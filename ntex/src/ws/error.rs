@@ -80,6 +80,9 @@ pub enum ProtocolError {
     /// Received new continuation but it is already started
     #[error("Received new continuation but it is already started")]
     ContinuationStarted,
+    /// A compressed message cannot be decompressed.
+    #[error("Invalid compressed message")]
+    InvalidCompressedData,
 }
 
 /// Errors produced while configuring a WebSocket client.
@@ -157,6 +160,9 @@ pub enum WsClientError {
     /// The server returned an extension that the client did not offer.
     #[error("Unexpected WebSocket extensions: {0:?}")]
     UnexpectedWebSocketExtensions(HeaderValue),
+    /// The server accepted an offered extension with invalid parameters.
+    #[error("Invalid WebSocket extensions: {0:?}")]
+    InvalidWebSocketExtensions(HeaderValue),
     /// Protocol error
     #[error("{0}")]
     Protocol(
@@ -220,6 +226,9 @@ impl Clone for WsClientError {
             }
             WsClientError::UnexpectedWebSocketExtensions(val) => {
                 WsClientError::UnexpectedWebSocketExtensions(val.clone())
+            }
+            WsClientError::InvalidWebSocketExtensions(val) => {
+                WsClientError::InvalidWebSocketExtensions(val.clone())
             }
             WsClientError::Protocol(err) => WsClientError::Protocol(*err),
             WsClientError::Timeout => WsClientError::Timeout,
@@ -334,7 +343,8 @@ mod tests {
             WsClientError::MissingWebSocketAcceptHeader,
             WsClientError::InvalidChallengeResponse("key".into(), hdr.clone()),
             WsClientError::InvalidWebSocketProtocol(hdr.clone()),
-            WsClientError::UnexpectedWebSocketExtensions(hdr),
+            WsClientError::UnexpectedWebSocketExtensions(hdr.clone()),
+            WsClientError::InvalidWebSocketExtensions(hdr),
             WsClientError::Protocol(ProtocolError::Overflow),
             WsClientError::Timeout,
             WsClientError::Connect(ConnectError::Unresolved),

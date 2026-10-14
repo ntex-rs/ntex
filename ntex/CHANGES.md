@@ -1,5 +1,11 @@
 # Changes
 
+## [4.3.0] - unreleased
+
+* ws: Add `permessage-deflate` extension support (RFC 7692) to the client and
+  the codec, enabled with `WsClientConfig::set_deflate()` and the `compress`
+  feature #1062
+
 ## [4.2.0] - 2026-10-10
 
 * http: Reduce the `zstd` encoder of a streaming response from 2MiB to 1.5MiB,

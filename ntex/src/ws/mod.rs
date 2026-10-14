@@ -12,9 +12,15 @@
 //! frames are exposed as raw bytes, text frames are rejected, and control
 //! frames are handled internally. Use [`WsConnection::into_transport()`] to
 //! run a byte-oriented protocol over a WebSocket connection.
+//!
+//! With the `compress` feature, the client can negotiate the
+//! `permessage-deflate` extension (RFC 7692), see
+//! [`WsClientConfig::set_deflate()`].
 mod cfg;
 mod client;
 mod codec;
+#[cfg(feature = "compress")]
+mod deflate;
 mod frame;
 mod handshake;
 mod mask;
@@ -27,6 +33,8 @@ pub mod error;
 pub use self::cfg::WsClientConfig;
 pub use self::client::{WsClient, WsConnection};
 pub use self::codec::{Codec, Frame, Item, Message};
+#[cfg(feature = "compress")]
+pub use self::deflate::DeflateConfig;
 pub use self::frame::Parser;
 pub use self::handshake::{handshake, handshake_response, verify_handshake};
 pub use self::proto::{CloseCode, CloseReason, OpCode, hash_key};
