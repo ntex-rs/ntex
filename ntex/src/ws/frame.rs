@@ -9,11 +9,13 @@ use crate::util::{BufMut, BytePage, BytePages, Bytes, BytesMut};
 pub struct Parser;
 
 impl Parser {
+    #[inline]
     fn parse_metadata(
         src: &[u8],
         server: bool,
         max_size: usize,
-    ) -> Result<Option<(usize, bool, OpCode, usize, Option<u32>)>, ProtocolError> {
+        allow_rsv1: bool,
+    ) -> Result<Option<(usize, bool, bool, OpCode, usize, Option<u32>)>, ProtocolError> {
         let chunk_len = src.len();
 
         let mut idx = 2;
@@ -24,7 +26,8 @@ impl Parser {
         let first = src[0];
         let second = src[1];
         let finished = first & 0x80 != 0;
-        let reserved = first & 0x70;
+        let rsv1 = allow_rsv1 && first & 0x40 != 0;
+        let reserved = first & if allow_rsv1 { 0x30 } else { 0x70 };
         if reserved != 0 {
             return Err(ProtocolError::ReservedBits(reserved >> 4));
         }
@@ -99,7 +102,7 @@ impl Parser {
             None
         };
 
-        Ok(Some((idx, finished, opcode, length, mask)))
+        Ok(Some((idx, finished, rsv1, opcode, length, mask)))
     }
 
     /// Parses one WebSocket frame from `src`.
@@ -116,9 +119,26 @@ impl Parser {
         server: bool,
         max_size: usize,
     ) -> Result<Option<(bool, OpCode, Option<Bytes>)>, ProtocolError> {
+        Ok(Parser::parse_frame(src, server, max_size, false)?
+            .map(|(finished, _, opcode, payload)| (finished, opcode, payload)))
+    }
+
+    /// Parses one WebSocket frame from `src`, like [`Parser::parse`].
+    ///
+    /// If `allow_rsv1` is set, the RSV1 bit is accepted and returned after
+    /// the final-fragment flag.
+    // inlined into the decoder, the frame tuple is not moved
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub(super) fn parse_frame(
+        src: &mut BytesMut,
+        server: bool,
+        max_size: usize,
+        allow_rsv1: bool,
+    ) -> Result<Option<(bool, bool, OpCode, Option<Bytes>)>, ProtocolError> {
         // try to parse ws frame metadata
-        let Some((idx, finished, opcode, length, mask)) =
-            Parser::parse_metadata(src, server, max_size)?
+        let Some((idx, finished, rsv1, opcode, length, mask)) =
+            Parser::parse_metadata(src, server, max_size, allow_rsv1)?
         else {
             return Ok(None);
         };
@@ -133,7 +153,7 @@ impl Parser {
 
         // no need for body
         if length == 0 {
-            return Ok(Some((finished, opcode, None)));
+            return Ok(Some((finished, rsv1, opcode, None)));
         }
 
         // unmask
@@ -141,7 +161,7 @@ impl Parser {
             apply_mask(&mut src[..length], mask);
         }
 
-        Ok(Some((finished, opcode, Some(src.split_to(length)))))
+        Ok(Some((finished, rsv1, opcode, Some(src.split_to(length)))))
     }
 
     /// Parses a close-frame payload.
@@ -197,7 +217,19 @@ impl Parser {
     where
         BytePage: From<B>,
     {
-        let payload = BytePage::from(pl);
+        Parser::write_frame(dst, BytePage::from(pl), op, fin, false, mask)
+    }
+
+    /// Encodes a WebSocket frame into `dst`, like [`Parser::write_message`],
+    /// `rsv1` sets the RSV1 bit.
+    pub(super) fn write_frame(
+        dst: &mut BytePages,
+        payload: BytePage,
+        op: OpCode,
+        fin: bool,
+        rsv1: bool,
+        mask: bool,
+    ) -> Result<(), ProtocolError> {
         if op.is_control() {
             if !fin {
                 return Err(ProtocolError::FragmentedControlFrame(op));
@@ -207,11 +239,13 @@ impl Parser {
             }
         }
 
-        let one: u8 = if fin {
-            0x80 | Into::<u8>::into(op)
-        } else {
-            op.into()
-        };
+        let mut one: u8 = op.into();
+        if fin {
+            one |= 0x80;
+        }
+        if rsv1 {
+            one |= 0x40;
+        }
         let payload_len = payload.len();
         let two = if mask { 0x80 } else { 0 };
 

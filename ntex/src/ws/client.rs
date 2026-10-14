@@ -268,21 +268,45 @@ where
             return Err(Error::from(WsClientError::MissingWebSocketAcceptHeader));
         }
 
-        validate_negotiation(&response.headers, &self.cfg.headers).map_err(Error::from)?;
+        validate_protocol(&response.headers, &self.cfg.headers).map_err(Error::from)?;
+        let codec = self
+            .negotiate_extensions(&response.headers)
+            .map_err(Error::from)?;
         log::trace!("{tag}: Ws handshake response verification is completed");
 
         // response and ws io
         Ok(WsConnection::new(
             io,
             ClientResponse::with_empty_payload(response, self.http_cfg.clone()),
-            if self.cfg.server_mode {
-                ws::Codec::new().max_size(self.cfg.max_size)
-            } else {
-                ws::Codec::new()
-                    .max_size(self.cfg.max_size)
-                    .set_client_mode()
-            },
+            codec,
         ))
+    }
+
+    /// Validates the accepted extensions, creates the connection's codec.
+    fn negotiate_extensions(&self, response: &HeaderMap) -> Result<ws::Codec, WsClientError> {
+        let mut codec = ws::Codec::new().max_size(self.cfg.max_size);
+        if !self.cfg.server_mode {
+            codec = codec.set_client_mode();
+        }
+
+        #[cfg(feature = "compress")]
+        if let Some(offer) = &self.cfg.deflate {
+            if let Some(agreed) = offer.accept(response)? {
+                log::trace!(
+                    "{}: Ws permessage-deflate is accepted {agreed:?}",
+                    self.cfg.tag()
+                );
+                codec = codec.set_deflate(agreed);
+            }
+            return Ok(codec);
+        }
+
+        if let Some(extensions) = response.get(header::SEC_WEBSOCKET_EXTENSIONS) {
+            return Err(WsClientError::UnexpectedWebSocketExtensions(
+                extensions.clone(),
+            ));
+        }
+        Ok(codec)
     }
 }
 
@@ -299,6 +323,12 @@ impl<F> WsClient<F> {
         // copy headers, the head is empty
         for (key, value) in &self.cfg.headers {
             head.headers_mut().append(key.clone(), value.clone());
+        }
+
+        #[cfg(feature = "compress")]
+        if let Some(deflate) = &self.cfg.deflate {
+            head.headers
+                .insert(header::SEC_WEBSOCKET_EXTENSIONS, deflate.offer());
         }
 
         // host header, without userinfo and the scheme's default port
@@ -332,13 +362,7 @@ impl<F> WsClient<F> {
     }
 }
 
-fn validate_negotiation(response: &HeaderMap, offered: &HeaderMap) -> Result<(), WsClientError> {
-    if let Some(extensions) = response.get(header::SEC_WEBSOCKET_EXTENSIONS) {
-        return Err(WsClientError::UnexpectedWebSocketExtensions(
-            extensions.clone(),
-        ));
-    }
-
+fn validate_protocol(response: &HeaderMap, offered: &HeaderMap) -> Result<(), WsClientError> {
     let mut protocols = response.get_all(header::SEC_WEBSOCKET_PROTOCOL);
     if let Some(protocol) = protocols.next() {
         let selected = protocol.to_str().ok();
@@ -636,7 +660,7 @@ mod tests {
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static("chat"),
         );
-        validate_negotiation(&response, &configured.headers).unwrap();
+        validate_protocol(&response, &configured.headers).unwrap();
 
         let mut offered_headers = HeaderMap::new();
         offered_headers.insert(
@@ -647,14 +671,14 @@ mod tests {
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static("superchat"),
         );
-        validate_negotiation(&response, &offered_headers).unwrap();
+        validate_protocol(&response, &offered_headers).unwrap();
 
         response.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static("other"),
         );
         assert!(matches!(
-            validate_negotiation(&response, &configured.headers),
+            validate_protocol(&response, &configured.headers),
             Err(WsClientError::InvalidWebSocketProtocol(_))
         ));
 
@@ -663,7 +687,7 @@ mod tests {
             HeaderValue::from_static("chat,superchat"),
         );
         assert!(matches!(
-            validate_negotiation(&response, &configured.headers),
+            validate_protocol(&response, &configured.headers),
             Err(WsClientError::InvalidWebSocketProtocol(_))
         ));
 
@@ -677,17 +701,23 @@ mod tests {
             HeaderValue::from_static("superchat"),
         );
         assert!(matches!(
-            validate_negotiation(&response, &configured.headers),
+            validate_protocol(&response, &configured.headers),
             Err(WsClientError::InvalidWebSocketProtocol(_))
         ));
+    }
 
-        response.remove(header::SEC_WEBSOCKET_PROTOCOL);
+    #[crate::rt_test]
+    async fn unexpected_extensions() {
+        let client = WsClient::new("ws://localhost", SharedCfg::default());
+        let mut response = HeaderMap::new();
+        assert!(!client.negotiate_extensions(&response).unwrap().is_closed());
+
         response.insert(
             header::SEC_WEBSOCKET_EXTENSIONS,
             HeaderValue::from_static("permessage-deflate"),
         );
         assert!(matches!(
-            validate_negotiation(&response, &configured.headers),
+            client.negotiate_extensions(&response),
             Err(WsClientError::UnexpectedWebSocketExtensions(_))
         ));
     }
@@ -845,6 +875,62 @@ mod tests {
 
         let req = handshake_request("ws://localhost/", WsClientConfig::new()).await;
         assert!(req.starts_with("GET / HTTP/1.1\r\n"), "{req}");
+    }
+
+    #[cfg(feature = "compress")]
+    #[crate::rt_test]
+    async fn deflate_offer() {
+        let req = handshake_request("ws://localhost/", WsClientConfig::new()).await;
+        assert!(!req.contains("sec-websocket-extensions"), "{req}");
+
+        // the offer replaces a configured header
+        let cfg = WsClientConfig::new()
+            .set_header(header::SEC_WEBSOCKET_EXTENSIONS, "x-ext")
+            .unwrap()
+            .set_deflate(ws::DeflateConfig::new().set_server_no_context_takeover(true));
+        let req = handshake_request("ws://localhost/", cfg).await;
+        let offers: Vec<_> = req
+            .lines()
+            .filter_map(|l| l.strip_prefix("sec-websocket-extensions: "))
+            .collect();
+        assert_eq!(
+            offers,
+            ["permessage-deflate; server_no_context_takeover; client_max_window_bits"]
+        );
+    }
+
+    #[cfg(feature = "compress")]
+    #[crate::rt_test]
+    async fn deflate_connection() {
+        let cfg = WsClientConfig::new().set_deflate(ws::DeflateConfig::new());
+        let (res, client) = connect_with(cfg, SharedCfg::default(), |accept| {
+            switching(&format!(
+                "upgrade: websocket\r\nconnection: upgrade\r\nsec-websocket-accept: {accept}\r\n\
+                 sec-websocket-extensions: permessage-deflate; client_no_context_takeover\r\n"
+            ))
+        })
+        .await;
+        let conn = res.unwrap();
+        let agreed = ws::DeflateConfig::new().set_client_no_context_takeover(true);
+        assert_eq!(conn.codec().deflate(), Some(&agreed));
+
+        // a compressed message from the peer
+        let peer = ws::Codec::new().set_deflate(agreed);
+        let rx = conn.seal().receiver();
+        client.write(peer_frame(&peer, ws::Message::Text("Hello".into())));
+        let item = rx.recv().await.unwrap().unwrap();
+        assert_eq!(item, ws::Frame::Text("Hello".into()));
+        drop(rx);
+        crate::time::sleep(crate::time::Millis(50)).await;
+        assert_eq!(
+            read_frame(&client, &peer),
+            ws::Frame::Close(Some(CloseCode::Normal.into()))
+        );
+
+        // the server declines the offer
+        let cfg = WsClientConfig::new().set_deflate(ws::DeflateConfig::new());
+        let (res, _client) = connected(cfg, SharedCfg::default()).await;
+        assert_eq!(res.unwrap().codec().deflate(), None);
     }
 
     #[cfg(feature = "cookie")]

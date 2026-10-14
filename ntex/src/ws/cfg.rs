@@ -23,6 +23,8 @@ pub struct WsClientConfig {
     pub(super) close_timeout: Millis,
     pub(super) headers: HeaderMap,
     pub(super) server_mode: bool,
+    #[cfg(feature = "compress")]
+    pub(super) deflate: Option<super::DeflateConfig>,
     #[cfg(feature = "cookie")]
     pub(super) cookies: Option<CookieJar>,
 
@@ -65,6 +67,8 @@ impl WsClientConfig {
             server_mode: false,
             timeout: Millis(5_000),
             close_timeout: Millis(5_000),
+            #[cfg(feature = "compress")]
+            deflate: None,
             #[cfg(feature = "cookie")]
             cookies: None,
             config: CfgContext::default(),
@@ -159,6 +163,29 @@ impl WsClientConfig {
     /// incoming frames. Server mode reverses those rules.
     pub fn set_server_mode(mut self) -> Self {
         self.server_mode = true;
+        self
+    }
+
+    #[must_use]
+    #[cfg(feature = "compress")]
+    /// Offers the `permessage-deflate` extension (RFC 7692) to the server.
+    ///
+    /// If the server accepts the offer, text and binary messages are
+    /// compressed in both directions. The server may decline it, then the
+    /// messages are not compressed. The opening handshake fails if the server
+    /// accepts the offer with parameters the client did not allow.
+    ///
+    /// The extension is not offered by default.
+    ///
+    /// ```rust
+    /// use ntex::ws::{DeflateConfig, WsClientConfig};
+    ///
+    /// let cfg = WsClientConfig::new().set_deflate(
+    ///     DeflateConfig::new().set_client_no_context_takeover(true)
+    /// );
+    /// ```
+    pub fn set_deflate(mut self, cfg: super::DeflateConfig) -> Self {
+        self.deflate = Some(cfg);
         self
     }
 
