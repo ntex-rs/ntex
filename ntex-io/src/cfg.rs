@@ -316,7 +316,7 @@ impl BufConfig {
                 avail += self.high;
                 new_cap += self.high;
             }
-            buf.reserve_capacity(new_cap);
+            buf.reserve_exact(new_cap);
         }
     }
 

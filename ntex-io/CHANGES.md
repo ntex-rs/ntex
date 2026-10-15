@@ -1,5 +1,9 @@
 # Changes
 
+## [3.14.0] - 2026-10-15
+
+* Update ntex-bytes dependency
+
 ## [3.13.1] - 2026-06-21
 
 * Handle disconnect during Io::read() call
