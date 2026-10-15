@@ -1,6 +1,6 @@
 # Changes
 
-## [4.3.0] - unreleased
+## [4.3.0] - 2026-10-15
 
 * ws: Add `permessage-deflate` extension support (RFC 7692) to the client and
   the codec, enabled with `WsClientConfig::set_deflate()` and the `compress`
