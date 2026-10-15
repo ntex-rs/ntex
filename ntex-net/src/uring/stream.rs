@@ -63,7 +63,7 @@ enum Operation {
     },
     Send {
         id: usize,
-        buf: BytePage,
+        buf: Box<BytePage>,
         result: Option<io::Result<usize>>,
     },
     Poll {
@@ -173,6 +173,15 @@ impl StreamOps {
 }
 
 impl Operation {
+    fn send(id: usize, buf: BytePage) -> Self {
+        Operation::Send {
+            id,
+            // The operations slab can relocate while a send is pending.
+            buf: Box::new(buf),
+            result: None,
+        }
+    }
+
     fn shutdown(tx: pool::Sender<io::Result<()>>) -> Self {
         Operation::Shutdown { tx: Some(tx) }
     }
@@ -201,7 +210,7 @@ impl Handler for StreamOpsHandler {
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
-                        item.ctx.with_write_buf(|pages| pages.prepend(buf));
+                        item.ctx.with_write_buf(|pages| pages.prepend(*buf));
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
 
@@ -418,17 +427,13 @@ impl StreamOpsStorage {
                     #[cfg(feature = "trace")]
                     log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
 
-                    let op_id = self.ops.insert(Some(Operation::Send {
-                        id,
-                        buf,
-                        result: None,
-                    })) as u32;
+                    let op_id = self.ops.insert(Some(Operation::send(id, buf))) as u32;
                     item.wr_op = NonZeroU32::new(op_id);
 
                     let (buf_ptr, buf_len) = if let Some(Operation::Send { buf, .. }) =
                         &self.ops[op_id as usize]
                     {
-                        // Safety. `buf` is stored in `self.ops` which is heap.
+                        // SAFETY: The boxed page stays fixed until completion or cancellation.
                         (unsafe { buf.as_ptr() }, buf.len() as u32)
                     } else {
                         unreachable!()
@@ -587,6 +592,41 @@ impl Drop for WeakStreamCtl {
             self.inner.storage.set(Some(storage));
         } else {
             self.inner.delayed_feed.push(IdType::Weak(self.id as u32));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ntex_bytes::Bytes;
+
+    use super::*;
+
+    #[test]
+    fn send_page_survives_operation_moves() {
+        let pointer = |op: &Option<Operation>| {
+            let Some(Operation::Send { buf, .. }) = op else {
+                panic!("expected a send operation");
+            };
+            let data: &[u8] = buf.as_ref().as_ref();
+            data.as_ptr()
+        };
+
+        let inline = Bytes::copy_from_slice(b"inline");
+        assert!(inline.is_inline());
+        for bytes in [inline, Bytes::from(vec![42; 8192])] {
+            let mut ops = Slab::with_capacity(1);
+            let id = ops.insert(Some(Operation::send(0, BytePage::from(bytes))));
+            let before = pointer(&ops[id]);
+
+            ops.reserve(1024);
+            assert_eq!(before, pointer(&ops[id]));
+
+            // Completion handling moves the operation out of its slab slot.
+            let op = ops[id].take();
+            let mut moved = Slab::with_capacity(1024);
+            let id = moved.insert(op);
+            assert_eq!(before, pointer(&moved[id]));
         }
     }
 }

@@ -1,5 +1,9 @@
 # Changes
 
+## [3.16.0] - 2026-10-15
+
+* Keep inline write buffers stable in the polling, Tokio, and io-uring backends.
+
 ## [3.15.0] - 2026-08-09
 
 * Do not unwind reactor panics, forward handling to arbiter

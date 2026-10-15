@@ -441,16 +441,17 @@ impl StreamItem {
             while let Some(page) = wrt.take() {
                 size += page.len();
 
-                // SAFETY: Page is stored in `pages` for lifetime of `bufs`
-                bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
-                    mem::transmute::<&[u8], &[u8]>(page.as_ref())
-                }));
                 pages[num] = Some(page);
 
                 num += 1;
                 if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
                     break;
                 }
+            }
+
+            // Finish moving pages before borrowing their inline storage.
+            for (buf, page) in bufs.iter_mut().zip(pages[..num].iter().flatten()) {
+                buf.write(io::IoSlice::new(page.as_ref()));
             }
 
             if num > 0 {
