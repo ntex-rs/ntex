@@ -45,9 +45,13 @@ bitflags::bitflags! {
         /// The socket could not be switched to non-blocking mode, so it is
         /// only read once the kernel reported it readable.
         const BLOCKING    = 0b0000_0100;
-        /// Reading is paused, a recv that completes meanwhile is not followed
-        /// by a read.
+        /// Reading is paused, by the io layer or by the read status, a recv
+        /// that completes or a notification that arrives meanwhile is not
+        /// followed by a read.
         const PAUSED      = 0b0000_1000;
+        /// Input is reported by socket state notifications instead of a
+        /// zero-byte recv.
+        const NOTIFY      = 0b0001_0000;
     }
 }
 
@@ -117,6 +121,32 @@ impl ReadOperation {
     /// Whether the socket could not be switched to non-blocking mode.
     pub(crate) fn is_blocking(&self) -> bool {
         self.flags.contains(Flags::BLOCKING)
+    }
+
+    /// Whether input is reported by socket state notifications.
+    #[cfg(test)]
+    pub(crate) fn is_notified(&self) -> bool {
+        self.flags.contains(Flags::NOTIFY)
+    }
+
+    /// Waits for input with socket state notifications instead of a zero-byte
+    /// recv, the socket is registered for them.
+    pub(crate) fn use_notifications(&mut self) {
+        self.flags.insert(Flags::NOTIFY);
+    }
+
+    /// Input is available, reads it unless reading is paused or closing.
+    pub(crate) fn notified(&mut self) {
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: RcvNotify({}) {:?}",
+            self.ctx.tag(),
+            self.io,
+            self.flags
+        );
+        if !self.flags.intersects(Flags::PAUSED | Flags::CLOSING) {
+            self.read();
+        }
     }
 
     /// Pauses reading until the next `read()`.
@@ -208,18 +238,29 @@ impl ReadOperation {
                         }
                     } else {
                         let size = usize::try_from(res).unwrap_or_default();
-                        drained = res < len;
+                        // a queued FIN raises no edge after a short read, so a
+                        // notified socket is read until it would block
+                        drained = res < len && !self.flags.contains(Flags::NOTIFY);
                         // SAFETY: winsock tells us how many bytes it read
                         unsafe { buf.advance_mut(size) };
                         Poll::Ready(Ok(size))
                     }
                 });
                 if st != IoTaskStatus::Io {
+                    // Reading resumes only through `read()`, once the io
+                    // layer reports read readiness again. A notification
+                    // meanwhile must not read past the back-pressure.
+                    self.flags.insert(Flags::PAUSED);
                     break;
                 }
                 if !drained && !self.flags.contains(Flags::BLOCKING) {
                     continue;
                 }
+            }
+
+            // a notification reports more input, the socket is drained
+            if self.flags.contains(Flags::NOTIFY) {
+                break;
             }
 
             // wait for more input without handing a buffer to the kernel
