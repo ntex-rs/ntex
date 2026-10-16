@@ -1,7 +1,7 @@
 use std::cell::{Cell, UnsafeCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use std::{future::Future, io, thread};
 
@@ -10,7 +10,9 @@ use crossbeam_queue::SegQueue;
 use swap_buffer_queue::error::{TryDequeueError, TryEnqueueError};
 use swap_buffer_queue::{Queue, buffer::ArrayBuffer};
 
-use crate::{driver::Driver, driver::Notify, driver::PollResult, handle::JoinHandle};
+use crate::{
+    busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult, handle::JoinHandle,
+};
 
 scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
 
@@ -120,14 +122,16 @@ impl Runtime {
     #[inline]
     pub fn awake(&self) {
         if self.queue.idle.get() {
-            self.queue.idle.set(false);
-            self.queue.poll_start.set(Instant::now());
+            self.queue.start_busy();
         }
     }
 
     /// Polls the runtime and runs scheduled tasks.
     pub fn poll(&self) -> PollResult {
-        let start = self.now();
+        // tasks scheduled from other threads do not end the idle state
+        if self.queue.idle.get() {
+            self.queue.busy.start(Instant::now());
+        }
 
         let result = if self.stop.get() {
             PollResult::Ready
@@ -137,11 +141,15 @@ impl Runtime {
             PollResult::Pending
         };
 
-        // published on every poll, a runtime that never idles stays visible
+        // a runtime that never idles stays visible, its busy period is read
+        // from its start
         let now = Instant::now();
-        self.queue.add_busy(now.saturating_duration_since(start));
         if result == PollResult::PollAgain {
             self.queue.poll_start.set(now);
+            self.queue.busy.next_turn(now);
+        } else {
+            self.queue.idle.set(true);
+            self.queue.busy.stop(now);
         }
         result
     }
@@ -166,12 +174,22 @@ impl Runtime {
     /// The runtime is busy from [`awake`](Self::awake) until [`poll`](Self::poll)
     /// finds no more tasks to run. This includes running tasks and handling
     /// driver events, and excludes time the driver is blocked waiting for events.
-    /// The value is wall-clock time, not CPU time, and is updated by each `poll`.
+    /// The value is wall-clock time, not CPU time, and includes the current
+    /// busy period, so it can be read from other threads while a task runs.
     ///
     /// Utilization over an interval is the busy duration delta divided by the
     /// elapsed time of the interval.
     pub fn busy_duration(&self) -> Duration {
-        self.queue.busy_duration()
+        self.queue.busy.busy_duration()
+    }
+
+    /// Returns how long the current runtime turn has been running, `None`
+    /// while the runtime is idle.
+    ///
+    /// A turn ends when [`poll`](Self::poll) returns, a long turn means a task
+    /// or a driver event handler keeps the runtime from making progress.
+    pub fn current_turn(&self) -> Option<Duration> {
+        self.queue.busy.current_turn()
     }
 
     /// Runs the provided future.
@@ -236,7 +254,15 @@ impl Handle {
     /// See [`Runtime::busy_duration`]. Always returns `Some`, the return type
     /// matches the other runtime backends.
     pub fn busy_duration(&self) -> Option<Duration> {
-        Some(self.queue.busy_duration())
+        Some(self.queue.busy.busy_duration())
+    }
+
+    /// Returns how long the current runtime turn has been running, `None`
+    /// while the runtime is idle.
+    ///
+    /// See [`Runtime::current_turn`].
+    pub fn current_turn(&self) -> Option<Duration> {
+        self.queue.busy.current_turn()
     }
 
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
@@ -270,8 +296,7 @@ struct RunnableQueue {
     poll_start: Cell<Instant>,
     // set by the first remote `schedule` after `run` cleared it
     notified: AtomicBool,
-    // total busy time in nanoseconds, written by the runtime thread only
-    busy: AtomicU64,
+    busy: BusyClock,
     handle: Box<dyn Notify>,
     event_interval: usize,
     local_queue: UnsafeCell<VecDeque<Runnable>>,
@@ -291,7 +316,7 @@ impl RunnableQueue {
             idle: Cell::new(true),
             poll_start: Cell::new(Instant::now()),
             notified: AtomicBool::new(false),
-            busy: AtomicU64::new(0),
+            busy: BusyClock::new(),
             local_queue: UnsafeCell::new(VecDeque::new()),
             sync_fixed_queue: Queue::default(),
             sync_queue: SegQueue::new(),
@@ -303,8 +328,7 @@ impl RunnableQueue {
             unsafe { (*self.local_queue.get()).push_back(runnable) };
             if self.idle.get() {
                 // starts a busy period, `awake` does not reset it
-                self.idle.set(false);
-                self.poll_start.set(Instant::now());
+                self.start_busy();
                 self.handle.notify().ok();
             }
         } else {
@@ -368,14 +392,11 @@ impl RunnableQueue {
         more_tasks
     }
 
-    fn add_busy(&self, d: Duration) {
-        let nanos = u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
-        let total = self.busy.load(Ordering::Relaxed).saturating_add(nanos);
-        self.busy.store(total, Ordering::Relaxed);
-    }
-
-    fn busy_duration(&self) -> Duration {
-        Duration::from_nanos(self.busy.load(Ordering::Relaxed))
+    fn start_busy(&self) {
+        let now = Instant::now();
+        self.idle.set(false);
+        self.poll_start.set(now);
+        self.busy.start(now);
     }
 
     fn clear(&self) {
@@ -742,6 +763,65 @@ mod tests {
         std::thread::sleep(sleep);
         assert_eq!(rt.poll(), PollResult::Pending);
         assert!(rt.busy_duration() >= busy2 + sleep);
+    }
+
+    #[test]
+    fn busy_duration_during_turn() {
+        let sleep = Duration::from_millis(50);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let th = thread::spawn(move || {
+            let rt = Runtime::new(Box::new(NoopNotify));
+            let hnd = rt.handle();
+            rt.spawn(async move {
+                tx.send(hnd).unwrap();
+                thread::sleep(sleep);
+            })
+            .detach();
+            assert_eq!(rt.poll(), PollResult::Pending);
+            rt
+        });
+
+        // the task is running, its turn is visible from another thread
+        let hnd = rx.recv().unwrap();
+        thread::sleep(sleep / 2);
+        assert!(hnd.busy_duration().unwrap() >= sleep / 2);
+        assert!(hnd.current_turn().unwrap() >= sleep / 2);
+
+        let rt = th.join().unwrap();
+        assert!(hnd.busy_duration().unwrap() >= sleep);
+        assert_eq!(hnd.current_turn(), None);
+        assert_eq!(rt.current_turn(), None);
+    }
+
+    #[test]
+    fn busy_duration_is_monotonic() {
+        let done = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let done2 = done.clone();
+        let th = thread::spawn(move || {
+            let rt = Runtime::new(Box::new(NoopNotify));
+            tx.send(rt.handle()).unwrap();
+            for _ in 0..100 {
+                rt.spawn(async { thread::sleep(Duration::from_micros(500)) })
+                    .detach();
+                assert_eq!(rt.poll(), PollResult::Pending);
+                thread::sleep(Duration::from_micros(200));
+            }
+            done2.store(true, Ordering::Release);
+        });
+
+        // a busy period is not counted twice when it ends
+        let hnd = rx.recv().unwrap();
+        let mut last = Duration::ZERO;
+        while !done.load(Ordering::Acquire) {
+            let busy = hnd.busy_duration().unwrap();
+            assert!(
+                busy + Duration::from_micros(100) >= last,
+                "{busy:?} < {last:?}"
+            );
+            last = last.max(busy);
+        }
+        th.join().unwrap();
     }
 
     #[test]

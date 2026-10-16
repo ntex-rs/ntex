@@ -21,6 +21,7 @@
 
 mod arbiter;
 mod builder;
+mod busy;
 #[cfg(target_os = "linux")]
 mod capture;
 mod driver;

@@ -134,6 +134,13 @@ impl Handle {
             .map(|h| h.metrics().worker_total_busy_duration(0))
     }
 
+    /// Returns how long the current runtime turn has been running.
+    ///
+    /// tokio does not expose runtime turns, always returns `None`.
+    pub fn current_turn(&self) -> Option<Duration> {
+        None
+    }
+
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
