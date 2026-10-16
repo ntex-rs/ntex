@@ -266,7 +266,8 @@ itself report the location inside ntex. The tokio and compio runtimes return
 `None`.
 
 On Linux, `System::set_latency_callback()` can receive a backtrace when an
-arbiter stalls.
+arbiter stalls, together with the spawn location of the running task when it
+is still the same task after the capture.
 Backtrace capture requires ntex signal handling and uses `SIGUSR2`; an
 embedding application should not reserve that signal for another purpose.
 

@@ -280,10 +280,15 @@ impl System {
     /// Set arbiter latency callback.
     ///
     /// This callback is called when the arbiter response latency exceeds the
-    /// configured threshold. The provided backtrace is not resolved.
+    /// configured threshold. The provided backtrace is not resolved. The
+    /// location is the spawn location of the task that blocks the arbiter,
+    /// see [`Handle::current_task`].
     pub fn set_latency_callback<F>(f: F)
     where
-        F: Fn(ntex_error::Backtrace) + Send + Sync + 'static,
+        F: Fn(ntex_error::Backtrace, Option<&'static std::panic::Location<'static>>)
+            + Send
+            + Sync
+            + 'static,
     {
         *ARB_CB.lock() = Some(Arc::new(f));
     }
@@ -561,7 +566,7 @@ fn watchdog(sys: &Weak<SystemInner>, stop: &AtomicBool, interval: Duration, thre
                         );
                     }
                     #[cfg(target_os = "linux")]
-                    capture_backtrace(&arb, age);
+                    capture_backtrace(&arb, age, task);
                 }
                 Stall::Recovered(time) => {
                     log::warn!(
@@ -578,7 +583,11 @@ fn watchdog(sys: &Weak<SystemInner>, stop: &AtomicBool, interval: Duration, thre
 
 #[cfg(target_os = "linux")]
 /// Sends `SIGUSR2` to the stalled arbiter thread to capture a backtrace.
-fn capture_backtrace(arb: &Arbiter, age: Duration) {
+fn capture_backtrace(
+    arb: &Arbiter,
+    age: Duration,
+    task: Option<&'static panic::Location<'static>>,
+) {
     const SPIN: Duration = Duration::from_micros(100);
 
     if !crate::signals::is_enabled() {
@@ -602,15 +611,29 @@ fn capture_backtrace(arb: &Arbiter, age: Duration) {
             thread::sleep(SPIN);
             if let Some(bt) = CAPTURE.take(tid) {
                 let bt = ntex_error::Backtrace::from(bt);
+                // the backtrace belongs to the task only if it still runs
+                let task = task.filter(|t| {
+                    arb.handle()
+                        .current_task()
+                        .is_some_and(|cur| std::ptr::eq(*t, cur))
+                });
                 if let Some(f) = latency_callback() {
-                    f(bt);
+                    f(bt, task);
                 } else {
                     bt.resolver().resolve();
-                    log::error!(
-                        "Arbiter {}({:?}) made no progress for {age:?}.\n{bt:?}",
-                        arb.name(),
-                        arb.id()
-                    );
+                    if let Some(task) = task {
+                        log::error!(
+                            "Arbiter {}({:?}) made no progress for {age:?}, running task spawned at {task}.\n{bt:?}",
+                            arb.name(),
+                            arb.id()
+                        );
+                    } else {
+                        log::error!(
+                            "Arbiter {}({:?}) made no progress for {age:?}.\n{bt:?}",
+                            arb.name(),
+                            arb.id()
+                        );
+                    }
                 }
                 break;
             }
@@ -643,13 +666,15 @@ async fn yield_to() {
 }
 
 #[cfg(target_os = "linux")]
-#[allow(clippy::type_complexity)]
-static ARB_CB: Mutex<Option<Arc<dyn Fn(ntex_error::Backtrace) + Send + Sync>>> = Mutex::new(None);
+static ARB_CB: Mutex<Option<Arc<LatencyCallback>>> = Mutex::new(None);
 
 #[cfg(target_os = "linux")]
-#[allow(clippy::type_complexity)]
+type LatencyCallback =
+    dyn Fn(ntex_error::Backtrace, Option<&'static panic::Location<'static>>) + Send + Sync;
+
+#[cfg(target_os = "linux")]
 /// Clone the callback so it runs without the lock and survives replacement.
-fn latency_callback() -> Option<Arc<dyn Fn(ntex_error::Backtrace) + Send + Sync>> {
+fn latency_callback() -> Option<Arc<LatencyCallback>> {
     ARB_CB.lock().clone()
 }
 
@@ -895,15 +920,15 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let data = Arc::new(vec![1u8; 64]);
         let calls2 = calls.clone();
-        System::set_latency_callback(move |_| {
+        System::set_latency_callback(move |_, _| {
             // replace itself, then use captured state
-            System::set_latency_callback(|_| {});
+            System::set_latency_callback(|_, _| {});
             assert_eq!(data.len(), 64);
             calls2.fetch_add(1, Ordering::Relaxed);
         });
 
-        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()));
-        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()));
+        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()), None);
+        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()), None);
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         *ARB_CB.lock() = None;
     }

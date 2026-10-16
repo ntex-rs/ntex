@@ -39,6 +39,9 @@
   `Handle::spawn()` and `spawn()` record the caller location. Returns `None`
   on tokio and compio
 
+* `System::set_latency_callback()` callback receives the spawn location of the
+  stalled task, the stall backtrace log names it
+
 * Require tokio 1.45
 
 * Add `ThreadPool::metrics()` and `System::pool_metrics()`, blocking thread pool
