@@ -21,6 +21,9 @@
 
 * Require tokio 1.45
 
+* Add `ThreadPool::metrics()` and `System::pool_metrics()`, blocking thread pool
+  threads, active and queued tasks, total queue wait and execution time
+
 ## [4.2.1] - 2026-10-11
 
 * Notify the driver once per poll for tasks scheduled from other threads

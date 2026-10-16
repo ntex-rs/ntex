@@ -11,7 +11,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::arbiter::Arbiter;
 #[cfg(target_os = "linux")]
 use crate::capture::CAPTURE;
-use crate::pool::ThreadPool;
+use crate::pool::{PoolMetrics, ThreadPool};
 use crate::{BlockingResult, Builder, Handle, HashMap, HashSet, Runner, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -315,6 +315,11 @@ impl System {
         R: Send + 'static,
     {
         self.0.pool.execute(f)
+    }
+
+    /// Returns a snapshot of the blocking thread pool metrics.
+    pub fn pool_metrics(&self) -> PoolMetrics {
+        self.0.pool.metrics()
     }
 
     /// Returns a previously registered type, or inserts and returns a new one.
