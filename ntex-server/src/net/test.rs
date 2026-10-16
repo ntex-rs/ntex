@@ -109,7 +109,6 @@ where
                     .listen("test", tcp, config, async move |_| factory().await)?
                     .workers(1)
                     .disable_signals()
-                    .enable_affinity()
                     .run();
 
                 ntex_rt::spawn(async move {

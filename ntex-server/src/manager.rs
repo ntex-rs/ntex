@@ -2,11 +2,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 use async_channel::{Receiver, Sender, unbounded};
-use core_affinity::CoreId;
 use ntex_rt::{System, signals::PanicSource, signals::Signal};
 use ntex_util::future::join_all;
 use ntex_util::time::{Millis, sleep, timeout};
 
+use crate::affinity::{self, Placement};
 use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
 use crate::{balance::Balancer, metrics::Metrics, server::ServerShared};
 
@@ -73,16 +73,13 @@ impl<F: ServerConfiguration> ServerManager<F> {
         // handle cmd
         ntex_rt::spawn(handle_cmd(mgr.clone(), rx));
 
-        // Retrieve the IDs of all active CPU cores.
-        let mut cores = if affinity {
-            core_affinity::get_core_ids().unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        // CPU placement of each worker
+        let plan = affinity::plan(affinity);
 
         // start workers
-        for _ in 0..mgr.0.cfg.num {
-            start_worker(mgr.clone(), cores.pop());
+        for idx in 0..mgr.0.cfg.num {
+            let placement = (!plan.is_empty()).then(|| plan[idx % plan.len()].clone());
+            start_worker(mgr.clone(), placement);
         }
 
         let srv = Server::new(tx, shared);
@@ -154,12 +151,13 @@ impl<F: ServerConfiguration> ServerManager<F> {
     }
 }
 
-fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreId>) {
+fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, placement: Option<Placement>) {
     ntex_rt::spawn(async move {
         let id = mgr.next_id();
         let name = format!("{}:worker:{}", mgr.0.cfg.name, id.0);
         let slot = mgr.0.shared.metrics.worker(id);
-        let mut wrk = Worker::start_with(name.clone(), mgr.factory(), cid, slot.clone());
+        let mut wrk =
+            Worker::start_with(name.clone(), mgr.factory(), placement.clone(), slot.clone());
 
         loop {
             match wrk.status() {
@@ -182,7 +180,12 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                     if let Some(ref slot) = slot {
                         slot.restart();
                     }
-                    wrk = Worker::start_with(name.clone(), mgr.factory(), cid, slot.clone());
+                    wrk = Worker::start_with(
+                        name.clone(),
+                        mgr.factory(),
+                        placement.clone(),
+                        slot.clone(),
+                    );
                 }
             }
             wrk.wait_for_status().await;

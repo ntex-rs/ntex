@@ -11,7 +11,7 @@ use ntex_service::Pipeline;
 use ntex_util::future::{Either, Stream, select, stream_recv};
 use ntex_util::time::{Millis, sleep, timeout_checked};
 
-use crate::{ServerConfiguration, metrics::WorkerSlot};
+use crate::{ServerConfiguration, affinity::Placement, metrics::WorkerSlot};
 
 const STOP_TIMEOUT: Millis = Millis(3000);
 
@@ -70,13 +70,13 @@ impl<T> Worker<T> {
         T: Send + 'static,
         F: ServerConfiguration<Item = T>,
     {
-        Self::start_with(name, cfg, cid, None)
+        Self::start_with(name, cfg, cid.map(Placement::CoreId), None)
     }
 
     pub(crate) fn start_with<F>(
         name: String,
         cfg: F,
-        cid: Option<CoreId>,
+        placement: Option<Placement>,
         metrics: Option<Arc<WorkerSlot>>,
     ) -> Worker<T>
     where
@@ -106,10 +106,12 @@ impl<T> Worker<T> {
 
         arbiter.handle().spawn(async move {
             log::info!("Starting worker {n:?}");
-            if let Some(cid) = cid
-                && core_affinity::set_for_current(cid)
-            {
-                log::info!("Set affinity to {cid:?} for worker {n:?}");
+            if let Some(placement) = placement {
+                if placement.apply() {
+                    log::info!("Set affinity to {placement} for worker {n:?}");
+                } else {
+                    log::warn!("Cannot set affinity to {placement} for worker {n:?}");
+                }
             }
 
             // the arbiter is stopped even if the service panics, runtimes

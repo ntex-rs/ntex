@@ -7,7 +7,7 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::error::IntoFailure;
 use crate::http::{self, Request, Response, ResponseError};
-use crate::server::{LoadBalancing, NoConfig, Server, ServerAppConfig, ServerBuilder};
+use crate::server::{Affinity, LoadBalancing, NoConfig, Server, ServerAppConfig, ServerBuilder};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory, State, fn_service};
 use crate::{SharedCfg, time::Seconds};
 
@@ -212,11 +212,24 @@ where
     }
 
     #[must_use]
-    /// Enable cpu affinity.
+    #[deprecated(
+        since = "4.4.0",
+        note = "affinity is enabled by default, use `affinity()` to change it"
+    )]
+    /// Does nothing, affinity is enabled by default.
+    pub fn enable_affinity(self) -> Self {
+        self
+    }
+
+    #[must_use]
+    /// Sets the CPU affinity of worker threads.
     ///
-    /// By default, affinity is disabled.
-    pub fn enable_affinity(mut self) -> Self {
-        self.builder = self.builder.enable_affinity();
+    /// Workers are spread over physical cores first, see [`Affinity`].
+    ///
+    /// By default, [`Affinity::Soft`] is used on Windows and
+    /// [`Affinity::Core`] on other platforms.
+    pub fn affinity(mut self, affinity: Affinity) -> Self {
+        self.builder = self.builder.affinity(affinity);
         self
     }
 

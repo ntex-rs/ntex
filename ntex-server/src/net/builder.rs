@@ -6,7 +6,7 @@ use ntex_service::{IntoService, Service, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::{LoadBalancing, NoConfig, Server, ServerAppConfig, WorkerPool};
+use crate::{Affinity, LoadBalancing, NoConfig, Server, ServerAppConfig, WorkerPool};
 
 use super::accept::AcceptLoop;
 use super::config::ServiceConfig;
@@ -147,11 +147,21 @@ where
     }
 
     #[must_use]
-    /// Enables CPU affinity for worker threads.
+    #[deprecated(
+        since = "4.3.0",
+        note = "affinity is enabled by default, use `affinity()` to change it"
+    )]
+    /// Does nothing, affinity is enabled by default.
+    pub fn enable_affinity(self) -> Self {
+        self
+    }
+
+    #[must_use]
+    /// Sets the CPU affinity of worker threads.
     ///
-    /// By default, affinity is disabled.
-    pub fn enable_affinity(mut self) -> Self {
-        self.pool = self.pool.enable_affinity();
+    /// See [`WorkerPool::affinity`].
+    pub fn affinity(mut self, affinity: Affinity) -> Self {
+        self.pool = self.pool.affinity(affinity);
         self
     }
 

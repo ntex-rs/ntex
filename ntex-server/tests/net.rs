@@ -9,7 +9,7 @@ use ntex::time::{Millis, sleep};
 use ntex::util::Bytes;
 use ntex_io::Io;
 use ntex_server::net::{
-    AcceptLoop, AcceptorCommand, LoadBalancing, ServerBuilder, ServerStatus, TestServer,
+    AcceptLoop, AcceptorCommand, Affinity, LoadBalancing, ServerBuilder, ServerStatus, TestServer,
     TestServerBuilder, bind_addr, build, build_test_server, build_with_config, create_tcp_listener,
     test_server,
 };
@@ -538,7 +538,7 @@ async fn test_builder_debug() {
     let builder = build_with_config(ntex_server::NoConfig)
         .name("dbg")
         .workers(2)
-        .enable_affinity()
+        .affinity(Affinity::Disabled)
         .stop_runtime()
         .disable_signals();
     let s = format!("{builder:?}");

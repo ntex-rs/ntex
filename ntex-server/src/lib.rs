@@ -18,6 +18,7 @@
 
 use ntex_service::Service;
 
+mod affinity;
 mod balance;
 mod manager;
 mod metrics;
@@ -27,6 +28,7 @@ mod server;
 mod state;
 mod wrk;
 
+pub use self::affinity::Affinity;
 pub use self::balance::LoadBalancing;
 pub use self::metrics::{ListenerMetrics, ServerMetrics, WorkerMetrics};
 pub use self::pool::WorkerPool;

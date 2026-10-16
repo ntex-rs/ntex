@@ -1127,33 +1127,29 @@ impl TestServer {
     #[cfg(feature = "ws")]
     /// Connect to websocket server at a given path
     pub async fn ws_at(&self, path: &str) -> Result<WsConnection<Sealed>, Error<WsClientError>> {
+        #[cfg(feature = "openssl")]
         if self.ssl {
-            #[cfg(feature = "openssl")]
-            {
-                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+            use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-                builder.set_verify(SslVerifyMode::NONE);
-                let _ = builder
-                    .set_alpn_protos(b"\x08http/1.1")
-                    .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
+            let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+            builder.set_verify(SslVerifyMode::NONE);
+            let _ = builder
+                .set_alpn_protos(b"\x08http/1.1")
+                .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-                WsClient::new(self.url(path), &self.cfg)
-                    .openssl(builder.build())
-                    .connect()
-                    .await
-                    .map(WsConnection::seal)
-            }
-            #[cfg(not(feature = "openssl"))]
-            {
-                panic!("openssl feature is required")
-            }
-        } else {
-            WsClient::new(self.url(path), &self.cfg)
+            return WsClient::new(self.url(path), &self.cfg)
+                .openssl(builder.build())
                 .connect()
                 .await
-                .map(WsConnection::seal)
+                .map(WsConnection::seal);
         }
+        #[cfg(not(feature = "openssl"))]
+        assert!(!self.ssl, "openssl feature is required");
+
+        WsClient::new(self.url(path), &self.cfg)
+            .connect()
+            .await
+            .map(WsConnection::seal)
     }
 
     #[cfg(feature = "ws")]
