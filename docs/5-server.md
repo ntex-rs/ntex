@@ -226,7 +226,10 @@ server has reached its stopped state.
 * `workers`: one entry per worker slot with processed `items`,
   `active_connections`, `restarts`, and how often and how long the worker
   was not ready (`not_ready`, `not_ready_duration`), for example because it
-  reached `max_connections()`.
+  reached `max_connections()`. `io` holds the I/O statistics of the
+  worker's connections: how often and how long (connection-time) reads and
+  writes were under backpressure, how many connections are under
+  backpressure now, and the bytes held in read and write buffers.
 * `listeners`: name, address and `accepted`, `connection_errors` and
   `resource_errors` counts for each listener.
 * `accept_pauses`, `accept_paused_duration` and `accept_backlog`: how often
@@ -235,7 +238,10 @@ server has reached its stopped state.
 
 ntex does not reject connections at the limit. Connections wait in the
 operating system's listen backlog while the accept loop is paused, so growing
-`accept_paused_duration` indicates that the server is saturated.
+`accept_paused_duration` indicates that the server is saturated. Growing
+write backpressure time means clients read slower than the application
+writes; growing read backpressure time means the application processes input
+slower than it arrives.
 
 ## Signals and shutdown
 

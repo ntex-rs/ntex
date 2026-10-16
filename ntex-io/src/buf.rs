@@ -178,6 +178,16 @@ impl Stack {
         self.borrow().transport().read_len()
     }
 
+    /// Returns the size of the application and transport read buffers.
+    pub(crate) fn read_buf_size(&self) -> usize {
+        let layers = self.borrow();
+        if let Some(wire) = &layers.wire {
+            layers.app.read_len() + wire.read_len()
+        } else {
+            layers.app.read_len()
+        }
+    }
+
     pub(crate) fn with_filter<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut FilterCtx<'_>) -> R,

@@ -1,6 +1,6 @@
 use std::cell::{Cell, UnsafeCell};
 use std::task::{Context, Poll};
-use std::{fmt, future::poll_fn, hash, io, marker, mem, ops, ptr, rc::Rc};
+use std::{fmt, future::poll_fn, hash, io, marker, mem, ops, ptr, rc::Rc, sync::Arc};
 
 use ntex_bytes::{BytePageSize, BytesMut};
 use ntex_codec::{Decoder, Encoder};
@@ -13,6 +13,7 @@ use crate::ctx::IoContext;
 use crate::filter::{Base, Filter, Layer};
 use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
+use crate::metrics::IoMetrics;
 use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
 use crate::utils::{Extensions, WriteDeadline, write_timed_out};
@@ -94,6 +95,11 @@ pub(crate) struct IoState {
     /// Consecutive read batches small enough for a smaller page.
     rd_small: Cell<u8>,
     pub(super) extensions: Extensions,
+    metrics: Arc<IoMetrics>,
+    /// Read buffer size last reported to `metrics`, saturated at `u32::MAX`.
+    rd_buffered: Cell<u32>,
+    /// Write buffer size last reported to `metrics`, saturated at `u32::MAX`.
+    wr_buffered: Cell<u32>,
 }
 
 impl IoState {
@@ -359,6 +365,53 @@ impl IoState {
             .set(self.wr_inflight.get().saturating_sub(as_u32(written)));
     }
 
+    pub(super) fn set_wr_backpressure(&self) {
+        if self.flags.set_wr_backpressure() {
+            self.metrics.wr_backpressure_on();
+        }
+    }
+
+    pub(super) fn unset_wr_backpressure(&self) {
+        if self.flags.unset_wr_backpressure() {
+            self.metrics.wr_backpressure_off();
+        }
+    }
+
+    pub(super) fn unset_wr_backpressure_and_flush(&self) {
+        if self.flags.unset_wr_backpressure_and_flush() {
+            self.metrics.wr_backpressure_off();
+        }
+    }
+
+    pub(super) fn set_read_ready_and_backpressure(&self) {
+        if self.flags.set_read_ready_and_backpressure() {
+            self.metrics.rd_backpressure_on();
+        }
+    }
+
+    pub(super) fn unset_read_ready_and_backpressure(&self) {
+        if self.flags.unset_read_ready_and_backpressure() {
+            self.metrics.rd_backpressure_off();
+        }
+    }
+
+    /// Reports the current read buffer size to the metrics.
+    ///
+    /// Must not be called while a read buffer is borrowed, its size would be
+    /// reported as zero.
+    pub(super) fn sync_read_buffered(&self) {
+        let size = u32::try_from(self.buffer.read_buf_size()).unwrap_or(u32::MAX);
+        let prev = self.rd_buffered.replace(size);
+        self.metrics.update_read_buffered(prev, size);
+    }
+
+    /// Reports the current write buffer size to the metrics.
+    pub(super) fn sync_write_buffered(&self) {
+        let size = u32::try_from(self.write_outstanding()).unwrap_or(u32::MAX);
+        let prev = self.wr_buffered.replace(size);
+        self.metrics.update_write_buffered(prev, size);
+    }
+
     pub(super) fn wake_read_task(&self) {
         self.read_task.wake();
     }
@@ -426,6 +479,21 @@ impl IoState {
     }
 }
 
+impl Drop for IoState {
+    fn drop(&mut self) {
+        // a connection can go away under backpressure
+        if self.flags.is_rd_backpressure() {
+            self.metrics.rd_backpressure_off();
+        }
+        if self.flags.is_wr_backpressure() {
+            self.metrics.wr_backpressure_off();
+        }
+        self.metrics.update_read_buffered(self.rd_buffered.get(), 0);
+        self.metrics
+            .update_write_buffered(self.wr_buffered.get(), 0);
+    }
+}
+
 impl Eq for IoState {}
 
 impl PartialEq for IoState {
@@ -485,6 +553,9 @@ impl Io {
             rd_batch: Cell::new(0),
             rd_small: Cell::new(0),
             extensions: Extensions::default(),
+            metrics: IoMetrics::current(),
+            rd_buffered: Cell::new(0),
+            wr_buffered: Cell::new(0),
         });
         inner.reset_read_size();
         inner.filter.set(Base::new(IoRef(inner.clone())));
@@ -527,6 +598,9 @@ impl IoRef {
             rd_batch: Cell::new(0),
             rd_small: Cell::new(0),
             extensions: Extensions::default(),
+            metrics: IoMetrics::current(),
+            rd_buffered: Cell::new(0),
+            wr_buffered: Cell::new(0),
         }))
     }
 }
@@ -959,7 +1033,7 @@ impl<F> Io<F> {
             // If the dispatcher requests more data but no read occurs,
             // restart the read task.
             if st.flags.is_read_paused_or_backpressure() || st.flags.is_read_wr_backpressure() {
-                st.flags.unset_read_ready_and_backpressure();
+                st.unset_read_ready_and_backpressure();
                 st.flags.unset_read_paused();
                 st.flags.unset_read_wr_backpressure();
                 st.wake_read_task();
@@ -1144,7 +1218,7 @@ impl<F> Io<F> {
                     return Poll::Pending;
                 }
             } else if st.is_wr_backpressure_needed(len) {
-                st.flags.set_wr_backpressure();
+                st.set_wr_backpressure();
                 st.dispatch_task.register(cx.waker());
                 return Poll::Pending;
             }
@@ -1152,7 +1226,7 @@ impl<F> Io<F> {
         if st.flags.is_peer_gone() && !st.flags.is_write_flush() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            st.flags.unset_wr_backpressure_and_flush();
+            st.unset_wr_backpressure_and_flush();
             Poll::Ready(Ok(()))
         }
     }
@@ -1242,7 +1316,7 @@ impl<F> Io<F> {
         } else if st.flags.is_wr_backpressure() {
             // write backpressure is enabled and outstanding output is smaller than half
             if st.should_disable_wr_backpressure(st.write_outstanding()) {
-                st.flags.unset_wr_backpressure();
+                st.unset_wr_backpressure();
                 Poll::Pending
             } else {
                 Poll::Ready(IoStatusUpdate::WriteBackpressure)
@@ -1367,7 +1441,10 @@ mod tests {
     use ntex_codec::BytesCodec;
     use ntex_util::{future::lazy, time::Millis, time::sleep, time::timeout};
 
+    use std::time::Duration;
+
     use super::*;
+    use crate::IoMetricsSnapshot;
     use crate::waiters::{TAG_DISCONNECT, WaiterEntry};
     use crate::{
         FilterBuf, IoContext, IoTaskStatus, Readiness, Waiter, ops::Iops, testing::IoTest,
@@ -1400,7 +1477,7 @@ mod tests {
         assert!(format!("{err:?}").contains("Timeout"));
 
         client.write(TEXT);
-        server.st().flags.set_wr_backpressure();
+        server.st().set_wr_backpressure();
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
     }
@@ -2118,6 +2195,138 @@ mod tests {
         assert!(io.flags().is_read_ready());
         assert!(io.flags().is_rd_backpressure());
         assert_eq!(io.read_more().await.unwrap(), Some(()));
+    }
+
+    #[ntex::test]
+    async fn read_backpressure_metrics() {
+        let metrics = IoMetrics::new();
+        IoMetrics::set_current(metrics.clone());
+
+        let (client, server) = IoTest::create();
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity()),
+            ),
+        );
+        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+
+        let size = BytePageSize::Size4.capacity();
+        client.write(vec![b'x'; size]);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_rd_backpressure());
+        let m = metrics.snapshot();
+        assert_eq!(m.read_backpressure, 1);
+        assert_eq!(m.read_backpressure_active, 1);
+        assert_eq!(m.read_buffered, size);
+        assert_eq!(m.write_backpressure, 0);
+
+        sleep(Millis(50)).await;
+        let _item = io.recv(&BytesCodec).await.ok().unwrap().unwrap();
+        assert!(!io.flags().is_rd_backpressure());
+        let m = metrics.snapshot();
+        assert_eq!(m.read_backpressure, 1);
+        assert_eq!(m.read_backpressure_active, 0);
+        assert_eq!(m.read_buffered, 0);
+        assert!(m.read_backpressure_time >= Duration::from_millis(40));
+        let time = m.read_backpressure_time;
+
+        // drop under backpressure closes the period and clears gauges
+        client.write(vec![b'x'; size]);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_rd_backpressure());
+        let m = metrics.snapshot();
+        assert_eq!(m.read_backpressure, 2);
+        assert_eq!(m.read_backpressure_active, 1);
+        assert_eq!(m.read_buffered, size);
+
+        drop(io);
+        sleep(Millis(10)).await;
+        let m = metrics.snapshot();
+        assert_eq!(m.read_backpressure, 2);
+        assert_eq!(m.read_backpressure_active, 0);
+        assert_eq!(m.read_buffered, 0);
+        assert!(m.read_backpressure_time > time);
+        assert_eq!(
+            metrics.snapshot().read_backpressure_time,
+            m.read_backpressure_time
+        );
+    }
+
+    #[ntex::test]
+    async fn write_backpressure_metrics() {
+        let metrics = IoMetrics::new();
+        IoMetrics::set_current(metrics.clone());
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
+        );
+        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+
+        io.encode_slice(b"1234").unwrap();
+        let m = metrics.snapshot();
+        assert_eq!(m.write_backpressure, 0);
+        assert_eq!(m.write_buffered, 4);
+
+        io.encode_slice(BIN2).unwrap();
+        assert!(io.flags().is_wr_backpressure());
+        let m = metrics.snapshot();
+        assert_eq!(m.write_backpressure, 1);
+        assert_eq!(m.write_backpressure_active, 1);
+        assert_eq!(m.write_buffered, 4 + BIN2.len());
+
+        // already enabled, not counted again
+        io.encode_slice(b"1234").unwrap();
+        let m = metrics.snapshot();
+        assert_eq!(m.write_backpressure, 1);
+        assert_eq!(m.write_buffered, 8 + BIN2.len());
+
+        sleep(Millis(50)).await;
+        client.remote_buffer_cap(1024);
+        let _ = client.read().await.unwrap();
+        assert!(matches!(
+            lazy(|cx| io.poll_flush(cx, false)).await,
+            Poll::Ready(Ok(()))
+        ));
+        assert!(!io.flags().is_wr_backpressure());
+        let m = metrics.snapshot();
+        assert_eq!(m.write_backpressure, 1);
+        assert_eq!(m.write_backpressure_active, 0);
+        assert_eq!(m.write_buffered, 0);
+        assert!(m.write_backpressure_time >= Duration::from_millis(40));
+
+        // drop under backpressure
+        client.remote_buffer_cap(0);
+        io.encode_slice(BIN2).unwrap();
+        io.encode_slice(BIN2).unwrap();
+        assert!(io.flags().is_wr_backpressure());
+        let m = metrics.snapshot();
+        assert_eq!(m.write_backpressure, 2);
+        assert_eq!(m.write_backpressure_active, 1);
+        assert!(m.write_buffered > 0);
+
+        drop(io);
+        sleep(Millis(10)).await;
+        let m = metrics.snapshot();
+        assert_eq!(m.write_backpressure_active, 0);
+        assert_eq!(m.write_buffered, 0);
+    }
+
+    #[ntex::test]
+    async fn metrics_current() {
+        let metrics = IoMetrics::new();
+        IoMetrics::set_current(metrics.clone());
+        assert!(Arc::ptr_eq(&IoMetrics::current(), &metrics));
+        assert_eq!(metrics.snapshot(), IoMetricsSnapshot::default());
+
+        let other = IoMetrics::new();
+        IoMetrics::set_current(other.clone());
+        assert!(Arc::ptr_eq(&IoMetrics::current(), &other));
     }
 
     #[ntex::test]
@@ -3232,7 +3441,7 @@ mod tests {
 
         // The dispatcher decoded part of the input: read readiness is cleared,
         // but the buffer is still above the back-pressure release mark.
-        io.st().flags.set_read_ready_and_backpressure();
+        io.st().set_read_ready_and_backpressure();
         io.st().flags.unset_read_ready();
         // shutdown clears the read pause and keeps the back-pressure
         assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
@@ -4057,7 +4266,7 @@ mod tests {
         )
         .add_filter(ClosingShutdown(Cell::new(false)));
 
-        io.st().flags.set_read_ready_and_backpressure();
+        io.st().set_read_ready_and_backpressure();
         io.close();
         sleep(Millis(50)).await;
 
@@ -4170,7 +4379,7 @@ mod tests {
         )
         .add_filter(PendingShutdown);
 
-        io.st().flags.set_read_ready_and_backpressure();
+        io.st().set_read_ready_and_backpressure();
         io.close();
         sleep(Millis(50)).await;
 
@@ -4531,7 +4740,7 @@ mod tests {
 
         client.write("data");
         sleep(Millis(25)).await;
-        io.st().flags.set_wr_backpressure();
+        io.st().set_wr_backpressure();
 
         let res = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx)).await;
         assert!(matches!(res, Err(RecvError::WriteBackpressure)));
@@ -4557,7 +4766,7 @@ mod tests {
         io.close();
         sleep(Millis(25)).await;
         io.st().notify_timeout();
-        io.st().flags.set_wr_backpressure();
+        io.st().set_wr_backpressure();
 
         let decoded = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx))
             .await

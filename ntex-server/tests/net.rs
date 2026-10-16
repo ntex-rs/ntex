@@ -7,7 +7,7 @@ use std::{net, time::Duration};
 use ntex::codec::BytesCodec;
 use ntex::time::{Millis, sleep};
 use ntex::util::Bytes;
-use ntex_io::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_server::net::{
     AcceptLoop, AcceptorCommand, Affinity, LoadBalancing, ServerBuilder, ServerStatus, TestServer,
     TestServerBuilder, bind_addr, build, build_test_server, build_with_config, create_tcp_listener,
@@ -121,6 +121,61 @@ async fn test_least_loaded_connections() {
     let io3 = connect().await.unwrap();
     check_echo(&io3).await;
     assert_eq!(active(), [1, 1]);
+    srv.stop(false).await;
+}
+
+#[ntex::test]
+async fn test_worker_io_metrics() {
+    const SIZE: usize = 8 * 1024 * 1024;
+
+    let (lst, addr) = local_listener();
+    let srv = build()
+        .workers(1)
+        .disable_signals()
+        .listen(
+            "test",
+            lst,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(1024)),
+            async |_: &()| {
+                fn_service(async |io: Io| {
+                    io.encode_slice(&vec![b'x'; SIZE]).unwrap();
+                    let _ = io.flush(true).await;
+                    let _ = io.recv(&BytesCodec).await;
+                    Ok::<_, ()>(())
+                })
+            },
+        )
+        .unwrap()
+        .run();
+    let io_metrics = || srv.metrics().workers[0].io;
+    sleep(Millis(100)).await;
+
+    // the client does not read, the server is under write backpressure
+    let io = ntex_net::tcp_connect(addr, SharedCfg::default())
+        .await
+        .unwrap();
+    wait_for(|| io_metrics().write_backpressure_active == 1).await;
+    let m = io_metrics();
+    assert_eq!(m.write_backpressure, 1);
+    assert!(m.write_buffered > 0);
+    assert!(m.write_buffered <= SIZE);
+
+    let mut received = 0;
+    while received < SIZE {
+        received += io.recv(&BytesCodec).await.unwrap().unwrap().len();
+    }
+    assert_eq!(received, SIZE);
+    wait_for(|| io_metrics().write_backpressure_active == 0).await;
+    let m = io_metrics();
+    assert_eq!(m.write_backpressure, 1);
+    assert!(m.write_backpressure_time > Duration::ZERO);
+
+    io.close();
+    wait_for(|| {
+        let m = io_metrics();
+        m.write_buffered == 0 && m.read_buffered == 0
+    })
+    .await;
     srv.stop(false).await;
 }
 

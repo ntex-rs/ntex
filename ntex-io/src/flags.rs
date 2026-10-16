@@ -348,8 +348,11 @@ impl Flags {
         self.insert(FlagsKind::WR_SEND_OP);
     }
 
-    pub(crate) fn set_wr_backpressure(&self) {
+    /// Returns whether write backpressure was not enabled before.
+    pub(crate) fn set_wr_backpressure(&self) -> bool {
+        let enabled = !self.contains(FlagsKind::DSP_W_BACKPRESSURE);
         self.insert(FlagsKind::DSP_W_BACKPRESSURE);
+        enabled
     }
 
     /// Starts a graceful shutdown with the filter chain.
@@ -412,8 +415,11 @@ impl Flags {
         self.insert(FlagsKind::BUF_R_READY);
     }
 
-    pub(crate) fn set_read_ready_and_backpressure(&self) {
+    /// Returns whether read backpressure was not enabled before.
+    pub(crate) fn set_read_ready_and_backpressure(&self) -> bool {
+        let enabled = !self.contains(FlagsKind::RD_BACKPRESSURE);
         self.insert(FlagsKind::RD_PAUSED | FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE);
+        enabled
     }
 
     pub(crate) fn set_read_eof(&self) {
@@ -437,19 +443,29 @@ impl Flags {
         self.remove(FlagsKind::WR_SEND_OP);
     }
 
-    pub(crate) fn unset_wr_backpressure(&self) {
+    /// Returns whether write backpressure was enabled.
+    pub(crate) fn unset_wr_backpressure(&self) -> bool {
+        let disabled = self.contains(FlagsKind::DSP_W_BACKPRESSURE);
         self.remove(FlagsKind::DSP_W_BACKPRESSURE);
+        disabled
     }
 
-    pub(crate) fn unset_wr_backpressure_and_flush(&self) {
+    /// Returns whether write backpressure was enabled.
+    pub(crate) fn unset_wr_backpressure_and_flush(&self) -> bool {
+        let disabled = self.contains(FlagsKind::DSP_W_BACKPRESSURE);
         self.remove(FlagsKind::DSP_W_BACKPRESSURE | FlagsKind::WR_FLUSH);
+        disabled
     }
 
     /// `RD_PAUSED` is deliberately left set, even though
     /// `set_read_ready_and_backpressure()` installs it. Callers rely on the
     /// pause surviving so that they can detect it and wake the read task.
-    pub(crate) fn unset_read_ready_and_backpressure(&self) {
+    ///
+    /// Returns whether read backpressure was enabled.
+    pub(crate) fn unset_read_ready_and_backpressure(&self) -> bool {
+        let disabled = self.contains(FlagsKind::RD_BACKPRESSURE);
         self.remove(FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE);
+        disabled
     }
 
     pub(crate) fn unset_read_ready(&self) {

@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::{cell::RefCell, time::Duration, time::Instant};
 
+use ntex_io::{IoMetrics, IoMetricsSnapshot};
+
 use crate::WorkerId;
 
 /// Snapshot of server metrics.
@@ -46,6 +48,9 @@ pub struct WorkerMetrics {
     pub not_ready_duration: Duration,
     /// Number of times the worker was restarted after a failure.
     pub restarts: u64,
+    /// I/O statistics of connections created on the worker, backpressure and
+    /// buffered bytes.
+    pub io: IoMetricsSnapshot,
 }
 
 /// Metrics of a single listener.
@@ -167,6 +172,7 @@ impl Metrics {
                     not_ready,
                     not_ready_duration,
                     restarts: w.restarts.load(Ordering::Relaxed),
+                    io: w.io.snapshot(),
                 }
             })
             .collect();
@@ -203,6 +209,7 @@ pub(crate) struct WorkerSlot {
     active: AtomicUsize,
     not_ready: Period,
     restarts: AtomicU64,
+    io: Arc<IoMetrics>,
 }
 
 thread_local! {
@@ -217,6 +224,7 @@ impl WorkerSlot {
             active: AtomicUsize::new(0),
             not_ready: Period::default(),
             restarts: AtomicU64::new(0),
+            io: IoMetrics::new(),
         }
     }
 
@@ -225,7 +233,12 @@ impl WorkerSlot {
         CURRENT_WORKER.with(|w| w.borrow().clone())
     }
 
+    /// Installs the slot for the current thread, connections created on the
+    /// thread afterwards report I/O statistics to the slot.
     pub(crate) fn set_current(slot: Option<Arc<WorkerSlot>>) {
+        if let Some(ref slot) = slot {
+            IoMetrics::set_current(slot.io.clone());
+        }
         CURRENT_WORKER.with(|w| *w.borrow_mut() = slot);
     }
 
