@@ -11,7 +11,7 @@ use ntex_service::Pipeline;
 use ntex_util::future::{Either, Stream, select, stream_recv};
 use ntex_util::time::{Millis, sleep, timeout_checked};
 
-use crate::ServerConfiguration;
+use crate::{ServerConfiguration, metrics::WorkerSlot};
 
 const STOP_TIMEOUT: Millis = Millis(3000);
 
@@ -68,6 +68,19 @@ impl<T> Worker<T> {
         T: Send + 'static,
         F: ServerConfiguration<Item = T>,
     {
+        Self::start_with(name, cfg, cid, None)
+    }
+
+    pub(crate) fn start_with<F>(
+        name: String,
+        cfg: F,
+        cid: Option<CoreId>,
+        metrics: Option<Arc<WorkerSlot>>,
+    ) -> Worker<T>
+    where
+        T: Send + 'static,
+        F: ServerConfiguration<Item = T>,
+    {
         let (reqs, r_rx) = unbounded();
         let (stop, s_rx) = unbounded();
         let (avail, a_tx) = WorkerAvailability::create();
@@ -99,8 +112,9 @@ impl<T> Worker<T> {
 
                 // the arbiter is stopped even if the service panics, runtimes
                 // that catch task panics keep the arbiter running otherwise
+                WorkerSlot::set_current(metrics.clone());
                 let _ = spawn(async move {
-                    match ServiceRunner::create(&n, cfg, r_rx, s_rx, a_tx).await {
+                    match ServiceRunner::create(&n, cfg, r_rx, s_rx, a_tx, metrics).await {
                         Ok(wrk) => {
                             log::debug!("Server instance has been created in {n:?}");
                             wrk.run().await;
@@ -302,6 +316,7 @@ struct ServiceRunner<F: ServerConfiguration<Item = Req>, Req> {
     reqs: Receiver<Req>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     availability: WorkerAvailabilityTx,
+    metrics: Option<Arc<WorkerSlot>>,
 }
 
 impl<F, Req> ServiceRunner<F, Req>
@@ -315,6 +330,7 @@ where
         reqs: Receiver<Req>,
         stop: Receiver<Shutdown>,
         availability: WorkerAvailabilityTx,
+        metrics: Option<Arc<WorkerSlot>>,
     ) -> Result<Self, ()> {
         availability.set(false);
         let mut stop = Box::pin(stop);
@@ -336,6 +352,7 @@ where
             reqs,
             stop,
             availability,
+            metrics,
             name: name.to_string(),
         })
     }
@@ -347,6 +364,9 @@ where
                 match self.svc.poll_ready(cx) {
                     Poll::Ready(Ok(())) => {
                         self.availability.set(true);
+                        if let Some(ref m) = self.metrics {
+                            m.ready(true);
+                        }
                     }
                     Poll::Ready(Err(err)) => {
                         self.availability.set(false);
@@ -354,6 +374,9 @@ where
                     }
                     Poll::Pending => {
                         self.availability.set(false);
+                        if let Some(ref m) = self.metrics {
+                            m.ready(false);
+                        }
                         return Poll::Pending;
                     }
                 }
@@ -369,6 +392,9 @@ where
             match select(fut, stream_recv(&mut self.stop)).await {
                 Either::Left(Ok(Some(item))) => {
                     // got item
+                    if let Some(ref m) = self.metrics {
+                        m.item();
+                    }
                     let _ = self.svc.call(item).await;
                     continue;
                 }
@@ -409,6 +435,10 @@ where
     }
 
     async fn stop(&self, timeout: Millis, result: Option<oneshot::Sender<bool>>) {
+        // a stopped worker is not counted as not ready
+        if let Some(ref m) = self.metrics {
+            m.ready(true);
+        }
         let res = timeout_checked(timeout, self.svc.shutdown()).await;
         if let Some(result) = result {
             let _ = result.send(res.is_ok());

@@ -206,6 +206,24 @@ Repeated stop requests join the stop already in progress. Await either
 `stop(...)` or the original `Server` when later work must begin only after the
 server has reached its stopped state.
 
+## Server metrics
+
+`Server::metrics()` returns a snapshot of load counters:
+
+* `workers`: one entry per worker slot with processed `items`,
+  `active_connections`, `restarts`, and how often and how long the worker
+  was not ready (`not_ready`, `not_ready_duration`), for example because it
+  reached `max_connections()`.
+* `listeners`: name, address and `accepted`, `connection_errors` and
+  `resource_errors` counts for each listener.
+* `accept_pauses`, `accept_paused_duration` and `accept_backlog`: how often
+  and how long the accept loop stopped accepting because no worker was
+  available, and how many accepted connections wait for a worker.
+
+ntex does not reject connections at the limit. Connections wait in the
+operating system's listen backlog while the accept loop is paused, so growing
+`accept_paused_duration` indicates that the server is saturated.
+
 ## Signals and shutdown
 
 Signal handling is enabled by default:

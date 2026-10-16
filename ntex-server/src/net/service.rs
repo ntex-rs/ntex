@@ -1,9 +1,9 @@
 use std::{fmt, io, sync::Arc};
 
 use ntex_service::{Ctx, Service, cfg::SharedCfg};
-use ntex_util::{HashMap, future::join_all, services::Counter};
+use ntex_util::{HashMap, future::join_all, services::Counter, services::counter::CounterGuard};
 
-use crate::{ServerAppConfig, ServerConfiguration};
+use crate::{ServerAppConfig, ServerConfiguration, metrics::WorkerSlot};
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService};
@@ -70,6 +70,7 @@ impl<Cfg: ServerAppConfig> ServerConfiguration for StreamServer<Cfg> {
             services,
             tokens,
             conns: MAX_CONNS_COUNTER.with(Clone::clone),
+            metrics: WorkerSlot::current(),
         })
     }
 
@@ -111,6 +112,33 @@ pub struct StreamService {
     tokens: HashMap<Token, (usize, SharedCfg)>,
     services: Vec<Box<dyn NetService>>,
     conns: Counter,
+    metrics: Option<Arc<WorkerSlot>>,
+}
+
+/// Open connection, released on drop.
+pub(crate) struct ConnGuard {
+    _guard: CounterGuard,
+    metrics: Option<Arc<WorkerSlot>>,
+}
+
+impl ConnGuard {
+    fn new(guard: CounterGuard, metrics: Option<Arc<WorkerSlot>>) -> Self {
+        if let Some(ref m) = metrics {
+            m.conn_opened();
+        }
+        Self {
+            _guard: guard,
+            metrics,
+        }
+    }
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        if let Some(ref m) = self.metrics {
+            m.conn_closed();
+        }
+    }
 }
 
 impl fmt::Debug for StreamService {
@@ -160,7 +188,8 @@ impl Service<(), Connection> for StreamService {
                 log::error!("Cannot convert to an async io stream: {e}");
             })?;
 
-            self.services[*idx].call(stream, self.conns.get());
+            let guard = ConnGuard::new(self.conns.get(), self.metrics.clone());
+            self.services[*idx].call(stream, guard);
             Ok(())
         } else {
             log::error!("Cannot get handler service for connection: {con:?}");
