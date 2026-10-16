@@ -29,6 +29,11 @@
 * Add arbiter scheduling latency sampling, `Arbiter::latency()` and
   `Builder::latency_interval()` (default 100ms, 0 disables)
 
+* Detect stalled arbiters on a dedicated watchdog thread, `LatencyMetrics`
+  reports `stalls`, `stall_duration` and `stalled`. The stall backtrace is
+  captured by the watchdog instead of the ping task, `ping_threshold` is the
+  stall threshold
+
 * Require tokio 1.45
 
 * Add `ThreadPool::metrics()` and `System::pool_metrics()`, blocking thread pool

@@ -2,7 +2,7 @@ use std::any::{Any, TypeId};
 use std::collections::VecDeque;
 use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
-use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, rc::Rc};
+use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, sync::Weak, thread};
 
 use async_channel::{Receiver, Sender, unbounded};
 use futures_timer::Delay;
@@ -11,8 +11,9 @@ use parking_lot::{Mutex, RwLock};
 use crate::arbiter::Arbiter;
 #[cfg(target_os = "linux")]
 use crate::capture::CAPTURE;
+use crate::metrics::Stall;
 use crate::pool::{PoolMetrics, ThreadPool};
-use crate::{BlockingResult, Builder, Handle, HashMap, HashSet, Runner, SystemRunner};
+use crate::{BlockingResult, Builder, Handle, HashMap, Runner, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -54,7 +55,6 @@ pub struct SystemConfig {
     pub(super) name: String,
     pub(super) stack_size: usize,
     pub(super) ping_interval: usize,
-    #[allow(dead_code)]
     pub(super) ping_threshold: usize,
     pub(super) latency_interval: usize,
     pub(super) pool_limit: usize,
@@ -385,6 +385,13 @@ struct SystemSupport {
     sys: System,
     stop: Option<oneshot::Sender<i32>>,
     commands: Receiver<SystemCommand>,
+    watchdog: Option<Arc<AtomicBool>>,
+}
+
+impl Drop for SystemSupport {
+    fn drop(&mut self) {
+        self.stop_watchdog();
+    }
 }
 
 impl SystemSupport {
@@ -393,6 +400,13 @@ impl SystemSupport {
             sys: sys.clone(),
             stop: Some(stop),
             commands: sys.0.receiver.clone(),
+            watchdog: None,
+        }
+    }
+
+    fn stop_watchdog(&mut self) {
+        if let Some(stop) = self.watchdog.take() {
+            stop.store(true, Ordering::Relaxed);
         }
     }
 
@@ -401,6 +415,7 @@ impl SystemSupport {
             &self.sys.0.arbiter.0.latency,
             self.sys.0.config.latency_interval,
         );
+        self.watchdog = start_watchdog(&self.sys);
         if self.sys.0.config.ping_interval != 0 {
             crate::spawn(ping_arbiters(self.sys.clone()));
         }
@@ -409,6 +424,7 @@ impl SystemSupport {
             match self.commands.recv().await {
                 Ok(SystemCommand::Exit(code)) => {
                     log::debug!("Stopping system with {code} code");
+                    self.stop_watchdog();
 
                     // stop arbiters
                     let mut arbiters = self.sys.0.arbiters.lock();
@@ -443,125 +459,155 @@ pub struct PingRecord {
 }
 
 async fn ping_arbiters(sys: System) {
-    let arbs = Rc::new(RefCell::new(HashSet::default()));
     let interval = Duration::from_millis(sys.0.config.ping_interval as u64);
-    #[cfg(target_os = "linux")]
-    let threshold = Duration::from_millis(sys.0.config.ping_threshold as u64);
 
     loop {
         // interval between pings
         Delay::new(interval).await;
 
-        // send pings
-        {
-            arbs.borrow_mut().clear();
+        let start = Instant::now();
+        let arbiters = sys.0.arbiters.lock();
 
-            let start = Instant::now();
-            let arbiters = sys.0.arbiters.lock();
+        // drop records of stopped arbiters
+        PINGS.with(|pings| {
+            pings
+                .borrow_mut()
+                .retain(|id, _| arbiters.all.contains_key(id));
+        });
 
-            // drop records of stopped arbiters
-            PINGS.with(|pings| {
-                pings
-                    .borrow_mut()
-                    .retain(|id, _| arbiters.all.contains_key(id));
+        for arb in &arbiters.list {
+            let id = arb.id();
+            let fut = arb.handle().spawn(async move {
+                yield_to().await;
             });
 
-            for arb in &arbiters.list {
-                let id = arb.id();
-                let arbs = arbs.clone();
-                let fut = arb.handle().spawn(async move {
-                    yield_to().await;
-                });
+            PINGS.with(|pings| {
+                let mut p = pings.borrow_mut();
+                let recs = p.entry(id).or_default();
+                recs.push_front(PingRecord { start, rtt: None });
+                recs.truncate(10);
+            });
 
-                // calc ttl
-                PINGS.with(|pings| {
-                    let mut p = pings.borrow_mut();
-                    let recs = p.entry(arb.id()).or_default();
-                    recs.push_front(PingRecord { start, rtt: None });
-                    recs.truncate(10);
-                });
-
-                crate::spawn(async move {
-                    if fut.await.is_ok() {
-                        arbs.borrow_mut().insert(id);
-
-                        PINGS.with(|pings| {
-                            // a late pong belongs to its own round
-                            if let Some(recs) = pings.borrow_mut().get_mut(&id)
-                                && let Some(rec) = recs.iter_mut().find(|r| r.start == start)
-                            {
-                                rec.rtt = Some(start.elapsed());
-                            }
-                        });
-                    }
-                });
-            }
-        }
-
-        // check pings
-        #[cfg(target_os = "linux")]
-        {
-            const SPIN: Duration = Duration::from_micros(100);
-
-            // threshold
-            Delay::new(threshold).await;
-
-            let mut no_pongs = Vec::new();
-            {
-                for arb in &sys.0.arbiters.lock().list {
-                    let pong = arbs.borrow_mut().remove(&arb.id());
-                    if !pong {
-                        no_pongs.push(arb.clone());
-                    }
+            crate::spawn(async move {
+                if fut.await.is_ok() {
+                    PINGS.with(|pings| {
+                        // a late pong belongs to its own round
+                        if let Some(recs) = pings.borrow_mut().get_mut(&id)
+                            && let Some(rec) = recs.iter_mut().find(|r| r.start == start)
+                        {
+                            rec.rtt = Some(start.elapsed());
+                        }
+                    });
                 }
-            }
+            });
+        }
+    }
+}
 
-            if !crate::signals::is_enabled() {
+/// Starts a thread that detects stalled arbiters.
+fn start_watchdog(sys: &System) -> Option<Arc<AtomicBool>> {
+    let interval = sys.0.config.latency_interval;
+    if interval == 0 {
+        return None;
+    }
+    let interval = Duration::from_millis(interval as u64);
+    let threshold = Duration::from_millis(sys.0.config.ping_threshold as u64);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let sys = Arc::downgrade(&sys.0);
+
+    let name = format!("{}:watchdog", sys.upgrade()?.config.name);
+    match thread::Builder::new()
+        .name(name)
+        .spawn(move || watchdog(&sys, &stop2, interval, threshold))
+    {
+        Ok(_) => Some(stop),
+        Err(e) => {
+            log::error!("Cannot start arbiter watchdog: {e}");
+            None
+        }
+    }
+}
+
+fn watchdog(sys: &Weak<SystemInner>, stop: &AtomicBool, interval: Duration, threshold: Duration) {
+    loop {
+        thread::sleep(interval);
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(arbiters) = sys.upgrade().map(|sys| sys.arbiters.lock().list.clone()) else {
+            return;
+        };
+
+        let now = Instant::now();
+        for arb in arbiters {
+            if !arb.is_running() {
                 continue;
             }
-
-            for arb in no_pongs {
-                // no response from arbiter
-                log::error!("Arbiter {}({:?}) did not return pong", arb.name(), arb.id());
-
-                // send tgkill to thread id to capture backtrace
-                let tid = arb.tid();
-                if !CAPTURE.arm(tid) {
-                    continue;
-                }
-                let result = unsafe {
-                    libc::syscall(libc::SYS_tgkill, libc::getpid(), arb.tid(), libc::SIGUSR2)
-                };
-
-                if result == -1 {
+            match arb.0.latency.check(now, threshold) {
+                Stall::Started(age) => {
                     log::error!(
-                        "Unsable to send SIGUSR2 to arbiter {}({:?}): {}",
+                        "Arbiter {}({:?}) is stalled, no progress for {age:?}",
                         arb.name(),
-                        arb.id(),
-                        std::io::Error::last_os_error()
+                        arb.id()
                     );
-                } else {
-                    // Spin
-                    for _ in 0..1000 {
-                        Delay::new(SPIN).await;
-                        if let Some(bt) = CAPTURE.take(tid) {
-                            let bt = ntex_error::Backtrace::from(bt);
-                            if let Some(f) = latency_callback() {
-                                f(bt);
-                            } else {
-                                bt.resolver().resolve();
-                                log::error!(
-                                    "Worker does not returned pong within {interval:?} time.\n{bt:?}"
-                                );
-                            }
-                            break;
-                        }
-                    }
+                    #[cfg(target_os = "linux")]
+                    capture_backtrace(&arb, age);
                 }
-                CAPTURE.disarm(tid);
+                Stall::Recovered(time) => {
+                    log::warn!(
+                        "Arbiter {}({:?}) recovered after {time:?} stall",
+                        arb.name(),
+                        arb.id()
+                    );
+                }
+                Stall::None => {}
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+/// Sends `SIGUSR2` to the stalled arbiter thread to capture a backtrace.
+fn capture_backtrace(arb: &Arbiter, age: Duration) {
+    const SPIN: Duration = Duration::from_micros(100);
+
+    if !crate::signals::is_enabled() {
+        return;
+    }
+    let tid = arb.tid();
+    if !CAPTURE.arm(tid) {
+        return;
+    }
+    let result = unsafe { libc::syscall(libc::SYS_tgkill, libc::getpid(), tid, libc::SIGUSR2) };
+
+    if result == -1 {
+        log::error!(
+            "Unable to send SIGUSR2 to arbiter {}({:?}): {}",
+            arb.name(),
+            arb.id(),
+            std::io::Error::last_os_error()
+        );
+    } else {
+        for _ in 0..1000 {
+            thread::sleep(SPIN);
+            if let Some(bt) = CAPTURE.take(tid) {
+                let bt = ntex_error::Backtrace::from(bt);
+                if let Some(f) = latency_callback() {
+                    f(bt);
+                } else {
+                    bt.resolver().resolve();
+                    log::error!(
+                        "Arbiter {}({:?}) made no progress for {age:?}.\n{bt:?}",
+                        arb.name(),
+                        arb.id()
+                    );
+                }
+                break;
+            }
+        }
+    }
+    CAPTURE.disarm(tid);
 }
 
 async fn yield_to() {
@@ -688,6 +734,50 @@ mod ping_tests {
                 assert_eq!(System::current().arbiter().latency(), None);
                 let mut arb = Arbiter::new();
                 assert_eq!(arb.latency(), None);
+                arb.stop();
+                arb.join().unwrap();
+            });
+    }
+
+    #[test]
+    fn stall_detection() {
+        System::build()
+            .name("test")
+            .latency_interval(10)
+            .ping_threshold(50)
+            .build(TestRunner)
+            .block_on(async {
+                let mut arb = Arbiter::new();
+                let (tx, rx) = oneshot::channel();
+                arb.handle().spawn(async move {
+                    std::thread::sleep(Duration::from_millis(300));
+                    let _ = tx.send(());
+                });
+
+                let stalled = || arb.latency().unwrap().stalled;
+                for _ in 0..400 {
+                    if stalled() {
+                        break;
+                    }
+                    Delay::new(Duration::from_millis(5)).await;
+                }
+                assert!(stalled());
+                rx.await.unwrap();
+
+                for _ in 0..400 {
+                    if !stalled() {
+                        break;
+                    }
+                    Delay::new(Duration::from_millis(5)).await;
+                }
+                let m = arb.latency().unwrap();
+                assert!(!m.stalled);
+                assert_eq!(m.stalls, 1);
+                assert!(m.stall_duration >= Duration::from_millis(200), "{m:?}");
+
+                let sys = System::current().arbiter().latency().unwrap();
+                assert_eq!((sys.stalls, sys.stalled), (0, false));
+
                 arb.stop();
                 arb.join().unwrap();
             });

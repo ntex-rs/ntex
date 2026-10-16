@@ -250,11 +250,17 @@ panics are reported as `BlockingError`.
 
 The system pings spawned arbiters every two seconds and keeps their ten most
 recent round-trip records. `System::list_arbiter_pings()` exposes those
-records. Set `ping_interval(0)` to disable the checks, or tune
-`ping_interval()` and `ping_threshold()` on `System::build()`.
+records. Set `ping_interval(0)` to disable pings.
+
+Every arbiter also samples its scheduling latency every `latency_interval()`,
+100 milliseconds by default. `Arbiter::latency()` returns a histogram of how
+late the samples woke up. A watchdog thread marks an arbiter as stalled when it
+records no sample for longer than the interval plus `ping_threshold()`, which
+defaults to one second, and counts stalls in `Arbiter::latency()`. Set
+`latency_interval(0)` to disable sampling and stall detection.
 
 On Linux, `System::set_latency_callback()` can receive a backtrace when an
-arbiter misses the configured threshold, which defaults to one second.
+arbiter stalls.
 Backtrace capture requires ntex signal handling and uses `SIGUSR2`; an
 embedding application should not reserve that signal for another purpose.
 

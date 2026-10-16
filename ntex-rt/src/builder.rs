@@ -111,10 +111,13 @@ impl Builder {
     }
 
     #[must_use]
-    /// Sets the ping response threshold.
+    /// Sets the arbiter stall threshold.
     ///
-    /// If a response takes too long, an attempt is made to create a backtrace
-    /// for the busy arbiter.
+    /// A watchdog thread marks an arbiter as stalled when it records no
+    /// latency sample for longer than the
+    /// [`latency_interval`](Self::latency_interval) plus this threshold, see
+    /// [`LatencyMetrics::stalls`](crate::LatencyMetrics::stalls). On Linux an
+    /// attempt is made to create a backtrace for the stalled arbiter.
     ///
     /// The threshold is specified in milliseconds and defaults to 1,000.
     pub fn ping_threshold(mut self, interval: usize) -> Self {
@@ -129,7 +132,7 @@ impl Builder {
     /// late it wakes up, see [`Arbiter::latency`](crate::Arbiter::latency).
     ///
     /// The interval is specified in milliseconds and defaults to 100.
-    /// Set it to zero to disable sampling.
+    /// Set it to zero to disable sampling and stall detection.
     pub fn latency_interval(mut self, interval: usize) -> Self {
         self.latency_interval = interval;
         self

@@ -61,4 +61,3 @@ pub use self::rt_compio::*;
 pub use self::rt_default::*;
 
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
-pub(crate) type HashSet<V> = std::collections::HashSet<V, foldhash::fast::RandomState>;
