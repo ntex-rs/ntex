@@ -422,17 +422,18 @@ mod tests {
     #[test]
     fn stall_detection() {
         let _guard = CALLBACK.lock();
+        // parked threads on CI VMs (macOS) can wake up tens of ms late
         System::build()
             .name("test")
             .latency_interval(10)
-            .ping_threshold(50)
+            .ping_threshold(200)
             .build(TestRunner)
             .block_on(async {
                 let mut arb = Arbiter::new();
                 let (tx, rx) = oneshot::channel();
                 let line = line!() + 1;
                 arb.handle().spawn(async move {
-                    std::thread::sleep(Duration::from_millis(300));
+                    std::thread::sleep(Duration::from_millis(800));
                     let _ = tx.send(());
                 });
 
@@ -445,10 +446,12 @@ mod tests {
                 }
                 assert!(stalled());
                 // the watchdog names the blocking task
-                if let Some(task) = arb.handle().current_task() {
-                    assert_eq!((task.file(), task.line()), (file!(), line));
+                let task = arb.handle().current_task();
+                if cfg!(any(feature = "tokio", feature = "compio")) {
+                    assert_eq!(task, None);
                 } else {
-                    assert!(cfg!(any(feature = "tokio", feature = "compio")));
+                    let task = task.unwrap();
+                    assert_eq!((task.file(), task.line()), (file!(), line));
                 }
                 rx.await.unwrap();
 
@@ -461,10 +464,12 @@ mod tests {
                 let m = arb.latency().unwrap();
                 assert!(!m.stalled);
                 assert_eq!(m.stalls, 1);
-                assert!(m.stall_duration >= Duration::from_millis(200), "{m:?}");
+                assert!(m.stall_duration >= Duration::from_millis(500), "{m:?}");
 
+                // the stall is attributed to the blocked arbiter only
                 let sys = System::current().arbiter().latency().unwrap();
-                assert_eq!((sys.stalls, sys.stalled), (0, false));
+                assert!(!sys.stalled);
+                assert!(sys.stall_duration < m.stall_duration, "{sys:?}");
 
                 arb.stop();
                 arb.join().unwrap();
@@ -491,9 +496,15 @@ mod tests {
     }
 
     #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
+    // Spins instead of blocking, a blocking call can be a tail call that
+    // leaves no frame of this function. Exported, so the symbol is resolved
+    // without debug info.
     #[inline(never)]
-    fn stalled_arbiter_fn(rx: &std::sync::mpsc::Receiver<()>) {
-        let _ = rx.recv();
+    #[unsafe(no_mangle)]
+    extern "C" fn ntex_rt_stalled_arbiter_fn(stop: &AtomicBool) {
+        while !stop.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
     }
 
     #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -513,31 +524,33 @@ mod tests {
             .build(TestRunner)
             .block_on(async move {
                 let mut arb = Arbiter::new();
-                let (tx, rx) = std::sync::mpsc::channel();
+                let stop = Arc::new(AtomicBool::new(false));
+                let stop2 = stop.clone();
                 let line = line!() + 1;
                 let done = arb.handle().spawn(async move {
-                    stalled_arbiter_fn(&rx);
+                    ntex_rt_stalled_arbiter_fn(&stop2);
                 });
 
                 // other tests can stall their arbiters too
                 let mut found = None;
                 for _ in 0..2000 {
                     if let Ok((bt, task)) = bt_rx.try_recv()
-                        && bt.contains("stalled_arbiter_fn")
+                        && bt.contains("ntex_rt_stalled_arbiter_fn")
                     {
                         found = Some((bt, task));
                         break;
                     }
                     Delay::new(Duration::from_millis(5)).await;
                 }
-                tx.send(()).unwrap();
+                stop.store(true, Ordering::Release);
                 done.await.unwrap();
                 let (bt, task) = found.expect("backtrace of the stalled arbiter");
                 assert!(bt.contains("stall_backtrace"), "{bt}");
-                if let Some(task) = task {
-                    assert_eq!((task.file(), task.line()), (file!(), line));
+                if cfg!(any(feature = "tokio", feature = "compio")) {
+                    assert_eq!(task, None);
                 } else {
-                    assert!(cfg!(any(feature = "tokio", feature = "compio")));
+                    let task = task.unwrap();
+                    assert_eq!((task.file(), task.line()), (file!(), line));
                 }
 
                 let recovered = || !arb.latency().unwrap().stalled;

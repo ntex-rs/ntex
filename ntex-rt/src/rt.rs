@@ -1189,7 +1189,7 @@ mod tests {
 
         // the streak is shorter than the duration
         let rt = Runtime::builder()
-            .self_wake_threshold(3, Duration::from_secs(3600))
+            .self_wake_threshold(3, Duration::from_hours(1))
             .build(Box::new(NoopNotify));
         assert_eq!(streak(&rt, 5), 5);
 
