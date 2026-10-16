@@ -19,6 +19,10 @@
   current runtime turn has been running, for detecting stalled runtimes.
   Always `None` on tokio
 
+* Add `Runtime::poll_count()`, `Runtime::poll_again_count()` and the
+  `Handle` counterparts, number of polls and polls that left scheduled tasks,
+  for detecting task backlog. The `Handle` methods return `None` on tokio
+
 * Require tokio 1.45
 
 * Add `ThreadPool::metrics()` and `System::pool_metrics()`, blocking thread pool

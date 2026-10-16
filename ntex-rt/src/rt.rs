@@ -1,7 +1,7 @@
 use std::cell::{Cell, UnsafeCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::{future::Future, io, thread};
 
@@ -136,8 +136,10 @@ impl Runtime {
         let result = if self.stop.get() {
             PollResult::Ready
         } else if self.queue.run() {
+            self.queue.add_poll(true);
             PollResult::PollAgain
         } else {
+            self.queue.add_poll(false);
             PollResult::Pending
         };
 
@@ -190,6 +192,23 @@ impl Runtime {
     /// or a driver event handler keeps the runtime from making progress.
     pub fn current_turn(&self) -> Option<Duration> {
         self.queue.busy.current_turn()
+    }
+
+    /// Returns the number of times [`poll`](Self::poll) ran scheduled tasks.
+    pub fn poll_count(&self) -> u64 {
+        self.queue.polls.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of times [`poll`](Self::poll) returned
+    /// [`PollResult::PollAgain`].
+    ///
+    /// `poll` runs a limited number of tasks, and returns `PollAgain` if
+    /// scheduled tasks remain. The `poll_again_count` delta divided by the
+    /// [`poll_count`](Self::poll_count) delta over an interval is the share of
+    /// polls that left a backlog; a value close to 1 means tasks are scheduled
+    /// faster than the runtime runs them.
+    pub fn poll_again_count(&self) -> u64 {
+        self.queue.polls_again.load(Ordering::Relaxed)
     }
 
     /// Runs the provided future.
@@ -265,6 +284,20 @@ impl Handle {
         self.queue.busy.current_turn()
     }
 
+    /// Returns the number of runtime polls that ran scheduled tasks.
+    ///
+    /// See [`Runtime::poll_count`]. Always returns `Some`.
+    pub fn poll_count(&self) -> Option<u64> {
+        Some(self.queue.polls.load(Ordering::Relaxed))
+    }
+
+    /// Returns the number of runtime polls that left scheduled tasks.
+    ///
+    /// See [`Runtime::poll_again_count`]. Always returns `Some`.
+    pub fn poll_again_count(&self) -> Option<u64> {
+        Some(self.queue.polls_again.load(Ordering::Relaxed))
+    }
+
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
@@ -297,6 +330,9 @@ struct RunnableQueue {
     // set by the first remote `schedule` after `run` cleared it
     notified: AtomicBool,
     busy: BusyClock,
+    // poll counters, written by the runtime thread only
+    polls: AtomicU64,
+    polls_again: AtomicU64,
     handle: Box<dyn Notify>,
     event_interval: usize,
     local_queue: UnsafeCell<VecDeque<Runnable>>,
@@ -317,6 +353,8 @@ impl RunnableQueue {
             poll_start: Cell::new(Instant::now()),
             notified: AtomicBool::new(false),
             busy: BusyClock::new(),
+            polls: AtomicU64::new(0),
+            polls_again: AtomicU64::new(0),
             local_queue: UnsafeCell::new(VecDeque::new()),
             sync_fixed_queue: Queue::default(),
             sync_queue: SegQueue::new(),
@@ -397,6 +435,16 @@ impl RunnableQueue {
         self.idle.set(false);
         self.poll_start.set(now);
         self.busy.start(now);
+    }
+
+    fn add_poll(&self, again: bool) {
+        let polls = self.polls.load(Ordering::Relaxed);
+        self.polls.store(polls.wrapping_add(1), Ordering::Relaxed);
+        if again {
+            let polls = self.polls_again.load(Ordering::Relaxed);
+            self.polls_again
+                .store(polls.wrapping_add(1), Ordering::Relaxed);
+        }
     }
 
     fn clear(&self) {
@@ -822,6 +870,31 @@ mod tests {
             last = last.max(busy);
         }
         th.join().unwrap();
+    }
+
+    #[test]
+    fn poll_count() {
+        let rt = Runtime::builder()
+            .event_interval(1)
+            .build(Box::new(NoopNotify));
+        let hnd = rt.handle();
+        assert_eq!((rt.poll_count(), rt.poll_again_count()), (0, 0));
+
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!((rt.poll_count(), rt.poll_again_count()), (1, 0));
+
+        // one task per poll, the first poll leaves a backlog
+        rt.spawn(async {}).detach();
+        rt.spawn(async {}).detach();
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(hnd.poll_count(), Some(3));
+        assert_eq!(hnd.poll_again_count(), Some(1));
+
+        // a stopped runtime does not run tasks
+        rt.stop.set(true);
+        assert_eq!(rt.poll(), PollResult::Ready);
+        assert_eq!((rt.poll_count(), rt.poll_again_count()), (3, 1));
     }
 
     #[test]

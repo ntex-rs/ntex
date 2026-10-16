@@ -141,6 +141,23 @@ impl Handle {
         None
     }
 
+    /// Returns the number of runtime polls, not available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// other runtime backends.
+    pub fn poll_count(&self) -> Option<u64> {
+        None
+    }
+
+    /// Returns the number of runtime polls that left scheduled tasks, not
+    /// available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// other runtime backends.
+    pub fn poll_again_count(&self) -> Option<u64> {
+        None
+    }
+
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
