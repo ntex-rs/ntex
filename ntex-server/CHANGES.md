@@ -11,6 +11,15 @@
   skips workers blocked by a task. It is the default, use
   `LoadBalancing::RoundRobin` for the previous behavior
 
+* Add `WorkerPool::affinity()` and `ServerBuilder::affinity()` with
+  `Affinity::{Disabled, Cpu, Core, Soft}`. `enable_affinity()` is deprecated
+  and does nothing.
+  Workers are placed on physical cores first, spread across NUMA nodes and L3
+  caches, then on SMT siblings, instead of taking CPUs from the highest number
+  down. `Soft` sets the Windows ideal processor without pinning, and is group
+  aware. Affinity is now enabled by default: `Soft` on Windows, `Core` (pin to
+  the CPUs of one physical core) on other platforms
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);

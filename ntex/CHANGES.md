@@ -6,6 +6,12 @@
   worker by default (`LoadBalancing::LeastLoaded`), use
   `LoadBalancing::RoundRobin` for the previous behavior
 
+* Add `HttpServer::affinity()`, `enable_affinity()` is deprecated and does
+  nothing. Workers are
+  placed on physical cores first. Affinity is now enabled by default:
+  `Affinity::Soft` (preferred CPU, no pinning) on Windows, `Affinity::Core` on
+  other platforms
+
 ## [4.3.0] - 2026-10-15
 
 * ws: Add `permessage-deflate` extension support (RFC 7692) to the client and

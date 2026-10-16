@@ -1,6 +1,6 @@
 use ntex_util::time::Millis;
 
-use crate::{LoadBalancing, Server, ServerConfiguration, manager::ServerManager};
+use crate::{Affinity, LoadBalancing, Server, ServerConfiguration, manager::ServerManager};
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Millis = Millis::from_secs(30);
 
@@ -15,7 +15,7 @@ pub struct WorkerPool {
     pub(crate) stop_on_panic: bool,
     pub(crate) graceful_shutdown: bool,
     pub(crate) graceful_shutdown_timeout: Millis,
-    pub(crate) affinity: bool,
+    pub(crate) affinity: Affinity,
     pub(crate) balancing: LoadBalancing,
 }
 
@@ -42,7 +42,7 @@ impl WorkerPool {
             stop_on_panic: false,
             graceful_shutdown: false,
             graceful_shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
-            affinity: false,
+            affinity: Affinity::default(),
             balancing: LoadBalancing::LeastLoaded,
         }
     }
@@ -128,11 +128,24 @@ impl WorkerPool {
     }
 
     #[must_use]
-    /// Enables CPU affinity for worker threads.
+    #[deprecated(
+        since = "4.3.0",
+        note = "affinity is enabled by default, use `affinity()` to change it"
+    )]
+    /// Does nothing, affinity is enabled by default.
+    pub fn enable_affinity(self) -> Self {
+        self
+    }
+
+    #[must_use]
+    /// Sets the CPU affinity of worker threads.
     ///
-    /// By default, affinity is disabled.
-    pub fn enable_affinity(mut self) -> Self {
-        self.affinity = true;
+    /// Workers are spread over physical cores first, see [`Affinity`].
+    ///
+    /// By default, [`Affinity::Soft`] is used on Windows and
+    /// [`Affinity::Core`] on other platforms.
+    pub fn affinity(mut self, affinity: Affinity) -> Self {
+        self.affinity = affinity;
         self
     }
 

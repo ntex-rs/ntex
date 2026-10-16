@@ -11,7 +11,7 @@ use ntex::http::HttpServiceConfig;
 #[cfg(feature = "openssl")]
 use ntex::web::WebAppConfig;
 use ntex::web::{self, App, HttpResponse, HttpServer};
-use ntex::{SharedCfg, io::IoConfig, server::TestServer, time::Seconds};
+use ntex::{SharedCfg, io::IoConfig, server::Affinity, server::TestServer, time::Seconds};
 #[cfg(unix)]
 use ntex::{rt, time::sleep};
 use ntex_tls::TlsConfig;
@@ -334,7 +334,7 @@ async fn test_with_config() {
             })
             .workers(1)
             .stop_on_panic()
-            .enable_affinity()
+            .affinity(Affinity::Core)
             .graceful_shutdown()
             .stop_runtime()
             .disable_signals()

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::{io, time::Duration};
 
 use ntex::time::{Millis, sleep};
-use ntex_server::{Server, ServerConfiguration, Worker, WorkerPool, WorkerStatus};
+use ntex_server::{Affinity, Server, ServerConfiguration, Worker, WorkerPool, WorkerStatus};
 use ntex_service::{Ctx, Service};
 
 #[derive(Clone, Default)]
@@ -248,6 +248,27 @@ async fn pool_least_loaded_skips_blocked_worker() {
     srv.stop(false).await;
 }
 
+/// Every affinity mode starts all workers, more workers than CPUs share them.
+#[ntex::test]
+async fn pool_affinity() {
+    let num = std::thread::available_parallelism().map_or(2, |n| n.get()) + 1;
+    for mode in [
+        Affinity::Disabled,
+        Affinity::Cpu,
+        Affinity::Core,
+        Affinity::Soft,
+    ] {
+        let c = Counters::default();
+        let srv = pool().workers(num).affinity(mode).run(Cfg::new(&c));
+        for i in 0..num {
+            process(&srv, i).await;
+        }
+        wait_for(|| c.items().len() == num).await;
+        wait_for(|| c.created.load(Relaxed) == num).await;
+        srv.stop(false).await;
+    }
+}
+
 #[ntex::test]
 async fn pool_non_graceful_stop() {
     let c = Counters::default();
@@ -375,7 +396,7 @@ fn pool_stop_runtime() {
     let res = sys.run(move || {
         let srv = pool()
             .workers(1)
-            .enable_affinity()
+            .affinity(Affinity::Cpu)
             .stop_runtime()
             .run(Cfg::new(&c2));
         ntex::rt::spawn(async move {
@@ -395,7 +416,7 @@ fn pool_builder() {
     let pool = WorkerPool::default()
         .name("test")
         .workers(3)
-        .enable_affinity()
+        .affinity(Affinity::Disabled)
         .graceful_shutdown();
     let s = format!("{pool:?}");
     assert!(s.contains("\"test\"") && s.contains("num: 3"), "{s}");

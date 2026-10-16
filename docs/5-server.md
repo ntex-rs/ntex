@@ -128,8 +128,14 @@ The commonly useful `ServerBuilder` settings are:
 * `workers()` sets the worker count.
 * `backlog()` sets the listen backlog for listeners created afterward.
 * `max_connections()` sets the process-wide per-worker connection limit.
-* `enable_affinity()` pins workers to CPU cores when the platform exposes
-  suitable core IDs.
+* `affinity()` sets the CPU placement of workers. Workers take one logical CPU
+  of each physical core first, spread across NUMA nodes and L3 caches, then
+  the SMT siblings. `Affinity::Cpu` pins a worker to one logical CPU,
+  `Affinity::Core` to the logical CPUs of one physical core, and
+  `Affinity::Soft` only sets the preferred CPU (the Windows ideal processor),
+  so the scheduler can still move a worker away from a busy CPU. On other
+  platforms `Soft` works like `Core`. The default is `Soft` on Windows and
+  `Core` elsewhere, `Affinity::Disabled` leaves placement to the OS.
 * `load_balancing()` selects how new connections are distributed between
   workers. The default `LoadBalancing::LeastLoaded` picks two random workers
   and sends the connection to the one with the lower runtime utilization

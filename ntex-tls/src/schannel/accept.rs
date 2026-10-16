@@ -1438,7 +1438,7 @@ mod tests {
         // the client answers HelloRequest with ClientHello and waits for the server
         peer.renegotiate();
         assert!(peer.recv().await);
-        assert!(!peer.ssl.get_ref().rd.is_empty());
+        assert_ne!(peer.ssl.get_ref().rd.len(), 0);
 
         io.encode(Bytes::from_static(b"bye"), &BytesCodec).unwrap();
         let done = std::rc::Rc::new(std::cell::RefCell::new(None));

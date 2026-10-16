@@ -841,12 +841,12 @@ mod tests {
     }
 
     struct TestHandle {
-        _ctl: WeakStreamCtl,
+        ctl: WeakStreamCtl,
     }
 
     impl ntex_io::Handle for TestHandle {
         fn query(&self, id: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
-            super::super::io::query(&self._ctl, id)
+            super::super::io::query(&self.ctl, id)
         }
     }
 
@@ -855,7 +855,7 @@ mod tests {
             let addr = self.socket.peer_addr().unwrap().as_socket();
             let (ctl, weak) = self.ops.register_with(self.socket, addr, ctx, self.notify);
             self.ctl.set(Some(ctl));
-            Box::new(TestHandle { _ctl: weak })
+            Box::new(TestHandle { ctl: weak })
         }
     }
 
@@ -1606,7 +1606,7 @@ mod tests {
         );
 
         // resuming reads the queued input
-        io.with_read_dst(|buf| buf.clear());
+        io.with_read_dst(ntex_bytes::BytesMut::clear);
         ctl.read();
         assert!(
             !io.with_read_dst(|buf| buf.is_empty()),
