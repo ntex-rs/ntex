@@ -1,6 +1,11 @@
 # Changes
 
-## [4.4.1] - Unreleased
+## [4.5.0] - Unreleased
+
+* Add `IoMetrics`, per-thread I/O statistics: read and write backpressure counts,
+  active connections and connection-time under backpressure, bytes held in read and
+  write buffers. Connections report to `IoMetrics::current()` of the thread they were
+  created on
 
 * The I/O timer clock starts at `ntex_util::time::now()`, `TimerHandle::remains()`
   could report an extra second when the clock started in the middle of a runtime turn

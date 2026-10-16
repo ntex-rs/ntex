@@ -361,7 +361,7 @@ impl IoContext {
                     if size > orig {
                         if st.is_rd_backpressure_needed(size) {
                             log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
-                            st.flags.set_read_ready_and_backpressure();
+                            st.set_read_ready_and_backpressure();
                         } else {
                             st.flags.set_read_ready();
                         }
@@ -408,6 +408,7 @@ impl IoContext {
                 })
             }),
         };
+        st.sync_read_buffered();
 
         if let Err(err) = result {
             // A read failure while the filters are shutting down does not
@@ -465,6 +466,7 @@ impl IoContext {
         let before = st.buffer.write_buf_size();
         let result = st.buffer.with_write_dst(|buffer| f(buffer));
         st.track_wr_inflight(before, st.buffer.write_buf_size());
+        st.sync_write_buffered();
 
         result
     }
@@ -493,6 +495,7 @@ impl IoContext {
         match status {
             Ok(written) => {
                 st.wr_inflight_written(written);
+                st.sync_write_buffered();
 
                 let len = st.buffer.write_buf_size();
                 let outstanding = st.write_outstanding();

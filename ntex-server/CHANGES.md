@@ -5,6 +5,8 @@
 * Add `Server::metrics()` with per-worker (`WorkerMetrics`), per-listener (`ListenerMetrics`)
   and accept-loop statistics (`ServerMetrics`)
 
+* Add `WorkerMetrics::io`, I/O backpressure and buffered bytes of the worker's connections
+
 * Add `WorkerPool::load_balancing()` and `ServerBuilder::load_balancing()`.
   `LoadBalancing::LeastLoaded` sends each item to the less loaded of two random
   workers, by runtime utilization, then open connections and queued items, and

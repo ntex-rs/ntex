@@ -263,12 +263,14 @@ impl IoRef {
     where
         U: Decoder,
     {
-        self.0.buffer.with_read_dst(self, |buf| {
+        let res = self.0.buffer.with_read_dst(self, |buf| {
             let res = self.decode_buf(codec, buf);
             self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
-        })
+        });
+        self.0.sync_read_buffered();
+        res
     }
 
     /// Attempts to decode a frame from the read buffer.
@@ -288,7 +290,7 @@ impl IoRef {
     where
         U: Decoder,
     {
-        self.0.buffer.with_read_dst(self, |buf| {
+        let res = self.0.buffer.with_read_dst(self, |buf| {
             let len = buf.len();
             let res = self.decode_buf(codec, buf).map(|item| Decoded {
                 item,
@@ -298,7 +300,9 @@ impl IoRef {
             self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
-        })
+        });
+        self.0.sync_read_buffered();
+        res
     }
 
     fn decode_buf<U: Decoder>(
@@ -370,6 +374,7 @@ impl IoRef {
         let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
         self.with_callbacks(|cb| cb.after_processing(self));
         self.release_read_destination();
+        self.0.sync_read_buffered();
 
         self.consolidate_write_state(false)?;
         Ok(result)
@@ -398,11 +403,13 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.0.buffer.with_read_dst(self, |buf| {
+        let res = self.0.buffer.with_read_dst(self, |buf| {
             let res = f(buf);
             self.update_read_destination(buf);
             res
-        })
+        });
+        self.0.sync_read_buffered();
+        res
     }
 
     #[inline]
@@ -469,6 +476,7 @@ impl IoRef {
     {
         let result = self.0.buffer.with_read_src(self, f);
         self.release_read_destination();
+        self.0.sync_read_buffered();
         result
     }
 
@@ -568,9 +576,10 @@ impl IoRef {
 
         // Enable backpressure
         if !st.flags.is_wr_backpressure() && st.is_wr_backpressure_needed(size) {
-            st.flags.set_wr_backpressure();
+            st.set_wr_backpressure();
             st.wake_dispatch_task();
         }
+        st.sync_write_buffered();
         Ok(())
     }
 
@@ -606,7 +615,7 @@ impl IoRef {
             if !st.should_disable_rd_backpressure(buf.len()) {
                 return;
             }
-            st.flags.unset_read_ready_and_backpressure();
+            st.unset_read_ready_and_backpressure();
         } else {
             st.flags.unset_read_ready();
         }
@@ -632,7 +641,7 @@ impl IoRef {
             if !st.should_disable_rd_backpressure(st.buffer.read_dst_size()) {
                 return;
             }
-            st.flags.unset_read_ready_and_backpressure();
+            st.unset_read_ready_and_backpressure();
         }
 
         if st.flags.is_read_paused() {
