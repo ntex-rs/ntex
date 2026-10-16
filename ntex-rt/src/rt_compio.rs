@@ -257,6 +257,15 @@ impl Handle {
         Some(self.stats.polls_again.load(Ordering::Relaxed))
     }
 
+    /// Returns the spawn location of the task the runtime is polling, not
+    /// available on compio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// neon runtime.
+    pub fn current_task(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
     /// Returns the histogram of runtime turn durations.
     ///
     /// Always returns `Some`.

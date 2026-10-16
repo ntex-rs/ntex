@@ -546,11 +546,20 @@ fn watchdog(sys: &Weak<SystemInner>, stop: &AtomicBool, interval: Duration, thre
             }
             match arb.0.latency.check(now, threshold) {
                 Stall::Started(age) => {
-                    log::error!(
-                        "Arbiter {}({:?}) is stalled, no progress for {age:?}",
-                        arb.name(),
-                        arb.id()
-                    );
+                    let task = arb.handle().current_task();
+                    if let Some(task) = task {
+                        log::error!(
+                            "Arbiter {}({:?}) is stalled, no progress for {age:?}, running task spawned at {task}",
+                            arb.name(),
+                            arb.id()
+                        );
+                    } else {
+                        log::error!(
+                            "Arbiter {}({:?}) is stalled, no progress for {age:?}",
+                            arb.name(),
+                            arb.id()
+                        );
+                    }
                     #[cfg(target_os = "linux")]
                     capture_backtrace(&arb, age);
                 }
@@ -749,6 +758,7 @@ mod ping_tests {
             .block_on(async {
                 let mut arb = Arbiter::new();
                 let (tx, rx) = oneshot::channel();
+                let line = line!() + 1;
                 arb.handle().spawn(async move {
                     std::thread::sleep(Duration::from_millis(300));
                     let _ = tx.send(());
@@ -762,6 +772,12 @@ mod ping_tests {
                     Delay::new(Duration::from_millis(5)).await;
                 }
                 assert!(stalled());
+                // the watchdog names the blocking task
+                if let Some(task) = arb.handle().current_task() {
+                    assert_eq!((task.file(), task.line()), (file!(), line));
+                } else {
+                    assert!(cfg!(any(feature = "tokio", feature = "compio")));
+                }
                 rx.await.unwrap();
 
                 for _ in 0..400 {

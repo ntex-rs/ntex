@@ -2,14 +2,17 @@ use std::{fmt, pin::Pin, task::Context, task::Poll, task::ready};
 
 use async_task::Task;
 
+/// Task metadata, the location the task was spawned at.
+pub(crate) type SpawnLocation = &'static std::panic::Location<'static>;
+
 #[derive(Debug)]
 /// A spawned task.
 pub struct JoinHandle<T> {
-    task: Option<Task<T>>,
+    task: Option<Task<T, SpawnLocation>>,
 }
 
 impl<T> JoinHandle<T> {
-    pub(crate) fn new(task: Task<T>) -> Self {
+    pub(crate) fn new(task: Task<T, SpawnLocation>) -> Self {
         JoinHandle { task: Some(task) }
     }
 

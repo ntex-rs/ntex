@@ -34,6 +34,11 @@
   captured by the watchdog instead of the ping task, `ping_threshold` is the
   stall threshold
 
+* Add `Handle::current_task()`, spawn location of the running task, the stall
+  log names the task that blocks the arbiter. `Runtime::spawn()`,
+  `Handle::spawn()` and `spawn()` record the caller location. Returns `None`
+  on tokio and compio
+
 * Require tokio 1.45
 
 * Add `ThreadPool::metrics()` and `System::pool_metrics()`, blocking thread pool

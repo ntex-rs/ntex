@@ -22,10 +22,12 @@ pub fn now() -> Instant {
     crate::rt::Runtime::current_now()
 }
 
+#[track_caller]
 pub fn spawn<F>(fut: F) -> JoinHandle<F::Output>
 where
     F: Future + 'static,
 {
+    let location = std::panic::Location::caller();
     let fut = crate::task::wrap(fut);
-    crate::rt::Runtime::with_current(|rt| rt.spawn(fut))
+    crate::rt::Runtime::with_current(|rt| unsafe { rt.spawn_at(fut, location) })
 }

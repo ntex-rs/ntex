@@ -1,19 +1,20 @@
 use std::cell::{Cell, UnsafeCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use std::{future::Future, io, thread};
+use std::{future::Future, io, panic::Location, ptr, thread};
 
 use async_task::Runnable;
 use crossbeam_queue::SegQueue;
 use swap_buffer_queue::error::{TryDequeueError, TryEnqueueError};
 use swap_buffer_queue::{Queue, buffer::ArrayBuffer};
 
+use crate::handle::{JoinHandle, SpawnLocation};
 use crate::metrics::{AtomicHistogram, Histogram};
-use crate::{
-    busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult, handle::JoinHandle,
-};
+use crate::{busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult};
+
+type Task = Runnable<SpawnLocation>;
 
 scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
 
@@ -92,8 +93,9 @@ impl Runtime {
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.
+    #[track_caller]
     pub fn spawn<F: Future + 'static>(&self, future: F) -> JoinHandle<F::Output> {
-        unsafe { self.spawn_unchecked(future) }
+        unsafe { self.spawn_at(future, Location::caller()) }
     }
 
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
@@ -101,12 +103,26 @@ impl Runtime {
     /// # Safety
     ///
     /// The caller should ensure the captured lifetime is long enough.
+    #[track_caller]
     pub unsafe fn spawn_unchecked<F: Future>(&self, future: F) -> JoinHandle<F::Output> {
+        unsafe { self.spawn_at(future, Location::caller()) }
+    }
+
+    /// Spawns a task, `location` is reported by [`Handle::current_task`].
+    ///
+    /// # Safety
+    ///
+    /// The caller should ensure the captured lifetime is long enough.
+    pub(crate) unsafe fn spawn_at<F: Future>(
+        &self,
+        future: F,
+        location: SpawnLocation,
+    ) -> JoinHandle<F::Output> {
         let queue = self.queue.clone();
         let (runnable, task) = unsafe {
-            async_task::spawn_unchecked(future, move |runnable| {
-                queue.schedule(runnable);
-            })
+            async_task::Builder::new()
+                .metadata(location)
+                .spawn_unchecked(move |_| future, move |runnable| queue.schedule(runnable))
         };
         runnable.schedule();
         JoinHandle::new(task)
@@ -234,18 +250,23 @@ impl Runtime {
     /// # Panics
     ///
     /// Panics if the driver fails to run the provided future.
+    #[track_caller]
     pub fn block_on<F: Future>(&self, future: F, driver: &dyn Driver) -> F::Output {
+        let location = Location::caller();
         self.stop.set(false);
         self.queue.poll_start.set(Instant::now());
 
         CURRENT_RUNTIME.set(self, || {
             let mut result = None;
             unsafe {
-                self.spawn_unchecked(async {
-                    result = Some(future.await);
-                    self.stop.set(true);
-                    let _ = self.queue.handle.notify();
-                });
+                self.spawn_at(
+                    async {
+                        result = Some(future.await);
+                        self.stop.set(true);
+                        let _ = self.queue.handle.notify();
+                    },
+                    location,
+                );
             }
 
             ntex_error::set_backtrace_start_alt("src/raw.rs", 0);
@@ -314,6 +335,17 @@ impl Handle {
         Some(self.queue.polls_again.load(Ordering::Relaxed))
     }
 
+    /// Returns the spawn location of the task the runtime is polling.
+    ///
+    /// Returns `None` while the runtime is idle, handles driver events or
+    /// between tasks. Can be read from other threads, for example to name the
+    /// task that blocks a stalled runtime.
+    pub fn current_task(&self) -> Option<&'static Location<'static>> {
+        let task = self.queue.current.load(Ordering::Relaxed);
+        // only null or a `&'static Location` is stored
+        unsafe { task.as_ref() }
+    }
+
     /// Returns the histogram of runtime poll durations.
     ///
     /// See [`Runtime::poll_histogram`]. Always returns `Some`.
@@ -325,12 +357,14 @@ impl Handle {
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.
+    #[track_caller]
     pub fn spawn<F: Future + Send + 'static>(&self, future: F) -> JoinHandle<F::Output> {
         let queue = self.queue.clone();
-        let schedule = move |runnable| {
-            queue.schedule(runnable);
+        let (runnable, task) = unsafe {
+            async_task::Builder::new()
+                .metadata(Location::caller())
+                .spawn_unchecked(move |_| future, move |runnable| queue.schedule(runnable))
         };
-        let (runnable, task) = unsafe { async_task::spawn_unchecked(future, schedule) };
         runnable.schedule();
         JoinHandle::new(task)
     }
@@ -359,9 +393,11 @@ struct RunnableQueue {
     poll_histogram: AtomicHistogram,
     handle: Box<dyn Notify>,
     event_interval: usize,
-    local_queue: UnsafeCell<VecDeque<Runnable>>,
-    sync_fixed_queue: Queue<ArrayBuffer<Runnable, 128>>,
-    sync_queue: SegQueue<Runnable>,
+    // spawn location of the running task, null between tasks
+    current: AtomicPtr<Location<'static>>,
+    local_queue: UnsafeCell<VecDeque<Task>>,
+    sync_fixed_queue: Queue<ArrayBuffer<Task, 128>>,
+    sync_queue: SegQueue<Task>,
 }
 
 unsafe impl Send for RunnableQueue {}
@@ -380,13 +416,14 @@ impl RunnableQueue {
             polls: AtomicU64::new(0),
             polls_again: AtomicU64::new(0),
             poll_histogram: AtomicHistogram::default(),
+            current: AtomicPtr::new(ptr::null_mut()),
             local_queue: UnsafeCell::new(VecDeque::new()),
             sync_fixed_queue: Queue::default(),
             sync_queue: SegQueue::new(),
         }
     }
 
-    fn schedule(&self, runnable: Runnable) {
+    fn schedule(&self, runnable: Task) {
         if self.id == current_thread_id() {
             unsafe { (*self.local_queue.get()).push_back(runnable) };
             if self.idle.get() {
@@ -418,7 +455,7 @@ impl RunnableQueue {
         // borrowed across `task.run()`
         for _ in 0..self.event_interval {
             if let Some(task) = self.pop_local() {
-                task.run();
+                self.run_task(task);
             } else {
                 break;
             }
@@ -427,7 +464,7 @@ impl RunnableQueue {
         let sync_queue_fixed = match self.sync_fixed_queue.try_dequeue() {
             Ok(buf) => {
                 for task in buf {
-                    task.run();
+                    self.run_task(task);
                 }
                 false
             }
@@ -438,7 +475,7 @@ impl RunnableQueue {
         let sync_queue = {
             for _ in 0..self.event_interval {
                 if let Some(task) = self.sync_queue.pop() {
-                    task.run();
+                    self.run_task(task);
                 } else {
                     break;
                 }
@@ -453,6 +490,22 @@ impl RunnableQueue {
             self.idle.set(true);
         }
         more_tasks
+    }
+
+    fn run_task(&self, task: Task) {
+        struct Reset<'a>(&'a AtomicPtr<Location<'static>>);
+
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) {
+                self.0.store(ptr::null_mut(), Ordering::Relaxed);
+            }
+        }
+
+        let location: SpawnLocation = task.metadata();
+        self.current
+            .store(ptr::from_ref(location).cast_mut(), Ordering::Relaxed);
+        let _reset = Reset(&self.current);
+        task.run();
     }
 
     fn start_busy(&self) {
@@ -481,7 +534,7 @@ impl RunnableQueue {
         }
     }
 
-    fn pop_local(&self) -> Option<Runnable> {
+    fn pop_local(&self) -> Option<Task> {
         unsafe { (*self.local_queue.get()).pop_front() }
     }
 }
@@ -864,6 +917,48 @@ mod tests {
         assert!(hnd.busy_duration().unwrap() >= sleep);
         assert_eq!(hnd.current_turn(), None);
         assert_eq!(rt.current_turn(), None);
+    }
+
+    #[test]
+    fn current_task() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let th = thread::spawn(move || {
+            let rt = Runtime::new(Box::new(NoopNotify));
+            let hnd = rt.handle();
+            assert_eq!(hnd.current_task(), None);
+
+            let line = line!() + 1;
+            rt.spawn(async move {
+                tx.send((hnd, line)).unwrap();
+                release_rx.recv().unwrap();
+            })
+            .detach();
+            assert_eq!(rt.poll(), PollResult::Pending);
+            rt
+        });
+
+        // the running task is visible from another thread
+        let (hnd, line) = rx.recv().unwrap();
+        let task = hnd.current_task().unwrap();
+        assert_eq!((task.file(), task.line()), (file!(), line));
+        release_tx.send(()).unwrap();
+
+        let rt = th.join().unwrap();
+        assert_eq!(hnd.current_task(), None);
+
+        // tasks spawned from other threads record their location too
+        let (tx, rx) = std::sync::mpsc::channel();
+        let hnd2 = hnd.clone();
+        let line = line!() + 1;
+        hnd.spawn(async move {
+            tx.send(hnd2.current_task()).unwrap();
+        })
+        .detach();
+        assert_eq!(rt.poll(), PollResult::Pending);
+        let task = rx.recv().unwrap().unwrap();
+        assert_eq!((task.file(), task.line()), (file!(), line));
+        assert_eq!(hnd.current_task(), None);
     }
 
     #[test]

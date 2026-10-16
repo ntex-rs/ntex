@@ -259,6 +259,12 @@ records no sample for longer than the interval plus `ping_threshold()`, which
 defaults to one second, and counts stalls in `Arbiter::latency()`. Set
 `latency_interval(0)` to disable sampling and stall detection.
 
+On the default neon runtime, `Handle::current_task()` returns the spawn
+location of the task the runtime is polling, and the stall log names it. A
+stall without a running task happens in the driver. Tasks spawned by ntex
+itself report the location inside ntex. The tokio and compio runtimes return
+`None`.
+
 On Linux, `System::set_latency_callback()` can receive a backtrace when an
 arbiter stalls.
 Backtrace capture requires ntex signal handling and uses `SIGUSR2`; an
