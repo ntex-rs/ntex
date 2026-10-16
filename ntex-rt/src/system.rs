@@ -284,10 +284,15 @@ impl System {
     ///
     /// This callback is called with the backtrace of a stalled arbiter, see
     /// [`Builder::ping_threshold`]. Backtraces are captured on Linux and
-    /// Windows. The provided backtrace is not resolved.
+    /// Windows. The provided backtrace is not resolved. The location is the
+    /// spawn location of the task that blocks the arbiter, see
+    /// [`Handle::current_task`].
     pub fn set_latency_callback<F>(f: F)
     where
-        F: Fn(ntex_error::Backtrace) + Send + Sync + 'static,
+        F: Fn(ntex_error::Backtrace, Option<&'static std::panic::Location<'static>>)
+            + Send
+            + Sync
+            + 'static,
     {
         crate::watchdog::set_latency_callback(Arc::new(f));
     }

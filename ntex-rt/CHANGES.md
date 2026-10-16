@@ -23,6 +23,12 @@
   `Handle` counterparts, number of polls and polls that left scheduled tasks,
   for detecting task backlog. The `Handle` methods return `None` on tokio
 
+* Add `Runtime::self_wake_count()` and `Handle::self_wake_count()`, number of
+  times a task woke itself while being polled. On neon, a task that keeps
+  waking itself for `RuntimeBuilder::self_wake_threshold()` wakes and duration,
+  10000 wakes over one second by default, is logged once as a possible busy
+  loop. `Handle::self_wake_count()` returns `None` on tokio and compio
+
 * Add `Runtime::poll_histogram()` and `Handle::poll_histogram()`, log2
   histogram of poll durations. The `Handle` method returns `None` on tokio
 
@@ -33,6 +39,14 @@
   reports `stalls`, `stall_duration` and `stalled`. The stall backtrace is
   captured by the watchdog instead of the ping task, `ping_threshold` is the
   stall threshold
+
+* Add `Handle::current_task()`, spawn location of the running task, the stall
+  log names the task that blocks the arbiter. `Runtime::spawn()`,
+  `Handle::spawn()` and `spawn()` record the caller location. Returns `None`
+  on tokio and compio
+
+* `System::set_latency_callback()` callback receives the spawn location of the
+  stalled task, the stall backtrace log names it
 
 * Capture stalled arbiter backtraces on Windows (x86_64 and aarch64), the
   watchdog suspends the arbiter thread and walks its stack.

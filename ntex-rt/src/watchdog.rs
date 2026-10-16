@@ -1,6 +1,6 @@
 //! Stalled arbiter detection.
 use std::sync::{Arc, Weak, atomic::AtomicBool, atomic::Ordering};
-use std::{thread, time::Duration, time::Instant};
+use std::{panic::Location, thread, time::Duration, time::Instant};
 
 use parking_lot::Mutex;
 
@@ -10,7 +10,8 @@ use crate::capture::CAPTURE;
 use crate::metrics::Stall;
 use crate::system::{System, SystemInner};
 
-type LatencyCallback = Arc<dyn Fn(ntex_error::Backtrace) + Send + Sync>;
+type LatencyCallback =
+    Arc<dyn Fn(ntex_error::Backtrace, Option<&'static Location<'static>>) + Send + Sync>;
 
 static ARB_CB: Mutex<Option<LatencyCallback>> = Mutex::new(None);
 
@@ -67,13 +68,28 @@ fn watchdog(sys: &Weak<SystemInner>, stop: &AtomicBool, interval: Duration, thre
             }
             match arb.0.latency.check(now, threshold) {
                 Stall::Started(age) => {
-                    log::error!(
-                        "Arbiter {}({:?}) is stalled, no progress for {age:?}",
-                        arb.name(),
-                        arb.id()
-                    );
+                    let task = arb.handle().current_task();
+                    if let Some(task) = task {
+                        log::error!(
+                            "Arbiter {}({:?}) is stalled, no progress for {age:?}, running task spawned at {task}",
+                            arb.name(),
+                            arb.id()
+                        );
+                    } else {
+                        log::error!(
+                            "Arbiter {}({:?}) is stalled, no progress for {age:?}",
+                            arb.name(),
+                            arb.id()
+                        );
+                    }
                     if let Some(bt) = capture_backtrace(&arb) {
-                        report(&arb, age, bt);
+                        // the backtrace belongs to the task only if it still runs
+                        let task = task.filter(|t| {
+                            arb.handle()
+                                .current_task()
+                                .is_some_and(|cur| std::ptr::eq(*t, cur))
+                        });
+                        report(&arb, age, bt, task);
                     }
                 }
                 Stall::Recovered(time) => {
@@ -89,17 +105,30 @@ fn watchdog(sys: &Weak<SystemInner>, stop: &AtomicBool, interval: Duration, thre
     }
 }
 
-fn report(arb: &Arbiter, age: Duration, bt: ntex_error::BacktraceRaw) {
+fn report(
+    arb: &Arbiter,
+    age: Duration,
+    bt: ntex_error::BacktraceRaw,
+    task: Option<&'static Location<'static>>,
+) {
     let bt = ntex_error::Backtrace::from(bt);
     if let Some(f) = latency_callback() {
-        f(bt);
+        f(bt, task);
     } else {
         bt.resolver().resolve();
-        log::error!(
-            "Arbiter {}({:?}) made no progress for {age:?}.\n{bt:?}",
-            arb.name(),
-            arb.id()
-        );
+        if let Some(task) = task {
+            log::error!(
+                "Arbiter {}({:?}) made no progress for {age:?}, running task spawned at {task}.\n{bt:?}",
+                arb.name(),
+                arb.id()
+            );
+        } else {
+            log::error!(
+                "Arbiter {}({:?}) made no progress for {age:?}.\n{bt:?}",
+                arb.name(),
+                arb.id()
+            );
+        }
     }
 }
 
@@ -145,7 +174,7 @@ pub(crate) fn sig_usr2() {
     #[allow(clippy::cast_possible_truncation)]
     {
         let tid = unsafe { libc::syscall(libc::SYS_gettid) } as i32;
-        CAPTURE.capture(tid, std::panic::Location::caller().file());
+        CAPTURE.capture(tid, Location::caller().file());
     }
 }
 
@@ -401,6 +430,7 @@ mod tests {
             .block_on(async {
                 let mut arb = Arbiter::new();
                 let (tx, rx) = oneshot::channel();
+                let line = line!() + 1;
                 arb.handle().spawn(async move {
                     std::thread::sleep(Duration::from_millis(300));
                     let _ = tx.send(());
@@ -414,6 +444,12 @@ mod tests {
                     Delay::new(Duration::from_millis(5)).await;
                 }
                 assert!(stalled());
+                // the watchdog names the blocking task
+                if let Some(task) = arb.handle().current_task() {
+                    assert_eq!((task.file(), task.line()), (file!(), line));
+                } else {
+                    assert!(cfg!(any(feature = "tokio", feature = "compio")));
+                }
                 rx.await.unwrap();
 
                 for _ in 0..400 {
@@ -441,15 +477,15 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let data = Arc::new(vec![1u8; 64]);
         let calls2 = calls.clone();
-        System::set_latency_callback(move |_| {
+        System::set_latency_callback(move |_, _| {
             // replace itself, then use captured state
-            System::set_latency_callback(|_| {});
+            System::set_latency_callback(|_, _| {});
             assert_eq!(data.len(), 64);
             calls2.fetch_add(1, Ordering::Relaxed);
         });
 
-        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()));
-        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()));
+        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()), None);
+        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()), None);
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         *ARB_CB.lock() = None;
     }
@@ -466,8 +502,8 @@ mod tests {
         let _guard = CALLBACK.lock();
         let (bt_tx, bt_rx) = std::sync::mpsc::channel();
         let bt_tx = Mutex::new(bt_tx);
-        System::set_latency_callback(move |bt| {
-            let _ = bt_tx.lock().send(format!("{:?}", bt.resolve()));
+        System::set_latency_callback(move |bt, task| {
+            let _ = bt_tx.lock().send((format!("{:?}", bt.resolve()), task));
         });
 
         System::build()
@@ -478,6 +514,7 @@ mod tests {
             .block_on(async move {
                 let mut arb = Arbiter::new();
                 let (tx, rx) = std::sync::mpsc::channel();
+                let line = line!() + 1;
                 let done = arb.handle().spawn(async move {
                     stalled_arbiter_fn(&rx);
                 });
@@ -485,18 +522,23 @@ mod tests {
                 // other tests can stall their arbiters too
                 let mut found = None;
                 for _ in 0..2000 {
-                    if let Ok(bt) = bt_rx.try_recv()
+                    if let Ok((bt, task)) = bt_rx.try_recv()
                         && bt.contains("stalled_arbiter_fn")
                     {
-                        found = Some(bt);
+                        found = Some((bt, task));
                         break;
                     }
                     Delay::new(Duration::from_millis(5)).await;
                 }
                 tx.send(()).unwrap();
                 done.await.unwrap();
-                let bt = found.expect("backtrace of the stalled arbiter");
+                let (bt, task) = found.expect("backtrace of the stalled arbiter");
                 assert!(bt.contains("stall_backtrace"), "{bt}");
+                if let Some(task) = task {
+                    assert_eq!((task.file(), task.line()), (file!(), line));
+                } else {
+                    assert!(cfg!(any(feature = "tokio", feature = "compio")));
+                }
 
                 let recovered = || !arb.latency().unwrap().stalled;
                 for _ in 0..400 {

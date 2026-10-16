@@ -7,7 +7,7 @@ use futures_timer::Delay;
 /// Number of [`Histogram`] buckets.
 pub const HISTOGRAM_BUCKETS: usize = 16;
 
-// upper bound of the first bucket, in microseconds
+/// upper bound of the first bucket, in microseconds
 const FIRST_BUCKET_US: u64 = 16;
 
 /// Snapshot of a duration histogram.
@@ -275,7 +275,10 @@ mod tests {
             assert_eq!(AtomicHistogram::bucket(lower), i);
             if let Some(upper) = upper {
                 assert_eq!(AtomicHistogram::bucket(upper), i + 1);
-                assert_eq!(AtomicHistogram::bucket(upper - Duration::from_nanos(1)), i);
+                assert_eq!(
+                    AtomicHistogram::bucket(upper.checked_sub(Duration::from_nanos(1)).unwrap()),
+                    i
+                );
             }
         }
         assert_eq!(Histogram::bucket_range(15).1, None);

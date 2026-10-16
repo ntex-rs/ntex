@@ -1,15 +1,40 @@
-use std::{fmt, pin::Pin, task::Context, task::Poll, task::ready};
+use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::{fmt, panic::Location, pin::Pin, task::Context, task::Poll, task::ready};
 
 use async_task::Task;
+
+/// The location a task was spawned at.
+pub(crate) type SpawnLocation = &'static Location<'static>;
+
+#[derive(Debug)]
+/// Task metadata.
+pub(crate) struct TaskMeta {
+    pub(crate) location: SpawnLocation,
+    /// Consecutive polls that woke the task itself, the high bit marks a
+    /// reported streak.
+    pub(crate) self_wakes: AtomicU32,
+    /// Start of the self-wake streak, nanoseconds since the runtime epoch.
+    pub(crate) streak_start: AtomicU64,
+}
+
+impl TaskMeta {
+    pub(crate) fn new(location: SpawnLocation) -> Self {
+        Self {
+            location,
+            self_wakes: AtomicU32::new(0),
+            streak_start: AtomicU64::new(0),
+        }
+    }
+}
 
 #[derive(Debug)]
 /// A spawned task.
 pub struct JoinHandle<T> {
-    task: Option<Task<T>>,
+    task: Option<Task<T, TaskMeta>>,
 }
 
 impl<T> JoinHandle<T> {
-    pub(crate) fn new(task: Task<T>) -> Self {
+    pub(crate) fn new(task: Task<T, TaskMeta>) -> Self {
         JoinHandle { task: Some(task) }
     }
 
