@@ -1,20 +1,24 @@
 use std::cell::{Cell, UnsafeCell};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::{collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc};
+use std::os::fd::{AsRawFd, RawFd};
+use std::{collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc};
 
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
 
 use ntex_io::Io;
 use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
-use ntex_io_uring::opcode::{AsyncCancel, Read};
+use ntex_io_uring::opcode::AsyncCancel;
 use ntex_io_uring::squeue::{Entry as SEntry, PushError, SubmissionQueue};
 use ntex_io_uring::{IoUring, Probe, Submitter, types::CancelBuilder, types::Fd};
-use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
+use ntex_rt::{DriverType, Notify, PollResult, Runtime};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
 
-use super::{TcpStream, UnixStream, stream::StreamOps};
+use super::{
+    TcpStream, UnixStream,
+    notifier::{self, Notifier, NotifierRead},
+    stream::StreamOps,
+};
 use crate::channel::Receiver;
 
 pub trait Handler {
@@ -147,7 +151,6 @@ bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
         const NEW      = 0b0000_0001;
-        const NOTIFIER = 0b0000_0010;
     }
 }
 
@@ -156,8 +159,7 @@ struct ReactorInner {
     flags: Cell<Flags>,
     ring: IoUring<SEntry, CEntry>,
     changes: UnsafeCell<VecDeque<mem::MaybeUninit<SEntry>>>,
-    // eventfd counter, written by the in-flight notifier read
-    notify_buf: UnsafeCell<u64>,
+    notify_read: NotifierRead,
 }
 
 impl ReactorInner {
@@ -182,17 +184,16 @@ impl ReactorInner {
             f(entry.assume_init_mut());
         }
     }
+}
 
-    /// Read the notifier eventfd, the completion wakes the driver
-    fn arm_notifier(&self, fd: RawFd) {
-        self.push(|en| {
-            Read::new(en, Fd(fd), self.notify_buf.get().cast(), 8).user_data(Reactor::NOTIFY);
-        });
+impl Drop for ReactorInner {
+    fn drop(&mut self) {
+        self.notify_read.stop(&self.ring);
     }
 }
 
 impl Reactor {
-    const NOTIFY: u64 = u64::MAX;
+    const NOTIFY: u64 = notifier::NOTIFY;
     const CANCEL: u64 = u64::MAX - 1;
     const BATCH: u64 = 48;
     const BATCH_MASK: u64 = 0xFFFF_0000_0000_0000;
@@ -249,12 +250,11 @@ impl Reactor {
             probe,
             flags: Cell::new(if new { Flags::NEW } else { Flags::empty() }),
             changes: UnsafeCell::new(VecDeque::with_capacity(32)),
-            notify_buf: UnsafeCell::new(0),
+            notify_read: NotifierRead::new(),
         });
 
         // Remote notifier
         let notifier = Notifier::new()?;
-        inner.arm_notifier(notifier.as_raw_fd());
 
         Ok(Self {
             fd,
@@ -291,20 +291,20 @@ impl Reactor {
     fn apply_changes(&self, sq: SubmissionQueue<'_, SEntry>) -> bool {
         unsafe {
             let changes = &mut *self.inner.changes.get();
-            if changes.is_empty() {
-                false
-            } else {
-                // safety: "changes" contains only initialized entries
-                while let Some(entry) = changes.front() {
-                    let res = sq.push(|en| ptr::copy_nonoverlapping(entry.as_ptr(), en, 1));
-                    if res.is_err() {
-                        break;
-                    }
-                    changes.pop_front();
+            // safety: "changes" contains only initialized entries
+            while let Some(entry) = changes.front() {
+                let res = sq.push(|en| ptr::copy_nonoverlapping(entry.as_ptr(), en, 1));
+                if res.is_err() {
+                    break;
                 }
-
-                !changes.is_empty()
+                changes.pop_front();
             }
+
+            let read = &self.inner.notify_read;
+            if changes.is_empty() {
+                read.arm(sq, self.notifier.as_raw_fd());
+            }
+            !changes.is_empty() || read.is_queued()
         }
     }
 
@@ -344,16 +344,7 @@ impl Reactor {
                 let user_data = entry.user_data();
                 match user_data {
                     Self::CANCEL => {}
-                    Self::NOTIFY => {
-                        // the read resets the eventfd counter
-                        let res = entry.result();
-                        assert!(
-                            res >= 0 || res == -libc::EINTR || res == -libc::ECANCELED,
-                            "cannot read notifier: {}",
-                            io::Error::from_raw_os_error(-res)
-                        );
-                        self.inner.arm_notifier(self.notifier.as_raw_fd());
-                    }
+                    Self::NOTIFY => self.inner.notify_read.completed(entry.result()),
                     _ => {
                         let batch = ((user_data & Self::BATCH_MASK) >> Self::BATCH) as usize;
                         let user_data = (user_data & Self::DATA_MASK) as usize;
@@ -457,6 +448,7 @@ impl crate::Reactor for Reactor {
 impl ntex_rt::Driver for Reactor {
     /// Poll the driver and handle completed operations.
     fn run(&self, rt: &Runtime) -> io::Result<()> {
+        let _notifier = self.inner.notify_read.guard(&self.inner.ring);
         let ring = &self.inner.ring;
         let sq = ring.submission();
         let mut cq = unsafe { ring.completion_shared() };
@@ -493,13 +485,16 @@ impl ntex_rt::Driver for Reactor {
 
         // cleanup handlers
         if result.is_ok() {
+            self.inner.notify_read.stop_arming();
             // Operations queued during the last turn (`Close` of dropped
             // streams in particular) have not reached the kernel yet.
             self.flush(sq, &submitter);
 
             // Handlers release buffers and sockets referenced by in-flight
             // operations, the kernel must be done with all of them first.
-            if let Err(e) = submitter.register_sync_cancel(None, CancelBuilder::any()) {
+            let canceled = submitter.register_sync_cancel(None, CancelBuilder::any());
+            self.inner.notify_read.canceled(ring, &canceled);
+            if let Err(e) = canceled {
                 log::error!("Cannot cancel in-flight operations: {e:?}");
             }
 
@@ -514,57 +509,6 @@ impl ntex_rt::Driver for Reactor {
     /// Get notification handle
     fn handle(&self) -> Box<dyn Notify> {
         Box::new(self.notifier.handle())
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Notifier {
-    fd: Arc<OwnedFd>,
-}
-
-impl Notifier {
-    /// Create a new notifier.
-    pub(crate) fn new() -> io::Result<Self> {
-        // io-uring fails reads of non-blocking files with EAGAIN instead of
-        // waiting for data, a write blocks only on the counter overflow
-        let fd = syscall!(libc::eventfd(0, libc::EFD_CLOEXEC))?;
-        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-        Ok(Self { fd: Arc::new(fd) })
-    }
-
-    pub(crate) fn handle(&self) -> NotifyHandle {
-        NotifyHandle::new(self.fd.clone())
-    }
-}
-
-impl AsRawFd for Notifier {
-    fn as_raw_fd(&self) -> RawFd {
-        self.fd.as_raw_fd()
-    }
-}
-
-#[derive(Clone, Debug)]
-/// A notify handle to the driver.
-pub(crate) struct NotifyHandle {
-    fd: Arc<OwnedFd>,
-}
-
-impl NotifyHandle {
-    pub(crate) fn new(fd: Arc<OwnedFd>) -> Self {
-        Self { fd }
-    }
-}
-
-impl Notify for NotifyHandle {
-    /// Notify the driver.
-    fn notify(&self) -> io::Result<()> {
-        let data = 1u64;
-        syscall!(libc::write(
-            self.fd.as_raw_fd(),
-            (&raw const data).cast(),
-            std::mem::size_of::<u64>(),
-        ))?;
-        Ok(())
     }
 }
 
@@ -588,8 +532,15 @@ impl fmt::Debug for ReactorApi {
 
 #[cfg(test)]
 mod tests {
-    use ntex_io_uring::opcode::Nop;
+    use std::future::pending;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
 
+    use ntex_io_uring::opcode::Nop;
+    use ntex_rt::syscall;
+
+    use super::notifier::NotifierState;
     use super::*;
 
     #[test]
@@ -600,6 +551,7 @@ mod tests {
         let ring = &reactor.inner.ring;
         let sq = ring.submission();
         // submit the notifier
+        assert!(!reactor.apply_changes(sq));
         ring.submitter().submit().unwrap();
         sq.sync();
         assert_eq!(sq.len(), 0);
@@ -633,6 +585,269 @@ mod tests {
         cq.sync();
         let ids: Vec<_> = cq.map(|e| e.user_data()).collect();
         assert_eq!(ids, [0, 1, 2, 3]);
+    }
+
+    fn sync_cancel_reactor() -> Option<Reactor> {
+        let reactor = Reactor::new(8).ok()?;
+        let err = reactor
+            .inner
+            .ring
+            .submitter()
+            .register_sync_cancel(None, CancelBuilder::user_data(Reactor::NOTIFY))
+            .unwrap_err();
+        if err.raw_os_error() != Some(libc::ENOENT) {
+            eprintln!("Skipping notifier cancellation test: {err}");
+            return None;
+        }
+        Some(reactor)
+    }
+
+    fn assert_notifier_canceled(reactor: &Reactor) {
+        // Run deferred cancellation completions without submitting other SQEs.
+        assert!(reactor.inner.ring.submission().is_empty());
+        reactor.inner.ring.submitter().submit().unwrap();
+        let err = reactor
+            .inner
+            .ring
+            .submitter()
+            .register_sync_cancel(None, CancelBuilder::user_data(Reactor::NOTIFY))
+            .unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ENOENT));
+    }
+
+    // Keep the kernel ring, but destroy the reactor before completing the read.
+    // Reclaim the deliberately retained allocation only after its CQE arrives.
+    fn complete_retained_notifier(mut reactor: Reactor) {
+        assert_eq!(
+            reactor.inner.notify_read.state.get(),
+            NotifierState::Retained
+        );
+        let buf = ptr::from_ref(reactor.inner.notify_read.buf.as_deref().unwrap()).cast_mut();
+        let notify = reactor.notifier.handle();
+        let inner = Rc::get_mut(&mut reactor.inner).unwrap();
+        let ring = mem::replace(&mut inner.ring, IoUring::new(1).unwrap());
+        let weak = Rc::downgrade(&reactor.inner);
+        drop(reactor);
+        assert!(weak.upgrade().is_none());
+
+        notify.notify().unwrap();
+        ring.submitter().submit_and_wait(1).unwrap();
+        let mut cq = unsafe { ring.completion_shared() };
+        cq.sync();
+        let entry = cq.next().unwrap();
+        assert_eq!(entry.user_data(), Reactor::NOTIFY);
+        assert_eq!(entry.result(), 8);
+        let buf = unsafe { Box::from_raw(buf) };
+        assert_eq!(unsafe { *buf.get() }, 1);
+    }
+
+    #[test]
+    fn notifier_unrun() {
+        let Ok(reactor) = Reactor::new(8) else {
+            return;
+        };
+        assert_eq!(reactor.inner.notify_read.state.get(), NotifierState::Queued);
+        assert!(reactor.inner.ring.submission().is_empty());
+        let weak = Rc::downgrade(&reactor.inner);
+        drop(reactor);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn notifier_stops_with_full_queue() {
+        let Ok(reactor) = Reactor::new(4) else {
+            return;
+        };
+        let sq = reactor.inner.ring.submission();
+        for _ in 0..8 {
+            reactor.inner.push(|en| {
+                Nop::new(en).user_data(Reactor::CANCEL);
+            });
+        }
+        assert!(reactor.apply_changes(sq));
+        assert_eq!(reactor.inner.notify_read.state.get(), NotifierState::Queued);
+        reactor
+            .inner
+            .notify_read
+            .stop_with(&reactor.inner.ring, || panic!("read was not queued"));
+        assert_eq!(
+            reactor.inner.notify_read.state.get(),
+            NotifierState::Stopped
+        );
+        assert_eq!(sq.len(), 4);
+        assert_eq!(unsafe { &*reactor.inner.changes.get() }.len(), 4);
+
+        let submitter = reactor.inner.ring.submitter();
+        reactor.flush(sq, &submitter);
+        submitter.submit_and_wait(8).unwrap();
+        let mut cq = unsafe { reactor.inner.ring.completion_shared() };
+        cq.sync();
+        assert_eq!(cq.len(), 8);
+        assert!(cq.all(|e| e.user_data() == Reactor::CANCEL));
+        assert!(reactor.inner.ring.submission().is_empty());
+    }
+
+    #[test]
+    fn notifier_cancellation_does_not_rearm() {
+        let Some(reactor) = sync_cancel_reactor() else {
+            return;
+        };
+        assert!(!reactor.apply_changes(reactor.inner.ring.submission()));
+        reactor.inner.ring.submitter().submit().unwrap();
+        reactor.inner.notify_read.stop(&reactor.inner.ring);
+        assert_eq!(
+            reactor.inner.notify_read.state.get(),
+            NotifierState::Stopped
+        );
+        assert_notifier_canceled(&reactor);
+
+        let mut cq = unsafe { reactor.inner.ring.completion_shared() };
+        reactor.poll_completions(&mut cq);
+        reactor
+            .inner
+            .notify_read
+            .stop_with(&reactor.inner.ring, || panic!("cleanup was not idempotent"));
+        assert!(!reactor.apply_changes(reactor.inner.ring.submission()));
+        assert!(reactor.inner.ring.submission().is_empty());
+    }
+
+    #[test]
+    fn notifier_completed_before_cleanup() {
+        let Some(reactor) = sync_cancel_reactor() else {
+            return;
+        };
+        assert!(!reactor.apply_changes(reactor.inner.ring.submission()));
+        reactor.notifier.handle().notify().unwrap();
+        reactor.inner.ring.submitter().submit_and_wait(1).unwrap();
+        assert_eq!(reactor.inner.notify_read.state.get(), NotifierState::Active);
+        reactor.inner.notify_read.stop(&reactor.inner.ring);
+        assert_eq!(
+            reactor.inner.notify_read.state.get(),
+            NotifierState::Stopped
+        );
+        assert_notifier_canceled(&reactor);
+    }
+
+    #[test]
+    fn notifier_queued_read_is_retained() {
+        let Some(reactor) = sync_cancel_reactor() else {
+            return;
+        };
+        assert!(!reactor.apply_changes(reactor.inner.ring.submission()));
+        assert_eq!(reactor.inner.ring.submission().len(), 1);
+        reactor.inner.notify_read.stop(&reactor.inner.ring);
+        assert_eq!(reactor.inner.ring.submission().len(), 1);
+        complete_retained_notifier(reactor);
+    }
+
+    #[test]
+    fn notifier_cancel_failure_is_retained() {
+        for errno in [libc::EINVAL, libc::ETIME, libc::EIO] {
+            let Some(reactor) = sync_cancel_reactor() else {
+                return;
+            };
+            assert!(!reactor.apply_changes(reactor.inner.ring.submission()));
+            reactor.inner.ring.submitter().submit().unwrap();
+            reactor
+                .inner
+                .notify_read
+                .stop_with(&reactor.inner.ring, || {
+                    Err(io::Error::from_raw_os_error(errno))
+                });
+            reactor
+                .inner
+                .notify_read
+                .stop_with(&reactor.inner.ring, || panic!("cleanup was not idempotent"));
+            assert!(!reactor.apply_changes(reactor.inner.ring.submission()));
+            assert!(reactor.inner.ring.submission().is_empty());
+            complete_retained_notifier(reactor);
+        }
+    }
+
+    #[test]
+    fn notifier_driver_error() {
+        let Ok(mut reactor) = Reactor::new(8) else {
+            return;
+        };
+        // A disabled ring rejects submission with EBADFD.
+        let inner = Rc::get_mut(&mut reactor.inner).unwrap();
+        inner.ring = IoUring::builder().setup_r_disabled().build(8).unwrap();
+        reactor.fd = inner.ring.as_raw_fd();
+        let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
+        let err = ntex_rt::Driver::run(&reactor, &rt).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::EBADFD));
+        assert_eq!(
+            reactor.inner.notify_read.state.get(),
+            NotifierState::Retained
+        );
+        drop(rt);
+
+        reactor
+            .inner
+            .ring
+            .submitter()
+            .register_enable_rings()
+            .unwrap();
+        complete_retained_notifier(reactor);
+    }
+
+    #[test]
+    fn notifier_handler_panic() {
+        struct Panicking {
+            api: ReactorApi,
+            seen: bool,
+        }
+
+        impl Handler for Panicking {
+            fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {
+                assert!(!self.seen, "unwind with the rearmed notifier in flight");
+                self.seen = true;
+                self.api.submit(0, |en| {
+                    Nop::new(en);
+                });
+            }
+            fn canceled(&mut self, _: usize) {}
+            fn tick(&mut self) {}
+            fn cleanup(&mut self) {}
+        }
+
+        let Some(reactor) = sync_cancel_reactor() else {
+            return;
+        };
+        let duplicate =
+            unsafe { OwnedFd::from_raw_fd(syscall!(libc::dup(reactor.as_raw_fd())).unwrap()) };
+        let notify = reactor.notifier.handle();
+        reactor.register(|api| {
+            api.submit(0, |en| {
+                Nop::new(en);
+            });
+            Box::new(Panicking { api, seen: false })
+        });
+        let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                rt.block_on(pending::<()>(), &reactor);
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            reactor.inner.notify_read.state.get(),
+            NotifierState::Stopped
+        );
+        assert_notifier_canceled(&reactor);
+        drop(rt);
+        let mut cq = unsafe { reactor.inner.ring.completion_shared() };
+        cq.sync();
+        let entry = cq.next().unwrap();
+        assert_eq!(entry.user_data(), Reactor::NOTIFY);
+        assert_eq!(entry.result(), -libc::ECANCELED);
+        drop(cq);
+        drop(reactor);
+        let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", duplicate.as_raw_fd()))
+            .unwrap();
+        assert!(!info.contains("op=22,"), "{info}");
+        drop(notify);
+        drop(duplicate);
     }
 
     #[test]
