@@ -43,12 +43,12 @@
 //!   the timers stored in it. The clock advances to the scheduled time of the
 //!   bucket, not to the time the driver woke up, so a late wakeup does not
 //!   delay later timers. Buckets that are overdue are processed at once.
-//! * [`LowresTimerDriver`] invalidates the cached [`now()`] and
-//!   [`system_time()`] values every 150 milliseconds.
+//! * [`LowresTimerDriver`] invalidates the cached [`system_time()`] value
+//!   every 150 milliseconds.
 //!
 //! Dropping the timer driver, i.e. when the runtime stops, stops the wheel and
 //! marks all timers as elapsed. Dropping the lowres driver invalidates the
-//! cached time.
+//! cached system time.
 //!
 //! A runtime does not always drop its pending tasks when it stops, the timer
 //! is also reset once the arbiter storage of the stopped system is cleared,
@@ -117,12 +117,13 @@ const fn as_millis(dur: Duration) -> u64 {
     dur.as_secs() * 1_000 + (dur.subsec_millis() as u64)
 }
 
-/// Returns a cached approximation of the current instant.
+/// Returns the start of the current runtime turn, see [`ntex_rt::now()`].
 ///
-/// The cached value is refreshed at roughly 150 millisecond intervals.
+/// Tasks polled in the same turn observe the same instant on neon and compio,
+/// on tokio this is [`Instant::now()`].
 #[inline]
 pub fn now() -> Instant {
-    TIMER.with(Timer::now)
+    ntex_rt::now()
 }
 
 /// Returns a cached approximation of the current system time.
@@ -199,7 +200,7 @@ bitflags::bitflags! {
         const LOWRES_TIMER   = 0b0000_1000;
         /// The lowres driver task is spawned.
         const LOWRES_DRIVER  = 0b0001_0000;
-        /// A timer was scheduled, `now()` and `system_time()` cache the time.
+        /// A timer was scheduled, `system_time()` caches the time.
         const RUNNING        = 0b0010_0000;
     }
 }
@@ -221,7 +222,6 @@ struct Timer {
     /// Incremented on reset, drivers of an older generation are stale.
     generation: Cell<u64>,
     driver: LocalWaker,
-    lowres_time: Cell<Option<Instant>>,
     lowres_stime: Cell<Option<SystemTime>>,
     lowres_driver: LocalWaker,
     /// Taken out of the cell for the duration of an operation.
@@ -264,7 +264,6 @@ impl Timer {
             flags: Cell::new(Flags::empty()),
             generation: Cell::new(0),
             driver: LocalWaker::new(),
-            lowres_time: Cell::new(None),
             lowres_stime: Cell::new(None),
             lowres_driver: LocalWaker::new(),
             wheel: Cell::new(Some(Box::new(Wheel {
@@ -292,21 +291,8 @@ impl Timer {
         f
     }
 
-    /// Returns the cached instant, the cache is populated only while the wheel
-    /// is running.
-    fn now(self: &Rc<Self>) -> Instant {
-        if let Some(cur) = self.lowres_time.get() {
-            cur
-        } else {
-            let now = Instant::now();
-            if self.flags.get().contains(Flags::RUNNING) {
-                self.lowres_time.set(Some(now));
-                self.refresh_lowres();
-            }
-            now
-        }
-    }
-
+    /// Returns the cached system time, the cache is populated only while the
+    /// wheel is running.
     fn system_time(self: &Rc<Self>) -> SystemTime {
         if let Some(cur) = self.lowres_stime.get() {
             cur
@@ -494,7 +480,6 @@ impl Timer {
     /// Invalidates the cached time, called when the lowres driver is dropped.
     fn stop_lowres(&self) {
         self.remove_flags(Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER);
-        self.lowres_time.set(None);
         self.lowres_stime.set(None);
     }
 
@@ -641,9 +626,6 @@ impl TimerDriver {
             sleep: Delay::new(deadline.saturating_duration_since(Instant::now())),
             armed: Some(deadline),
         });
-
-        // start lowres driver
-        timer.refresh_lowres();
     }
 }
 
@@ -667,12 +649,6 @@ impl Future for TimerDriver {
         timer.driver.register(cx.waker());
 
         let now = Instant::now();
-        timer.lowres_time.set(Some(now));
-        if !timer.flags.get().contains(Flags::LOWRES_TIMER) {
-            // arm the invalidation, otherwise the cached time stays stale
-            // until the next wakeup of the driver
-            timer.refresh_lowres();
-        }
 
         loop {
             let expiry = timer.next_expiry.get();
@@ -765,7 +741,6 @@ impl Future for LowresTimerDriver {
         }
 
         if Pin::new(&mut this.sleep).poll(cx).is_ready() {
-            timer.lowres_time.set(None);
             timer.lowres_stime.set(None);
             flags.remove(Flags::LOWRES_TIMER);
             timer.flags.set(flags);
@@ -975,7 +950,7 @@ mod tests {
             no
         });
         timer.next_expiry.set(3);
-        timer.lowres_time.set(Some(Instant::now()));
+        timer.lowres_stime.set(Some(SystemTime::now()));
         timer.insert_flags(
             Flags::RUNNING | Flags::DRIVER_STARTED | Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER,
         );
@@ -986,7 +961,7 @@ mod tests {
             sleep: Delay::new(Duration::ZERO),
         });
         assert_eq!(timer.flags.get(), Flags::DRIVER_STARTED);
-        assert!(timer.lowres_time.get().is_none());
+        assert!(timer.lowres_stime.get().is_none());
         // timers are still pending
         assert_eq!(timer.next_expiry.get(), 3);
         timer.with_wheel(|w| assert_eq!(w.timers[no].bucket, Some(3)));
@@ -1022,8 +997,7 @@ mod tests {
         assert!(elapsed >= Duration::from_millis(50), "elapsed: {elapsed:?}");
     }
 
-    /// The time cached by the wheel driver is invalidated after
-    /// `LOWRES_RESOLUTION`, like the time cached by `now()`.
+    /// `now()` does not go stale while the wheel is idle.
     #[ntex::test]
     async fn test_driver_cached_time_expires() {
         // the lowres timer of the cache populated at start fires first

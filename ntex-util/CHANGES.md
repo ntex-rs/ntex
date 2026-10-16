@@ -1,5 +1,10 @@
 # Changes
 
+## [4.4.0] - Unreleased
+
+* `time::now()` returns `ntex_rt::now()`, the start of the current runtime turn on
+  neon and compio, `Instant::now()` on tokio. The lowres `Instant` cache is removed
+
 ## [4.3.0] - 2026-10-06
 
 * `BufferService` uses pipeline readiness of the inner service instead of `call_nowait()`

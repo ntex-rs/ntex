@@ -1,5 +1,10 @@
 # Changes
 
+## [4.4.1] - Unreleased
+
+* The I/O timer clock starts at `ntex_util::time::now()`, `TimerHandle::remains()`
+  could report an extra second when the clock started in the middle of a runtime turn
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`
