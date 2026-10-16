@@ -47,6 +47,8 @@ pub struct Worker<T> {
     reqs: Sender<T>,
     stop: Sender<Shutdown>,
     avail: WorkerAvailability,
+    arbiter: Arbiter,
+    metrics: Option<Arc<WorkerSlot>>,
 }
 
 #[derive(Debug)]
@@ -87,46 +89,46 @@ impl<T> Worker<T> {
         let n = name.clone();
         let inner = avail.inner.clone();
 
+        let arbiter = Arbiter::with_name(name.clone()).on_stop(move || {
+            inner.failed.store(true, Ordering::Release);
+            inner.updated.store(true, Ordering::Release);
+            inner.available.store(false, Ordering::Release);
+            inner.waker.wake();
+        });
         let worker = Worker {
             reqs,
             avail,
             stop,
-            name: name.clone(),
+            name,
+            arbiter: arbiter.clone(),
+            metrics: metrics.clone(),
         };
 
-        Arbiter::with_name(name)
-            .on_stop(move || {
-                inner.failed.store(true, Ordering::Release);
-                inner.updated.store(true, Ordering::Release);
-                inner.available.store(false, Ordering::Release);
-                inner.waker.wake();
-            })
-            .handle()
-            .spawn(async move {
-                log::info!("Starting worker {n:?}");
-                if let Some(cid) = cid
-                    && core_affinity::set_for_current(cid)
-                {
-                    log::info!("Set affinity to {cid:?} for worker {n:?}");
-                }
+        arbiter.handle().spawn(async move {
+            log::info!("Starting worker {n:?}");
+            if let Some(cid) = cid
+                && core_affinity::set_for_current(cid)
+            {
+                log::info!("Set affinity to {cid:?} for worker {n:?}");
+            }
 
-                // the arbiter is stopped even if the service panics, runtimes
-                // that catch task panics keep the arbiter running otherwise
-                WorkerSlot::set_current(metrics.clone());
-                let _ = spawn(async move {
-                    match ServiceRunner::create(&n, cfg, r_rx, s_rx, a_tx, metrics).await {
-                        Ok(wrk) => {
-                            log::debug!("Server instance has been created in {n:?}");
-                            wrk.run().await;
-                        }
-                        Err(()) => {
-                            log::error!("Cannot start worker {n:?}");
-                        }
+            // the arbiter is stopped even if the service panics, runtimes
+            // that catch task panics keep the arbiter running otherwise
+            WorkerSlot::set_current(metrics.clone());
+            let _ = spawn(async move {
+                match ServiceRunner::create(&n, cfg, r_rx, s_rx, a_tx, metrics).await {
+                    Ok(wrk) => {
+                        log::debug!("Server instance has been created in {n:?}");
+                        wrk.run().await;
                     }
-                })
-                .await;
-                Arbiter::current().stop();
-            });
+                    Err(()) => {
+                        log::error!("Cannot start worker {n:?}");
+                    }
+                }
+            })
+            .await;
+            Arbiter::current().stop();
+        });
 
         worker
     }
@@ -134,6 +136,16 @@ impl<T> Worker<T> {
     /// Returns the worker name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the arbiter the worker runs on.
+    pub(crate) fn arbiter(&self) -> &Arbiter {
+        &self.arbiter
+    }
+
+    /// Returns the number of open connections plus queued items.
+    pub(crate) fn load(&self) -> usize {
+        self.metrics.as_ref().map_or(0, |m| m.active()) + self.reqs.len()
     }
 
     #[inline]
@@ -213,6 +225,8 @@ impl<T> Clone for Worker<T> {
             reqs: self.reqs.clone(),
             stop: self.stop.clone(),
             avail: self.avail.clone(),
+            arbiter: self.arbiter.clone(),
+            metrics: self.metrics.clone(),
         }
     }
 }

@@ -7,7 +7,7 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::error::IntoFailure;
 use crate::http::{self, Request, Response, ResponseError};
-use crate::server::{NoConfig, Server, ServerAppConfig, ServerBuilder};
+use crate::server::{LoadBalancing, NoConfig, Server, ServerAppConfig, ServerBuilder};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory, State, fn_service};
 use crate::{SharedCfg, time::Seconds};
 
@@ -217,6 +217,17 @@ where
     /// By default, affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
         self.builder = self.builder.enable_affinity();
+        self
+    }
+
+    #[must_use]
+    /// Sets how new connections are distributed between workers.
+    ///
+    /// By default, [`LoadBalancing::LeastLoaded`] sends new connections to idle
+    /// workers, which helps when connections are long-lived or their load is
+    /// uneven. [`LoadBalancing::RoundRobin`] sends them to the workers in turn.
+    pub fn load_balancing(mut self, balancing: LoadBalancing) -> Self {
+        self.builder = self.builder.load_balancing(balancing);
         self
     }
 

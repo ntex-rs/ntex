@@ -241,6 +241,10 @@ impl WorkerSlot {
         self.restarts.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn active(&self) -> usize {
+        self.active.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn conn_opened(&self) {
         self.active.fetch_add(1, Ordering::Relaxed);
     }

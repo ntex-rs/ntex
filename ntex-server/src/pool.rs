@@ -1,6 +1,6 @@
 use ntex_util::time::Millis;
 
-use crate::{Server, ServerConfiguration, manager::ServerManager};
+use crate::{LoadBalancing, Server, ServerConfiguration, manager::ServerManager};
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Millis = Millis::from_secs(30);
 
@@ -16,6 +16,7 @@ pub struct WorkerPool {
     pub(crate) graceful_shutdown: bool,
     pub(crate) graceful_shutdown_timeout: Millis,
     pub(crate) affinity: bool,
+    pub(crate) balancing: LoadBalancing,
 }
 
 impl Default for WorkerPool {
@@ -42,6 +43,7 @@ impl WorkerPool {
             graceful_shutdown: false,
             graceful_shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             affinity: false,
+            balancing: LoadBalancing::LeastLoaded,
         }
     }
 
@@ -131,6 +133,17 @@ impl WorkerPool {
     /// By default, affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
         self.affinity = true;
+        self
+    }
+
+    #[must_use]
+    /// Sets how items are distributed between workers.
+    ///
+    /// By default, [`LoadBalancing::LeastLoaded`] sends new items to idle
+    /// workers, which helps when connections are long-lived or their load is
+    /// uneven. [`LoadBalancing::RoundRobin`] sends them to the workers in turn.
+    pub fn load_balancing(mut self, balancing: LoadBalancing) -> Self {
+        self.balancing = balancing;
         self
     }
 

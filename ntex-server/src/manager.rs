@@ -8,7 +8,7 @@ use ntex_util::future::join_all;
 use ntex_util::time::{Millis, sleep, timeout};
 
 use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
-use crate::{metrics::Metrics, server::ServerShared};
+use crate::{balance::Balancer, metrics::Metrics, server::ServerShared};
 
 const STOP_DELAY: Millis = Millis(250);
 const RESTART_DELAY: Millis = Millis(250);
@@ -191,7 +191,7 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
 }
 
 struct HandleCmdState<F: ServerConfiguration> {
-    next: usize,
+    balancer: Balancer,
     backlog: VecDeque<F::Item>,
     workers: Vec<Worker<F::Item>>,
     mgr: ServerManager<F>,
@@ -200,11 +200,16 @@ struct HandleCmdState<F: ServerConfiguration> {
 impl<F: ServerConfiguration> HandleCmdState<F> {
     fn new(mgr: ServerManager<F>) -> Self {
         Self {
-            next: 0,
+            balancer: Balancer::new(mgr.0.cfg.balancing),
             backlog: VecDeque::new(),
             workers: Vec::with_capacity(mgr.0.cfg.num),
             mgr,
         }
+    }
+
+    fn remove_worker(&mut self, idx: usize) {
+        self.workers.remove(idx);
+        self.balancer.remove(idx);
     }
 
     fn process(&mut self, mut item: F::Item) {
@@ -217,12 +222,10 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 }
                 break;
             }
-            if self.next >= self.workers.len() {
-                self.next = self.workers.len() - 1;
-            }
-            match self.workers[self.next].send(item) {
+            let idx = self.balancer.select(&self.workers);
+            match self.workers[idx].send(item) {
                 Ok(()) => {
-                    self.next = (self.next + 1) % self.workers.len();
+                    self.balancer.sent(idx, self.workers.len());
                     break;
                 }
                 Err(i) => {
@@ -230,7 +233,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                         log::trace!("Worker failed while processing item");
                     }
                     item = i;
-                    self.workers.remove(self.next);
+                    self.remove_worker(idx);
                 }
             }
         }
@@ -238,16 +241,22 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
 
     fn update_workers(&mut self, upd: Update<F::Item>) {
         match upd {
-            Update::Available(worker) => {
-                self.workers.push(worker);
-                self.workers.sort();
-                if self.workers.len() == 1 {
-                    self.mgr.resume();
+            Update::Available(worker) => match self.workers.binary_search(&worker) {
+                Ok(idx) => {
+                    self.workers[idx] = worker;
+                    self.balancer.reset(idx);
                 }
-            }
+                Err(idx) => {
+                    self.workers.insert(idx, worker);
+                    self.balancer.insert(idx);
+                    if self.workers.len() == 1 {
+                        self.mgr.resume();
+                    }
+                }
+            },
             Update::Unavailable(worker) => {
                 if let Ok(idx) = self.workers.binary_search(&worker) {
-                    self.workers.remove(idx);
+                    self.remove_worker(idx);
                 }
                 if self.workers.is_empty() {
                     self.mgr.pause();
@@ -260,7 +269,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 // handle worker failure
                 if let Err(item) = self.workers[0].send(item) {
                     self.backlog.push_back(item);
-                    self.workers.remove(0);
+                    self.remove_worker(0);
                     if self.workers.is_empty() {
                         self.mgr.pause();
                     }

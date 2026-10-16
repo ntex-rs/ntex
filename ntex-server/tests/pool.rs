@@ -19,11 +19,17 @@ struct Counters {
     stop: Arc<AtomicUsize>,
     shutdown: Arc<AtomicUsize>,
     items: Arc<Mutex<Vec<usize>>>,
+    threads: Arc<Mutex<Vec<(usize, String)>>>,
 }
 
 impl Counters {
     fn items(&self) -> Vec<usize> {
         self.items.lock().unwrap().clone()
+    }
+
+    /// Items with the name of the worker thread that processed them.
+    fn threads(&self) -> Vec<(usize, String)> {
+        self.threads.lock().unwrap().clone()
     }
 }
 
@@ -41,6 +47,8 @@ struct Cfg {
     fail_ready: usize,
     /// Panic when processing this item.
     panic_on: Option<usize>,
+    /// Block the worker thread when processing this item.
+    block_on: Option<(usize, Duration)>,
     items: Option<mpsc::Sender<usize>>,
 }
 
@@ -53,6 +61,7 @@ impl Cfg {
             shutdown_delay: Millis::ZERO,
             fail_ready: 0,
             panic_on: None,
+            block_on: None,
             items: None,
         }
     }
@@ -78,6 +87,16 @@ impl Service<(), usize> for Srv {
     async fn call(&self, item: usize, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
         assert!(self.cfg.panic_on != Some(item), "item {item}");
         self.cfg.c.items.lock().unwrap().push(item);
+        let name = std::thread::current()
+            .name()
+            .unwrap_or_default()
+            .to_string();
+        self.cfg.c.threads.lock().unwrap().push((item, name));
+        if let Some((block, dur)) = self.cfg.block_on
+            && block == item
+        {
+            std::thread::sleep(dur);
+        }
         if let Some(ref tx) = self.cfg.items {
             let _ = tx.send(item);
         }
@@ -196,6 +215,37 @@ async fn pool_process_items() {
     srv.pause().await;
     srv.resume().await;
     assert!(srv.clone().await.is_ok());
+}
+
+#[ntex::test]
+async fn pool_least_loaded_skips_blocked_worker() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.block_on = Some((0, Duration::from_millis(1000)));
+    // least loaded balancing is the default
+    let srv = pool().workers(2).run(cfg);
+    wait_for(|| c.created.load(Relaxed) == 2).await;
+    // tokio does not report runtime turns, a blocked worker is detected
+    // by its missing latency samples, wait for the first sample
+    sleep(Millis(250)).await;
+
+    // blocks one worker
+    process(&srv, 0).await;
+    wait_for(|| c.threads().len() == 1).await;
+    let blocked = c.threads()[0].1.clone();
+    sleep(Millis(300)).await;
+
+    for i in 1..=20 {
+        process(&srv, i).await;
+    }
+    wait_for(|| c.threads().len() == 21).await;
+    let threads = c.threads();
+    assert!(
+        threads[1..].iter().all(|(_, name)| *name != blocked),
+        "{threads:?}"
+    );
+
+    srv.stop(false).await;
 }
 
 #[ntex::test]
