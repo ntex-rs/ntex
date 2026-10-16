@@ -1,5 +1,10 @@
 # Changes
 
+## Unreleased
+
+* io-uring: protect the notifier read buffer during errors and unwinding;
+  retain only the counter allocation if cancellation cannot establish its safety
+
 ## [4.5.0] - 2026-10-12
 
 * polling, tokio: keep writing within one write cycle until the socket stops
