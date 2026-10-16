@@ -18,6 +18,7 @@
 
 use ntex_service::Service;
 
+mod balance;
 mod manager;
 mod metrics;
 pub mod net;
@@ -26,6 +27,7 @@ mod server;
 mod state;
 mod wrk;
 
+pub use self::balance::LoadBalancing;
 pub use self::metrics::{ListenerMetrics, ServerMetrics, WorkerMetrics};
 pub use self::pool::WorkerPool;
 pub use self::server::Server;

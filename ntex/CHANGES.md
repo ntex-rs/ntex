@@ -1,5 +1,11 @@
 # Changes
 
+## [4.4.0] - Unreleased
+
+* Add `HttpServer::load_balancing()`. New connections go to the least loaded
+  worker by default (`LoadBalancing::LeastLoaded`), use
+  `LoadBalancing::RoundRobin` for the previous behavior
+
 ## [4.3.0] - 2026-10-15
 
 * ws: Add `permessage-deflate` extension support (RFC 7692) to the client and

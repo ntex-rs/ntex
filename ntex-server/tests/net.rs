@@ -9,8 +9,9 @@ use ntex::time::{Millis, sleep};
 use ntex::util::Bytes;
 use ntex_io::Io;
 use ntex_server::net::{
-    AcceptLoop, AcceptorCommand, ServerBuilder, ServerStatus, TestServer, TestServerBuilder,
-    bind_addr, build, build_test_server, build_with_config, create_tcp_listener, test_server,
+    AcceptLoop, AcceptorCommand, LoadBalancing, ServerBuilder, ServerStatus, TestServer,
+    TestServerBuilder, bind_addr, build, build_test_server, build_with_config, create_tcp_listener,
+    test_server,
 };
 use ntex_service::{Ctx, Service, cfg::SharedCfg, fn_service};
 
@@ -79,6 +80,48 @@ async fn test_server_echo() {
         .unwrap()
         .unwrap();
     assert!(net::TcpStream::connect(srv.addr()).is_err());
+}
+
+#[ntex::test]
+async fn test_least_loaded_connections() {
+    // the test server runs a single worker
+    let (lst, addr) = local_listener();
+    let srv = build()
+        .workers(2)
+        .load_balancing(LoadBalancing::LeastLoaded)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    let connect = || ntex_net::tcp_connect(addr, SharedCfg::default());
+    let active = || {
+        let mut conns: Vec<_> = srv
+            .metrics()
+            .workers
+            .iter()
+            .map(|w| w.active_connections)
+            .collect();
+        conns.sort_unstable();
+        conns
+    };
+    sleep(Millis(100)).await;
+
+    let io1 = connect().await.unwrap();
+    check_echo(&io1).await;
+    let io2 = connect().await.unwrap();
+    check_echo(&io2).await;
+    assert_eq!(active(), [1, 1]);
+
+    // the next connection goes to the worker without connections,
+    // round-robin would send it to the worker of `io1`
+    io2.close();
+    wait_for(|| active() == [0, 1]).await;
+    let io3 = connect().await.unwrap();
+    check_echo(&io3).await;
+    assert_eq!(active(), [1, 1]);
+    srv.stop(false).await;
 }
 
 #[ntex::test]

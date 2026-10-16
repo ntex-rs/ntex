@@ -5,6 +5,12 @@
 * Add `Server::metrics()` with per-worker (`WorkerMetrics`), per-listener (`ListenerMetrics`)
   and accept-loop statistics (`ServerMetrics`)
 
+* Add `WorkerPool::load_balancing()` and `ServerBuilder::load_balancing()`.
+  `LoadBalancing::LeastLoaded` sends each item to the less loaded of two random
+  workers, by runtime utilization, then open connections and queued items, and
+  skips workers blocked by a task. It is the default, use
+  `LoadBalancing::RoundRobin` for the previous behavior
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);

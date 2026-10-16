@@ -130,6 +130,13 @@ The commonly useful `ServerBuilder` settings are:
 * `max_connections()` sets the process-wide per-worker connection limit.
 * `enable_affinity()` pins workers to CPU cores when the platform exposes
   suitable core IDs.
+* `load_balancing()` selects how new connections are distributed between
+  workers. The default `LoadBalancing::LeastLoaded` picks two random workers
+  and sends the connection to the one with the lower runtime utilization
+  (averaged over ~250 ms), or, when both are similarly busy, the one with
+  fewer open and queued connections. Workers whose runtime is blocked by a
+  task are skipped. It helps when connections are long-lived or their load is
+  uneven. `LoadBalancing::RoundRobin` sends connections to the workers in turn.
 * `graceful_shutdown_timeout()` bounds how long a graceful stop waits for
   workers. The default is 30 seconds.
 * `stop_on_panic()` stops the server instead of restarting a worker that fails.

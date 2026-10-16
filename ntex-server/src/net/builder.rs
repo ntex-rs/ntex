@@ -6,7 +6,7 @@ use ntex_service::{IntoService, Service, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::{NoConfig, Server, ServerAppConfig, WorkerPool};
+use crate::{LoadBalancing, NoConfig, Server, ServerAppConfig, WorkerPool};
 
 use super::accept::AcceptLoop;
 use super::config::ServiceConfig;
@@ -152,6 +152,15 @@ where
     /// By default, affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
         self.pool = self.pool.enable_affinity();
+        self
+    }
+
+    #[must_use]
+    /// Sets how new connections are distributed between workers.
+    ///
+    /// See [`WorkerPool::load_balancing`].
+    pub fn load_balancing(mut self, balancing: LoadBalancing) -> Self {
+        self.pool = self.pool.load_balancing(balancing);
         self
     }
 
