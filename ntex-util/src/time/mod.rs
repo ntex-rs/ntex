@@ -385,22 +385,25 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
-    /// State Under Test: Two calls of `now()` return the same value if they are done within resolution interval.
+    /// State Under Test: `now()` returns the start of the current runtime turn.
     ///
-    /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
+    /// Expected Behavior: `now()` is not later than the current instant and is close to it.
     #[ntex::test]
-    async fn lowres_time_does_not_immediately_change() {
+    async fn now_is_current() {
         sleep(Millis(25)).await;
 
-        assert_eq!(now(), now());
+        let now = now();
+        let cur = time::Instant::now();
+        assert!(cur >= now);
+        assert!(cur - now < time::Duration::from_millis(50));
     }
 
-    /// State Under Test: `now()` updates returned value every ~1ms period.
+    /// State Under Test: `now()` advances between runtime turns.
     ///
     /// Expected Behavior: Two calls of `now()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a 1ms interval.
     #[ntex::test]
-    async fn lowres_time_updates_after_resolution_interval() {
+    async fn now_updates_after_sleep() {
         sleep(Millis(50)).await;
 
         let first_time = now();
@@ -476,7 +479,7 @@ mod tests {
         assert!(!fut.is_elapsed());
         fut.await;
 
-        // the cached `now()` may be refreshed between two calls, measure
+        // `now()` may advance between two calls, measure
         // with the clock. An elapsed timer completes without waiting for the
         // timer driver, the bound leaves room for scheduling latency
         let first_time = time::Instant::now();

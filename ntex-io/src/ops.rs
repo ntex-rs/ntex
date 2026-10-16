@@ -262,7 +262,8 @@ impl Default for IoManager {
             storage,
             timers: TimerStorage {
                 running: false,
-                base: Instant::now(),
+                // the clock of `now()`, it may lag `Instant::now()`
+                base: now(),
                 current: 0,
                 cache: VecDeque::with_capacity(CAP),
                 notifications: BTreeMap::default(),
