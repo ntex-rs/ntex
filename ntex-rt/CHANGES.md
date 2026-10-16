@@ -34,6 +34,13 @@
   captured by the watchdog instead of the ping task, `ping_threshold` is the
   stall threshold
 
+* Capture stalled arbiter backtraces on Windows (x86_64 and aarch64), the
+  watchdog suspends the arbiter thread and walks its stack.
+  `System::set_latency_callback()` is available on all platforms
+
+* Start the latency sampler before `Arbiter::new()` returns, `Arbiter::latency()`
+  returned `None` for a new arbiter
+
 * Require tokio 1.45
 
 * Add `ThreadPool::metrics()` and `System::pool_metrics()`, blocking thread pool

@@ -2,16 +2,13 @@ use std::any::{Any, TypeId};
 use std::collections::VecDeque;
 use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
-use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, sync::Weak, thread};
+use std::{cell::RefCell, fmt, future::Future, pin::Pin};
 
 use async_channel::{Receiver, Sender, unbounded};
 use futures_timer::Delay;
 use parking_lot::{Mutex, RwLock};
 
 use crate::arbiter::Arbiter;
-#[cfg(target_os = "linux")]
-use crate::capture::CAPTURE;
-use crate::metrics::Stall;
 use crate::pool::{PoolMetrics, ThreadPool};
 use crate::{BlockingResult, Builder, Handle, HashMap, Runner, SystemRunner};
 
@@ -35,12 +32,12 @@ pub struct Id(pub(crate) usize);
 ///
 /// A system stores runtime configuration, manages arbiters, dispatches process
 /// signals, and owns the blocking thread pool.
-pub struct System(Arc<SystemInner>);
+pub struct System(pub(crate) Arc<SystemInner>);
 
-struct SystemInner {
+pub(crate) struct SystemInner {
     id: usize,
     arbiter: Arbiter,
-    config: SystemConfig,
+    pub(crate) config: SystemConfig,
     sender: Sender<SystemCommand>,
     receiver: Receiver<SystemCommand>,
     storage: RwLock<HashMap<TypeId, Box<dyn Any + Sync + Send>>>,
@@ -70,6 +67,13 @@ thread_local!(
 impl Clone for System {
     fn clone(&self) -> Self {
         Self(self.0.clone())
+    }
+}
+
+impl SystemInner {
+    /// Returns the registered arbiters.
+    pub(crate) fn arbiters(&self) -> Vec<Arbiter> {
+        self.arbiters.lock().list.clone()
     }
 }
 
@@ -275,17 +279,17 @@ impl System {
         });
     }
 
-    #[cfg(target_os = "linux")]
     #[doc(hidden)]
     /// Set arbiter latency callback.
     ///
-    /// This callback is called when the arbiter response latency exceeds the
-    /// configured threshold. The provided backtrace is not resolved.
+    /// This callback is called with the backtrace of a stalled arbiter, see
+    /// [`Builder::ping_threshold`]. Backtraces are captured on Linux and
+    /// Windows. The provided backtrace is not resolved.
     pub fn set_latency_callback<F>(f: F)
     where
         F: Fn(ntex_error::Backtrace) + Send + Sync + 'static,
     {
-        *ARB_CB.lock() = Some(Arc::new(f));
+        crate::watchdog::set_latency_callback(Arc::new(f));
     }
 
     /// Returns a clone of the system configuration.
@@ -415,7 +419,7 @@ impl SystemSupport {
             &self.sys.0.arbiter.0.latency,
             self.sys.0.config.latency_interval,
         );
-        self.watchdog = start_watchdog(&self.sys);
+        self.watchdog = crate::watchdog::start(&self.sys);
         if self.sys.0.config.ping_interval != 0 {
             crate::spawn(ping_arbiters(self.sys.clone()));
         }
@@ -504,112 +508,6 @@ async fn ping_arbiters(sys: System) {
     }
 }
 
-/// Starts a thread that detects stalled arbiters.
-fn start_watchdog(sys: &System) -> Option<Arc<AtomicBool>> {
-    let interval = sys.0.config.latency_interval;
-    if interval == 0 {
-        return None;
-    }
-    let interval = Duration::from_millis(interval as u64);
-    let threshold = Duration::from_millis(sys.0.config.ping_threshold as u64);
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop2 = stop.clone();
-    let sys = Arc::downgrade(&sys.0);
-
-    let name = format!("{}:watchdog", sys.upgrade()?.config.name);
-    match thread::Builder::new()
-        .name(name)
-        .spawn(move || watchdog(&sys, &stop2, interval, threshold))
-    {
-        Ok(_) => Some(stop),
-        Err(e) => {
-            log::error!("Cannot start arbiter watchdog: {e}");
-            None
-        }
-    }
-}
-
-fn watchdog(sys: &Weak<SystemInner>, stop: &AtomicBool, interval: Duration, threshold: Duration) {
-    loop {
-        thread::sleep(interval);
-        if stop.load(Ordering::Relaxed) {
-            return;
-        }
-        let Some(arbiters) = sys.upgrade().map(|sys| sys.arbiters.lock().list.clone()) else {
-            return;
-        };
-
-        let now = Instant::now();
-        for arb in arbiters {
-            if !arb.is_running() {
-                continue;
-            }
-            match arb.0.latency.check(now, threshold) {
-                Stall::Started(age) => {
-                    log::error!(
-                        "Arbiter {}({:?}) is stalled, no progress for {age:?}",
-                        arb.name(),
-                        arb.id()
-                    );
-                    #[cfg(target_os = "linux")]
-                    capture_backtrace(&arb, age);
-                }
-                Stall::Recovered(time) => {
-                    log::warn!(
-                        "Arbiter {}({:?}) recovered after {time:?} stall",
-                        arb.name(),
-                        arb.id()
-                    );
-                }
-                Stall::None => {}
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-/// Sends `SIGUSR2` to the stalled arbiter thread to capture a backtrace.
-fn capture_backtrace(arb: &Arbiter, age: Duration) {
-    const SPIN: Duration = Duration::from_micros(100);
-
-    if !crate::signals::is_enabled() {
-        return;
-    }
-    let tid = arb.tid();
-    if !CAPTURE.arm(tid) {
-        return;
-    }
-    let result = unsafe { libc::syscall(libc::SYS_tgkill, libc::getpid(), tid, libc::SIGUSR2) };
-
-    if result == -1 {
-        log::error!(
-            "Unable to send SIGUSR2 to arbiter {}({:?}): {}",
-            arb.name(),
-            arb.id(),
-            std::io::Error::last_os_error()
-        );
-    } else {
-        for _ in 0..1000 {
-            thread::sleep(SPIN);
-            if let Some(bt) = CAPTURE.take(tid) {
-                let bt = ntex_error::Backtrace::from(bt);
-                if let Some(f) = latency_callback() {
-                    f(bt);
-                } else {
-                    bt.resolver().resolve();
-                    log::error!(
-                        "Arbiter {}({:?}) made no progress for {age:?}.\n{bt:?}",
-                        arb.name(),
-                        arb.id()
-                    );
-                }
-                break;
-            }
-        }
-    }
-    CAPTURE.disarm(tid);
-}
-
 async fn yield_to() {
     use std::task::{Context, Poll};
 
@@ -631,28 +529,6 @@ async fn yield_to() {
     }
 
     Yield { completed: false }.await;
-}
-
-#[cfg(target_os = "linux")]
-#[allow(clippy::type_complexity)]
-static ARB_CB: Mutex<Option<Arc<dyn Fn(ntex_error::Backtrace) + Send + Sync>>> = Mutex::new(None);
-
-#[cfg(target_os = "linux")]
-#[allow(clippy::type_complexity)]
-/// Clone the callback so it runs without the lock and survives replacement.
-fn latency_callback() -> Option<Arc<dyn Fn(ntex_error::Backtrace) + Send + Sync>> {
-    ARB_CB.lock().clone()
-}
-
-#[track_caller]
-#[cfg(target_family = "unix")]
-pub(crate) fn sig_usr2() {
-    #[cfg(target_os = "linux")]
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        let tid = unsafe { libc::syscall(libc::SYS_gettid) } as i32;
-        CAPTURE.capture(tid, panic::Location::caller().file());
-    }
 }
 
 #[cfg(test)]
@@ -734,50 +610,6 @@ mod ping_tests {
                 assert_eq!(System::current().arbiter().latency(), None);
                 let mut arb = Arbiter::new();
                 assert_eq!(arb.latency(), None);
-                arb.stop();
-                arb.join().unwrap();
-            });
-    }
-
-    #[test]
-    fn stall_detection() {
-        System::build()
-            .name("test")
-            .latency_interval(10)
-            .ping_threshold(50)
-            .build(TestRunner)
-            .block_on(async {
-                let mut arb = Arbiter::new();
-                let (tx, rx) = oneshot::channel();
-                arb.handle().spawn(async move {
-                    std::thread::sleep(Duration::from_millis(300));
-                    let _ = tx.send(());
-                });
-
-                let stalled = || arb.latency().unwrap().stalled;
-                for _ in 0..400 {
-                    if stalled() {
-                        break;
-                    }
-                    Delay::new(Duration::from_millis(5)).await;
-                }
-                assert!(stalled());
-                rx.await.unwrap();
-
-                for _ in 0..400 {
-                    if !stalled() {
-                        break;
-                    }
-                    Delay::new(Duration::from_millis(5)).await;
-                }
-                let m = arb.latency().unwrap();
-                assert!(!m.stalled);
-                assert_eq!(m.stalls, 1);
-                assert!(m.stall_duration >= Duration::from_millis(200), "{m:?}");
-
-                let sys = System::current().arbiter().latency().unwrap();
-                assert_eq!((sys.stalls, sys.stalled), (0, false));
-
                 arb.stop();
                 arb.join().unwrap();
             });
@@ -864,31 +696,5 @@ mod api_tests {
                 arb.stop();
                 arb.join().unwrap();
             });
-    }
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::{panic::Location, sync::Arc};
-
-    use super::*;
-
-    #[test]
-    fn latency_callback_replaced_while_running() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let data = Arc::new(vec![1u8; 64]);
-        let calls2 = calls.clone();
-        System::set_latency_callback(move |_| {
-            // replace itself, then use captured state
-            System::set_latency_callback(|_| {});
-            assert_eq!(data.len(), 64);
-            calls2.fetch_add(1, Ordering::Relaxed);
-        });
-
-        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()));
-        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()));
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-        *ARB_CB.lock() = None;
     }
 }

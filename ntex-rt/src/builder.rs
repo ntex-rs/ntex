@@ -116,8 +116,8 @@ impl Builder {
     /// A watchdog thread marks an arbiter as stalled when it records no
     /// latency sample for longer than the
     /// [`latency_interval`](Self::latency_interval) plus this threshold, see
-    /// [`LatencyMetrics::stalls`](crate::LatencyMetrics::stalls). On Linux an
-    /// attempt is made to create a backtrace for the stalled arbiter.
+    /// [`LatencyMetrics::stalls`](crate::LatencyMetrics::stalls). On Linux and
+    /// Windows an attempt is made to create a backtrace for the stalled arbiter.
     ///
     /// The threshold is specified in milliseconds and defaults to 1,000.
     pub fn ping_threshold(mut self, interval: usize) -> Self {

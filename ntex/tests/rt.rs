@@ -365,7 +365,7 @@ async fn idle_disconnect_uring() {
     assert_eq!(total, DATA.len() * 2);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn test_log_backtrace() {
     use std::{sync::atomic::AtomicBool, time::Duration};

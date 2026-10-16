@@ -1,5 +1,9 @@
 # Changes
 
+## [3.1.0] - Unreleased
+
+* Add BacktraceRaw::from_ips() for stacks walked outside of the backtrace crate
+
 ## [3.0.0] - 2026-10-01
 
 * Re-export FailureDiagnostic

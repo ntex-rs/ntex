@@ -204,7 +204,7 @@ pub(crate) fn start(sys: &System) -> bool {
             }
         };
 
-        let usr2 = unsafe { register(SIGUSR2, || crate::system::sig_usr2()) };
+        let usr2 = unsafe { register(SIGUSR2, || crate::watchdog::sig_usr2()) };
         if usr2.is_err() {
             log::error!("Cannot install signal handler for SIGUSR2");
         }

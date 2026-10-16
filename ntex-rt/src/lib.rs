@@ -33,6 +33,7 @@ mod system;
 mod task;
 #[cfg(test)]
 mod testing;
+mod watchdog;
 
 mod rt;
 pub mod rt_default;

@@ -42,6 +42,8 @@ pub(crate) struct ArbiterInner {
     pub(crate) latency: Arc<LatencyStats>,
     #[cfg(target_os = "linux")]
     tid: i32,
+    #[cfg(windows)]
+    thread: Option<crate::watchdog::ThreadHandle>,
 }
 
 impl fmt::Debug for Arbiter {
@@ -143,6 +145,8 @@ impl Arbiter {
                 let result = crate::driver::block_on(config.runner.as_ref(), async move {
                     let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx, on_stop);
                     sys.register_arbiter(arb.clone());
+                    // `Arbiter::latency()` is available once the arbiter is returned
+                    start_latency_sampler(&arb.0.latency, config.latency_interval);
                     arb_hnd_tx
                         .send(arb.clone())
                         .expect("Controller thread has gone");
@@ -157,7 +161,6 @@ impl Arbiter {
                         .run(sys),
                     );
                     ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
-                    start_latency_sampler(&arb.0.latency, config.latency_interval);
 
                     // run loop
                     let _ = stop_rx.await;
@@ -221,6 +224,8 @@ impl Arbiter {
             #[cfg(target_os = "linux")]
             #[allow(clippy::cast_possible_truncation)]
             tid: unsafe { libc::syscall(libc::SYS_gettid) } as i32,
+            #[cfg(windows)]
+            thread: crate::watchdog::ThreadHandle::current(),
         }))
     }
 
@@ -233,6 +238,12 @@ impl Arbiter {
     /// TID of the arbiter
     pub(crate) fn tid(&self) -> i32 {
         self.0.tid
+    }
+
+    #[cfg(windows)]
+    /// Handle of the arbiter thread
+    pub(crate) fn thread(&self) -> Option<&crate::watchdog::ThreadHandle> {
+        self.0.thread.as_ref()
     }
 
     /// Returns the arbiter name.
