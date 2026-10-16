@@ -6,11 +6,12 @@ use std::{future::Future, io, pin::Pin};
 use async_channel::Sender;
 use ntex_rt::signals::Signal;
 
-use crate::manager::ServerCommand;
+use crate::{manager::ServerCommand, metrics::Metrics};
 
 #[derive(Debug)]
 pub(crate) struct ServerShared {
     pub(crate) paused: AtomicBool,
+    pub(crate) metrics: Metrics,
 }
 
 /// Controller and completion future for a running server.
@@ -39,6 +40,15 @@ impl<T> Server<T> {
             shared,
             stop: None,
         }
+    }
+
+    pub(crate) fn metrics_ref(&self) -> &Metrics {
+        &self.shared.metrics
+    }
+
+    /// Returns a snapshot of the server metrics.
+    pub fn metrics(&self) -> crate::ServerMetrics {
+        self.shared.metrics.snapshot()
     }
 
     pub(crate) fn signal(&self, sig: Signal) {

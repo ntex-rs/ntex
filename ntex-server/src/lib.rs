@@ -19,12 +19,14 @@
 use ntex_service::Service;
 
 mod manager;
+mod metrics;
 pub mod net;
 mod pool;
 mod server;
 mod state;
 mod wrk;
 
+pub use self::metrics::{ListenerMetrics, ServerMetrics, WorkerMetrics};
 pub use self::pool::WorkerPool;
 pub use self::server::Server;
 pub use self::state::{NoConfig, ServerAppConfig};

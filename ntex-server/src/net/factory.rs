@@ -2,16 +2,16 @@ use std::{io, sync::Arc};
 
 use ntex_io::Io;
 use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
-use ntex_util::{future::BoxFuture, services::counter::CounterGuard};
+use ntex_util::future::BoxFuture;
 
-use super::{ServerAppConfig, Token};
+use super::{ServerAppConfig, Token, service::ConnGuard};
 
 pub(super) type FactoryServiceType<St> = Box<dyn FactoryService<St>>;
 type CreateResult = Vec<(Box<dyn NetService>, Arc<str>, Vec<(Token, SharedCfg)>)>;
 type SvcFactory<St> = dyn Fn(St) -> BoxFuture<'static, Box<dyn NetService>>;
 
 pub(crate) trait NetService {
-    fn call(&self, _: Io, _: CounterGuard);
+    fn call(&self, _: Io, _: ConnGuard);
 
     fn ready(&self) -> BoxFuture<'_, Result<(), ()>>;
 
@@ -79,7 +79,7 @@ pub(crate) struct ServerService {
 }
 
 impl NetService for ServerService {
-    fn call(&self, io: Io, guard: CounterGuard) {
+    fn call(&self, io: Io, guard: ConnGuard) {
         let fut = self.pipeline.call_static(io);
         ntex_rt::spawn(async move {
             let _ = fut.await;

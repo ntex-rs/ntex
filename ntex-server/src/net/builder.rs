@@ -368,6 +368,11 @@ where
         let srv = StreamServer::new(self.accept.notify(), self.state, self.services);
         let svc = self.pool.run(srv);
 
+        svc.metrics_ref().listeners(
+            self.sockets
+                .iter()
+                .map(|sock| (sock.1.clone(), sock.2.local_addr().to_string())),
+        );
         let sockets = self
             .sockets
             .into_iter()

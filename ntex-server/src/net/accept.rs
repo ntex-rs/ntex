@@ -9,6 +9,7 @@ use polling::{Event, Events, Poller};
 
 use super::socket::{Connection, Listener, SocketAddr};
 use super::{Server, ServerStatus, Token};
+use crate::metrics::AcceptSlot;
 
 const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ERR_TIMEOUT: Duration = Duration::from_millis(500);
@@ -223,6 +224,12 @@ impl Accept {
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) -> Accept {
         let mut sockets = Vec::new();
+        // the builder registers named listeners, others only have an address
+        srv.metrics_ref().listeners(
+            socks
+                .iter()
+                .map(|(_, lst)| (String::new(), lst.local_addr().to_string())),
+        );
         for (hnd_token, lst) in socks {
             sockets.push(ServerSocketInfo {
                 addr: lst.local_addr(),
@@ -246,6 +253,10 @@ impl Accept {
             backpressure: true,
             backlog: VecDeque::new(),
         }
+    }
+
+    fn metrics(&self) -> &AcceptSlot {
+        self.srv.metrics_ref().listeners([])
     }
 
     fn update_status(&mut self, st: ServerStatus) {
@@ -425,9 +436,12 @@ impl Accept {
                 if let Err(msg) = self.srv.process(msg) {
                     log::trace!("Server is unavailable");
                     self.backlog.push_front(msg);
+                    self.metrics().backlog(self.backlog.len());
                     return;
                 }
             }
+            self.metrics().backlog(0);
+            self.metrics().paused(false);
 
             // re-enable acceptors
             self.backpressure = false;
@@ -443,6 +457,7 @@ impl Accept {
             }
         } else if !self.backpressure && on {
             self.backpressure = true;
+            self.metrics().paused(true);
             for key in 0..self.sockets.len() {
                 // disable err timeout
                 let info = &mut self.sockets[key];
@@ -459,6 +474,7 @@ impl Accept {
             if let Some(info) = self.sockets.get_mut(token) {
                 match info.sock.accept() {
                     Ok(Some(io)) => {
+                        self.srv.metrics_ref().listeners([]).accepted(token);
                         let msg = Connection {
                             io,
                             token: info.token,
@@ -466,15 +482,19 @@ impl Accept {
                         if let Err(msg) = self.srv.process(msg) {
                             log::trace!("Server is unavailable");
                             self.backlog.push_back(msg);
+                            self.metrics().backlog(self.backlog.len());
                             self.backpressure(true);
                             return false;
                         }
                     }
                     Ok(None) => return true,
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return true,
-                    Err(ref e) if connection_error(e) => (),
+                    Err(ref e) if connection_error(e) => {
+                        self.srv.metrics_ref().listeners([]).connection_error(token);
+                    }
                     Err(e) => {
                         log::error!("Error accepting socket: {e}");
+                        self.srv.metrics_ref().listeners([]).resource_error(token);
 
                         // sleep after error
                         info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));

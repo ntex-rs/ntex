@@ -174,6 +174,13 @@ async fn pool_process_items() {
     process(&srv, 11).await;
     wait_for(|| c.items().len() == 11).await;
 
+    let m = srv.metrics();
+    assert_eq!(m.workers.len(), 2);
+    assert_eq!(m.workers.iter().map(|w| w.items).sum::<u64>(), 11);
+    assert!(m.workers.iter().all(|w| w.restarts == 0));
+    assert!(m.workers.iter().all(|w| w.active_connections == 0));
+    assert!(m.listeners.is_empty());
+
     let srv2 = srv.clone();
     let stopped = ntex::rt::spawn(srv2);
     sleep(Millis(50)).await;
@@ -249,6 +256,9 @@ async fn pool_restarts_failed_worker() {
     wait_for(|| c.items().len() == 1).await;
     assert_eq!(c.create_failures.load(Relaxed), 1);
     assert_eq!(c.created.load(Relaxed), 1);
+    let m = srv.metrics();
+    assert_eq!(m.workers[0].restarts, 1);
+    assert_eq!(m.workers[0].items, 1);
     srv.stop(false).await;
 }
 
@@ -284,6 +294,9 @@ async fn pool_worker_panic_restarts_worker() {
     wait_for(|| c.created.load(Relaxed) == 2).await;
     process(&srv, 2).await;
     wait_for(|| c.items().contains(&2)).await;
+    let m = srv.metrics();
+    assert_eq!(m.workers[0].restarts, 1);
+    assert_eq!(m.workers[0].items, 2);
     srv.stop(false).await;
 }
 

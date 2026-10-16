@@ -1,5 +1,10 @@
 # Changes
 
+## [4.3.0] - Unreleased
+
+* Add `Server::metrics()` with per-worker (`WorkerMetrics`), per-listener (`ListenerMetrics`)
+  and accept-loop statistics (`ServerMetrics`)
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);

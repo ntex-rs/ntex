@@ -7,8 +7,8 @@ use ntex_rt::{System, signals::PanicSource, signals::Signal};
 use ntex_util::future::join_all;
 use ntex_util::time::{Millis, sleep, timeout};
 
-use crate::server::ServerShared;
 use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
+use crate::{metrics::Metrics, server::ServerShared};
 
 const STOP_DELAY: Millis = Millis(250);
 const RESTART_DELAY: Millis = Millis(250);
@@ -57,6 +57,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
         let no_signals = cfg.no_signals;
         let shared = Arc::new(ServerShared {
             paused: AtomicBool::new(true),
+            metrics: Metrics::new(cfg.num),
         });
         let mgr = ServerManager(Rc::new(Inner {
             cfg,
@@ -157,7 +158,8 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
     ntex_rt::spawn(async move {
         let id = mgr.next_id();
         let name = format!("{}:worker:{}", mgr.0.cfg.name, id.0);
-        let mut wrk = Worker::start(name.clone(), mgr.factory(), cid);
+        let slot = mgr.0.shared.metrics.worker(id);
+        let mut wrk = Worker::start_with(name.clone(), mgr.factory(), cid, slot.clone());
 
         loop {
             match wrk.status() {
@@ -177,7 +179,10 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                     if mgr.stopping() {
                         return;
                     }
-                    wrk = Worker::start(name.clone(), mgr.factory(), cid);
+                    if let Some(ref slot) = slot {
+                        slot.restart();
+                    }
+                    wrk = Worker::start_with(name.clone(), mgr.factory(), cid, slot.clone());
                 }
             }
             wrk.wait_for_status().await;
