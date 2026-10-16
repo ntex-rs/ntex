@@ -1,9 +1,19 @@
 use std::task::{Context, Poll, ready};
+use std::time::{Duration, Instant};
 use std::{fmt, future::Future, pin::Pin};
 
 use async_channel::Sender;
 
 use crate::arbiter::{Arbiter, ArbiterCommand};
+
+/// Returns the current time.
+///
+/// tokio does not expose the start of a runtime turn, this is
+/// [`Instant::now()`].
+#[inline]
+pub fn now() -> Instant {
+    Instant::now()
+}
 
 #[inline]
 /// Spawn a future on the current thread.
@@ -90,20 +100,39 @@ impl<T> Future for JoinHandle<T> {
 
 #[derive(Clone, Debug)]
 /// Handle to the runtime.
-pub struct Handle(Sender<ArbiterCommand>);
+pub struct Handle {
+    sender: Sender<ArbiterCommand>,
+    rt: Option<tok_io::runtime::Handle>,
+}
 
 impl Handle {
+    /// Must be called on the arbiter thread.
     pub(crate) fn new(sender: Sender<ArbiterCommand>) -> Self {
-        Self(sender)
+        // the arbiter runs on the single worker of a current-thread runtime
+        let rt = tok_io::runtime::Handle::try_current()
+            .ok()
+            .filter(|h| h.runtime_flavor() == tok_io::runtime::RuntimeFlavor::CurrentThread);
+        Self { sender, rt }
     }
 
     pub fn current() -> Self {
-        Self(Arbiter::current().0.sender.clone())
+        Arbiter::current().handle().clone()
     }
 
     #[inline]
     /// Wake up runtime.
     pub fn notify(&self) {}
+
+    /// Returns the total time the runtime has been busy.
+    ///
+    /// Reports tokio's `worker_total_busy_duration`, which excludes time spent
+    /// handling driver events. Returns `None` if the arbiter does not run on a
+    /// current-thread tokio runtime.
+    pub fn busy_duration(&self) -> Option<Duration> {
+        self.rt
+            .as_ref()
+            .map(|h| h.metrics().worker_total_busy_duration(0))
+    }
 
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
@@ -117,7 +146,7 @@ impl Handle {
         let (tx, rx) = oneshot::async_channel();
 
         let _ = self
-            .0
+            .sender
             .try_send(ArbiterCommand::Execute(Box::pin(async move {
                 let result = future.await;
                 let _ = tx.send(result);
