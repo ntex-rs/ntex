@@ -158,6 +158,15 @@ impl Handle {
         None
     }
 
+    /// Returns the number of times a task woke itself while it was polled, not
+    /// available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// neon runtime.
+    pub fn self_wake_count(&self) -> Option<u64> {
+        None
+    }
+
     /// Returns the spawn location of the task the runtime is polling, not
     /// available on tokio.
     ///

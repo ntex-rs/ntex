@@ -801,7 +801,7 @@ mod ping_tests {
                 if let Some(task) = arb.handle().current_task() {
                     assert_eq!((task.file(), task.line()), (file!(), line));
                 } else {
-                    assert!(cfg!(any(feature = "tokio", feature = "compio")));
+                    const { assert!(cfg!(any(feature = "tokio", feature = "compio"))) };
                 }
                 rx.await.unwrap();
 

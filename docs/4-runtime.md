@@ -265,6 +265,12 @@ stall without a running task happens in the driver. Tasks spawned by ntex
 itself report the location inside ntex. The tokio and compio runtimes return
 `None`.
 
+The neon runtime also counts self-wakes, wakes a task triggers while it is
+being polled, in `Handle::self_wake_count()`. A task that wakes itself 10000
+times in a row over at least one second without waiting for anything is logged
+once with its spawn location as a possible busy loop. Change the limits with
+`RuntimeBuilder::self_wake_threshold()`; a count of zero disables the warning.
+
 On Linux, `System::set_latency_callback()` can receive a backtrace when an
 arbiter stalls, together with the spawn location of the running task when it
 is still the same task after the capture.

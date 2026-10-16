@@ -10,11 +10,14 @@ use crossbeam_queue::SegQueue;
 use swap_buffer_queue::error::{TryDequeueError, TryEnqueueError};
 use swap_buffer_queue::{Queue, buffer::ArrayBuffer};
 
-use crate::handle::{JoinHandle, SpawnLocation};
+use crate::handle::{JoinHandle, SpawnLocation, TaskMeta};
 use crate::metrics::{AtomicHistogram, Histogram};
 use crate::{busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult};
 
-type Task = Runnable<SpawnLocation>;
+type Task = Runnable<TaskMeta>;
+
+// marks a reported self-wake streak
+const REPORTED: u32 = 1 << 31;
 
 scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
 
@@ -49,7 +52,7 @@ impl Runtime {
     fn with_builder(builder: &RuntimeBuilder, handle: Box<dyn Notify>) -> Self {
         Self {
             stop: Cell::new(false),
-            queue: Arc::new(RunnableQueue::new(builder.event_interval, handle)),
+            queue: Arc::new(RunnableQueue::new(builder, handle)),
         }
     }
 
@@ -121,7 +124,7 @@ impl Runtime {
         let queue = self.queue.clone();
         let (runnable, task) = unsafe {
             async_task::Builder::new()
-                .metadata(location)
+                .metadata(TaskMeta::new(location))
                 .spawn_unchecked(move |_| future, move |runnable| queue.schedule(runnable))
         };
         runnable.schedule();
@@ -234,6 +237,16 @@ impl Runtime {
         self.queue.polls_again.load(Ordering::Relaxed)
     }
 
+    /// Returns the number of times a task woke itself while it was polled.
+    ///
+    /// A task that wakes itself, for example with `wake_by_ref()` or a yield,
+    /// is scheduled again without waiting for an event. A steadily growing
+    /// count points to tasks that poll in a loop, see
+    /// [`RuntimeBuilder::self_wake_threshold`].
+    pub fn self_wake_count(&self) -> u64 {
+        self.queue.self_wakes.load(Ordering::Relaxed)
+    }
+
     /// Returns the histogram of [`poll`](Self::poll) durations.
     ///
     /// A poll lasts from the start of the runtime turn, see [`now`](Self::now),
@@ -335,6 +348,13 @@ impl Handle {
         Some(self.queue.polls_again.load(Ordering::Relaxed))
     }
 
+    /// Returns the number of times a task woke itself while it was polled.
+    ///
+    /// See [`Runtime::self_wake_count`]. Always returns `Some`.
+    pub fn self_wake_count(&self) -> Option<u64> {
+        Some(self.queue.self_wakes.load(Ordering::Relaxed))
+    }
+
     /// Returns the spawn location of the task the runtime is polling.
     ///
     /// Returns `None` while the runtime is idle, handles driver events or
@@ -362,7 +382,7 @@ impl Handle {
         let queue = self.queue.clone();
         let (runnable, task) = unsafe {
             async_task::Builder::new()
-                .metadata(Location::caller())
+                .metadata(TaskMeta::new(Location::caller()))
                 .spawn_unchecked(move |_| future, move |runnable| queue.schedule(runnable))
         };
         runnable.schedule();
@@ -391,6 +411,11 @@ struct RunnableQueue {
     polls: AtomicU64,
     polls_again: AtomicU64,
     poll_histogram: AtomicHistogram,
+    // self-wake counter, written by the runtime thread only
+    self_wakes: AtomicU64,
+    self_wake_limit: u32,
+    self_wake_time: Duration,
+    epoch: Instant,
     handle: Box<dyn Notify>,
     event_interval: usize,
     // spawn location of the running task, null between tasks
@@ -404,18 +429,23 @@ unsafe impl Send for RunnableQueue {}
 unsafe impl Sync for RunnableQueue {}
 
 impl RunnableQueue {
-    fn new(event_interval: usize, handle: Box<dyn Notify>) -> Self {
+    fn new(builder: &RuntimeBuilder, handle: Box<dyn Notify>) -> Self {
+        let now = Instant::now();
         Self {
             handle,
-            event_interval,
+            event_interval: builder.event_interval,
             id: current_thread_id(),
             idle: Cell::new(true),
-            poll_start: Cell::new(Instant::now()),
+            poll_start: Cell::new(now),
             notified: AtomicBool::new(false),
             busy: BusyClock::new(),
             polls: AtomicU64::new(0),
             polls_again: AtomicU64::new(0),
             poll_histogram: AtomicHistogram::default(),
+            self_wakes: AtomicU64::new(0),
+            self_wake_limit: builder.self_wake_limit,
+            self_wake_time: builder.self_wake_time,
+            epoch: now,
             current: AtomicPtr::new(ptr::null_mut()),
             local_queue: UnsafeCell::new(VecDeque::new()),
             sync_fixed_queue: Queue::default(),
@@ -501,11 +531,52 @@ impl RunnableQueue {
             }
         }
 
-        let location: SpawnLocation = task.metadata();
-        self.current
-            .store(ptr::from_ref(location).cast_mut(), Ordering::Relaxed);
+        let meta: *const TaskMeta = task.metadata();
+        let wakes = {
+            let meta = unsafe { &*meta };
+            self.current
+                .store(ptr::from_ref(meta.location).cast_mut(), Ordering::Relaxed);
+            let wakes = meta.self_wakes.load(Ordering::Relaxed);
+            if wakes != 0 {
+                meta.self_wakes.store(0, Ordering::Relaxed);
+            }
+            wakes
+        };
         let _reset = Reset(&self.current);
-        task.run();
+
+        if task.run() {
+            // woken while polled, the task is alive in `local_queue`
+            self.self_wake(unsafe { &*meta }, wakes);
+        }
+    }
+
+    fn self_wake(&self, meta: &TaskMeta, wakes: u32) {
+        let total = self.self_wakes.load(Ordering::Relaxed);
+        self.self_wakes
+            .store(total.wrapping_add(1), Ordering::Relaxed);
+
+        let reported = wakes & REPORTED;
+        let count = ((wakes & !REPORTED) + 1).min(!REPORTED);
+        let now = self.poll_start.get();
+        if count == 1 {
+            #[allow(clippy::cast_possible_truncation)]
+            let start = now.saturating_duration_since(self.epoch).as_nanos() as u64;
+            meta.streak_start.store(start, Ordering::Relaxed);
+        }
+
+        let mut wakes = count | reported;
+        if reported == 0 && self.self_wake_limit != 0 && count >= self.self_wake_limit {
+            let start = Duration::from_nanos(meta.streak_start.load(Ordering::Relaxed));
+            let elapsed = now.saturating_duration_since(self.epoch + start);
+            if elapsed >= self.self_wake_time {
+                log::warn!(
+                    "Task spawned at {} woke itself {count} times in {elapsed:?} without waiting, possible busy loop",
+                    meta.location
+                );
+                wakes |= REPORTED;
+            }
+        }
+        meta.self_wakes.store(wakes, Ordering::Relaxed);
     }
 
     fn start_busy(&self) {
@@ -543,6 +614,8 @@ impl RunnableQueue {
 #[derive(Debug, Clone)]
 pub struct RuntimeBuilder {
     event_interval: usize,
+    self_wake_limit: u32,
+    self_wake_time: Duration,
 }
 
 impl Default for RuntimeBuilder {
@@ -554,7 +627,11 @@ impl Default for RuntimeBuilder {
 impl RuntimeBuilder {
     /// Create the builder with default config.
     pub fn new() -> Self {
-        Self { event_interval: 61 }
+        Self {
+            event_interval: 61,
+            self_wake_limit: 10_000,
+            self_wake_time: Duration::from_secs(1),
+        }
     }
 
     /// Sets the number of scheduler ticks after which the scheduler will poll
@@ -564,6 +641,21 @@ impl RuntimeBuilder {
     /// Values below 1 are treated as 1.
     pub fn event_interval(&mut self, val: usize) -> &mut Self {
         self.event_interval = val.max(1);
+        self
+    }
+
+    /// Sets the self-wake streak that is reported as a possible busy loop.
+    ///
+    /// A task that wakes itself on every poll, for example a loop around
+    /// `wake_by_ref()` or a yield, never waits for an event. The runtime logs
+    /// a warning with the task spawn location once the task wakes itself
+    /// `count` times in a row and the streak lasts at least `duration`. Each
+    /// streak is reported once. A count of 0 disables the warning.
+    ///
+    /// By default, 10 000 self-wakes over at least 1 second.
+    pub fn self_wake_threshold(&mut self, count: u32, duration: Duration) -> &mut Self {
+        self.self_wake_limit = count.min(!REPORTED);
+        self.self_wake_time = duration;
         self
     }
 
@@ -1043,5 +1135,68 @@ mod tests {
         assert!(waker.borrow().is_none());
         // the woken task is dropped too, releasing its clone of `waker`
         assert_eq!(Rc::strong_count(&waker), 1);
+    }
+
+    #[test]
+    fn self_wake() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let waker = Rc::new(RefCell::new(None::<Waker>));
+        let waker2 = waker.clone();
+        let mut polls = 0;
+        let h = rt.spawn(poll_fn(move |cx| {
+            polls += 1;
+            match polls {
+                1..=5 => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                6 => {
+                    *waker2.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                _ => Poll::Ready(()),
+            }
+        }));
+        CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
+        assert_eq!(rt.self_wake_count(), 5);
+        assert_eq!(rt.handle().self_wake_count(), Some(5));
+
+        // a wake from outside of the poll is not a self-wake
+        waker.borrow_mut().take().unwrap().wake();
+        CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
+        assert!(h.is_finished());
+        assert_eq!(rt.self_wake_count(), 5);
+    }
+
+    #[test]
+    fn self_wake_streak() {
+        fn streak(rt: &Runtime, n: u32) -> u32 {
+            let meta = TaskMeta::new(Location::caller());
+            for _ in 0..n {
+                let wakes = meta.self_wakes.load(Ordering::Relaxed);
+                rt.queue.self_wake(&meta, wakes);
+            }
+            meta.self_wakes.load(Ordering::Relaxed)
+        }
+
+        let rt = Runtime::builder()
+            .self_wake_threshold(3, Duration::ZERO)
+            .build(Box::new(NoopNotify));
+        assert_eq!(streak(&rt, 2), 2);
+        assert_eq!(streak(&rt, 3), 3 | REPORTED);
+        assert_eq!(streak(&rt, 5), 5 | REPORTED);
+        assert_eq!(rt.self_wake_count(), 10);
+
+        // the streak is shorter than the duration
+        let rt = Runtime::builder()
+            .self_wake_threshold(3, Duration::from_secs(3600))
+            .build(Box::new(NoopNotify));
+        assert_eq!(streak(&rt, 5), 5);
+
+        // disabled
+        let rt = Runtime::builder()
+            .self_wake_threshold(0, Duration::ZERO)
+            .build(Box::new(NoopNotify));
+        assert_eq!(streak(&rt, 5), 5);
     }
 }
