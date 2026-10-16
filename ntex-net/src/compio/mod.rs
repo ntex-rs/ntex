@@ -68,14 +68,15 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
             loop {
                 let start = Instant::now();
                 ntex_rt::set_poll_start(Some(start));
+                ntex_rt::start_busy(start);
                 if fut.as_mut().poll(&mut cx).is_ready() {
                     rt.0.run();
-                    ntex_rt::add_busy(start.elapsed());
+                    ntex_rt::stop_busy(Instant::now());
                     ntex_rt::set_poll_start(None);
                     return;
                 }
                 let remaining = rt.0.run();
-                ntex_rt::add_busy(start.elapsed());
+                ntex_rt::stop_busy(Instant::now());
                 ntex_rt::set_poll_start(None);
 
                 if remaining {
@@ -88,6 +89,7 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
     }));
 
     if let Err(payload) = result {
+        ntex_rt::stop_busy(Instant::now());
         ntex_rt::set_poll_start(None);
         // pending tasks are dropped after the active unwind has ended
         drop(rt);
@@ -234,6 +236,26 @@ mod tests {
                 .await
                 .unwrap();
             assert!(hnd.busy_duration().unwrap() >= sleep);
+        });
+    }
+
+    #[test]
+    fn busy_duration_during_turn() {
+        let sleep = std::time::Duration::from_millis(50);
+        System::new("test", DefaultRuntime).block_on(async move {
+            let hnd = System::current().handle();
+            let reader = std::thread::spawn(move || {
+                std::thread::sleep(sleep / 2);
+                (hnd.busy_duration().unwrap(), hnd.current_turn())
+            });
+            ntex_rt::spawn(async move { std::thread::sleep(sleep) })
+                .await
+                .unwrap();
+
+            // the turn running the task is visible from another thread
+            let (busy, turn) = reader.join().unwrap();
+            assert!(busy >= sleep / 4, "{busy:?}");
+            assert!(turn.unwrap() >= sleep / 4, "{turn:?}");
         });
     }
 

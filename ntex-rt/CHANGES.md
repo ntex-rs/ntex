@@ -11,7 +11,13 @@
   the runtime spent running tasks and handling driver events, for measuring
   utilization. `Handle::busy_duration()` returns `Option<Duration>` on all
   backends; on tokio it reports `worker_total_busy_duration` and returns `None`
-  unless the arbiter runs on a current-thread runtime
+  unless the arbiter runs on a current-thread runtime. On neon and compio it
+  includes the current busy period, so other threads see a runtime that is
+  stuck in a long task as busy
+
+* Add `Runtime::current_turn()` and `Handle::current_turn()`, how long the
+  current runtime turn has been running, for detecting stalled runtimes.
+  Always `None` on tokio
 
 * Require tokio 1.45
 
