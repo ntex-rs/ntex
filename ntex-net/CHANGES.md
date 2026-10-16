@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* iocp: wait for input with socket state notifications (`ProcessSocketNotifications`)
+  instead of a zero-byte `WSARecv` per read, saves a recv post and its completion per
+  read. Windows builds before 20348 (Windows 10, Server 2019), blocking sockets and
+  sockets that fail to register keep using zero-byte recvs
+
 * io-uring: protect the notifier read buffer during errors and unwinding;
   retain only the counter allocation if cancellation cannot establish its safety
 

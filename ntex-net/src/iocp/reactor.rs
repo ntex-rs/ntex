@@ -1,5 +1,5 @@
 use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle, RawHandle};
-use std::sync::{Arc, atomic::AtomicU8, atomic::Ordering};
+use std::sync::{Arc, OnceLock, atomic::AtomicU8, atomic::Ordering};
 use std::{cell::Cell, fmt, io, mem, net, ptr};
 
 use windows_sys::Win32::{
@@ -7,7 +7,7 @@ use windows_sys::Win32::{
         ERROR_BROKEN_PIPE, ERROR_CONNECTION_ABORTED, ERROR_CONNECTION_REFUSED, ERROR_HANDLE_EOF,
         ERROR_HOST_UNREACHABLE, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA, ERROR_NETNAME_DELETED,
         ERROR_NETWORK_UNREACHABLE, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
-        ERROR_PORT_UNREACHABLE, ERROR_SEM_TIMEOUT, INVALID_HANDLE_VALUE, NTSTATUS,
+        ERROR_PORT_UNREACHABLE, ERROR_SEM_TIMEOUT, HANDLE, INVALID_HANDLE_VALUE, NTSTATUS,
         RtlNtStatusToDosError, WAIT_TIMEOUT,
     },
     Networking::WinSock,
@@ -17,6 +17,7 @@ use windows_sys::Win32::{
             CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED_ENTRY,
             PostQueuedCompletionStatus,
         },
+        LibraryLoader::{GetModuleHandleA, GetProcAddress},
         Threading::INFINITE,
         WindowsProgramming::{FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, FILE_SKIP_SET_EVENT_ON_HANDLE},
     },
@@ -33,6 +34,10 @@ use crate::channel::Receiver;
 pub trait Handler {
     /// Operation is completed.
     fn completed(&mut self, udata: u32, result: io::Result<usize>, optr: *mut Overlapped);
+
+    /// Socket state notification for the stream `id`, see
+    /// [`ReactorApi::register_notify()`].
+    fn notified(&mut self, _id: usize, _events: u32) {}
 
     /// Reactor turn is completed
     fn tick(&mut self) {}
@@ -56,6 +61,16 @@ impl ReactorApi {
     /// Attach stream socket of the `domain` with `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`
     pub(crate) fn attach_stream(&self, hnd: RawHandle, domain: Domain) -> io::Result<()> {
         self.reactor.attach_stream(hnd, domain)
+    }
+
+    /// Registers a stream socket for persistent edge-triggered read
+    /// notifications, delivered to `Handler::notified()` with `id`.
+    ///
+    /// Returns `false` if socket state notifications are not available, or
+    /// `id` does not fit into a completion key. The stream then waits for
+    /// input with a zero-byte recv.
+    pub(crate) fn register_notify(&self, sock: WinSock::SOCKET, id: usize) -> bool {
+        notify_key(self.hnd as usize, id).is_some_and(|key| self.reactor.register_notify(sock, key))
     }
 
     /// Get overlapped.
@@ -242,6 +257,13 @@ impl Reactor {
     fn poll_completions(&self, events: &[OVERLAPPED_ENTRY]) {
         let mut handlers = self.handlers.take().unwrap();
         for entry in events {
+            // socket state notification, `lpOverlapped` is not a pointer
+            if let Some((hnd, id)) = decode_notify_key(entry.lpCompletionKey) {
+                if let Some(h) = handlers.get_mut(hnd) {
+                    h.notified(id, entry.dwNumberOfBytesTransferred);
+                }
+                continue;
+            }
             let overlapped_ptr: *mut Overlapped = entry.lpOverlapped.cast();
             let overlapped = unsafe { &*overlapped_ptr };
             if overlapped.hnd == 0 {
@@ -346,6 +368,34 @@ impl ReactorInner {
         self.register(h, true)
     }
 
+    fn register_notify(&self, sock: WinSock::SOCKET, key: usize) -> bool {
+        let Some(psn) = process_socket_notifications() else {
+            return false;
+        };
+        let mut reg = WinSock::SOCK_NOTIFY_REGISTRATION {
+            socket: sock,
+            completionKey: key as _,
+            eventFilter: (WinSock::SOCK_NOTIFY_REGISTER_EVENT_IN
+                | WinSock::SOCK_NOTIFY_REGISTER_EVENT_HANGUP) as u16,
+            operation: WinSock::SOCK_NOTIFY_OP_ENABLE as u8,
+            triggerFlags: (WinSock::SOCK_NOTIFY_TRIGGER_PERSISTENT
+                | WinSock::SOCK_NOTIFY_TRIGGER_EDGE) as u8,
+            registrationResult: 0,
+        };
+        let res = unsafe {
+            psn(
+                self.port.as_raw_handle(),
+                1,
+                &raw mut reg,
+                0,
+                0,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        res == 0 && reg.registrationResult == 0
+    }
+
     fn register(&self, h: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         syscall!(
             BOOL,
@@ -362,6 +412,51 @@ impl ReactorInner {
         }
         Ok(())
     }
+}
+
+/// Completion keys of socket state notifications have the top bit set, all
+/// other packets use key 0. Below it are the handler index, then the stream
+/// id in the low `NOTIFY_ID_BITS` bits: 15 and 48 bits on 64-bit targets,
+/// 7 and 24 bits on 32-bit ones.
+const NOTIFY_KEY: usize = 1 << (usize::BITS - 1);
+const NOTIFY_ID_BITS: u32 = usize::BITS * 3 / 4;
+const NOTIFY_ID_MASK: usize = (1 << NOTIFY_ID_BITS) - 1;
+const NOTIFY_HND_LIMIT: usize = NOTIFY_KEY >> NOTIFY_ID_BITS;
+
+fn notify_key(hnd: usize, id: usize) -> Option<usize> {
+    (hnd < NOTIFY_HND_LIMIT && id <= NOTIFY_ID_MASK)
+        .then_some(NOTIFY_KEY | hnd << NOTIFY_ID_BITS | id)
+}
+
+/// Returns the handler index and stream id of a notification packet's key.
+pub(crate) fn decode_notify_key(key: usize) -> Option<(usize, usize)> {
+    (key & NOTIFY_KEY != 0).then_some(((key & !NOTIFY_KEY) >> NOTIFY_ID_BITS, key & NOTIFY_ID_MASK))
+}
+
+type ProcessSocketNotificationsFn = unsafe extern "system" fn(
+    HANDLE,
+    u32,
+    *mut WinSock::SOCK_NOTIFY_REGISTRATION,
+    u32,
+    u32,
+    *mut OVERLAPPED_ENTRY,
+    *mut u32,
+) -> u32;
+
+/// `ProcessSocketNotifications`, available since Windows build 20348 (Windows
+/// Server 2022, Windows 11). It is looked up at runtime, a static import would
+/// fail to load on older builds, which wait for input with zero-byte recvs.
+fn process_socket_notifications() -> Option<ProcessSocketNotificationsFn> {
+    static PSN: OnceLock<Option<ProcessSocketNotificationsFn>> = OnceLock::new();
+    *PSN.get_or_init(|| unsafe {
+        let module = GetModuleHandleA(c"ws2_32.dll".as_ptr().cast());
+        if module.is_null() {
+            return None;
+        }
+        GetProcAddress(module, c"ProcessSocketNotifications".as_ptr().cast()).map(|f| {
+            mem::transmute::<unsafe extern "system" fn() -> isize, ProcessSocketNotificationsFn>(f)
+        })
+    })
 }
 
 fn ifs_flag(domain: Domain) -> u8 {

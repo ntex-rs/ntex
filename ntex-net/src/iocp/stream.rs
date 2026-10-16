@@ -207,6 +207,18 @@ impl StreamOps {
         addr: Option<net::SocketAddr>,
         ctx: IoContext,
     ) -> (StreamCtl, WeakStreamCtl) {
+        self.register_with(io, addr, ctx, true)
+    }
+
+    /// Registers a stream, `notify` allows waiting for input with socket state
+    /// notifications instead of zero-byte recvs.
+    fn register_with(
+        self,
+        io: Socket,
+        addr: Option<net::SocketAddr>,
+        ctx: IoContext,
+        notify: bool,
+    ) -> (StreamCtl, WeakStreamCtl) {
         let sock = io.as_raw_socket();
         #[cfg(feature = "trace")]
         log::trace!("{}: Registered({:?}) {:?}", ctx.tag(), sock, addr);
@@ -229,13 +241,18 @@ impl StreamOps {
                 false
             }
         };
-        let rd_op = OpBox::new(ops::ReadOperation::new(
+        let mut rd_op = OpBox::new(ops::ReadOperation::new(
             id,
             sock,
             ctx.clone(),
             &self.0.api,
             nonblocking,
         ));
+        // edge-triggered notifications need a non-blocking socket, it is
+        // read until drained
+        if notify && nonblocking && self.0.api.register_notify(sock as _, id) {
+            rd_op.use_notifications();
+        }
 
         // write op
         let wr_op = OpBox::new(ops::WriteOperation::new(id, sock, ctx, &self.0.api));
@@ -313,6 +330,24 @@ impl Handler for StreamOpsHandler {
                     st.release_if_done(id);
                 }
             });
+        }
+    }
+
+    fn notified(&mut self, id: usize, _events: u32) {
+        // A notification queued before the socket was closed can arrive after
+        // the slot is reused. It then acts as a spurious `read()`, which is
+        // harmless: a non-blocking socket is found drained, a blocking one is
+        // not read before the kernel reports input, and a paused stream is
+        // not read at all.
+        let op = self.inner.with(|st| {
+            st.streams
+                .get_mut(id)
+                .filter(|item| !item.is_closing())
+                .map(|item| item.rd_op.as_ptr())
+        });
+        if let Some(op) = op {
+            // SAFETY: see `StreamCtl::read()`
+            unsafe { (*op).notified() };
         }
     }
 
@@ -802,6 +837,7 @@ mod tests {
         socket: Socket,
         ops: StreamOps,
         ctl: Rc<Cell<Option<StreamCtl>>>,
+        notify: bool,
     }
 
     struct TestHandle {
@@ -817,16 +853,51 @@ mod tests {
     impl ntex_io::IoStream for TestStream {
         fn start(self, ctx: IoContext) -> Box<dyn ntex_io::Handle> {
             let addr = self.socket.peer_addr().unwrap().as_socket();
-            let (ctl, weak) = self.ops.register(self.socket, addr, ctx);
+            let (ctl, weak) = self.ops.register_with(self.socket, addr, ctx, self.notify);
             self.ctl.set(Some(ctl));
             Box::new(TestHandle { _ctl: weak })
         }
     }
 
     /// Registers the client end of a loopback connection with a private
-    /// reactor, and returns it along with the peer end.
+    /// reactor, and returns it along with the peer end. The stream waits for
+    /// input with zero-byte recvs.
     fn registered(
         reactor: &Reactor,
+    ) -> (
+        ntex_io::Io,
+        StreamCtl,
+        StreamOps,
+        WinSock::SOCKET,
+        std::net::TcpStream,
+    ) {
+        registered_with(reactor, false)
+    }
+
+    /// Like `registered()`, but the stream waits for input with socket state
+    /// notifications. Returns `None` if they are not available.
+    fn registered_notify(
+        reactor: &Reactor,
+    ) -> Option<(
+        ntex_io::Io,
+        StreamCtl,
+        StreamOps,
+        WinSock::SOCKET,
+        std::net::TcpStream,
+    )> {
+        let res = registered_with(reactor, true);
+        if res.2.0.with(|st| st.streams[res.1.id].rd_op.is_notified()) {
+            Some(res)
+        } else {
+            eprintln!("socket state notifications are not available, skipped");
+            cleanup(&res.2);
+            None
+        }
+    }
+
+    fn registered_with(
+        reactor: &Reactor,
+        notify: bool,
     ) -> (
         ntex_io::Io,
         StreamCtl,
@@ -849,6 +920,7 @@ mod tests {
                 socket: Socket::from(client),
                 ops: ops.clone(),
                 ctl: ctl.clone(),
+                notify,
             },
             ntex_service::cfg::SharedCfg::default(),
         );
@@ -1358,6 +1430,187 @@ mod tests {
         assert!(
             ops.0.with(|st| st.streams[id].rd_op.is_pending()),
             "no recv waits for more input"
+        );
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// Dequeues the next socket state notification from the reactor's port,
+    /// waiting up to `timeout` milliseconds, and delivers it like the reactor
+    /// does. Returns `false` if none arrived.
+    fn deliver_notification(reactor: &Reactor, ops: &StreamOps, timeout: u32) -> bool {
+        let mut entry = OVERLAPPED_ENTRY::default();
+        let mut count = 0;
+        let res = unsafe {
+            GetQueuedCompletionStatusEx(
+                reactor.as_raw_handle().cast(),
+                &raw mut entry,
+                1,
+                &raw mut count,
+                timeout,
+                0,
+            )
+        };
+        if res == 0 || count != 1 {
+            return false;
+        }
+        let (_, id) = super::super::reactor::decode_notify_key(entry.lpCompletionKey)
+            .expect("not a socket state notification");
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .notified(id, entry.dwNumberOfBytesTransferred);
+        true
+    }
+
+    /// A notified stream waits for input without a recv in flight, so it holds
+    /// no read buffer and leaves nothing for the close to cancel.
+    #[ntex::test]
+    async fn notified_idle_stream_has_no_recv_in_flight() {
+        let reactor = Reactor::new().unwrap();
+        let Some((io, ctl, ops, raw, mut peer)) = registered_notify(&reactor) else {
+            return;
+        };
+        let page = io.cfg().read_size_min();
+        let buf = BytesMut::with_page_size(page);
+        let ptr = buf.as_ptr();
+        drop(buf);
+
+        ctl.read();
+        assert!(!ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()));
+        let buf = BytesMut::with_page_size(page);
+        assert_eq!(buf.as_ptr(), ptr, "idle stream took a read buffer");
+        drop(buf);
+
+        // nothing to cancel, the close does not suspend
+        std::future::poll_fn(|cx| {
+            let mut fut = pin!(ctl.shutdown(false));
+            assert!(matches!(
+                fut.as_mut().poll(cx),
+                std::task::Poll::Ready(Ok(()))
+            ));
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_closed(raw, &mut peer);
+
+        drop(ctl);
+        drop(io);
+    }
+
+    /// Available input is read in place, input that arrives later is read
+    /// once its notification is delivered.
+    #[ntex::test]
+    async fn notification_reads_new_input() {
+        let reactor = Reactor::new().unwrap();
+        let Some((io, ctl, ops, raw, mut peer)) = registered_notify(&reactor) else {
+            return;
+        };
+        std::io::Write::write_all(&mut peer, b"hello").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        ctl.read();
+        assert_eq!(
+            io.with_read_dst(|buf| buf.split_to(buf.len())),
+            b"hello".as_ref()
+        );
+        // the input present at registration may have raised a notification
+        while deliver_notification(&reactor, &ops, 50) {}
+
+        std::io::Write::write_all(&mut peer, b"world").unwrap();
+        assert!(
+            deliver_notification(&reactor, &ops, 5000),
+            "no notification for new input"
+        );
+        assert_eq!(
+            io.with_read_dst(|buf| buf.split_to(buf.len())),
+            b"world".as_ref()
+        );
+
+        // input queued along with the peer's close is read up to the eof
+        std::io::Write::write_all(&mut peer, b"bye").unwrap();
+        peer.shutdown(std::net::Shutdown::Write).unwrap();
+        assert!(deliver_notification(&reactor, &ops, 5000));
+        while deliver_notification(&reactor, &ops, 100) {}
+        assert_eq!(
+            io.with_read_dst(|buf| buf.split_to(buf.len())),
+            b"bye".as_ref()
+        );
+        assert!(io.is_read_eof(), "eof queued with the input not read");
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// A notification that arrives during a pause does not read, the input
+    /// stays in the socket until reading resumes.
+    #[ntex::test]
+    async fn notification_while_paused_reads_on_resume() {
+        let reactor = Reactor::new().unwrap();
+        let Some((io, ctl, ops, raw, mut peer)) = registered_notify(&reactor) else {
+            return;
+        };
+        ctl.read();
+        ctl.pause();
+
+        std::io::Write::write_all(&mut peer, b"hello").unwrap();
+        assert!(deliver_notification(&reactor, &ops, 5000));
+        assert!(io.with_read_dst(|buf| buf.is_empty()), "read while paused");
+
+        ctl.read();
+        assert_eq!(
+            io.with_read_dst(|buf| buf.split_to(buf.len())),
+            b"hello".as_ref()
+        );
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// Once reading stops at the read back-pressure, notifications do not
+    /// read further until the io layer resumes reading.
+    #[ntex::test]
+    async fn notification_respects_read_backpressure() {
+        let reactor = Reactor::new().unwrap();
+        let Some((io, ctl, ops, raw, mut peer)) = registered_notify(&reactor) else {
+            return;
+        };
+        let limit = io.cfg().read_backpressure();
+        let chunk = [1u8; 1022];
+        ctl.read();
+
+        let mut size = 0;
+        while size < limit {
+            std::io::Write::write_all(&mut peer, &chunk).unwrap();
+            assert!(deliver_notification(&reactor, &ops, 5000));
+            size = io.with_read_dst(|buf| buf.len());
+        }
+
+        // the stream is at the back-pressure, further input stays unread. The
+        // socket is not drained, so the writes raise one edge at most.
+        for _ in 0..8 {
+            std::io::Write::write_all(&mut peer, &chunk).unwrap();
+            while deliver_notification(&reactor, &ops, 100) {}
+        }
+        assert_eq!(
+            io.with_read_dst(|buf| buf.len()),
+            size,
+            "read past the back-pressure"
+        );
+
+        // resuming reads the queued input
+        io.with_read_dst(|buf| buf.clear());
+        ctl.read();
+        assert!(
+            !io.with_read_dst(|buf| buf.is_empty()),
+            "resume did not read"
         );
 
         cleanup(&ops);
