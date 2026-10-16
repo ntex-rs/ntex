@@ -1,8 +1,10 @@
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
-use std::pin::Pin;
+use std::panic::{self, AssertUnwindSafe};
+use std::pin::{Pin, pin};
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 use std::task::{Context, Poll, Wake, Waker};
+use std::time::{Duration, Instant};
 
 use compio_runtime::Runtime;
 use ntex_io::Io;
@@ -52,10 +54,45 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
     let _reset = ResetGuard;
     let rt = RtGuard(Runtime::new().unwrap());
     log::info!("Starting compio runtime, driver {:?}", rt.0.driver_type());
-    rt.0.block_on(PollWhenWoken {
-        fut: Box::pin(fut),
-        flag: None,
-    });
+    ntex_rt::reset_busy();
+
+    // same loop as compio's `Runtime::block_on`, but tracks busy time
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        rt.0.enter(|| {
+            let waker = rt.0.waker();
+            let mut cx = Context::from_waker(&waker);
+            let mut fut = pin!(PollWhenWoken {
+                fut: Box::pin(fut),
+                flag: None,
+            });
+            loop {
+                let start = Instant::now();
+                ntex_rt::set_poll_start(Some(start));
+                if fut.as_mut().poll(&mut cx).is_ready() {
+                    rt.0.run();
+                    ntex_rt::add_busy(start.elapsed());
+                    ntex_rt::set_poll_start(None);
+                    return;
+                }
+                let remaining = rt.0.run();
+                ntex_rt::add_busy(start.elapsed());
+                ntex_rt::set_poll_start(None);
+
+                if remaining {
+                    rt.0.poll_with(Some(Duration::ZERO));
+                } else {
+                    rt.0.poll();
+                }
+            }
+        });
+    }));
+
+    if let Err(payload) = result {
+        ntex_rt::set_poll_start(None);
+        // pending tasks are dropped after the active unwind has ended
+        drop(rt);
+        panic::resume_unwind(payload);
+    }
 }
 
 /// Polls the future only after it has been woken.
@@ -187,6 +224,34 @@ mod tests {
     use ntex_rt::System;
 
     use crate::DefaultRuntime;
+
+    #[test]
+    fn busy_duration() {
+        let sleep = std::time::Duration::from_millis(20);
+        System::new("test", DefaultRuntime).block_on(async move {
+            let hnd = System::current().handle();
+            ntex_rt::spawn(async move { std::thread::sleep(sleep) })
+                .await
+                .unwrap();
+            assert!(hnd.busy_duration().unwrap() >= sleep);
+        });
+    }
+
+    #[test]
+    fn now() {
+        System::new("test", DefaultRuntime).block_on(async {
+            // both tasks run in the same turn
+            let a = ntex_rt::spawn(async {
+                let t = ntex_rt::now();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                t
+            });
+            let b = ntex_rt::spawn(async { ntex_rt::now() });
+            assert_eq!(a.await.unwrap(), b.await.unwrap());
+        });
+        let t = std::time::Instant::now();
+        assert!(ntex_rt::now() >= t);
+    }
 
     struct SpawnOnDrop;
 

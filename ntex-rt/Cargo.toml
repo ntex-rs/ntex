@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "4.2.1"
+version = "4.3.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]

@@ -1,5 +1,20 @@
 # Changes
 
+## [4.3.0] - Unreleased
+
+* Add `Runtime::now()`, cached start of the current runtime turn
+
+* Add `ntex_rt::now()`, start of the current runtime turn on neon and compio,
+  `Instant::now()` on tokio
+
+* Add `Runtime::busy_duration()` and `Handle::busy_duration()`, total time
+  the runtime spent running tasks and handling driver events, for measuring
+  utilization. `Handle::busy_duration()` returns `Option<Duration>` on all
+  backends; on tokio it reports `worker_total_busy_duration` and returns `None`
+  unless the arbiter runs on a current-thread runtime
+
+* Require tokio 1.45
+
 ## [4.2.1] - 2026-10-11
 
 * Notify the driver once per poll for tasks scheduled from other threads

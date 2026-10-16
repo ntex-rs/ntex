@@ -59,7 +59,7 @@ ntex-io = "4.4.0"
 ntex-macros = "4.2.0"
 ntex-net = "4.5.0"
 ntex-router = "2.1.0"
-ntex-rt = "4.2.1"
+ntex-rt = "4.3.0"
 ntex-server = "4.2.0"
 ntex-service = "5.2.0"
 ntex-tls = "4.3.1"
@@ -138,7 +138,7 @@ unsynn = { version = "0.3", default-features = false, features = ["proc_macro2"]
 windows-sys = "0.61.0"
 time = "0.3.54"
 thiserror = "2"
-tok-io = { version = "1", package = "tokio", default-features = false }
+tok-io = { version = "1.45", package = "tokio", default-features = false }
 webpki-roots = "1.0"
 uuid = { version = "1.19", features = ["v7"] }
 zstd = "0.13"

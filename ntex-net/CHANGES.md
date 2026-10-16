@@ -1,6 +1,7 @@
 # Changes
 
-## Unreleased
+
+## [4.6.0] - Unreleased
 
 * iocp: wait for input with socket state notifications (`ProcessSocketNotifications`)
   instead of a zero-byte `WSARecv` per read, saves a recv post and its completion per
@@ -9,6 +10,8 @@
 
 * io-uring: protect the notifier read buffer during errors and unwinding;
   retain only the counter allocation if cancellation cannot establish its safety
+
+* compio: drive the runtime loop from ntex to track runtime busy time
 
 ## [4.5.0] - 2026-10-12
 

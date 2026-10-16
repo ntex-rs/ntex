@@ -1,5 +1,7 @@
+use std::sync::{Arc, atomic::AtomicU64, atomic::Ordering};
 use std::task::{Context, Poll, ready};
-use std::{cell::Cell, fmt, future::Future, pin::Pin};
+use std::time::{Duration, Instant};
+use std::{cell::Cell, cell::RefCell, fmt, future::Future, pin::Pin};
 
 use async_channel::Sender;
 
@@ -7,6 +9,46 @@ use crate::arbiter::{Arbiter, ArbiterCommand};
 
 thread_local! {
     static STOPPING: Cell<bool> = const { Cell::new(false) };
+    // total busy time in nanoseconds, written by the runtime thread only
+    static BUSY: RefCell<Arc<AtomicU64>> = RefCell::new(Arc::default());
+    // start of the current runtime turn, `None` while the runtime waits for events
+    static POLL_START: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Returns the start of the current runtime turn.
+///
+/// Tasks polled in the same turn observe the same instant. Returns
+/// [`Instant::now()`] outside of a runtime turn.
+#[inline]
+pub fn now() -> Instant {
+    POLL_START.with(Cell::get).unwrap_or_else(Instant::now)
+}
+
+#[doc(hidden)]
+/// Sets the start of the current runtime turn, see [`now()`].
+///
+/// Called by the compio driver.
+pub fn set_poll_start(start: Option<Instant>) {
+    POLL_START.with(|s| s.set(start));
+}
+
+#[doc(hidden)]
+/// Resets the busy time counter of the current thread.
+///
+/// Called by the compio driver before it starts a new runtime.
+pub fn reset_busy() {
+    BUSY.with(|b| *b.borrow_mut() = Arc::default());
+}
+
+#[doc(hidden)]
+/// Adds the duration of a runtime turn to the busy time of the current thread.
+pub fn add_busy(d: Duration) {
+    let nanos = u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+    BUSY.with(|b| {
+        let b = b.borrow();
+        let total = b.load(Ordering::Relaxed).saturating_add(nanos);
+        b.store(total, Ordering::Relaxed);
+    });
 }
 
 #[doc(hidden)]
@@ -116,18 +158,32 @@ impl<T> Future for JoinHandle<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct Handle(Sender<ArbiterCommand>);
+pub struct Handle {
+    sender: Sender<ArbiterCommand>,
+    busy: Arc<AtomicU64>,
+}
 
 impl Handle {
+    /// Must be called on the arbiter thread.
     pub(crate) fn new(sender: Sender<ArbiterCommand>) -> Self {
-        Self(sender)
+        let busy = BUSY.with(|b| b.borrow().clone());
+        Self { sender, busy }
     }
 
     pub fn current() -> Self {
-        Self(Arbiter::current().0.sender.clone())
+        Arbiter::current().handle().clone()
     }
 
     pub fn notify(&self) {}
+
+    /// Returns the total time the runtime has been busy.
+    ///
+    /// The runtime is busy while it polls tasks, time spent waiting for and
+    /// handling driver events is not counted. Always returns `Some`, the
+    /// return type matches the other runtime backends.
+    pub fn busy_duration(&self) -> Option<Duration> {
+        Some(Duration::from_nanos(self.busy.load(Ordering::Relaxed)))
+    }
 
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
@@ -137,7 +193,7 @@ impl Handle {
         let (tx, rx) = oneshot::async_channel();
 
         let _ = self
-            .0
+            .sender
             .try_send(ArbiterCommand::Execute(Box::pin(async move {
                 let result = future.await;
                 let _ = tx.send(result);

@@ -114,3 +114,25 @@ impl crate::Reactor for Reactor {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use ntex_rt::System;
+
+    use crate::DefaultRuntime;
+
+    #[test]
+    fn busy_duration() {
+        let sleep = Duration::from_millis(20);
+        let hnd = System::new("test", DefaultRuntime).block_on(async move {
+            let hnd = System::current().handle();
+            ntex_rt::spawn(async move { std::thread::sleep(sleep) })
+                .await
+                .unwrap();
+            hnd
+        });
+        assert!(hnd.busy_duration().unwrap() >= sleep);
+    }
+}
