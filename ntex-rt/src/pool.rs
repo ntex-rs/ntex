@@ -1,8 +1,9 @@
 //! A thread pool for blocking operations.
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering, fence};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering, fence};
 use std::task::{Context, Poll};
-use std::{any::Any, fmt, future::Future, panic, pin::Pin, thread, time::Duration};
+use std::time::{Duration, Instant};
+use std::{any::Any, fmt, future::Future, panic, pin::Pin, thread};
 
 use crossbeam_channel::{Receiver, Select, Sender, TrySendError, bounded, unbounded};
 
@@ -55,6 +56,44 @@ impl<T: 'static> BlockingResult<T> {
         })
         .detach();
     }
+}
+
+/// Snapshot of [`ThreadPool`] metrics.
+///
+/// Durations and task counts are totals since the pool was created. Rates
+/// and averages over an interval are computed from the deltas of two
+/// snapshots, e.g. the average queue wait is the `wait_duration` delta
+/// divided by the `tasks` delta.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PoolMetrics {
+    /// Maximum number of worker threads.
+    pub thread_limit: usize,
+    /// Number of worker threads, busy or idle.
+    pub threads: usize,
+    /// Number of tasks being executed.
+    pub active_tasks: usize,
+    /// Number of tasks waiting for a worker thread.
+    pub queue_depth: usize,
+    /// Number of tasks started.
+    pub tasks: u64,
+    /// Total time started tasks waited for a worker thread.
+    pub wait_duration: Duration,
+    /// Total time worker threads spent executing tasks.
+    pub busy_duration: Duration,
+}
+
+#[derive(Debug, Default)]
+struct PoolStats {
+    active: AtomicUsize,
+    tasks: AtomicU64,
+    // nanoseconds
+    wait: AtomicU64,
+    busy: AtomicU64,
+}
+
+fn as_nanos(d: Duration) -> u64 {
+    u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
 type BoxedDispatchable = Box<dyn Dispatchable + Send>;
@@ -151,6 +190,7 @@ pub struct ThreadPool {
     sender_high_prio: Sender<BoxedDispatchable>,
     receiver_high_prio: Receiver<BoxedDispatchable>,
     counter: Arc<AtomicUsize>,
+    stats: Arc<PoolStats>,
     thread_limit: usize,
     recv_timeout: Duration,
 }
@@ -172,6 +212,23 @@ impl ThreadPool {
             recv_timeout,
             name: format!("{name}:pool-wrk"),
             counter: Arc::new(AtomicUsize::new(0)),
+            stats: Arc::default(),
+        }
+    }
+
+    /// Returns a snapshot of the pool metrics.
+    ///
+    /// Gauges and totals are read independently and may be slightly
+    /// inconsistent with each other.
+    pub fn metrics(&self) -> PoolMetrics {
+        PoolMetrics {
+            thread_limit: self.thread_limit,
+            threads: self.counter.load(Ordering::Relaxed),
+            active_tasks: self.stats.active.load(Ordering::Relaxed),
+            queue_depth: self.receiver_high_prio.len(),
+            tasks: self.stats.tasks.load(Ordering::Relaxed),
+            wait_duration: Duration::from_nanos(self.stats.wait.load(Ordering::Relaxed)),
+            busy_duration: Duration::from_nanos(self.stats.busy.load(Ordering::Relaxed)),
         }
     }
 
@@ -199,10 +256,24 @@ impl ThreadPool {
         R: Send + 'static,
     {
         let (tx, rx) = oneshot::async_channel();
+        let stats = self.stats.clone();
+        let queued = Instant::now();
         let f = Box::new(move || {
             // do not execute operation if receiver is dropped
             if !tx.is_closed() {
+                let start = Instant::now();
+                stats.tasks.fetch_add(1, Ordering::Relaxed);
+                stats
+                    .wait
+                    .fetch_add(as_nanos(start - queued), Ordering::Relaxed);
+                stats.active.fetch_add(1, Ordering::Relaxed);
+
                 let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
+
+                stats.active.fetch_sub(1, Ordering::Relaxed);
+                stats
+                    .busy
+                    .fetch_add(as_nanos(start.elapsed()), Ordering::Relaxed);
                 let _ = tx.send(result);
             }
         });
@@ -361,6 +432,38 @@ mod tests {
             spawn_blocking(move || tx.send(1).unwrap()).detach();
             assert_eq!(rx.await, Ok(1));
         });
+    }
+
+    #[test]
+    fn metrics() {
+        let pool = ThreadPool::new("test", 1, Duration::from_secs(1));
+        let m = pool.metrics();
+        assert_eq!((m.thread_limit, m.threads, m.tasks), (1, 0, 0));
+
+        // occupy the only worker, the second task waits in the queue
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let first = pool.execute(move || {
+            start_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        start_rx.recv().unwrap();
+        let second = pool.execute(|| ());
+
+        let m = pool.metrics();
+        assert_eq!((m.threads, m.active_tasks, m.queue_depth), (1, 1, 1));
+        assert_eq!(m.tasks, 1);
+
+        let sleep = Duration::from_millis(20);
+        thread::sleep(sleep);
+        release_tx.send(()).unwrap();
+        assert_eq!(wait(first, Duration::from_secs(5)), Some(Ok(())));
+        assert_eq!(wait(second, Duration::from_secs(5)), Some(Ok(())));
+
+        let m = pool.metrics();
+        assert_eq!((m.active_tasks, m.queue_depth, m.tasks), (0, 0, 2));
+        assert!(m.wait_duration >= sleep);
+        assert!(m.busy_duration >= sleep);
     }
 
     #[test]

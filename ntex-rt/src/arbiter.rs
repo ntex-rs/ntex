@@ -5,6 +5,7 @@ use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, rc::R
 use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
 
+use crate::metrics::{LatencyMetrics, LatencyStats, start_latency_sampler};
 use crate::{Handle, HashMap, Id, System};
 
 thread_local!(
@@ -38,8 +39,11 @@ pub(crate) struct ArbiterInner {
     thread_handle: Mutex<Option<thread::JoinHandle<()>>>,
     on_stop: OnCloseStorage,
     running: AtomicBool,
+    pub(crate) latency: Arc<LatencyStats>,
     #[cfg(target_os = "linux")]
     tid: i32,
+    #[cfg(windows)]
+    thread: Option<crate::watchdog::ThreadHandle>,
 }
 
 impl fmt::Debug for Arbiter {
@@ -141,6 +145,8 @@ impl Arbiter {
                 let result = crate::driver::block_on(config.runner.as_ref(), async move {
                     let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx, on_stop);
                     sys.register_arbiter(arb.clone());
+                    // `Arbiter::latency()` is available once the arbiter is returned
+                    start_latency_sampler(&arb.0.latency, config.latency_interval);
                     arb_hnd_tx
                         .send(arb.clone())
                         .expect("Controller thread has gone");
@@ -214,9 +220,12 @@ impl Arbiter {
             hnd: Some(hnd),
             thread_handle: Mutex::new(None),
             running: AtomicBool::new(true),
+            latency: Arc::default(),
             #[cfg(target_os = "linux")]
             #[allow(clippy::cast_possible_truncation)]
             tid: unsafe { libc::syscall(libc::SYS_gettid) } as i32,
+            #[cfg(windows)]
+            thread: crate::watchdog::ThreadHandle::current(),
         }))
     }
 
@@ -231,6 +240,12 @@ impl Arbiter {
         self.0.tid
     }
 
+    #[cfg(windows)]
+    /// Handle of the arbiter thread
+    pub(crate) fn thread(&self) -> Option<&crate::watchdog::ThreadHandle> {
+        self.0.thread.as_ref()
+    }
+
     /// Returns the arbiter name.
     pub fn name(&self) -> &str {
         self.0.name.as_ref()
@@ -240,6 +255,14 @@ impl Arbiter {
     /// Returns a handle to the arbiter's runtime.
     pub fn handle(&self) -> &Handle {
         self.0.hnd.as_ref().unwrap()
+    }
+
+    /// Returns the arbiter's scheduling latency.
+    ///
+    /// Returns `None` if latency sampling is disabled, see
+    /// [`Builder::latency_interval`](crate::Builder::latency_interval).
+    pub fn latency(&self) -> Option<LatencyMetrics> {
+        self.0.latency.metrics()
     }
 
     #[inline]

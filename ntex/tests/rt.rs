@@ -365,7 +365,7 @@ async fn idle_disconnect_uring() {
     assert_eq!(total, DATA.len() * 2);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn test_log_backtrace() {
     use std::{sync::atomic::AtomicBool, time::Duration};
@@ -398,7 +398,10 @@ fn test_log_backtrace() {
 
     let tag = Arc::new(AtomicBool::new(false));
     let tag2 = tag.clone();
-    System::set_latency_callback(move |_| {
+    let task = Arc::new(std::sync::Mutex::new(None));
+    let task2 = task.clone();
+    System::set_latency_callback(move |_, loc| {
+        *task2.lock().unwrap() = loc;
         tag2.store(true, Ordering::Relaxed);
     });
 
@@ -406,4 +409,8 @@ fn test_log_backtrace() {
     run(tx);
     let _ = rx.recv();
     assert!(tag.load(Ordering::Relaxed));
+    // neon reports the spawn location, tokio and compio report none
+    if let Some(loc) = *task.lock().unwrap() {
+        assert_eq!(loc.file(), file!());
+    }
 }

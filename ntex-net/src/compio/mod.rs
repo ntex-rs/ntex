@@ -70,13 +70,17 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
                 ntex_rt::set_poll_start(Some(start));
                 ntex_rt::start_busy(start);
                 if fut.as_mut().poll(&mut cx).is_ready() {
-                    rt.0.run();
-                    ntex_rt::stop_busy(Instant::now());
+                    let remaining = rt.0.run();
+                    let end = Instant::now();
+                    ntex_rt::stop_busy(end);
+                    ntex_rt::add_poll(end.saturating_duration_since(start), remaining);
                     ntex_rt::set_poll_start(None);
                     return;
                 }
                 let remaining = rt.0.run();
-                ntex_rt::stop_busy(Instant::now());
+                let end = Instant::now();
+                ntex_rt::stop_busy(end);
+                ntex_rt::add_poll(end.saturating_duration_since(start), remaining);
                 ntex_rt::set_poll_start(None);
 
                 if remaining {
@@ -256,6 +260,21 @@ mod tests {
             let (busy, turn) = reader.join().unwrap();
             assert!(busy >= sleep / 4, "{busy:?}");
             assert!(turn.unwrap() >= sleep / 4, "{turn:?}");
+        });
+    }
+
+    #[test]
+    fn poll_count() {
+        System::new("test", DefaultRuntime).block_on(async {
+            let hnd = System::current().handle();
+            let polls = hnd.poll_count().unwrap();
+            ntex_rt::spawn(async {}).await.unwrap();
+            assert!(hnd.poll_count().unwrap() > polls);
+            assert!(hnd.poll_again_count().unwrap() <= hnd.poll_count().unwrap());
+            assert_eq!(
+                hnd.poll_histogram().unwrap().count(),
+                hnd.poll_count().unwrap()
+            );
         });
     }
 

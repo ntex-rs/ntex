@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicU64, atomic::Ordering};
 use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
 use std::{cell::Cell, cell::RefCell, fmt, future::Future, pin::Pin};
@@ -7,11 +7,12 @@ use async_channel::Sender;
 
 use crate::arbiter::{Arbiter, ArbiterCommand};
 use crate::busy::BusyClock;
+use crate::metrics::{AtomicHistogram, Histogram};
 
 thread_local! {
     static STOPPING: Cell<bool> = const { Cell::new(false) };
-    // busy time of the runtime on this thread
-    static BUSY: RefCell<Arc<BusyClock>> = RefCell::new(Arc::new(BusyClock::new()));
+    // runtime counters of this thread
+    static STATS: RefCell<Arc<Stats>> = RefCell::new(Arc::default());
     // start of the current runtime turn, `None` while the runtime waits for events
     static POLL_START: Cell<Option<Instant>> = const { Cell::new(None) };
 }
@@ -33,12 +34,37 @@ pub fn set_poll_start(start: Option<Instant>) {
     POLL_START.with(|s| s.set(start));
 }
 
+// runtime counters, written by the runtime thread only
+#[derive(Debug)]
+struct Stats {
+    busy: BusyClock,
+    polls: AtomicU64,
+    polls_again: AtomicU64,
+    poll_histogram: AtomicHistogram,
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            busy: BusyClock::new(),
+            polls: AtomicU64::new(0),
+            polls_again: AtomicU64::new(0),
+            poll_histogram: AtomicHistogram::default(),
+        }
+    }
+}
+
+fn incr(counter: &AtomicU64) {
+    let v = counter.load(Ordering::Relaxed);
+    counter.store(v.wrapping_add(1), Ordering::Relaxed);
+}
+
 #[doc(hidden)]
-/// Resets the busy time counter of the current thread.
+/// Resets the runtime counters of the current thread.
 ///
 /// Called by the compio driver before it starts a new runtime.
 pub fn reset_busy() {
-    BUSY.with(|b| *b.borrow_mut() = Arc::new(BusyClock::new()));
+    STATS.with(|s| *s.borrow_mut() = Arc::default());
 }
 
 #[doc(hidden)]
@@ -46,7 +72,7 @@ pub fn reset_busy() {
 ///
 /// Called by the compio driver.
 pub fn start_busy(start: Instant) {
-    BUSY.with(|b| b.borrow().start(start));
+    STATS.with(|s| s.borrow().busy.start(start));
 }
 
 #[doc(hidden)]
@@ -54,7 +80,23 @@ pub fn start_busy(start: Instant) {
 ///
 /// Called by the compio driver.
 pub fn stop_busy(end: Instant) {
-    BUSY.with(|b| b.borrow().stop(end));
+    STATS.with(|s| s.borrow().busy.stop(end));
+}
+
+#[doc(hidden)]
+/// Counts a runtime turn of the current thread.
+///
+/// `busy` is the duration of the turn, `again` is set if scheduled tasks
+/// remain after the turn.
+pub fn add_poll(busy: Duration, again: bool) {
+    STATS.with(|s| {
+        let s = s.borrow();
+        s.poll_histogram.record(busy);
+        incr(&s.polls);
+        if again {
+            incr(&s.polls_again);
+        }
+    });
 }
 
 #[doc(hidden)]
@@ -166,14 +208,14 @@ impl<T> Future for JoinHandle<T> {
 #[derive(Clone, Debug)]
 pub struct Handle {
     sender: Sender<ArbiterCommand>,
-    busy: Arc<BusyClock>,
+    stats: Arc<Stats>,
 }
 
 impl Handle {
     /// Must be called on the arbiter thread.
     pub(crate) fn new(sender: Sender<ArbiterCommand>) -> Self {
-        let busy = BUSY.with(|b| b.borrow().clone());
-        Self { sender, busy }
+        let stats = STATS.with(|s| s.borrow().clone());
+        Self { sender, stats }
     }
 
     pub fn current() -> Self {
@@ -189,13 +231,55 @@ impl Handle {
     /// it can be read from other threads while a task runs. Always returns
     /// `Some`, the return type matches the other runtime backends.
     pub fn busy_duration(&self) -> Option<Duration> {
-        Some(self.busy.busy_duration())
+        Some(self.stats.busy.busy_duration())
     }
 
     /// Returns how long the current runtime turn has been running, `None`
     /// while the runtime is idle or handles driver events.
     pub fn current_turn(&self) -> Option<Duration> {
-        self.busy.current_turn()
+        self.stats.busy.current_turn()
+    }
+
+    /// Returns the number of runtime turns.
+    ///
+    /// Always returns `Some`, the return type matches the other runtime
+    /// backends.
+    pub fn poll_count(&self) -> Option<u64> {
+        Some(self.stats.polls.load(Ordering::Relaxed))
+    }
+
+    /// Returns the number of runtime turns that left scheduled tasks.
+    ///
+    /// The `poll_again_count` delta divided by the
+    /// [`poll_count`](Self::poll_count) delta over an interval is the share of
+    /// turns that left a backlog. Always returns `Some`.
+    pub fn poll_again_count(&self) -> Option<u64> {
+        Some(self.stats.polls_again.load(Ordering::Relaxed))
+    }
+
+    /// Returns the number of times a task woke itself while it was polled, not
+    /// available on compio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// neon runtime.
+    pub fn self_wake_count(&self) -> Option<u64> {
+        None
+    }
+
+    /// Returns the spawn location of the task the runtime is polling, not
+    /// available on compio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// neon runtime.
+    pub fn current_task(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    /// Returns the histogram of runtime turn durations.
+    ///
+    /// Always returns `Some`.
+    pub fn poll_histogram(&self) -> Option<Histogram> {
+        Some(self.stats.poll_histogram.snapshot())
     }
 
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>

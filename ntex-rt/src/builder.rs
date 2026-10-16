@@ -16,6 +16,8 @@ pub struct Builder {
     ping_interval: usize,
     /// Arbiter ping response threshold
     ping_threshold: usize,
+    /// Arbiter latency sampling interval
+    latency_interval: usize,
     /// Signal handling
     signals: bool,
     /// Panic handling
@@ -34,6 +36,7 @@ impl Builder {
             stack_size: 0,
             ping_interval: 2000,
             ping_threshold: 1000,
+            latency_interval: 100,
             signals: false,
             panics: false,
             testing: false,
@@ -108,14 +111,30 @@ impl Builder {
     }
 
     #[must_use]
-    /// Sets the ping response threshold.
+    /// Sets the arbiter stall threshold.
     ///
-    /// If a response takes too long, an attempt is made to create a backtrace
-    /// for the busy arbiter.
+    /// A watchdog thread marks an arbiter as stalled when it records no
+    /// latency sample for longer than the
+    /// [`latency_interval`](Self::latency_interval) plus this threshold, see
+    /// [`LatencyMetrics::stalls`](crate::LatencyMetrics::stalls). On Linux and
+    /// Windows an attempt is made to create a backtrace for the stalled arbiter.
     ///
     /// The threshold is specified in milliseconds and defaults to 1,000.
     pub fn ping_threshold(mut self, interval: usize) -> Self {
         self.ping_threshold = interval;
+        self
+    }
+
+    #[must_use]
+    /// Sets the scheduling latency sampling interval for arbiters.
+    ///
+    /// Each arbiter runs a task that sleeps for the interval and records how
+    /// late it wakes up, see [`Arbiter::latency`](crate::Arbiter::latency).
+    ///
+    /// The interval is specified in milliseconds and defaults to 100.
+    /// Set it to zero to disable sampling and stall detection.
+    pub fn latency_interval(mut self, interval: usize) -> Self {
+        self.latency_interval = interval;
         self
     }
 
@@ -163,6 +182,7 @@ impl Builder {
             stack_size: self.stack_size,
             ping_interval: self.ping_interval,
             ping_threshold: self.ping_threshold,
+            latency_interval: self.latency_interval,
             pool_limit: self.pool_limit,
             pool_recv_timeout: self.pool_recv_timeout,
             runner: Arc::new(runner),

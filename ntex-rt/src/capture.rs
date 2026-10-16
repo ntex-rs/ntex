@@ -169,8 +169,11 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = unsafe {
-            signal_hook::low_level::register(signal_hook::consts::SIGUSR2, crate::system::sig_usr2)
-                .unwrap()
+            signal_hook::low_level::register(
+                signal_hook::consts::SIGUSR2,
+                crate::watchdog::sig_usr2,
+            )
+            .unwrap()
         };
         let tid = gettid();
 

@@ -250,13 +250,35 @@ panics are reported as `BlockingError`.
 
 The system pings spawned arbiters every two seconds and keeps their ten most
 recent round-trip records. `System::list_arbiter_pings()` exposes those
-records. Set `ping_interval(0)` to disable the checks, or tune
-`ping_interval()` and `ping_threshold()` on `System::build()`.
+records. Set `ping_interval(0)` to disable pings.
 
-On Linux, `System::set_latency_callback()` can receive a backtrace when an
-arbiter misses the configured threshold, which defaults to one second.
-Backtrace capture requires ntex signal handling and uses `SIGUSR2`; an
-embedding application should not reserve that signal for another purpose.
+Every arbiter also samples its scheduling latency every `latency_interval()`,
+100 milliseconds by default. `Arbiter::latency()` returns a histogram of how
+late the samples woke up. A watchdog thread marks an arbiter as stalled when it
+records no sample for longer than the interval plus `ping_threshold()`, which
+defaults to one second, and counts stalls in `Arbiter::latency()`. Set
+`latency_interval(0)` to disable sampling and stall detection.
+
+On the default neon runtime, `Handle::current_task()` returns the spawn
+location of the task the runtime is polling, and the stall log names it. A
+stall without a running task happens in the driver. Tasks spawned by ntex
+itself report the location inside ntex. The tokio and compio runtimes return
+`None`.
+
+The neon runtime also counts self-wakes, wakes a task triggers while it is
+being polled, in `Handle::self_wake_count()`. A task that wakes itself 10000
+times in a row over at least one second without waiting for anything is logged
+once with its spawn location as a possible busy loop. Change the limits with
+`RuntimeBuilder::self_wake_threshold()`; a count of zero disables the warning.
+
+On Linux and Windows, `System::set_latency_callback()` can receive a backtrace
+when an arbiter stalls, together with the spawn location of the running task
+when it is still the same task after the capture; without a callback the
+backtrace is logged.
+On Linux, backtrace capture requires ntex signal handling and uses `SIGUSR2`;
+an embedding application should not reserve that signal for another purpose.
+On Windows, the watchdog briefly suspends the stalled arbiter thread and walks
+its stack (x86_64 and aarch64 only).
 
 ## Custom runners
 

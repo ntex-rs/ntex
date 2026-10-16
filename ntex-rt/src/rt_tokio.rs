@@ -141,6 +141,49 @@ impl Handle {
         None
     }
 
+    /// Returns the number of runtime polls, not available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// other runtime backends.
+    pub fn poll_count(&self) -> Option<u64> {
+        None
+    }
+
+    /// Returns the number of runtime polls that left scheduled tasks, not
+    /// available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// other runtime backends.
+    pub fn poll_again_count(&self) -> Option<u64> {
+        None
+    }
+
+    /// Returns the number of times a task woke itself while it was polled, not
+    /// available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// neon runtime.
+    pub fn self_wake_count(&self) -> Option<u64> {
+        None
+    }
+
+    /// Returns the spawn location of the task the runtime is polling, not
+    /// available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// neon runtime.
+    pub fn current_task(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    /// Returns the histogram of runtime poll durations, not available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// other runtime backends.
+    pub fn poll_histogram(&self) -> Option<crate::Histogram> {
+        None
+    }
+
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
