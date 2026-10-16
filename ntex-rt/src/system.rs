@@ -56,6 +56,7 @@ pub struct SystemConfig {
     pub(super) ping_interval: usize,
     #[allow(dead_code)]
     pub(super) ping_threshold: usize,
+    pub(super) latency_interval: usize,
     pub(super) pool_limit: usize,
     pub(super) pool_recv_timeout: Duration,
     pub(super) testing: bool,
@@ -396,6 +397,10 @@ impl SystemSupport {
     }
 
     async fn run(mut self) {
+        crate::metrics::start_latency_sampler(
+            &self.sys.0.arbiter.0.latency,
+            self.sys.0.config.latency_interval,
+        );
         if self.sys.0.config.ping_interval != 0 {
             crate::spawn(ping_arbiters(self.sys.clone()));
         }
@@ -644,6 +649,47 @@ mod ping_tests {
                     Delay::new(Duration::from_millis(5)).await;
                 }
                 assert!(!has());
+            });
+    }
+
+    #[test]
+    fn latency_sampling() {
+        System::build()
+            .name("test")
+            .latency_interval(5)
+            .build(TestRunner)
+            .block_on(async {
+                let mut arb = Arbiter::new();
+                let sampled = |arb: &Arbiter| arb.latency().unwrap().histogram.count() >= 2;
+                let sys_arb = System::current().arbiter();
+
+                for _ in 0..400 {
+                    if sampled(&arb) && sampled(&sys_arb) {
+                        break;
+                    }
+                    Delay::new(Duration::from_millis(5)).await;
+                }
+                assert!(sampled(&arb));
+                assert!(sampled(&sys_arb));
+
+                let m = arb.latency().unwrap();
+                assert_eq!(m.interval, Duration::from_millis(5));
+                assert!(m.last_sample.unwrap() <= Instant::now());
+
+                arb.stop();
+                arb.join().unwrap();
+            });
+
+        System::build()
+            .name("test")
+            .latency_interval(0)
+            .build(TestRunner)
+            .block_on(async {
+                assert_eq!(System::current().arbiter().latency(), None);
+                let mut arb = Arbiter::new();
+                assert_eq!(arb.latency(), None);
+                arb.stop();
+                arb.join().unwrap();
             });
     }
 }

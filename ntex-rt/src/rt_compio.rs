@@ -7,6 +7,7 @@ use async_channel::Sender;
 
 use crate::arbiter::{Arbiter, ArbiterCommand};
 use crate::busy::BusyClock;
+use crate::metrics::{AtomicHistogram, Histogram};
 
 thread_local! {
     static STOPPING: Cell<bool> = const { Cell::new(false) };
@@ -39,6 +40,7 @@ struct Stats {
     busy: BusyClock,
     polls: AtomicU64,
     polls_again: AtomicU64,
+    poll_histogram: AtomicHistogram,
 }
 
 impl Default for Stats {
@@ -47,6 +49,7 @@ impl Default for Stats {
             busy: BusyClock::new(),
             polls: AtomicU64::new(0),
             polls_again: AtomicU64::new(0),
+            poll_histogram: AtomicHistogram::default(),
         }
     }
 }
@@ -83,10 +86,12 @@ pub fn stop_busy(end: Instant) {
 #[doc(hidden)]
 /// Counts a runtime turn of the current thread.
 ///
-/// `again` is set if scheduled tasks remain after the turn.
-pub fn add_poll(again: bool) {
+/// `busy` is the duration of the turn, `again` is set if scheduled tasks
+/// remain after the turn.
+pub fn add_poll(busy: Duration, again: bool) {
     STATS.with(|s| {
         let s = s.borrow();
+        s.poll_histogram.record(busy);
         incr(&s.polls);
         if again {
             incr(&s.polls_again);
@@ -250,6 +255,13 @@ impl Handle {
     /// turns that left a backlog. Always returns `Some`.
     pub fn poll_again_count(&self) -> Option<u64> {
         Some(self.stats.polls_again.load(Ordering::Relaxed))
+    }
+
+    /// Returns the histogram of runtime turn durations.
+    ///
+    /// Always returns `Some`.
+    pub fn poll_histogram(&self) -> Option<Histogram> {
+        Some(self.stats.poll_histogram.snapshot())
     }
 
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>

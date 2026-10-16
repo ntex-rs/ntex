@@ -5,6 +5,7 @@ use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, rc::R
 use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
 
+use crate::metrics::{LatencyMetrics, LatencyStats, start_latency_sampler};
 use crate::{Handle, HashMap, Id, System};
 
 thread_local!(
@@ -38,6 +39,7 @@ pub(crate) struct ArbiterInner {
     thread_handle: Mutex<Option<thread::JoinHandle<()>>>,
     on_stop: OnCloseStorage,
     running: AtomicBool,
+    pub(crate) latency: Arc<LatencyStats>,
     #[cfg(target_os = "linux")]
     tid: i32,
 }
@@ -155,6 +157,7 @@ impl Arbiter {
                         .run(sys),
                     );
                     ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
+                    start_latency_sampler(&arb.0.latency, config.latency_interval);
 
                     // run loop
                     let _ = stop_rx.await;
@@ -214,6 +217,7 @@ impl Arbiter {
             hnd: Some(hnd),
             thread_handle: Mutex::new(None),
             running: AtomicBool::new(true),
+            latency: Arc::default(),
             #[cfg(target_os = "linux")]
             #[allow(clippy::cast_possible_truncation)]
             tid: unsafe { libc::syscall(libc::SYS_gettid) } as i32,
@@ -240,6 +244,14 @@ impl Arbiter {
     /// Returns a handle to the arbiter's runtime.
     pub fn handle(&self) -> &Handle {
         self.0.hnd.as_ref().unwrap()
+    }
+
+    /// Returns the arbiter's scheduling latency.
+    ///
+    /// Returns `None` if latency sampling is disabled, see
+    /// [`Builder::latency_interval`](crate::Builder::latency_interval).
+    pub fn latency(&self) -> Option<LatencyMetrics> {
+        self.0.latency.metrics()
     }
 
     #[inline]

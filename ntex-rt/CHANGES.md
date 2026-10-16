@@ -23,6 +23,12 @@
   `Handle` counterparts, number of polls and polls that left scheduled tasks,
   for detecting task backlog. The `Handle` methods return `None` on tokio
 
+* Add `Runtime::poll_histogram()` and `Handle::poll_histogram()`, log2
+  histogram of poll durations. The `Handle` method returns `None` on tokio
+
+* Add arbiter scheduling latency sampling, `Arbiter::latency()` and
+  `Builder::latency_interval()` (default 100ms, 0 disables)
+
 * Require tokio 1.45
 
 * Add `ThreadPool::metrics()` and `System::pool_metrics()`, blocking thread pool

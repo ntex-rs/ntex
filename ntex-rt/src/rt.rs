@@ -10,6 +10,7 @@ use crossbeam_queue::SegQueue;
 use swap_buffer_queue::error::{TryDequeueError, TryEnqueueError};
 use swap_buffer_queue::{Queue, buffer::ArrayBuffer};
 
+use crate::metrics::{AtomicHistogram, Histogram};
 use crate::{
     busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult, handle::JoinHandle,
 };
@@ -128,9 +129,10 @@ impl Runtime {
 
     /// Polls the runtime and runs scheduled tasks.
     pub fn poll(&self) -> PollResult {
+        let start = Instant::now();
         // tasks scheduled from other threads do not end the idle state
         if self.queue.idle.get() {
-            self.queue.busy.start(Instant::now());
+            self.queue.busy.start(start);
         }
 
         let result = if self.stop.get() {
@@ -146,6 +148,11 @@ impl Runtime {
         // a runtime that never idles stays visible, its busy period is read
         // from its start
         let now = Instant::now();
+        if result != PollResult::Ready {
+            self.queue
+                .poll_histogram
+                .record(now.saturating_duration_since(start));
+        }
         if result == PollResult::PollAgain {
             self.queue.poll_start.set(now);
             self.queue.busy.next_turn(now);
@@ -209,6 +216,15 @@ impl Runtime {
     /// faster than the runtime runs them.
     pub fn poll_again_count(&self) -> u64 {
         self.queue.polls_again.load(Ordering::Relaxed)
+    }
+
+    /// Returns the histogram of [`poll`](Self::poll) durations.
+    ///
+    /// A poll lasts from the start of the runtime turn, see [`now`](Self::now),
+    /// until it finishes running tasks. Tasks woken during a poll wait at least
+    /// until it finishes, long polls mean high scheduling latency.
+    pub fn poll_histogram(&self) -> Histogram {
+        self.queue.poll_histogram.snapshot()
     }
 
     /// Runs the provided future.
@@ -298,6 +314,13 @@ impl Handle {
         Some(self.queue.polls_again.load(Ordering::Relaxed))
     }
 
+    /// Returns the histogram of runtime poll durations.
+    ///
+    /// See [`Runtime::poll_histogram`]. Always returns `Some`.
+    pub fn poll_histogram(&self) -> Option<Histogram> {
+        Some(self.queue.poll_histogram.snapshot())
+    }
+
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
@@ -333,6 +356,7 @@ struct RunnableQueue {
     // poll counters, written by the runtime thread only
     polls: AtomicU64,
     polls_again: AtomicU64,
+    poll_histogram: AtomicHistogram,
     handle: Box<dyn Notify>,
     event_interval: usize,
     local_queue: UnsafeCell<VecDeque<Runnable>>,
@@ -355,6 +379,7 @@ impl RunnableQueue {
             busy: BusyClock::new(),
             polls: AtomicU64::new(0),
             polls_again: AtomicU64::new(0),
+            poll_histogram: AtomicHistogram::default(),
             local_queue: UnsafeCell::new(VecDeque::new()),
             sync_fixed_queue: Queue::default(),
             sync_queue: SegQueue::new(),
@@ -890,11 +915,13 @@ mod tests {
         assert_eq!(rt.poll(), PollResult::Pending);
         assert_eq!(hnd.poll_count(), Some(3));
         assert_eq!(hnd.poll_again_count(), Some(1));
+        assert_eq!(hnd.poll_histogram().unwrap().count(), 3);
 
         // a stopped runtime does not run tasks
         rt.stop.set(true);
         assert_eq!(rt.poll(), PollResult::Ready);
         assert_eq!((rt.poll_count(), rt.poll_again_count()), (3, 1));
+        assert_eq!(rt.poll_histogram().count(), 3);
     }
 
     #[test]

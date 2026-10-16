@@ -71,14 +71,16 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
                 ntex_rt::start_busy(start);
                 if fut.as_mut().poll(&mut cx).is_ready() {
                     let remaining = rt.0.run();
-                    ntex_rt::stop_busy(Instant::now());
-                    ntex_rt::add_poll(remaining);
+                    let end = Instant::now();
+                    ntex_rt::stop_busy(end);
+                    ntex_rt::add_poll(end.saturating_duration_since(start), remaining);
                     ntex_rt::set_poll_start(None);
                     return;
                 }
                 let remaining = rt.0.run();
-                ntex_rt::stop_busy(Instant::now());
-                ntex_rt::add_poll(remaining);
+                let end = Instant::now();
+                ntex_rt::stop_busy(end);
+                ntex_rt::add_poll(end.saturating_duration_since(start), remaining);
                 ntex_rt::set_poll_start(None);
 
                 if remaining {
@@ -269,6 +271,10 @@ mod tests {
             ntex_rt::spawn(async {}).await.unwrap();
             assert!(hnd.poll_count().unwrap() > polls);
             assert!(hnd.poll_again_count().unwrap() <= hnd.poll_count().unwrap());
+            assert_eq!(
+                hnd.poll_histogram().unwrap().count(),
+                hnd.poll_count().unwrap()
+            );
         });
     }
 

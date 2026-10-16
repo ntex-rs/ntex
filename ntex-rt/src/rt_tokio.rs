@@ -158,6 +158,14 @@ impl Handle {
         None
     }
 
+    /// Returns the histogram of runtime poll durations, not available on tokio.
+    ///
+    /// Always returns `None`, the method exists for compatibility with the
+    /// other runtime backends.
+    pub fn poll_histogram(&self) -> Option<crate::Histogram> {
+        None
+    }
+
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
