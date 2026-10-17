@@ -145,7 +145,7 @@ where
                         if let State::CallPublish { fut } =
                             mem::replace(&mut *this.st, State::ReadRequest)
                         {
-                            crate::rt::spawn(fut);
+                            crate::rt::spawn_detached(fut);
                         }
                         st
                     }

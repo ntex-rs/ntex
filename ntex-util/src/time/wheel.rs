@@ -620,7 +620,7 @@ impl TimerDriver {
         TimerReset::register();
 
         let deadline = timer.expiry_time(timer.next_expiry.get());
-        crate::spawn(TimerDriver {
+        crate::spawn_detached(TimerDriver {
             timer: timer.clone(),
             generation: timer.generation.get(),
             sleep: Delay::new(deadline.saturating_duration_since(Instant::now())),
@@ -705,7 +705,7 @@ impl LowresTimerDriver {
         timer.insert_flags(Flags::LOWRES_DRIVER);
         TimerReset::register();
 
-        crate::spawn(LowresTimerDriver {
+        crate::spawn_detached(LowresTimerDriver {
             timer: timer.clone(),
             generation: timer.generation.get(),
             sleep: Delay::new(LOWRES_RESOLUTION),

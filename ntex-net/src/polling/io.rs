@@ -1,7 +1,7 @@
 use std::{any, future::poll_fn, task::Poll};
 
 use ntex_io::{Handle, IoContext, Readiness, types};
-use ntex_rt::spawn;
+use ntex_rt::spawn_detached;
 
 use super::stream::{StreamCtl, WeakStreamCtl};
 
@@ -9,7 +9,7 @@ impl ntex_io::IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let super::TcpStream(io, ops) = self;
         let (sctl, weak) = ops.register(io, ctx.clone());
-        spawn(async move { run(sctl, ctx).await });
+        spawn_detached(async move { run(sctl, ctx).await });
 
         Box::new(HandleWrapper(weak))
     }
@@ -19,7 +19,7 @@ impl ntex_io::IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let super::UnixStream(io, ops) = self;
         let (sctl, weak) = ops.register(io, ctx.clone());
-        spawn(async move { run(sctl, ctx).await });
+        spawn_detached(async move { run(sctl, ctx).await });
 
         Box::new(HandleWrapper(weak))
     }

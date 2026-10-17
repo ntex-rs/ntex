@@ -35,6 +35,22 @@ where
     }
 }
 
+#[inline]
+/// Spawns a future on the current thread without a join handle.
+///
+/// The output is dropped when the task completes. Unlike dropping the
+/// [`JoinHandle`] returned by [`spawn()`], this does not allocate a handle.
+///
+/// # Panics
+///
+/// This function panics if ntex system is not running.
+pub fn spawn_detached<F>(f: F)
+where
+    F: Future + 'static,
+{
+    drop(tok_io::task::spawn_local(crate::task::wrap(f)));
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct JoinError;
 
@@ -205,5 +221,20 @@ impl Handle {
         JoinHandle {
             task: Some(Either::Spawn(rx)),
         }
+    }
+
+    /// Spawns a new asynchronous task without a [`JoinHandle`].
+    ///
+    /// The output is dropped on the runtime thread when the task completes,
+    /// so it does not have to be `Send`.
+    pub fn spawn_detached<F>(&self, future: F)
+    where
+        F: Future + Send + 'static,
+    {
+        let _ = self
+            .sender
+            .try_send(ArbiterCommand::Execute(Box::pin(async move {
+                future.await;
+            })));
     }
 }

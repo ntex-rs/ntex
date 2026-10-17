@@ -31,3 +31,21 @@ where
     let fut = crate::task::wrap(fut);
     crate::rt::Runtime::with_current(|rt| unsafe { rt.spawn_at(fut, location) })
 }
+
+/// Spawns a future on the current thread without a join handle.
+///
+/// The output is dropped when the task completes. Unlike dropping the
+/// [`JoinHandle`] returned by [`spawn()`], this does not allocate a handle.
+///
+/// # Panics
+///
+/// This function panics if ntex system is not running.
+#[track_caller]
+pub fn spawn_detached<F>(fut: F)
+where
+    F: Future + 'static,
+{
+    let location = std::panic::Location::caller();
+    let fut = crate::task::wrap(fut);
+    crate::rt::Runtime::with_current(|rt| unsafe { rt.spawn_detached_at(fut, location) });
+}

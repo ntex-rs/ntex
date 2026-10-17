@@ -154,6 +154,24 @@ impl Runtime {
         unsafe { self.queue.spawn(future, location) }
     }
 
+    /// Spawns a new asynchronous task without a [`JoinHandle`].
+    ///
+    /// The output is dropped when the task completes.
+    #[track_caller]
+    pub fn spawn_detached<F: Future + 'static>(&self, future: F) {
+        unsafe { self.spawn_detached_at(future, Location::caller()) }
+    }
+
+    /// Spawns a detached task, `location` is reported by
+    /// [`Handle::current_task`].
+    ///
+    /// # Safety
+    ///
+    /// The caller should ensure the captured lifetime is long enough.
+    pub(crate) unsafe fn spawn_detached_at<F: Future>(&self, future: F, location: SpawnLocation) {
+        unsafe { self.queue.spawn_detached(future, location) }
+    }
+
     /// Marks the runtime as awake.
     ///
     /// Drivers call this after returning from a blocking wait, before handling
@@ -295,7 +313,7 @@ impl Runtime {
         CURRENT_RUNTIME.set(self, || {
             let mut result = None;
             unsafe {
-                self.spawn_at(
+                self.spawn_detached_at(
                     async {
                         result = Some(future.await);
                         self.stop.set(true);
@@ -417,6 +435,18 @@ impl Handle {
     {
         unsafe { self.queue.spawn(future, Location::caller()) }
     }
+
+    /// Spawns a new asynchronous task without a [`JoinHandle`].
+    ///
+    /// The output is dropped on the runtime thread when the task completes,
+    /// so it does not have to be `Send`.
+    #[track_caller]
+    pub fn spawn_detached<F>(&self, future: F)
+    where
+        F: Future + Send + 'static,
+    {
+        unsafe { self.queue.spawn_detached(future, Location::caller()) }
+    }
 }
 
 impl Clone for Handle {
@@ -492,6 +522,36 @@ impl RunnableQueue {
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
         JoinHandle::new(unsafe { crate::raw::spawn(future, self.clone(), location) })
+    }
+
+    /// Spawns a task on this queue without a join handle.
+    ///
+    /// # Safety
+    ///
+    /// The caller should ensure the captured lifetime is long enough.
+    #[cfg(ntex_rt_task)]
+    unsafe fn spawn_detached<F: Future>(self: &Arc<Self>, future: F, location: SpawnLocation) {
+        unsafe { crate::raw::spawn_detached(future, self.clone(), location) }
+    }
+
+    /// Spawns a task on this queue without a join handle.
+    ///
+    /// # Safety
+    ///
+    /// The caller should ensure the captured lifetime is long enough.
+    #[cfg(not(ntex_rt_task))]
+    unsafe fn spawn_detached<F: Future>(self: &Arc<Self>, future: F, location: SpawnLocation) {
+        // the output is dropped by the task, async-task drops the output of
+        // a finished task on the detaching thread
+        unsafe {
+            self.spawn(
+                async move {
+                    future.await;
+                },
+                location,
+            )
+        }
+        .detach();
     }
 
     /// Spawns a task on this queue.
@@ -1847,7 +1907,7 @@ mod tests {
             } else {
                 drop(h);
             }
-            poll_until(&rt, || out.get() == 1);
+            assert_eq!(out.get(), 1);
         }
 
         // detached before completion
@@ -1962,16 +2022,13 @@ mod tests {
         drain(&rt);
         assert_eq!(polls.load(Ordering::SeqCst), 2);
 
-        // the last waker, dropped on another thread, frees the task
+        // the output is dropped with the join handle
         drop(h);
+        assert_eq!(out.get(), 1);
+        // the last waker, dropped on another thread, frees the task
         drop(w2);
-        #[cfg(ntex_rt_task)]
-        {
-            drain(&rt);
-            assert_eq!(out.get(), 0);
-        }
         thread::spawn(move || w3.wake()).join().unwrap();
-        poll_until(&rt, || out.get() == 1);
+        drain(&rt);
     }
 
     struct ReDrop {

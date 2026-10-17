@@ -81,7 +81,7 @@ pub(crate) struct ServerService {
 impl NetService for ServerService {
     fn call(&self, io: Io, guard: ConnGuard) {
         let fut = self.pipeline.call_static(io);
-        ntex_rt::spawn(async move {
+        ntex_rt::spawn_detached(async move {
             let _ = fut.await;
             drop(guard);
         });

@@ -171,7 +171,7 @@ impl Arbiter {
                         .expect("Controller thread has gone");
 
                     // start arbiter controller
-                    crate::spawn(
+                    crate::spawn_detached(
                         ArbiterController {
                             sys: None,
                             stop: Some(stop),
@@ -386,7 +386,7 @@ impl ArbiterController {
                     }
                 }
                 Ok(ArbiterCommand::Execute(fut)) => {
-                    crate::spawn(fut);
+                    crate::spawn_detached(fut);
                 }
                 Err(_) => break,
             }

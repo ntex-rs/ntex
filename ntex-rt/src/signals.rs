@@ -80,7 +80,7 @@ fn register_system(sys: &System) -> Option<Registration> {
         ENABLED.store(true, Ordering::Release);
 
         let (tx, rx) = oneshot::async_channel();
-        sys.handle().spawn(signals(rx));
+        sys.handle().spawn_detached(signals(rx));
         STOP.with(|stop| {
             *stop.borrow_mut() = Some(tx);
         });
@@ -97,7 +97,7 @@ fn unregister_system(sys: &System) -> Option<Registration> {
     if cur.as_ref().is_some_and(|cur| cur.id() == sys.id()) {
         cur.take();
         ENABLED.store(false, Ordering::Release);
-        sys.handle().spawn(async move {
+        sys.handle().spawn_detached(async move {
             STOP.with(|stop| {
                 if let Some(tx) = stop.borrow_mut().take() {
                     let _ = tx.send(());

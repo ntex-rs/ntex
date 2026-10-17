@@ -44,7 +44,7 @@ impl WsSink {
         if self.0.cfg.close_timeout.non_zero() {
             let io = self.0.io.clone();
             let close_timeout = self.0.cfg.close_timeout;
-            rt::spawn(async move {
+            rt::spawn_detached(async move {
                 select(sleep(close_timeout), io.on_disconnect()).await;
                 if io.is_active() {
                     io.close();

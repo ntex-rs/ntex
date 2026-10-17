@@ -6,7 +6,7 @@ use std::{cell::Cell, cell::RefCell, mem, num::NonZeroUsize, ops, rc::Rc};
 
 use ntex_rt::Arbiter;
 use ntex_util::time::{Millis, Seconds, now, sleep};
-use ntex_util::{HashSet, spawn};
+use ntex_util::{HashSet, spawn_detached};
 use slab::Slab;
 
 use crate::IoRef;
@@ -183,7 +183,7 @@ impl TimerStorage {
         }
         self.running = true;
 
-        spawn(async move {
+        spawn_detached(async move {
             let guard = TimerGuard;
             // one wheel timer is reset for every tick
             let timer = sleep(Self::next_tick());
@@ -375,7 +375,7 @@ impl Iops {
                         })
                         .unwrap_or_default();
                     mgr.iops.task = task;
-                    spawn(Iops::task(task));
+                    spawn_detached(Iops::task(task));
                 }
             }
         });
