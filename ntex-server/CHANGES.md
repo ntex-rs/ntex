@@ -11,7 +11,12 @@
 
 * Add `WorkerMetrics::page_cache`, statistics of the worker thread's buffer page cache
 
-* Re-export `ServerMetrics`, `WorkerMetrics` and `ListenerMetrics` from `ntex_server::net`
+* Add `WorkerMetrics::runtime` (`RuntimeMetrics`), the worker runtime's busy time,
+  polls, self-wakes, poll durations, current turn and task, scheduling latency and
+  stalls. Totals are kept across worker restarts
+
+* Re-export `ServerMetrics`, `WorkerMetrics`, `ListenerMetrics` and `RuntimeMetrics`
+  from `ntex_server::net`
 
 * Add `WorkerPool::load_balancing()` and `ServerBuilder::load_balancing()`.
   `LoadBalancing::LeastLoaded` sends each item to the less loaded of two random

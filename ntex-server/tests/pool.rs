@@ -248,6 +248,41 @@ async fn pool_least_loaded_skips_blocked_worker() {
     srv.stop(false).await;
 }
 
+/// Worker metrics report the runtime's load and a blocked worker.
+#[ntex::test]
+async fn pool_runtime_metrics() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.block_on = Some((1, Duration::from_millis(1500)));
+    let srv = pool().workers(1).run(cfg);
+    let rt = || srv.metrics().workers[0].runtime.clone();
+
+    process(&srv, 0).await;
+    wait_for(|| c.items().len() == 1).await;
+    wait_for(|| rt().latency.is_some_and(|l| l.histogram.count() > 0)).await;
+    let m = rt();
+    assert!(m.busy_duration.is_some_and(|d| !d.is_zero()));
+    assert_eq!(m.latency.unwrap().stalls, 0);
+    // tokio does not report runtime turns
+    let turns = m.polls.is_some();
+    if turns {
+        assert!(m.polls.is_some_and(|n| n > 0));
+        assert!(m.poll_histogram.is_some_and(|h| h.count() > 0));
+    }
+
+    // a blocked worker is reported as stalled
+    process(&srv, 1).await;
+    wait_for(|| c.items().len() == 2).await;
+    if turns {
+        assert!(rt().current_turn.is_some());
+    }
+    wait_for(|| rt().latency.is_some_and(|l| l.stalled)).await;
+    wait_for(|| rt().latency.is_some_and(|l| !l.stalled && l.stalls == 1)).await;
+    assert!(rt().latency.unwrap().stall_duration > Duration::ZERO);
+
+    srv.stop(false).await;
+}
+
 /// Every affinity mode starts all workers, more workers than CPUs share them.
 #[ntex::test]
 async fn pool_affinity() {

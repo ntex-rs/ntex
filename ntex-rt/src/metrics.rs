@@ -62,6 +62,17 @@ impl Histogram {
         }
         Histogram { buckets }
     }
+
+    /// Returns the sum of two histograms, for example to combine the
+    /// histograms of several runtimes.
+    #[must_use]
+    pub fn merge(&self, other: &Histogram) -> Histogram {
+        let mut buckets = self.buckets;
+        for (b, o) in buckets.iter_mut().zip(other.buckets.iter()) {
+            *b = b.wrapping_add(*o);
+        }
+        Histogram { buckets }
+    }
 }
 
 /// Duration histogram updated by a single thread.
@@ -301,6 +312,7 @@ mod tests {
             delta.buckets()[AtomicHistogram::bucket(Duration::from_millis(1))],
             1
         );
+        assert_eq!(prev.merge(&delta), cur);
     }
 
     #[test]

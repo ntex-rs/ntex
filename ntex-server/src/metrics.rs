@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
-use std::{cell::RefCell, time::Duration, time::Instant};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::{cell::RefCell, panic::Location, time::Duration, time::Instant};
 
 use ntex_bytes::{PageCacheMetrics, PageCacheSnapshot};
 use ntex_io::{IoConfigMetrics, IoMetricsGroup, IoMetricsSnapshot};
+use ntex_rt::{Arbiter, Histogram, LatencyMetrics};
 
 use crate::WorkerId;
 
@@ -62,6 +63,46 @@ pub struct WorkerMetrics {
     /// releasing pages and its replacement already runs, updates can be lost,
     /// so after a worker restart the statistics may be slightly off.
     pub page_cache: PageCacheSnapshot,
+    /// Statistics of the worker's runtime.
+    pub runtime: RuntimeMetrics,
+}
+
+/// Runtime statistics of a worker.
+///
+/// Counters, durations and histograms are totals over all runtimes the
+/// worker slot ran on, a restarted worker continues the totals of the worker
+/// it replaces. Values a runtime backend does not provide are `None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RuntimeMetrics {
+    /// Total time the runtime was busy running tasks.
+    ///
+    /// The `busy_duration` delta divided by the elapsed time is the worker's
+    /// utilization. On tokio it is available only for current-thread
+    /// runtimes.
+    pub busy_duration: Option<Duration>,
+    /// Number of runtime turns that ran scheduled tasks. Not available on
+    /// tokio.
+    pub polls: Option<u64>,
+    /// Number of runtime turns that left scheduled tasks for the next turn.
+    /// Not available on tokio.
+    pub polls_again: Option<u64>,
+    /// Number of times a task woke itself while it was polled. Neon only.
+    pub self_wakes: Option<u64>,
+    /// Durations of runtime turns. Not available on tokio.
+    pub poll_histogram: Option<Histogram>,
+    /// How long the current runtime turn has been running, `None` while the
+    /// runtime is idle or the backend does not track turns.
+    pub current_turn: Option<Duration>,
+    /// Spawn location of the task the runtime is polling now. Neon only.
+    pub current_task: Option<&'static Location<'static>>,
+    /// Scheduling latency and stalls, `None` if latency sampling is disabled,
+    /// see `ntex_rt::Builder::latency_interval()`.
+    ///
+    /// `histogram`, `stalls` and `stall_duration` are totals over all
+    /// runtimes of the worker slot, the other fields describe the current
+    /// runtime.
+    pub latency: Option<LatencyMetrics>,
 }
 
 /// Metrics of a single listener.
@@ -186,6 +227,7 @@ impl Metrics {
                     io: w.io.snapshot(),
                     io_other: w.io.other().snapshot(),
                     page_cache: w.page_cache.snapshot(),
+                    runtime: w.runtime_metrics(),
                 }
             })
             .collect();
@@ -224,6 +266,57 @@ pub(crate) struct WorkerSlot {
     restarts: AtomicU64,
     io: Arc<IoMetricsGroup>,
     page_cache: Arc<PageCacheMetrics>,
+    runtime: Mutex<RuntimeSlot>,
+}
+
+/// Runtime of the worker and the totals of the runtimes it replaced.
+#[derive(Debug, Default)]
+struct RuntimeSlot {
+    arbiter: Option<Arbiter>,
+    base: RuntimeTotals,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeTotals {
+    busy: Duration,
+    polls: u64,
+    polls_again: u64,
+    self_wakes: u64,
+    poll_histogram: Histogram,
+    latency_histogram: Histogram,
+    stalls: u64,
+    stall_duration: Duration,
+}
+
+impl RuntimeTotals {
+    fn add(&mut self, m: &RuntimeMetrics) {
+        self.busy += m.busy_duration.unwrap_or_default();
+        self.polls += m.polls.unwrap_or_default();
+        self.polls_again += m.polls_again.unwrap_or_default();
+        self.self_wakes += m.self_wakes.unwrap_or_default();
+        if let Some(ref h) = m.poll_histogram {
+            self.poll_histogram = self.poll_histogram.merge(h);
+        }
+        if let Some(ref l) = m.latency {
+            self.latency_histogram = self.latency_histogram.merge(&l.histogram);
+            self.stalls += l.stalls;
+            self.stall_duration += l.stall_duration;
+        }
+    }
+}
+
+fn runtime_metrics(arb: &Arbiter) -> RuntimeMetrics {
+    let hnd = arb.handle();
+    RuntimeMetrics {
+        busy_duration: hnd.busy_duration(),
+        polls: hnd.poll_count(),
+        polls_again: hnd.poll_again_count(),
+        self_wakes: hnd.self_wake_count(),
+        poll_histogram: hnd.poll_histogram(),
+        current_turn: hnd.current_turn(),
+        current_task: hnd.current_task(),
+        latency: arb.latency(),
+    }
 }
 
 thread_local! {
@@ -240,7 +333,38 @@ impl WorkerSlot {
             restarts: AtomicU64::new(0),
             io: IoMetricsGroup::new(),
             page_cache: PageCacheMetrics::new(),
+            runtime: Mutex::default(),
         }
+    }
+
+    /// Sets the arbiter the worker runs on, the totals of the previous
+    /// arbiter are kept.
+    pub(crate) fn set_arbiter(&self, arbiter: Arbiter) {
+        let mut rt = self.runtime.lock().unwrap();
+        if let Some(prev) = rt.arbiter.replace(arbiter) {
+            let m = runtime_metrics(&prev);
+            rt.base.add(&m);
+        }
+    }
+
+    fn runtime_metrics(&self) -> RuntimeMetrics {
+        let rt = self.runtime.lock().unwrap();
+        let Some(ref arb) = rt.arbiter else {
+            return RuntimeMetrics::default();
+        };
+        let base = &rt.base;
+        let mut m = runtime_metrics(arb);
+        m.busy_duration = m.busy_duration.map(|d| d + base.busy);
+        m.polls = m.polls.map(|n| n + base.polls);
+        m.polls_again = m.polls_again.map(|n| n + base.polls_again);
+        m.self_wakes = m.self_wakes.map(|n| n + base.self_wakes);
+        m.poll_histogram = m.poll_histogram.map(|h| h.merge(&base.poll_histogram));
+        if let Some(ref mut l) = m.latency {
+            l.histogram = l.histogram.merge(&base.latency_histogram);
+            l.stalls += base.stalls;
+            l.stall_duration += base.stall_duration;
+        }
+        m
     }
 
     /// Metrics slot of the worker running on the current thread.
@@ -394,5 +518,44 @@ mod tests {
         assert_eq!(s.listeners[0].resource_errors, 1);
         assert_eq!(s.accept_backlog, 3);
         assert_eq!(s.accept_pauses, 0);
+    }
+
+    /// Runtime totals are kept when a worker's arbiter is replaced.
+    #[ntex::test]
+    async fn runtime_restart() {
+        let busy = |a: &Arbiter| {
+            a.handle()
+                .spawn(async {
+                    std::thread::sleep(Duration::from_millis(20));
+                })
+                .detach();
+        };
+
+        let m = Metrics::new(1);
+        let w = m.worker(WorkerId(0)).unwrap();
+        assert_eq!(w.runtime_metrics(), RuntimeMetrics::default());
+
+        let a1 = Arbiter::with_name("rt-metrics-1".to_string());
+        w.set_arbiter(a1.clone());
+        busy(&a1);
+        ntex::time::sleep(ntex::time::Millis(250)).await;
+        let m1 = w.runtime_metrics();
+        let b1 = m1.busy_duration.unwrap();
+        let l1 = m1.latency.clone().unwrap().histogram.count();
+        assert!(b1 >= Duration::from_millis(20));
+        assert!(l1 > 0);
+        a1.stop();
+
+        let a2 = Arbiter::with_name("rt-metrics-2".to_string());
+        w.set_arbiter(a2.clone());
+        busy(&a2);
+        ntex::time::sleep(ntex::time::Millis(250)).await;
+        let m2 = w.runtime_metrics();
+        assert!(m2.busy_duration.unwrap() >= b1 + Duration::from_millis(20));
+        assert!(m2.latency.unwrap().histogram.count() > l1);
+        if let (Some(p1), Some(p2)) = (m1.polls, m2.polls) {
+            assert!(p2 > p1);
+        }
+        a2.stop();
     }
 }

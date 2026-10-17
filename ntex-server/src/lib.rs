@@ -30,7 +30,7 @@ mod wrk;
 
 pub use self::affinity::Affinity;
 pub use self::balance::LoadBalancing;
-pub use self::metrics::{ListenerMetrics, ServerMetrics, WorkerMetrics};
+pub use self::metrics::{ListenerMetrics, RuntimeMetrics, ServerMetrics, WorkerMetrics};
 pub use self::pool::WorkerPool;
 pub use self::server::Server;
 pub use self::state::{NoConfig, ServerAppConfig};

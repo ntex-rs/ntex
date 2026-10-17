@@ -315,6 +315,7 @@ the file descriptor limit (`ulimit -n`) or lower `max_connections()`.
 | `restarts` | counter | Number of times the worker was restarted after a failure. |
 | `io`, `io_other` | | I/O statistics, see below. |
 | `page_cache` | | Buffer page cache statistics of the worker thread, see below. |
+| `runtime` | | Runtime statistics of the worker thread, see below. |
 
 * Compare `active_connections` and the rate of `items` across workers to
   check load balancing. With the default `LoadBalancing::LeastLoaded`, they
@@ -327,6 +328,62 @@ the file descriptor limit (`ulimit -n`) or lower `max_connections()`.
   keep-alive or WebSocket connections.
 * `restarts` should stay at zero. Any increase means a worker failed;
   alert on it and check the logs.
+
+### Runtime
+
+`WorkerMetrics::runtime` is a `RuntimeMetrics` with the statistics of the
+worker thread's runtime. A field is `None` when the runtime does not provide
+it. Totals are kept when a worker restarts; `current_turn`,
+`current_task` and the `latency` gauges (`last`, `last_sample`, `stalled`)
+describe the current worker thread.
+
+| Metric | Kind | Runtimes | Meaning |
+|--------|------|----------|---------|
+| `busy_duration` | duration | all | Time the runtime spent running tasks and handling I/O events. |
+| `polls` | counter | neon, compio | Runtime turns that ran scheduled tasks. |
+| `polls_again` | counter | neon, compio | Runtime turns that left scheduled tasks for the next turn. |
+| `self_wakes` | counter | neon | Polls in which a task woke itself, for example by yielding. |
+| `poll_histogram` | histogram | neon, compio | Duration of runtime turns. |
+| `current_turn` | duration | neon, compio | How long the current runtime turn has been running, `None` while the runtime is idle. |
+| `current_task` | location | neon | Spawn location of the task being polled now. |
+| `latency` | | all | Scheduling latency and stalls, see below. `None` if sampling is disabled. |
+
+`latency` is a `LatencyMetrics`. A task on each worker sleeps for
+`interval` and records how late it wakes up:
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `interval` | setting | Sampling interval. |
+| `last` | gauge | Lateness of the most recent sample. |
+| `histogram` | histogram | Lateness of all samples. |
+| `last_sample` | gauge | Time of the most recent sample. |
+| `stalls` | counter | Times the worker recorded no sample for longer than `interval` plus the stall threshold. |
+| `stall_duration` | duration | Total duration of finished stalls. |
+| `stalled` | gauge | Whether the worker is stalled now. |
+
+On tokio, `busy_duration` is tokio's worker busy time, which excludes
+handling I/O events.
+
+* Utilization is the difference of `busy_duration` divided by the elapsed
+  time. A worker close to 100% is CPU bound: add workers or cores. Uneven
+  utilization across workers points to expensive connections pinned to a
+  few workers.
+* Scheduling latency is what every request on the worker waits in addition
+  to its own processing. Watch high percentiles of the `histogram`
+  difference; values of several milliseconds mean the worker is overloaded
+  or a task runs too long between `.await` points.
+* Long turns in `poll_histogram` delay every task woken during the turn.
+  They come from tasks that run too long between `.await` points; move such
+  work to `spawn_blocking()` or split it.
+* A ratio of `polls_again` to `polls` close to 1 means tasks are scheduled
+  faster than the worker runs them, the worker has a backlog. A high `self_wakes` rate points
+  to tasks that busy-loop by yielding.
+* `stalls` should stay at zero. A stall means blocking code, such as a
+  synchronous call or a lock, held the worker. Alert on it, see
+  [Worker stalls and busy loops](#worker-stalls-and-busy-loops).
+
+The sampling interval and the stall threshold are system builder settings,
+see [Worker stalls and busy loops](#worker-stalls-and-busy-loops).
 
 ### I/O metrics
 
@@ -468,6 +525,137 @@ or `page_cache.total()` for the sum. Each entry is a `PageCacheStats`:
 
 After a worker restart these statistics may be slightly off, because the old
 and new worker threads can update them at the same time.
+
+## Worker stalls and busy loops
+
+Each worker runs its connections on a single thread. Code that blocks that
+thread, such as a synchronous call, a lock held for a long time or a long
+computation between `.await` points, delays every connection on the worker.
+The runtime detects blocked workers and tasks that never wait, logs them,
+and reports them in the worker metrics.
+
+### Stall detection
+
+Every worker runs a task that sleeps for the latency sampling interval and
+records how late it wakes up. A watchdog thread checks the workers every
+interval. A worker that has recorded no sample for longer than the interval
+plus the stall threshold is stalled. With the defaults, 100 ms and 1 s, a
+worker is stalled after about 1.1 s without progress.
+
+When a stall starts, the watchdog logs an error:
+
+```text
+Arbiter my-server:worker:0(Id(3)) is stalled, no progress for 1.1s, running task spawned at src/main.rs:42:9
+```
+
+On neon the message names the spawn location of the task that is running.
+Tasks spawned by ntex itself, such as the connection dispatchers, report a
+location inside ntex. A stall without a running task happens in the I/O
+driver. When the worker makes progress again, a warning reports the stall
+duration:
+
+```text
+Arbiter my-server:worker:0(Id(3)) recovered after 2.4s stall
+```
+
+The same information is in `WorkerMetrics::runtime`:
+
+* `latency.stalls` and `latency.stall_duration` count finished stalls.
+  Alert on any increase.
+* `latency.stalled` is set while the worker is stalled. `current_turn`
+  shows how long the worker has been blocked and `current_task` where the
+  blocking task was spawned (neon).
+* Shorter blocking that stays under the threshold shows up as high values
+  in the `latency.histogram` and `poll_histogram` differences.
+
+With `LoadBalancing::LeastLoaded`, the default, new connections skip a
+worker whose runtime turn has lasted 100 ms or more, that has recorded no
+latency sample for 100 ms past its interval, or that is stalled, as long as
+another worker is available. Connections already on the blocked worker
+still wait for it.
+
+Change the interval and the threshold, both in milliseconds, on the system
+builder. `#[ntex::main]` has no options for them, build the system
+directly:
+
+```rust,no_run
+use ntex::rt::{DefaultRuntime, System};
+
+fn main() -> std::io::Result<()> {
+    System::build()
+        .name("my-server")
+        .signals(true) // backtraces on Linux need signal handling
+        .latency_interval(50) // sample every 50 ms
+        .ping_threshold(500) // stalled after 550 ms without a sample
+        .build(DefaultRuntime)
+        .block_on(async {
+            // build and run the server
+            Ok(())
+        })
+}
+```
+
+A shorter interval detects stalls sooner and gives a finer latency
+histogram, at the cost of more timer wakeups on idle workers. Keep the
+threshold above the longest blocking you accept, so it does not log
+expected work. `latency_interval(0)` disables sampling and stall detection,
+and `WorkerMetrics::runtime.latency` is then `None`.
+
+### Busy loop detection
+
+A task that wakes itself on every poll, for example a loop around
+`yield_now()` or `wake_by_ref()`, never waits for an event. It keeps the
+worker busy without blocking it, so it is not a stall, but it wastes CPU
+and delays other tasks. The neon runtime counts these self-wakes. When a
+task wakes itself 10 000 times in a row over at least one second, the
+runtime logs a warning once for that streak:
+
+```text
+Task spawned at src/main.rs:42:9 woke itself 10000 times in 1.2s without waiting, possible busy loop
+```
+
+`WorkerMetrics::runtime.self_wakes` is the total count. A steadily rising
+rate together with high utilization (`busy_duration`) and a low connection
+rate points to a busy loop; replace it with code that waits for an event or
+a timer. The tokio and compio runtimes do not count self-wakes. The limits
+can be changed with `RuntimeBuilder::self_wake_threshold()` only when the
+runtime is built directly, see the runtime chapter.
+
+### Backtrace capture
+
+On Linux and Windows the watchdog captures a backtrace of the stalled
+worker thread once, when the stall starts:
+
+* On Linux it sends `SIGUSR2` to the worker thread, whose handler records
+  the stack. This requires ntex signal handling on the system,
+  `signals = true` in `#[ntex::main]` or `System::build().signals(true)`.
+  The application must not use `SIGUSR2` for anything else.
+* On Windows the watchdog briefly suspends the worker thread and walks its
+  stack, on x86_64 and aarch64.
+* Other platforms only log the stall.
+
+Without a callback the backtrace is resolved and logged as an error together
+with the task location. `System::set_latency_callback()` replaces the
+logging, for example to send the backtrace to an error tracker. The callback
+is process-wide and runs on the watchdog thread, so keep it short; it
+receives the unresolved backtrace and the spawn location of the blocking
+task. The location is `None` when the task changed during the capture,
+because the backtrace then may not belong to it.
+
+```rust,no_run
+use ntex::rt::System;
+
+fn install() {
+    System::set_latency_callback(|bt, task| {
+        let bt = bt.resolve();
+        log::error!("worker stalled, task spawned at {task:?}\n{bt}");
+    });
+}
+```
+
+Backtraces need symbols. Release builds without debug information may show
+wrong or missing function names; add `debug = "line-tables-only"` to the
+release profile for readable backtraces with file and line numbers.
 
 ## Signals and shutdown
 
