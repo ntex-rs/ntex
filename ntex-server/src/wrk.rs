@@ -91,7 +91,20 @@ impl<T> Worker<T> {
         let n = name.clone();
         let inner = avail.inner.clone();
 
-        let arbiter = Arbiter::with_name(name.clone()).on_stop(move || {
+        let n2 = name.clone();
+        let init = move || {
+            if let Some(placement) = placement {
+                if placement.apply() {
+                    log::info!("Set affinity to {placement} for worker {n2:?}");
+                } else {
+                    log::warn!("Cannot set affinity to {placement} for worker {n2:?}");
+                }
+            }
+        };
+
+        // placement is applied before the runtime is created, so its memory
+        // is allocated on the NUMA node of the worker's CPU
+        let arbiter = Arbiter::with_init(name.clone(), init).on_stop(move || {
             inner.failed.store(true, Ordering::Release);
             inner.updated.store(true, Ordering::Release);
             inner.available.store(false, Ordering::Release);
@@ -111,13 +124,6 @@ impl<T> Worker<T> {
 
         arbiter.handle().spawn(async move {
             log::info!("Starting worker {n:?}");
-            if let Some(placement) = placement {
-                if placement.apply() {
-                    log::info!("Set affinity to {placement} for worker {n:?}");
-                } else {
-                    log::warn!("Cannot set affinity to {placement} for worker {n:?}");
-                }
-            }
 
             // the arbiter is stopped even if the service panics, runtimes
             // that catch task panics keep the arbiter running otherwise

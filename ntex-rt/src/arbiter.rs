@@ -104,15 +104,31 @@ impl Arbiter {
     /// Starts an arbiter on a new thread with an automatically generated name.
     pub fn new() -> Arbiter {
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
-        Arbiter::start(id, format!("{}:arb:{}", System::current().name(), id))
+        Arbiter::start(id, format!("{}:arb:{}", System::current().name(), id), None)
     }
 
     /// Starts an arbiter on a new thread with the specified name.
     pub fn with_name(name: String) -> Arbiter {
-        Arbiter::start(COUNT.fetch_add(1, Ordering::Relaxed), name)
+        Arbiter::start(COUNT.fetch_add(1, Ordering::Relaxed), name, None)
     }
 
-    fn start(id: usize, name: String) -> Arbiter {
+    /// Starts an arbiter on a new thread with the specified name.
+    ///
+    /// `init` runs on the new thread before the arbiter's runtime is created,
+    /// for example to set the thread's CPU affinity, so that the runtime's
+    /// memory is allocated on the NUMA node of that CPU.
+    pub fn with_init<F>(name: String, init: F) -> Arbiter
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        Arbiter::start(
+            COUNT.fetch_add(1, Ordering::Relaxed),
+            name,
+            Some(Box::new(init)),
+        )
+    }
+
+    fn start(id: usize, name: String, init: Option<Box<dyn FnOnce() + Send>>) -> Arbiter {
         let sys = System::current();
         let name2 = Arc::new(name.clone());
         let config = sys.config();
@@ -132,6 +148,9 @@ impl Arbiter {
 
         let handle = builder
             .spawn(move || {
+                if let Some(init) = init {
+                    init();
+                }
                 let name3 = name2.clone();
                 log::info!("Starting {name3:?} arbiter");
 
@@ -490,6 +509,35 @@ mod tests {
     #[should_panic(expected = "Arbiter is not running")]
     fn current_without_arbiter() {
         let _ = Arbiter::current();
+    }
+
+    #[test]
+    fn arbiter_with_init() {
+        thread_local! {
+            static INIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+
+        System::new("arb-init", TestRunner).block_on(async {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let mut arb = Arbiter::with_init("init".to_string(), move || {
+                INIT.with(|init| init.set(true));
+                let _ = tx.send(thread::current().name().map(str::to_string));
+            });
+            assert_eq!(rx.recv().unwrap().as_deref(), Some("init"));
+
+            // `init` ran on the arbiter's thread
+            let (tx, rx) = oneshot::async_channel();
+            arb.handle()
+                .spawn(async move {
+                    let _ = tx.send(INIT.with(std::cell::Cell::get));
+                })
+                .detach();
+            assert!(rx.await.unwrap());
+            assert!(!INIT.with(std::cell::Cell::get));
+
+            arb.stop();
+            arb.join().unwrap();
+        });
     }
 
     #[test]

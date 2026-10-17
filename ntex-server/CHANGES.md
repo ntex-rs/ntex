@@ -40,6 +40,12 @@
 * The default number of workers counts the CPUs of all processor groups on
   Windows, it was limited to 64 before
 
+* Worker affinity is set before the worker's runtime is created, so runtime
+  memory is allocated on the NUMA node of the worker's CPU
+
+* On Windows, worker placement honors the job object group affinity and the
+  default CPU sets of the process
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);

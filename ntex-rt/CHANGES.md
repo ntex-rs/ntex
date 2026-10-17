@@ -1,8 +1,11 @@
 # Changes
 
-## [4.3.0] - Unreleased
+## [4.3.0] - 2026-10-17
 
 * Add `Histogram::merge()`, sum of two histograms
+
+* Add `Arbiter::with_init()`, runs a callback on the arbiter's thread before
+  its runtime is created
 
 * Add `Runtime::now()`, cached start of the current runtime turn
 
