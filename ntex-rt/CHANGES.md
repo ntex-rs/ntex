@@ -2,6 +2,9 @@
 
 ## [4.3.0] - 2026-10-17
 
+* Use a zero-sized schedule function for neon tasks, avoids a waker
+  reference count increment and decrement on every wake
+
 * Fix compio `JoinHandle` never completing when it is polled on another thread
   and the task finishes while the handle registers its waker
 

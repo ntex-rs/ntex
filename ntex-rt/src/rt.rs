@@ -121,14 +121,7 @@ impl Runtime {
         future: F,
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
-        let queue = self.queue.clone();
-        let (runnable, task) = unsafe {
-            async_task::Builder::new()
-                .metadata(TaskMeta::new(location))
-                .spawn_unchecked(move |_| future, move |runnable| queue.schedule(runnable))
-        };
-        runnable.schedule();
-        JoinHandle::new(task)
+        unsafe { self.queue.spawn(future, location) }
     }
 
     /// Marks the runtime as awake.
@@ -379,14 +372,7 @@ impl Handle {
     /// There is no guarantee that a spawned task will execute to completion.
     #[track_caller]
     pub fn spawn<F: Future + Send + 'static>(&self, future: F) -> JoinHandle<F::Output> {
-        let queue = self.queue.clone();
-        let (runnable, task) = unsafe {
-            async_task::Builder::new()
-                .metadata(TaskMeta::new(Location::caller()))
-                .spawn_unchecked(move |_| future, move |runnable| queue.schedule(runnable))
-        };
-        runnable.schedule();
-        JoinHandle::new(task)
+        unsafe { self.queue.spawn(future, Location::caller()) }
     }
 }
 
@@ -399,7 +385,7 @@ impl Clone for Handle {
 }
 
 #[derive(Debug)]
-struct RunnableQueue {
+pub(crate) struct RunnableQueue {
     id: thread::ThreadId,
     idle: Cell<bool>,
     // start of the current busy period, valid while not idle
@@ -453,24 +439,67 @@ impl RunnableQueue {
         }
     }
 
+    /// Spawns a task on this queue.
+    ///
+    /// # Safety
+    ///
+    /// The caller should ensure the captured lifetime is long enough.
+    unsafe fn spawn<F: Future>(
+        self: &Arc<Self>,
+        future: F,
+        location: SpawnLocation,
+    ) -> JoinHandle<F::Output> {
+        // a zero-sized schedule function, async-task keeps a task reference
+        // around each call of a schedule function that captures state
+        fn schedule(runnable: Task) {
+            let queue = &runnable.metadata().queue;
+            if queue.id == current_thread_id() {
+                // the runtime thread cannot drop the queue during this call
+                let queue: *const RunnableQueue = Arc::as_ptr(queue);
+                unsafe { (*queue).schedule_local(runnable) };
+            } else {
+                // the runtime may run and drop the task as soon as it is
+                // queued, the queue must outlive the call
+                let queue = queue.clone();
+                queue.schedule_remote(runnable);
+            }
+        }
+
+        let (runnable, task) = unsafe {
+            async_task::Builder::new()
+                .metadata(TaskMeta::new(self.clone(), location))
+                .spawn_unchecked(move |_| future, schedule)
+        };
+        self.schedule(runnable);
+        JoinHandle::new(task)
+    }
+
     fn schedule(&self, runnable: Task) {
         if self.id == current_thread_id() {
-            unsafe { (*self.local_queue.get()).push_back(runnable) };
-            if self.idle.get() {
-                // starts a busy period, `awake` does not reset it
-                self.start_busy();
-                self.handle.notify().ok();
-            }
+            self.schedule_local(runnable);
         } else {
-            let result = self.sync_fixed_queue.try_enqueue([runnable]);
-            if let Err(TryEnqueueError::InsufficientCapacity([runnable])) = result {
-                self.sync_queue.push(runnable);
-            }
-            // the driver is already notified, `run` drains this task after
-            // clearing the flag
-            if !self.notified.swap(true, Ordering::Release) {
-                self.handle.notify().ok();
-            }
+            self.schedule_remote(runnable);
+        }
+    }
+
+    fn schedule_local(&self, runnable: Task) {
+        unsafe { (*self.local_queue.get()).push_back(runnable) };
+        if self.idle.get() {
+            // starts a busy period, `awake` does not reset it
+            self.start_busy();
+            self.handle.notify().ok();
+        }
+    }
+
+    fn schedule_remote(&self, runnable: Task) {
+        let result = self.sync_fixed_queue.try_enqueue([runnable]);
+        if let Err(TryEnqueueError::InsufficientCapacity([runnable])) = result {
+            self.sync_queue.push(runnable);
+        }
+        // the driver is already notified, `run` drains this task after
+        // clearing the flag
+        if !self.notified.swap(true, Ordering::Release) {
+            self.handle.notify().ok();
         }
     }
 
@@ -987,12 +1016,15 @@ mod tests {
     fn busy_duration_during_turn() {
         let sleep = Duration::from_millis(50);
         let (tx, rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         let th = thread::spawn(move || {
             let rt = Runtime::new(Box::new(NoopNotify));
             let hnd = rt.handle();
             rt.spawn(async move {
                 tx.send(hnd).unwrap();
                 thread::sleep(sleep);
+                // keep the turn running until the other thread checked it
+                let _ = done_rx.recv();
             })
             .detach();
             assert_eq!(rt.poll(), PollResult::Pending);
@@ -1004,6 +1036,7 @@ mod tests {
         thread::sleep(sleep / 2);
         assert!(hnd.busy_duration().unwrap() >= sleep / 2);
         assert!(hnd.current_turn().unwrap() >= sleep / 2);
+        done_tx.send(()).unwrap();
 
         let rt = th.join().unwrap();
         assert!(hnd.busy_duration().unwrap() >= sleep);
@@ -1171,7 +1204,7 @@ mod tests {
     #[test]
     fn self_wake_streak() {
         fn streak(rt: &Runtime, n: u32) -> u32 {
-            let meta = TaskMeta::new(Location::caller());
+            let meta = TaskMeta::new(rt.queue.clone(), Location::caller());
             for _ in 0..n {
                 let wakes = meta.self_wakes.load(Ordering::Relaxed);
                 rt.queue.self_wake(&meta, wakes);
