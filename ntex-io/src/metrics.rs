@@ -21,7 +21,7 @@ pub struct IoMetrics {
     closed: [AtomicU64; CLOSE_REASONS],
 }
 
-const CLOSE_REASONS: usize = 10;
+const CLOSE_REASONS: usize = 18;
 
 /// Reason a connection was closed.
 ///
@@ -29,6 +29,10 @@ const CLOSE_REASONS: usize = 10;
 /// [`IoRef::set_close_reason`](crate::IoRef::set_close_reason), the first
 /// reported reason is kept. It is counted in [`IoMetrics`] when the connection
 /// state is released.
+///
+/// Applications can count their own reasons with `Custom1` to `Custom8`. Set
+/// the reason before closing the connection or failing the service, a reason
+/// reported by the dispatcher is not replaced.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CloseReason {
@@ -50,6 +54,22 @@ pub enum CloseReason {
     Service,
     /// The server is shutting down.
     Shutdown,
+    /// Application-defined reason, counted in `CloseStats::custom[0]`.
+    Custom1,
+    /// Application-defined reason, counted in `CloseStats::custom[1]`.
+    Custom2,
+    /// Application-defined reason, counted in `CloseStats::custom[2]`.
+    Custom3,
+    /// Application-defined reason, counted in `CloseStats::custom[3]`.
+    Custom4,
+    /// Application-defined reason, counted in `CloseStats::custom[4]`.
+    Custom5,
+    /// Application-defined reason, counted in `CloseStats::custom[5]`.
+    Custom6,
+    /// Application-defined reason, counted in `CloseStats::custom[6]`.
+    Custom7,
+    /// Application-defined reason, counted in `CloseStats::custom[7]`.
+    Custom8,
 }
 
 impl CloseReason {
@@ -64,12 +84,20 @@ impl CloseReason {
             CloseReason::Encoder => 6,
             CloseReason::Service => 7,
             CloseReason::Shutdown => 8,
+            CloseReason::Custom1 => 9,
+            CloseReason::Custom2 => 10,
+            CloseReason::Custom3 => 11,
+            CloseReason::Custom4 => 12,
+            CloseReason::Custom5 => 13,
+            CloseReason::Custom6 => 14,
+            CloseReason::Custom7 => 15,
+            CloseReason::Custom8 => 16,
         }
     }
 }
 
 // connections closed without a reported reason or I/O error
-const CLOSE_OTHER: usize = 9;
+const CLOSE_OTHER: usize = 17;
 
 /// Closed connections by [`CloseReason`].
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -95,6 +123,9 @@ pub struct CloseStats {
     pub service: u64,
     /// Closed by server shutdown.
     pub shutdown: u64,
+    /// Closed by application-defined reasons, `custom[0]` counts
+    /// [`CloseReason::Custom1`] and so on.
+    pub custom: [u64; 8],
     /// Closed without a reported reason, e.g. by the application.
     pub other: u64,
 }
@@ -197,6 +228,7 @@ impl IoMetrics {
             encoder: c[CloseReason::Encoder.index()],
             service: c[CloseReason::Service.index()],
             shutdown: c[CloseReason::Shutdown.index()],
+            custom: std::array::from_fn(|i| c[CloseReason::Custom1.index() + i]),
             other: c[CLOSE_OTHER],
         }
     }

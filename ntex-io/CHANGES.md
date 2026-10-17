@@ -8,7 +8,9 @@
   created on
 
 * Add `CloseReason`, `IoRef::set_close_reason()` and `IoRef::close_reason()`, the first
-  reported reason is kept. `IoMetricsSnapshot::closed` counts closed connections by reason
+  reported reason is kept. `IoMetricsSnapshot::closed` counts closed connections by reason,
+  `CloseReason::Custom1` to `Custom8` are counted in `CloseStats::custom` for application
+  metrics
 
 * The I/O timer clock starts at `ntex_util::time::now()`, `TimerHandle::remains()`
   could report an extra second when the clock started in the middle of a runtime turn

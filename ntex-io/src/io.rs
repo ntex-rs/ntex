@@ -2355,6 +2355,18 @@ mod tests {
         let (_client, server) = IoTest::create();
         drop(Io::from(server));
 
+        // application-defined reasons
+        for reason in [
+            CloseReason::Custom1,
+            CloseReason::Custom8,
+            CloseReason::Custom8,
+        ] {
+            let (_client, server) = IoTest::create();
+            let io = Io::from(server);
+            io.set_close_reason(reason);
+            drop(io);
+        }
+
         // transport error without a reason
         let (client, server) = IoTest::create();
         let io = Io::from(server);
@@ -2364,7 +2376,8 @@ mod tests {
 
         sleep(Millis(10)).await;
         let c = metrics.snapshot().closed;
-        assert_eq!(c.total, 3);
+        assert_eq!(c.total, 6);
+        assert_eq!(c.custom, [1, 0, 0, 0, 0, 0, 0, 2]);
         assert_eq!(c.keepalive, 1);
         assert_eq!(c.decoder, 0);
         assert_eq!(c.other, 1);
