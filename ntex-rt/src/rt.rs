@@ -2045,6 +2045,38 @@ mod tests {
         drain(&rt);
     }
 
+    #[test]
+    fn unclaimed_output_with_own_waker() {
+        // the output holds a waker of its task, a cycle unless it is dropped
+        for case in 0..5 {
+            let rt = Runtime::new(Box::new(NoopNotify));
+            let dropped = Arc::new(AtomicBool::new(false));
+            let mut flag = Some(DropFlag(dropped.clone()));
+            let h = rt.spawn(poll_fn(move |cx| {
+                Poll::Ready((cx.waker().clone(), flag.take().unwrap()))
+            }));
+            let remote_drop = |h| thread::spawn(move || drop(h)).join().unwrap();
+            match case {
+                0 => h.detach(),
+                1 => remote_drop(h),
+                2 => {
+                    drain(&rt);
+                    h.detach();
+                }
+                3 => {
+                    drain(&rt);
+                    h.cancel();
+                }
+                _ => {
+                    drain(&rt);
+                    remote_drop(h);
+                }
+            }
+            drain(&rt);
+            assert!(dropped.load(Ordering::SeqCst), "case {case}");
+        }
+    }
+
     struct ReDrop {
         waker: Rc<RefCell<Option<Waker>>>,
         other: Option<JoinHandle<()>>,
