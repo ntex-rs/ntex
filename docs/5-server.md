@@ -231,9 +231,12 @@ server has reached its stopped state.
   writes were under backpressure, how many connections are under
   backpressure now, and the bytes held in read and write buffers. `closed`
   counts closed connections by reason: keep-alive, read or write timeout,
-  peer gone, I/O error, decoder, encoder, service error, server shutdown, and
-  `other` for connections closed without a reported reason, for example by
-  the application or after a response without keep-alive.
+  peer gone, I/O error, decoder, encoder, service error, server shutdown,
+  application-defined reasons (`custom`), and `other` for connections closed
+  without a reported reason, for example by the application or after a
+  response without keep-alive. An application counts its own reasons with
+  `io.set_close_reason(CloseReason::Custom1)` to `Custom8` before closing the
+  connection; the first reported reason is kept.
   `page_cache` holds the statistics of the worker thread's buffer page cache
   per page size: `hits`, `misses`, pages returned to the cache (`cached`) or
   freed because it was full (`freed`), and the cached `pages` and `bytes`. A
