@@ -139,12 +139,21 @@ The commonly useful `ServerBuilder` settings are:
   `Core` elsewhere, `Affinity::Disabled` leaves placement to the OS. Affinity
   is supported on Windows, Linux and Android, other platforms ignore it.
 * `load_balancing()` selects how new connections are distributed between
-  workers. The default `LoadBalancing::LeastLoaded` picks two random workers
+  workers. `LoadBalancing::LeastLoaded` picks two random workers
   and sends the connection to the one with the lower runtime utilization
   (averaged over ~250 ms), or, when both are similarly busy, the one with
   fewer open and queued connections. Workers whose runtime is blocked by a
   task are skipped. It helps when connections are long-lived or their load is
-  uneven. `LoadBalancing::RoundRobin` sends connections to the workers in turn.
+  uneven. The default `LoadBalancing::IncomingCpu` works the same, but first
+  tries the worker placed on the CPU that receives the connection's network
+  packets (on an SMT sibling of it if that CPU has no worker), so the
+  connection's packets and its worker share the CPU caches. That worker is
+  used unless its utilization exceeds the least loaded choice by more than
+  20% or its load by more than half plus 16. The incoming CPU is the
+  receive-side scaling (RSS) CPU on Windows, other platforms and loopback
+  connections have none and fall back to `LeastLoaded`, as does
+  `Affinity::Disabled`. `LoadBalancing::RoundRobin` sends connections to the
+  workers in turn.
 * `graceful_shutdown_timeout()` bounds how long a graceful stop waits for
   workers. The default is 30 seconds.
 * `stop_on_panic()` stops the server instead of restarting a worker that fails.
@@ -284,6 +293,23 @@ these metrics are the main saturation signal:
 * Pauses caused by `Server::pause()` are counted too. Account for them
   during maintenance windows.
 
+### Incoming CPU
+
+These fields are on `ServerMetrics`, see `LoadBalancing::IncomingCpu`.
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `incoming_cpu_hits` | counter | Connections sent to the worker on the CPU that receives their packets. |
+| `incoming_cpu_misses` | counter | Connections with a known incoming CPU sent to another worker, because no worker is placed on that CPU or its worker was busier. |
+
+Connections without a known incoming CPU, e.g. loopback connections or
+servers on platforms other than Windows, are counted in neither. Many
+misses mean the network adapter delivers packets to CPUs without workers,
+for example CPUs outside the process affinity, or that the workers on the
+RSS CPUs are busier than the others, for example RSS uses fewer CPUs than
+the server has workers. Check the adapter's RSS settings
+(`Get-NetAdapterRss`) against the worker placement.
+
 ### Listeners
 
 `ServerMetrics::listeners` has one `ListenerMetrics` entry per bound socket.
@@ -318,9 +344,10 @@ the file descriptor limit (`ulimit -n`) or lower `max_connections()`.
 | `runtime` | | Runtime statistics of the worker thread, see below. |
 
 * Compare `active_connections` and the rate of `items` across workers to
-  check load balancing. With the default `LoadBalancing::LeastLoaded`, they
-  should be close. A worker with much higher `not_ready_duration` than the
-  others points to long-lived or expensive connections pinned to it.
+  check load balancing. With the default `LoadBalancing::IncomingCpu` or with
+  `LoadBalancing::LeastLoaded`, they should be close. A worker with much
+  higher `not_ready_duration` than the others points to long-lived or
+  expensive connections pinned to it.
 * If `not_ready_duration` grows on all workers together with
   `accept_paused_duration`, the server is at capacity.
 * `active_connections` at the `max_connections()` value with idle CPU
@@ -623,11 +650,11 @@ The same information is in `WorkerMetrics::runtime`:
 * Shorter blocking that stays under the threshold shows up as high values
   in the `latency.histogram` and `poll_histogram` differences.
 
-With `LoadBalancing::LeastLoaded`, the default, new connections skip a
-worker whose runtime turn has lasted 100 ms or more, that has recorded no
-latency sample for 100 ms past its interval, or that is stalled, as long as
-another worker is available. Connections already on the blocked worker
-still wait for it.
+With `LoadBalancing::IncomingCpu`, the default, and `LoadBalancing::LeastLoaded`,
+new connections skip a worker whose runtime turn has lasted 100 ms or more,
+that has recorded no latency sample for 100 ms past its interval, or that is
+stalled, as long as another worker is available. Connections already on the
+blocked worker still wait for it.
 
 Change the interval and the threshold, both in milliseconds, on the system
 builder. `#[ntex::main]` has no options for them, build the system

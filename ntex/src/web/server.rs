@@ -236,9 +236,11 @@ where
     #[must_use]
     /// Sets how new connections are distributed between workers.
     ///
-    /// By default, [`LoadBalancing::LeastLoaded`] sends new connections to idle
+    /// By default, [`LoadBalancing::IncomingCpu`] sends new connections to idle
     /// workers, which helps when connections are long-lived or their load is
-    /// uneven. [`LoadBalancing::RoundRobin`] sends them to the workers in turn.
+    /// uneven, and prefers the worker on the CPU that receives a connection's
+    /// network packets. [`LoadBalancing::RoundRobin`] sends them to the
+    /// workers in turn.
     pub fn load_balancing(mut self, balancing: LoadBalancing) -> Self {
         self.builder = self.builder.load_balancing(balancing);
         self

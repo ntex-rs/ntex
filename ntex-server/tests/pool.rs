@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::{io, time::Duration};
 
 use ntex::time::{Millis, sleep};
-use ntex_server::{Affinity, Server, ServerConfiguration, Worker, WorkerPool, WorkerStatus};
+use ntex_server::{
+    Affinity, LoadBalancing, Server, ServerConfiguration, Worker, WorkerPool, WorkerStatus,
+};
 use ntex_service::{Ctx, Service};
 
 #[derive(Clone, Default)]
@@ -49,6 +51,8 @@ struct Cfg {
     panic_on: Option<usize>,
     /// Block the worker thread when processing this item.
     block_on: Option<(usize, Duration)>,
+    /// The incoming CPU of items is `item % 1000`.
+    incoming_cpu: bool,
     items: Option<mpsc::Sender<usize>>,
 }
 
@@ -62,6 +66,7 @@ impl Cfg {
             fail_ready: 0,
             panic_on: None,
             block_on: None,
+            incoming_cpu: false,
             items: None,
         }
     }
@@ -141,6 +146,10 @@ impl ServerConfiguration for Cfg {
 
     async fn stop(&self) {
         self.c.stop.fetch_add(1, Relaxed);
+    }
+
+    fn incoming_cpu(&self, item: &usize) -> Option<usize> {
+        self.incoming_cpu.then_some(item % 1000)
     }
 }
 
@@ -222,7 +231,7 @@ async fn pool_least_loaded_skips_blocked_worker() {
     let c = Counters::default();
     let mut cfg = Cfg::new(&c);
     cfg.block_on = Some((0, Duration::from_millis(1000)));
-    // least loaded balancing is the default
+    // least loaded balancing is the default for items without incoming CPU
     let srv = pool().workers(2).run(cfg);
     wait_for(|| c.created.load(Relaxed) == 2).await;
     // tokio does not report runtime turns, a blocked worker is detected
@@ -246,6 +255,64 @@ async fn pool_least_loaded_skips_blocked_worker() {
     );
 
     srv.stop(false).await;
+}
+
+/// Items go to the worker placed on their incoming CPU.
+#[ntex::test]
+async fn pool_incoming_cpu() {
+    let cpus = std::thread::available_parallelism().map_or(2, |n| n.get());
+    for balancing in [LoadBalancing::IncomingCpu, LoadBalancing::LeastLoaded] {
+        let c = Counters::default();
+        let mut cfg = Cfg::new(&c);
+        cfg.incoming_cpu = true;
+        let srv = pool()
+            .workers(2)
+            .affinity(Affinity::Cpu)
+            .load_balancing(balancing)
+            .run(cfg);
+        wait_for(|| c.created.load(Relaxed) == 2).await;
+
+        let mut total = 0;
+        for round in 0..3 {
+            for cpu in 0..cpus {
+                // idle workers, the worker on the CPU is not busier
+                process(&srv, round * 1000 + cpu).await;
+                total += 1;
+                wait_for(|| c.items().len() == total).await;
+            }
+        }
+
+        let m = srv.metrics();
+        let (hits, misses) = (m.incoming_cpu_hits, m.incoming_cpu_misses);
+        if balancing == LoadBalancing::LeastLoaded
+            || cfg!(not(any(
+                windows,
+                target_os = "linux",
+                target_os = "android"
+            )))
+        {
+            assert_eq!((hits, misses), (0, 0));
+        } else {
+            assert_eq!(hits + misses, total as u64);
+            // each CPU is always hit or always missed
+            assert!(hits >= 3 && hits % 3 == 0, "{hits}");
+            let threads = c.threads();
+            let mut local = 0;
+            for cpu in 0..cpus {
+                let mut names: Vec<_> = threads
+                    .iter()
+                    .filter(|(item, _)| item % 1000 == cpu)
+                    .map(|(_, name)| name)
+                    .collect();
+                names.dedup();
+                if names.len() == 1 {
+                    local += 3;
+                }
+            }
+            assert!(local >= hits, "{local} {hits} {threads:?}");
+        }
+        srv.stop(false).await;
+    }
 }
 
 /// Worker metrics report the runtime's load and a blocked worker.

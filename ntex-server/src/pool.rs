@@ -40,7 +40,7 @@ impl WorkerPool {
             graceful_shutdown: false,
             graceful_shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             affinity: Affinity::default(),
-            balancing: LoadBalancing::LeastLoaded,
+            balancing: LoadBalancing::IncomingCpu,
         }
     }
 
@@ -149,9 +149,11 @@ impl WorkerPool {
     #[must_use]
     /// Sets how items are distributed between workers.
     ///
-    /// By default, [`LoadBalancing::LeastLoaded`] sends new items to idle
+    /// By default, [`LoadBalancing::IncomingCpu`] sends new items to idle
     /// workers, which helps when connections are long-lived or their load is
-    /// uneven. [`LoadBalancing::RoundRobin`] sends them to the workers in turn.
+    /// uneven, and prefers the worker on the CPU that receives a connection's
+    /// network packets. [`LoadBalancing::RoundRobin`] sends them to the
+    /// workers in turn.
     pub fn load_balancing(mut self, balancing: LoadBalancing) -> Self {
         self.balancing = balancing;
         self

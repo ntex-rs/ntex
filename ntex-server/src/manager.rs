@@ -216,6 +216,11 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 
     fn process(&mut self, mut item: F::Item) {
+        let cpu = if self.balancer.uses_incoming_cpu(&self.workers) {
+            self.mgr.0.factory.incoming_cpu(&item)
+        } else {
+            None
+        };
         loop {
             if self.workers.is_empty() {
                 if !self.mgr.0.stopping.get() {
@@ -225,10 +230,13 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 }
                 break;
             }
-            let idx = self.balancer.select(&self.workers);
+            let (idx, local) = self.balancer.select(&self.workers, cpu);
             match self.workers[idx].send(item) {
                 Ok(()) => {
                     self.balancer.sent(idx, self.workers.len());
+                    if let Some(local) = local {
+                        self.mgr.0.shared.metrics.incoming_cpu(local);
+                    }
                     break;
                 }
                 Err(i) => {

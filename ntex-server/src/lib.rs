@@ -80,6 +80,18 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     ///
     /// Called once, before the workers are stopped.
     async fn stop(&self) {}
+
+    /// Returns the index of the logical CPU that receives the network packets
+    /// of the item, if known.
+    ///
+    /// Used by [`LoadBalancing::IncomingCpu`] to send the item to the worker
+    /// placed on that CPU. CPUs are numbered as in [`Worker::start`]. Network
+    /// servers return the receive-side scaling (RSS) CPU of the connection on
+    /// Windows. The default returns `None`.
+    fn incoming_cpu(&self, item: &Self::Item) -> Option<usize> {
+        let _ = item;
+        None
+    }
 }
 
 #[cfg(test)]

@@ -28,6 +28,13 @@ pub struct ServerMetrics {
     /// Number of accepted connections waiting in the accept loop for an
     /// available worker.
     pub accept_backlog: usize,
+    /// Number of items sent to the worker on their incoming CPU, see
+    /// [`LoadBalancing::IncomingCpu`](crate::LoadBalancing::IncomingCpu).
+    pub incoming_cpu_hits: u64,
+    /// Number of items with a known incoming CPU that were sent to another
+    /// worker, because no worker is placed on that CPU or its worker was
+    /// busier than other workers.
+    pub incoming_cpu_misses: u64,
 }
 
 /// Metrics of a single worker.
@@ -170,6 +177,8 @@ pub(crate) struct Metrics {
     epoch: Instant,
     workers: Box<[Arc<WorkerSlot>]>,
     accept: OnceLock<AcceptSlot>,
+    incoming_cpu_hits: AtomicU64,
+    incoming_cpu_misses: AtomicU64,
 }
 
 impl Metrics {
@@ -181,7 +190,20 @@ impl Metrics {
                 .map(|_| Arc::new(WorkerSlot::new(epoch)))
                 .collect(),
             accept: OnceLock::new(),
+            incoming_cpu_hits: AtomicU64::new(0),
+            incoming_cpu_misses: AtomicU64::new(0),
         }
+    }
+
+    /// An item with a known incoming CPU was sent to the worker on that CPU,
+    /// or to another worker.
+    pub(crate) fn incoming_cpu(&self, hit: bool) {
+        let counter = if hit {
+            &self.incoming_cpu_hits
+        } else {
+            &self.incoming_cpu_misses
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn worker(&self, id: WorkerId) -> Option<Arc<WorkerSlot>> {
@@ -234,6 +256,8 @@ impl Metrics {
 
         let mut metrics = ServerMetrics {
             workers,
+            incoming_cpu_hits: self.incoming_cpu_hits.load(Ordering::Relaxed),
+            incoming_cpu_misses: self.incoming_cpu_misses.load(Ordering::Relaxed),
             ..Default::default()
         };
         if let Some(accept) = self.accept.get() {

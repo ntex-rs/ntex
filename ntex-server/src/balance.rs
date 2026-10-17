@@ -1,6 +1,8 @@
 use std::hash::{BuildHasher, RandomState};
 use std::time::{Duration, Instant};
 
+use ntex_util::HashMap;
+
 use crate::Worker;
 
 /// How the server distributes items between workers.
@@ -15,10 +17,23 @@ pub enum LoadBalancing {
     /// ~250 ms. Workers whose utilization differs by less than 10% are compared
     /// by their open connections plus queued items. Workers whose runtime
     /// is blocked by a task are skipped while another worker is available.
+    LeastLoaded,
+    /// Each connection is sent to the worker placed on the CPU that receives
+    /// its network packets, unless that worker is busier than other workers.
+    ///
+    /// The worker on the incoming CPU, or on an SMT sibling of it if no worker
+    /// is placed on that CPU, is used if its utilization exceeds the
+    /// [`LeastLoaded`](Self::LeastLoaded) choice by at most 20% and its load by
+    /// at most half plus 16. Otherwise, and for items without a known
+    /// incoming CPU, it works like [`LeastLoaded`](Self::LeastLoaded).
+    ///
+    /// The incoming CPU is the receive-side scaling (RSS) CPU of the
+    /// connection, known on Windows for connections over network adapters
+    /// with RSS. Requires worker affinity, see [`Affinity`](crate::Affinity).
     ///
     /// This is the default.
     #[default]
-    LeastLoaded,
+    IncomingCpu,
 }
 
 /// Minimum interval between worker load samples.
@@ -29,6 +44,12 @@ const TAU: Duration = Duration::from_millis(250);
 const BLOCKED: Duration = Duration::from_millis(100);
 /// Utilization difference below which workers are compared by load.
 const UTIL_SLACK: f64 = 0.1;
+/// Utilization by which the worker on the incoming CPU may exceed the
+/// least loaded choice.
+const LOCAL_UTIL_SLACK: f64 = 0.2;
+/// Load by which the worker on the incoming CPU may exceed the least loaded
+/// choice, on top of half of that choice's load.
+const LOCAL_LOAD_SLACK: usize = 16;
 
 #[derive(Copy, Clone, Debug, Default)]
 /// Worker runtime sample.
@@ -92,6 +113,11 @@ pub(crate) struct Balancer {
     ready: Vec<usize>,
     refreshed: Option<Instant>,
     rng: u64,
+    /// Indexes of the workers placed on each CPU, or on an SMT sibling of a
+    /// CPU without its own worker.
+    local: HashMap<usize, Vec<usize>>,
+    /// `local` must be rebuilt.
+    local_stale: bool,
 }
 
 impl Balancer {
@@ -103,6 +129,8 @@ impl Balancer {
             ready: Vec::new(),
             refreshed: None,
             rng: RandomState::new().hash_one(0u64) | 1,
+            local: HashMap::default(),
+            local_stale: true,
         }
     }
 
@@ -110,35 +138,65 @@ impl Balancer {
     pub(crate) fn insert(&mut self, idx: usize) {
         self.states.insert(idx, State::default());
         self.refreshed = None;
+        self.local_stale = true;
     }
 
     /// The worker at `idx` is replaced.
     pub(crate) fn reset(&mut self, idx: usize) {
         self.states[idx] = State::default();
         self.refreshed = None;
+        self.local_stale = true;
     }
 
     /// The worker at `idx` is removed.
     pub(crate) fn remove(&mut self, idx: usize) {
         self.states.remove(idx);
         self.refreshed = None;
+        self.local_stale = true;
     }
 
-    /// Returns the index of the worker for the next item.
+    /// Returns `true` if [`select`](Self::select) uses the incoming CPU of
+    /// items, i.e. the mode is [`LoadBalancing::IncomingCpu`] and some
+    /// workers are placed on CPUs.
+    pub(crate) fn uses_incoming_cpu<T>(&mut self, workers: &[Worker<T>]) -> bool {
+        if self.mode != LoadBalancing::IncomingCpu {
+            return false;
+        }
+        if self.local_stale {
+            self.local_stale = false;
+            self.map_cpus(workers.iter().map(Worker::cpus));
+        }
+        !self.local.is_empty()
+    }
+
+    /// Returns the index of the worker for the next item, and whether it was
+    /// chosen for the incoming CPU of the item if that CPU is set.
     ///
     /// `workers` must not be empty.
-    pub(crate) fn select<T>(&mut self, workers: &[Worker<T>]) -> usize {
+    pub(crate) fn select<T>(
+        &mut self,
+        workers: &[Worker<T>],
+        cpu: Option<usize>,
+    ) -> (usize, Option<bool>) {
         match self.mode {
             LoadBalancing::RoundRobin => {
                 if self.next >= workers.len() {
                     self.next = workers.len() - 1;
                 }
-                self.next
+                (self.next, None)
             }
-            LoadBalancing::LeastLoaded => {
+            LoadBalancing::LeastLoaded | LoadBalancing::IncomingCpu => {
                 let now = Instant::now();
                 self.refresh(now, |idx| Sample::of(&workers[idx], now));
-                self.least_loaded(|idx| workers[idx].load())
+                let load = |idx: usize| workers[idx].load();
+                let idx = self.least_loaded(load);
+                match cpu {
+                    Some(cpu) if self.uses_incoming_cpu(workers) => {
+                        let local = self.local_worker(cpu, idx, load);
+                        (local.unwrap_or(idx), Some(local.is_some()))
+                    }
+                    _ => (idx, None),
+                }
             }
         }
     }
@@ -192,6 +250,52 @@ impl Balancer {
         } else {
             a
         }
+    }
+
+    /// Maps CPUs to the workers placed on them, `cpus` yields the CPU of
+    /// each worker followed by its SMT siblings.
+    fn map_cpus<'a>(&mut self, cpus: impl Iterator<Item = &'a [usize]>) {
+        let cpus: Vec<_> = cpus.collect();
+        self.local.clear();
+        for (idx, cpus) in cpus.iter().enumerate() {
+            if let Some(&cpu) = cpus.first() {
+                self.local.entry(cpu).or_default().push(idx);
+            }
+        }
+        let mut siblings = HashMap::<usize, Vec<usize>>::default();
+        for (idx, cpus) in cpus.iter().enumerate() {
+            for cpu in cpus.iter().skip(1) {
+                if !self.local.contains_key(cpu) {
+                    siblings.entry(*cpu).or_default().push(idx);
+                }
+            }
+        }
+        self.local.extend(siblings);
+    }
+
+    /// Returns the least loaded worker for the incoming `cpu`, unless it is
+    /// busier than `other`, the least loaded choice.
+    fn local_worker(
+        &self,
+        cpu: usize,
+        other: usize,
+        load: impl Fn(usize) -> usize,
+    ) -> Option<usize> {
+        let util = |idx: usize| self.states[idx].util;
+        let best = self
+            .local
+            .get(&cpu)?
+            .iter()
+            .copied()
+            .filter(|&idx| !self.states[idx].blocked)
+            .min_by(|&a, &b| {
+                util(a)
+                    .total_cmp(&util(b))
+                    .then_with(|| load(a).cmp(&load(b)))
+            })?;
+        let max_load = load(other) + load(other) / 2 + LOCAL_LOAD_SLACK;
+        (best == other || (util(best) <= util(other) + LOCAL_UTIL_SLACK && load(best) <= max_load))
+            .then_some(best)
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -326,6 +430,65 @@ mod tests {
         let mut b = balancer(1);
         b.refresh(Instant::now(), |_| sample(0, true));
         assert_eq!(b.least_loaded(|_| 0), 0);
+    }
+
+    #[test]
+    fn map_cpus() {
+        let mut b = balancer(5);
+        // workers 0 and 1 on the two CPUs of core (0, 1), workers 2 and 3
+        // on CPU 2 and 4 of cores (2, 3) and (4, 5), worker 4 not placed
+        b.map_cpus([&[0, 1][..], &[1, 0], &[2, 3], &[4, 5], &[]].into_iter());
+        let mut local: Vec<_> = b.local.iter().map(|(c, w)| (*c, w.clone())).collect();
+        local.sort();
+        assert_eq!(
+            local,
+            [
+                (0, vec![0]),
+                (1, vec![1]),
+                (2, vec![2]),
+                (3, vec![2]),
+                (4, vec![3]),
+                (5, vec![3])
+            ]
+        );
+
+        // several workers on one CPU
+        b.map_cpus([&[0][..], &[0]].into_iter());
+        assert_eq!(b.local.get(&0), Some(&vec![0, 1]));
+        assert_eq!(b.local.len(), 1);
+    }
+
+    #[test]
+    fn local_worker() {
+        let t = Instant::now();
+        let mut b = balancer(4);
+        b.map_cpus([&[0][..], &[1], &[2], &[2]].into_iter());
+        b.refresh(t, |_| sample(0, false));
+        b.refresh(t + MS * 100, |i| sample([10, 0, 100, 90][i], false));
+        let load = |_| 10;
+
+        // the worker on the incoming CPU is preferred
+        assert_eq!(b.local_worker(0, 1, load), Some(0));
+        // the least utilized of the workers on the CPU
+        assert_eq!(b.local_worker(2, 2, load), Some(3));
+        // no worker on the CPU
+        assert_eq!(b.local_worker(7, 1, load), None);
+        // utilization exceeds the other choice by more than the slack
+        assert!(b.states[3].util > b.states[1].util + LOCAL_UTIL_SLACK);
+        assert_eq!(b.local_worker(2, 1, load), None);
+        b.map_cpus([&[0][..], &[1], &[2], &[3]].into_iter());
+        assert_eq!(b.local_worker(2, 1, load), None);
+        assert_eq!(b.local_worker(2, 2, load), Some(2));
+
+        // load exceeds the other choice by more than half plus the slack
+        let load = |i: usize| [100, 10, 0, 0][i];
+        assert_eq!(b.local_worker(0, 1, load), None);
+        let load = |i: usize| [100, 56, 0, 0][i];
+        assert_eq!(b.local_worker(0, 1, load), Some(0));
+
+        // blocked worker
+        b.refresh(t + MS * 200, |i| sample([10, 0, 100, 90][i], i == 0));
+        assert_eq!(b.local_worker(0, 1, |_| 0), None);
     }
 
     #[test]
