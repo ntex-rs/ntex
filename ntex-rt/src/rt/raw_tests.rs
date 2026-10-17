@@ -1,0 +1,1003 @@
+//! Ported async-task scenarios for the raw task.
+//!
+//! The test thread is the owner thread, it runs tasks by hand and counts
+//! the queued tasks to check each schedule.
+
+// `clone().wake()` exercises the by-value wake path
+#![allow(clippy::waker_clone_wake)]
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Barrier, Mutex};
+use std::task::{Context, Poll, Waker};
+
+use super::{Arc, Future, Location, Notify, Ordering, RunnableQueue, Runtime, io, thread};
+use crate::raw::{self, Remote, Runnable, Task};
+
+#[derive(Debug)]
+struct NoopNotify;
+
+impl Notify for NoopNotify {
+    fn notify(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct Counter(Arc<AtomicUsize>);
+
+impl Counter {
+    fn get(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    fn inc(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn token(&self) -> Token {
+        Token(self.clone())
+    }
+}
+
+/// Increments the counter on drop.
+#[derive(Debug)]
+struct Token(Counter);
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        self.0.inc();
+    }
+}
+
+#[derive(Default)]
+struct CountWaker(AtomicUsize);
+
+impl std::task::Wake for CountWaker {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Res {
+    Pending,
+    Ready,
+    Panic,
+}
+
+/// Event counters of a test future.
+#[derive(Default, Clone)]
+struct Probe {
+    polls: Counter,
+    drops: Counter,
+    outputs: Counter,
+    waker: Arc<Mutex<Option<Waker>>>,
+}
+
+impl Probe {
+    fn future(&self, res: Res) -> Fut {
+        Fut {
+            p: self.clone(),
+            res,
+            gate: None,
+            _drop: self.drops.token(),
+        }
+    }
+
+    /// The first poll waits twice on the barrier, another thread acts in
+    /// between.
+    fn gated(&self, res: Res, gate: &Arc<Barrier>) -> Fut {
+        Fut {
+            gate: Some(gate.clone()),
+            ..self.future(res)
+        }
+    }
+
+    /// Takes the waker stored by the last poll.
+    fn waker(&self) -> Waker {
+        self.waker.lock().unwrap().take().unwrap()
+    }
+
+    fn waker_clone(&self) -> Waker {
+        self.waker.lock().unwrap().clone().unwrap()
+    }
+
+    #[track_caller]
+    fn check(&self, polls: usize, drops: usize, outputs: usize) {
+        assert_eq!(
+            (self.polls.get(), self.drops.get(), self.outputs.get()),
+            (polls, drops, outputs),
+            "(polls, drops, outputs)"
+        );
+    }
+}
+
+struct Fut {
+    p: Probe,
+    res: Res,
+    gate: Option<Arc<Barrier>>,
+    _drop: Token,
+}
+
+impl Future for Fut {
+    type Output = Token;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Token> {
+        let this = self.get_mut();
+        *this.p.waker.lock().unwrap() = Some(cx.waker().clone());
+        this.p.polls.inc();
+        if let Some(gate) = this.gate.take() {
+            gate.wait();
+            gate.wait();
+        }
+        match this.res {
+            Res::Pending => Poll::Pending,
+            Res::Ready => Poll::Ready(this.p.outputs.token()),
+            Res::Panic => panic!("task panic"),
+        }
+    }
+}
+
+fn new_rt() -> Runtime {
+    Runtime::new(Box::new(NoopNotify))
+}
+
+fn spawn<F: Future + 'static>(rt: &Runtime, f: F) -> Task<F::Output> {
+    unsafe { raw::spawn(f, rt.queue.clone(), Location::caller()) }
+}
+
+fn locals(rt: &Runtime) -> Vec<Runnable> {
+    std::iter::from_fn(|| rt.queue.pop_local()).collect()
+}
+
+fn remotes(rt: &Runtime) -> Vec<Remote> {
+    std::iter::from_fn(|| rt.queue.remote_queue.pop().unwrap()).collect()
+}
+
+/// Pops the only local task.
+#[track_caller]
+fn one_local(rt: &Runtime) -> Runnable {
+    let mut q = locals(rt);
+    assert_eq!(q.len(), 1, "local queue");
+    q.pop().unwrap()
+}
+
+/// Pops the only remote task and merges it.
+#[track_caller]
+fn one_remote(rt: &Runtime) -> Option<Runnable> {
+    let mut q = remotes(rt);
+    assert_eq!(q.len(), 1, "remote queue");
+    q.pop().unwrap().into_runnable()
+}
+
+#[track_caller]
+fn assert_idle(rt: &Runtime) {
+    assert!(rt.queue.local_queue.is_empty(), "local queue");
+    assert!(rt.queue.remote_queue.is_empty(), "remote queue");
+}
+
+/// Every task header keeps the runtime queue alive.
+#[track_caller]
+fn assert_freed(rt: &Runtime) {
+    assert_idle(rt);
+    assert_eq!(Arc::strong_count(&rt.queue), 1, "tasks alive");
+}
+
+fn join<T>(task: &mut Task<T>) -> Poll<Option<T>> {
+    task.poll_join(&Context::from_waker(Waker::noop()))
+}
+
+fn on_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    thread::spawn(f).join().unwrap()
+}
+
+#[test]
+fn drop_and_detach() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Ready));
+    drop(one_local(&rt));
+    p.check(0, 1, 0);
+    assert!(task.is_finished());
+    task.detach();
+    assert_freed(&rt);
+}
+
+#[test]
+fn detach_and_drop() {
+    let rt = new_rt();
+    let p = Probe::default();
+    spawn(&rt, p.future(Res::Ready)).detach();
+    p.check(0, 0, 0);
+    drop(one_local(&rt));
+    p.check(0, 1, 0);
+    assert_freed(&rt);
+}
+
+#[test]
+fn detach_and_run() {
+    let rt = new_rt();
+    let p = Probe::default();
+    spawn(&rt, p.future(Res::Ready)).detach();
+    assert!(!one_local(&rt).run());
+    drop(p.waker());
+    p.check(1, 1, 1);
+    assert_freed(&rt);
+}
+
+#[test]
+fn run_and_detach() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Ready));
+    one_local(&rt).run();
+    drop(p.waker());
+    p.check(1, 1, 0);
+    task.detach();
+    p.check(1, 1, 1);
+    assert_freed(&rt);
+}
+
+#[test]
+fn cancel_and_run() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Ready));
+    task.cancel();
+    p.check(0, 0, 0);
+    one_local(&rt).run();
+    p.check(0, 1, 0);
+    assert_freed(&rt);
+}
+
+#[test]
+fn run_and_cancel() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Ready));
+    one_local(&rt).run();
+    drop(p.waker());
+    task.cancel();
+    p.check(1, 1, 1);
+    assert_freed(&rt);
+}
+
+#[test]
+fn cancel_pending() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Pending));
+    one_local(&rt).run();
+    task.cancel();
+    p.check(1, 0, 0);
+    // the cancel schedules the task, the runner drops the future
+    one_local(&rt).run();
+    p.check(1, 1, 0);
+    // wakers of a closed task do not schedule it
+    let w = p.waker();
+    w.wake_by_ref();
+    w.clone().wake();
+    assert_idle(&rt);
+    drop(w);
+    assert_freed(&rt);
+}
+
+#[test]
+fn schedule() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut task = spawn(&rt, p.future(Res::Pending));
+    one_local(&rt).run();
+    assert_idle(&rt);
+
+    // wakes coalesce while scheduled
+    let w = p.waker();
+    w.wake_by_ref();
+    w.wake_by_ref();
+    w.clone().wake();
+    let r = one_local(&rt);
+    w.wake_by_ref();
+    assert_idle(&rt);
+    r.run();
+    p.check(2, 0, 0);
+    drop(w);
+
+    for _ in 0..3 {
+        p.waker().wake();
+        one_local(&rt).run();
+    }
+    p.check(5, 0, 0);
+    assert_eq!(join(&mut task).map(|v| v.is_some()), Poll::Pending);
+    drop(task);
+    // the stored waker keeps the task alive
+    assert_idle(&rt);
+    drop(p.waker());
+    one_local(&rt).run();
+    p.check(5, 1, 0);
+    assert_freed(&rt);
+}
+
+#[test]
+fn self_wake_during_run() {
+    let rt = new_rt();
+    let polls = Counter::default();
+    let polls2 = polls.clone();
+    spawn(
+        &rt,
+        std::future::poll_fn(move |cx| {
+            polls2.inc();
+            if polls2.get() < 3 {
+                // only the first wake queues the task
+                cx.waker().wake_by_ref();
+                cx.waker().clone().wake();
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        }),
+    )
+    .detach();
+    assert!(one_local(&rt).run());
+    assert!(one_local(&rt).run());
+    assert!(!one_local(&rt).run());
+    assert_eq!(polls.get(), 3);
+    assert_freed(&rt);
+}
+
+#[test]
+fn join_twice() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut task = spawn(&rt, p.future(Res::Ready));
+    assert!(join(&mut task).is_pending());
+    one_local(&rt).run();
+    assert!(matches!(join(&mut task), Poll::Ready(Some(_))));
+    p.check(1, 1, 1);
+    // the output is consumed
+    assert!(matches!(join(&mut task), Poll::Ready(None)));
+    drop(task);
+    drop(p.waker());
+    assert_freed(&rt);
+}
+
+#[test]
+fn join_waker_replaced() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut task = spawn(&rt, p.future(Res::Pending));
+    let a = Arc::new(CountWaker::default());
+    let b = Arc::new(CountWaker::default());
+
+    let wa = Waker::from(a.clone());
+    assert!(task.poll_join(&Context::from_waker(&wa)).is_pending());
+    drop(wa);
+    one_local(&rt).run();
+    let wb = Waker::from(b.clone());
+    assert!(task.poll_join(&Context::from_waker(&wb)).is_pending());
+    drop(wb);
+    // the replaced waker is released
+    assert_eq!(Arc::strong_count(&a), 1);
+    task.cancel();
+    one_local(&rt).run();
+    assert_eq!(a.0.load(Ordering::SeqCst), 0);
+    assert_eq!(b.0.load(Ordering::SeqCst), 1);
+    assert_eq!(Arc::strong_count(&b), 1);
+    drop(p.waker());
+    assert_freed(&rt);
+}
+
+#[test]
+fn join_by_task_waker() {
+    // a task joining another task registers an ntex waker
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut inner = Some(spawn(&rt, p.future(Res::Ready)));
+    let out = Arc::new(Mutex::new(None));
+    let out2 = out.clone();
+    spawn(
+        &rt,
+        std::future::poll_fn(move |cx| match inner.as_mut().unwrap().poll_join(cx) {
+            Poll::Ready(v) => {
+                *out2.lock().unwrap() = Some(v.is_some());
+                inner = None;
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        }),
+    )
+    .detach();
+    let mut q = locals(&rt);
+    assert_eq!(q.len(), 2);
+    let outer = q.pop().unwrap();
+    let first = q.pop().unwrap();
+    outer.run();
+    first.run();
+    // the inner task woke the outer one
+    one_local(&rt).run();
+    assert_eq!(*out.lock().unwrap(), Some(true));
+    p.check(1, 1, 1);
+    drop(p.waker());
+    assert_freed(&rt);
+}
+
+#[test]
+fn wake_completed() {
+    let rt = new_rt();
+    for remote in [false, true] {
+        let p = Probe::default();
+        let task = spawn(&rt, p.future(Res::Ready));
+        one_local(&rt).run();
+        let w = p.waker();
+        drop(task);
+        // the waker keeps the output alive
+        p.check(1, 1, 0);
+        if remote {
+            on_thread(move || {
+                w.wake_by_ref();
+                w.clone().wake();
+                w.wake();
+            });
+            // the released reference is merged on the owner thread
+            assert!(one_remote(&rt).is_none());
+        } else {
+            w.wake_by_ref();
+            w.clone().wake();
+            assert_idle(&rt);
+            w.wake();
+        }
+        p.check(1, 1, 1);
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn wake_dropped() {
+    let rt = new_rt();
+    for remote in [false, true] {
+        let p = Probe::default();
+        let task = spawn(&rt, p.future(Res::Pending));
+        one_local(&rt).run();
+        task.cancel();
+        one_local(&rt).run();
+        p.check(1, 1, 0);
+        let w = p.waker();
+        if remote {
+            on_thread(move || w.wake());
+            assert!(one_remote(&rt).is_none());
+        } else {
+            w.wake();
+        }
+        p.check(1, 1, 0);
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn remote_wake_variants() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Pending));
+    one_local(&rt).run();
+
+    // wake by ref, clone and wake, wake by value, all coalesce
+    let w = p.waker();
+    let w = on_thread(move || {
+        w.wake_by_ref();
+        w.clone().wake();
+        let w2 = w.clone();
+        w2.wake_by_ref();
+        w2.wake();
+        w
+    });
+    one_remote(&rt).unwrap().run();
+    p.check(2, 0, 0);
+    assert_idle(&rt);
+
+    // clones dropped remotely are merged without a run
+    on_thread(move || drop(w.clone()));
+    assert!(one_remote(&rt).is_none());
+    p.check(2, 0, 0);
+
+    // a remote wake of a locally scheduled task runs it once
+    let w = p.waker_clone();
+    p.waker().wake();
+    on_thread(move || w.wake());
+    let r = one_local(&rt);
+    assert!(one_remote(&rt).is_none());
+    r.run();
+    p.check(3, 0, 0);
+
+    drop(task);
+    drop(p.waker());
+    one_local(&rt).run();
+    p.check(3, 1, 0);
+    assert_freed(&rt);
+}
+
+#[test]
+fn drop_last_waker() {
+    let rt = new_rt();
+    for remote in [false, true] {
+        let p = Probe::default();
+        let task = spawn(&rt, p.future(Res::Pending));
+        one_local(&rt).run();
+        task.detach();
+        p.check(1, 0, 0);
+
+        let w = p.waker();
+        if remote {
+            on_thread(move || drop(w));
+            assert!(one_remote(&rt).is_none());
+        } else {
+            drop(w);
+        }
+        // nothing can wake the task, it is scheduled to drop the future
+        one_local(&rt).run();
+        p.check(1, 1, 0);
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn drop_last_task() {
+    let rt = new_rt();
+    for (remote, cancel) in [(false, false), (false, true), (true, false), (true, true)] {
+        let p = Probe::default();
+        let task = spawn(&rt, p.future(Res::Pending));
+        one_local(&rt).run();
+        drop(p.waker());
+        p.check(1, 0, 0);
+        assert_idle(&rt);
+
+        if remote {
+            on_thread(move || {
+                if cancel {
+                    task.cancel();
+                } else {
+                    task.detach();
+                }
+            });
+            let r = one_remote(&rt);
+            // a cancel runs the task, the last release schedules it locally
+            assert_eq!(r.is_some(), cancel);
+            r.unwrap_or_else(|| one_local(&rt)).run();
+        } else {
+            if cancel {
+                task.cancel();
+            } else {
+                task.detach();
+            }
+            one_local(&rt).run();
+        }
+        p.check(1, 1, 0);
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn remote_spawn() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let q = rt.queue.clone();
+    let fut = p.future(Res::Ready);
+    let mut task = on_thread(move || unsafe { raw::spawn(fut, q, Location::caller()) });
+    assert!(rt.queue.local_queue.is_empty());
+    one_remote(&rt).unwrap().run();
+    p.check(1, 1, 0);
+    assert!(matches!(join(&mut task), Poll::Ready(Some(_))));
+    drop(task);
+    drop(p.waker());
+    p.check(1, 1, 1);
+    assert_freed(&rt);
+}
+
+#[test]
+fn remote_spawn_cancel() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let q = rt.queue.clone();
+    let fut = p.future(Res::Ready);
+    on_thread(move || unsafe { raw::spawn(fut, q, Location::caller()) }.cancel());
+    // queued once, the runner drops the future
+    one_remote(&rt).unwrap().run();
+    p.check(0, 1, 0);
+    assert_freed(&rt);
+}
+
+/// Runs the task on the owner thread while `during` runs on another thread
+/// in the middle of the poll. Returns whether the poll panicked.
+fn during_run<T: Send + 'static>(
+    r: Runnable,
+    gate: &Arc<Barrier>,
+    during: impl FnOnce() -> T + Send + 'static,
+) -> (bool, T) {
+    let gate2 = gate.clone();
+    let th = thread::spawn(move || {
+        gate2.wait();
+        let res = during();
+        gate2.wait();
+        res
+    });
+    let res = catch_unwind(AssertUnwindSafe(|| r.run()));
+    (res.is_err(), th.join().unwrap())
+}
+
+/// Spawns a task with a gated future and runs it to the gated poll.
+fn gated_task(rt: &Runtime, p: &Probe, res: Res, gate: &Arc<Barrier>) -> (Task<Token>, Runnable) {
+    let fut = p.gated(res, gate);
+    let task = spawn(rt, async move {
+        // the first run returns before the gated poll
+        yield_now().await;
+        fut.await
+    });
+    assert!(one_local(rt).run());
+    (task, one_local(rt))
+}
+
+async fn yield_now() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
+}
+
+#[test]
+fn wake_during_run() {
+    for res in [Res::Pending, Res::Panic] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let gate = Arc::new(Barrier::new(2));
+        let (task, r) = gated_task(&rt, &p, res, &gate);
+        let p2 = p.clone();
+        let (panicked, ()) = during_run(r, &gate, move || p2.waker().wake());
+        assert_eq!(panicked, res == Res::Panic);
+        // a remote wake is queued remotely, never locally
+        assert!(rt.queue.local_queue.is_empty());
+        let r = one_remote(&rt);
+        if res == Res::Pending {
+            p.check(1, 0, 0);
+            r.unwrap().run();
+            p.check(2, 0, 0);
+            drop(task);
+            drop(p.waker());
+            one_local(&rt).run();
+        } else {
+            assert!(r.is_none());
+            drop(task);
+        }
+        p.check(p.polls.get(), 1, 0);
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn cancel_during_run() {
+    // cancel only, wake then cancel, cancel then wake
+    for res in [Res::Pending, Res::Ready, Res::Panic] {
+        for order in 0..3 {
+            let rt = new_rt();
+            let p = Probe::default();
+            let gate = Arc::new(Barrier::new(2));
+            let (task, r) = gated_task(&rt, &p, res, &gate);
+            let p2 = p.clone();
+            let (panicked, ()) = during_run(r, &gate, move || {
+                let w = p2.waker_clone();
+                if order == 1 {
+                    w.wake_by_ref();
+                }
+                task.cancel();
+                if order == 2 {
+                    w.wake_by_ref();
+                }
+                // the future is dropped on the owner thread
+                assert_eq!(p2.drops.get(), 0);
+            });
+            assert_eq!(panicked, res == Res::Panic, "{res:?} {order}");
+            assert!(rt.queue.local_queue.is_empty());
+            p.check(1, usize::from(res != Res::Pending), 0);
+            // queued once, a pending future is dropped without a poll
+            if let Some(r) = one_remote(&rt) {
+                assert_eq!(res, Res::Pending);
+                r.run();
+            }
+            drop(p.waker());
+            p.check(1, 1, usize::from(res == Res::Ready));
+            assert_freed(&rt);
+        }
+    }
+}
+
+#[test]
+fn detach_during_run() {
+    for res in [Res::Pending, Res::Ready, Res::Panic] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let gate = Arc::new(Barrier::new(2));
+        let (task, r) = gated_task(&rt, &p, res, &gate);
+        let (panicked, ()) = during_run(r, &gate, move || task.detach());
+        assert_eq!(panicked, res == Res::Panic);
+        // the release is merged without a run
+        assert!(one_remote(&rt).is_none());
+        p.check(1, usize::from(res != Res::Pending), 0);
+        drop(p.waker());
+        if res == Res::Pending {
+            one_local(&rt).run();
+        }
+        p.check(1, 1, usize::from(res == Res::Ready));
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn join_during_run() {
+    for res in [Res::Ready, Res::Panic] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let gate = Arc::new(Barrier::new(2));
+        let (task, r) = gated_task(&rt, &p, res, &gate);
+        let woken = Arc::new(CountWaker::default());
+        let woken2 = woken.clone();
+        let (panicked, mut task) = during_run(r, &gate, move || {
+            let mut task = task;
+            let w = Waker::from(woken2);
+            assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+            task
+        });
+        assert_eq!(panicked, res == Res::Panic);
+        // completion wakes the awaiter once
+        assert_eq!(woken.0.load(Ordering::SeqCst), 1);
+        assert_eq!(Arc::strong_count(&woken), 1);
+        let (ready, task) = on_thread(move || {
+            let ready = matches!(join(&mut task), Poll::Ready(Some(_)));
+            (ready, task)
+        });
+        assert_eq!(ready, res == Res::Ready);
+        p.check(1, 1, usize::from(res == Res::Ready));
+        drop(task);
+        drop(p.waker());
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn panic_and_join() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut task = spawn(&rt, p.future(Res::Panic));
+    let r = one_local(&rt);
+    assert!(catch_unwind(AssertUnwindSafe(|| r.run())).is_err());
+    p.check(1, 1, 0);
+    assert!(task.is_finished());
+    assert!(matches!(join(&mut task), Poll::Ready(None)));
+    // wakers of a panicked task do not schedule it
+    p.waker().wake();
+    assert_idle(&rt);
+    drop(task);
+    assert_freed(&rt);
+}
+
+#[test]
+fn runtime_drop_merges_remote_refs() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Pending));
+    one_local(&rt).run();
+    let w = p.waker();
+    let w2 = on_thread(move || {
+        let w2 = w.clone();
+        w.wake();
+        drop(task);
+        w2
+    });
+    // queued locally and remotely
+    w2.wake_by_ref();
+    drop(w2);
+    let q = rt.queue.clone();
+    drop(rt);
+    p.check(1, 1, 0);
+    assert_eq!(Arc::strong_count(&q), 1, "tasks alive");
+}
+
+struct Slot {
+    waker: Mutex<Option<Waker>>,
+    // polls left until ready
+    left: AtomicUsize,
+}
+
+struct StressFut {
+    slots: Arc<Vec<Slot>>,
+    idx: usize,
+    outputs: Counter,
+    created: Counter,
+    _drop: Token,
+}
+
+impl Future for StressFut {
+    type Output = Token;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Token> {
+        let slot = &self.slots[self.idx];
+        *slot.waker.lock().unwrap() = Some(cx.waker().clone());
+        let left = slot.left.fetch_sub(1, Ordering::Relaxed);
+        if left <= 1 {
+            self.created.inc();
+            Poll::Ready(self.outputs.token())
+        } else {
+            if left.is_multiple_of(3) {
+                cx.waker().wake_by_ref();
+            }
+            Poll::Pending
+        }
+    }
+}
+
+/// xorshift64, returns a value in `0..n`
+fn rand(s: &mut u64, n: usize) -> usize {
+    *s ^= *s << 13;
+    *s ^= *s >> 7;
+    *s ^= *s << 17;
+    usize::try_from(*s % n as u64).unwrap()
+}
+
+fn slot_waker(slots: &[Slot], idx: usize) -> Option<Waker> {
+    slots[idx].waker.lock().unwrap().clone()
+}
+
+/// Spawns `futs` remotely, then pokes random wakers and joins, cancels or
+/// detaches each task.
+fn stress_worker(
+    mut rng: u64,
+    slots: &[Slot],
+    queue: &Arc<RunnableQueue>,
+    mut tasks: Vec<(usize, Task<Token>)>,
+    futs: Vec<StressFut>,
+) {
+    for f in futs {
+        let idx = f.idx;
+        tasks.push((idx, unsafe {
+            raw::spawn(f, queue.clone(), Location::caller())
+        }));
+    }
+    for (idx, mut task) in tasks {
+        for _ in 0..rand(&mut rng, 4) {
+            if let Some(w) = slot_waker(slots, rand(&mut rng, slots.len())) {
+                match rand(&mut rng, 3) {
+                    0 => w.wake_by_ref(),
+                    1 => w.clone().wake(),
+                    _ => drop(w.clone()),
+                }
+            }
+        }
+        match rand(&mut rng, 4) {
+            0 => task.cancel(),
+            1 => drop(task),
+            _ => {
+                let waker = Waker::from(Arc::new(CountWaker::default()));
+                let cx = Context::from_waker(&waker);
+                loop {
+                    if let Poll::Ready(out) = task.poll_join(&cx) {
+                        assert!(out.is_some(), "task {idx} is not cancelled");
+                        break;
+                    }
+                    if let Some(w) = slot_waker(slots, idx) {
+                        w.wake();
+                    }
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+}
+
+/// Runs local and remote tasks until `done` and both queues are empty.
+fn run_until_done(rt: &Runtime, done: impl Fn() -> bool) {
+    loop {
+        let finished = done();
+        let mut ran = false;
+        while let Some(r) = rt.queue.pop_local() {
+            r.run();
+            ran = true;
+        }
+        loop {
+            match rt.queue.remote_queue.pop() {
+                Ok(Some(r)) => {
+                    if let Some(r) = r.into_runnable() {
+                        r.run();
+                    }
+                    ran = true;
+                }
+                Ok(None) => break,
+                Err(_) => thread::yield_now(),
+            }
+        }
+        if finished && !ran {
+            break;
+        }
+        if !ran {
+            thread::yield_now();
+        }
+    }
+}
+
+/// Wakes, clones and drops wakers, joins, cancels and detaches tasks from
+/// several threads while the owner thread runs them.
+///
+/// `NTEX_RAW_STRESS=<rounds>` runs more rounds.
+#[test]
+fn stress() {
+    const WORKERS: usize = 4;
+    let (rounds, per_worker) = if cfg!(miri) {
+        (1, 4)
+    } else {
+        let rounds = std::env::var("NTEX_RAW_STRESS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20u64);
+        (rounds, 32)
+    };
+    let rt = new_rt();
+
+    for round in 0..rounds {
+        let total = WORKERS * per_worker * 2;
+        let slots: Arc<Vec<Slot>> = Arc::new(
+            (0..total)
+                .map(|i| Slot {
+                    waker: Mutex::new(None),
+                    left: AtomicUsize::new(1 + i % 7),
+                })
+                .collect(),
+        );
+        let (drops, outputs, created) =
+            (Counter::default(), Counter::default(), Counter::default());
+        let fut = |idx| StressFut {
+            slots: slots.clone(),
+            idx,
+            outputs: outputs.clone(),
+            created: created.clone(),
+            _drop: drops.token(),
+        };
+
+        // the first half is spawned on the owner thread, the rest remotely
+        let mut handles: Vec<Vec<_>> = (0..WORKERS).map(|_| Vec::new()).collect();
+        for idx in 0..total / 2 {
+            handles[idx % WORKERS].push((idx, spawn(&rt, fut(idx))));
+        }
+        let done = Arc::new(AtomicUsize::new(0));
+        let workers: Vec<_> = handles
+            .into_iter()
+            .enumerate()
+            .map(|(w, tasks)| {
+                let futs = (0..per_worker)
+                    .map(|i| fut(total / 2 + w * per_worker + i))
+                    .collect();
+                let (slots, done, q) = (slots.clone(), done.clone(), rt.queue.clone());
+                let rng = (round + 1) * 0x9E37_79B9 + w as u64 * 7 + 1;
+                thread::spawn(move || {
+                    stress_worker(rng, &slots, &q, tasks, futs);
+                    done.fetch_add(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+
+        run_until_done(&rt, || done.load(Ordering::SeqCst) == WORKERS);
+        for w in workers {
+            w.join().unwrap();
+        }
+
+        // release the stored wakers, detached pending tasks get closed
+        for slot in slots.iter() {
+            drop(slot.waker.lock().unwrap().take());
+        }
+        run_until_done(&rt, || true);
+        assert_eq!(drops.get(), total, "futures dropped");
+        assert_eq!(outputs.get(), created.get(), "outputs dropped");
+        assert_freed(&rt);
+    }
+}

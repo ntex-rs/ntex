@@ -64,5 +64,9 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Threading",
 ] }
 
+# loom models of the raw task, `RUSTFLAGS="--cfg ntex_rt_task --cfg ntex_loom"`
+[target.'cfg(ntex_loom)'.dependencies]
+loom = "0.7"
+
 [dev-dependencies]
 ntex = { workspace = true }
