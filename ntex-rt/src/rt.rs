@@ -997,8 +997,8 @@ mod raw_loom;
 mod tests {
     use std::pin::Pin;
     use std::sync::atomic::AtomicUsize;
-    use std::task::{Poll, Waker};
-    use std::{cell::RefCell, future::poll_fn, rc::Rc};
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc};
 
     use super::*;
 
@@ -2168,6 +2168,93 @@ mod tests {
             // the future is neither polled nor dropped again
             assert_eq!(drops.get(), 1);
             assert_eq!(polls.get(), 1);
+        }
+    }
+
+    /// Waker that runs a callback when it is cloned or released.
+    struct Hook {
+        refs: Cell<usize>,
+        on_clone: Cell<Option<Box<dyn FnOnce()>>>,
+        on_release: Cell<Option<Box<dyn FnOnce()>>>,
+    }
+
+    impl Hook {
+        const VTABLE: RawWakerVTable =
+            RawWakerVTable::new(Self::clone, Self::release, |_| (), Self::release);
+
+        fn waker(
+            on_clone: Option<Box<dyn FnOnce()>>,
+            on_release: Option<Box<dyn FnOnce()>>,
+        ) -> Waker {
+            let hook = Box::into_raw(Box::new(Hook {
+                refs: Cell::new(1),
+                on_clone: Cell::new(on_clone),
+                on_release: Cell::new(on_release),
+            }));
+            unsafe { Waker::from_raw(RawWaker::new(hook.cast(), &Self::VTABLE)) }
+        }
+
+        unsafe fn clone(p: *const ()) -> RawWaker {
+            let hook = unsafe { &*p.cast::<Hook>() };
+            hook.refs.set(hook.refs.get() + 1);
+            if let Some(f) = hook.on_clone.take() {
+                f();
+            }
+            RawWaker::new(p, &Self::VTABLE)
+        }
+
+        unsafe fn release(p: *const ()) {
+            let hook = unsafe { &*p.cast::<Hook>() };
+            hook.refs.set(hook.refs.get() - 1);
+            if hook.refs.get() == 0 {
+                if let Some(f) = hook.on_release.take() {
+                    f();
+                }
+                drop(unsafe { Box::from_raw(p.cast_mut().cast::<Hook>()) });
+            }
+        }
+    }
+
+    #[test]
+    fn join_completes_in_waker_callback() {
+        // the target task completes while the join handle replaces its waker
+        for in_clone in [false, true] {
+            let rt = Runtime::new(Box::new(NoopNotify));
+            CURRENT_RUNTIME.set(&rt, || {
+                let ready = Rc::new(Cell::new(false));
+                let waker = Rc::new(RefCell::new(None::<Waker>));
+                let (ready2, waker2) = (ready.clone(), waker.clone());
+                let mut h = rt.spawn(poll_fn(move |cx| {
+                    if ready2.get() {
+                        Poll::Ready(1)
+                    } else {
+                        *waker2.borrow_mut() = Some(cx.waker().clone());
+                        Poll::Pending
+                    }
+                }));
+                while rt.poll() == PollResult::PollAgain {}
+
+                let complete: Box<dyn FnOnce()> = Box::new(move || {
+                    ready.set(true);
+                    waker.borrow_mut().take().unwrap().wake();
+                    Runtime::with_current(|rt| while rt.poll() == PollResult::PollAgain {});
+                });
+                let (on_clone, on_release) = if in_clone {
+                    (Some(complete), None)
+                } else {
+                    (None, Some(complete))
+                };
+
+                let first = Hook::waker(None, on_release);
+                let res = Pin::new(&mut h).poll(&mut Context::from_waker(&first));
+                assert!(res.is_pending());
+                // the join handle keeps the last reference
+                drop(first);
+
+                let second = Hook::waker(on_clone, None);
+                let res = Pin::new(&mut h).poll(&mut Context::from_waker(&second));
+                assert!(matches!(res, Poll::Ready(Ok(1))));
+            });
         }
     }
 

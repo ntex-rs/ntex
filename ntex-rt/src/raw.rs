@@ -242,14 +242,20 @@ impl Awaiter {
         }
     }
 
+    /// Stores `waker`, returns the replaced waker.
+    ///
+    /// Cloning `waker` and dropping the replaced waker may run user code,
+    /// the replaced waker is dropped by the caller once the awaiter is
+    /// consistent.
+    ///
     /// # Safety
     ///
     /// The caller should have exclusive access to the awaiter.
-    unsafe fn register(&self, waker: &Waker) {
+    unsafe fn register(&self, waker: &Waker) -> Option<Waker> {
         let cur = unsafe { *self.0.get() };
         let new = if ptr::eq(waker.vtable(), &raw const WAKER_VTABLE) {
             if ptr::eq(cur, waker.data()) {
-                return;
+                return None;
             }
             // the stored pointer owns the cloned reference
             ManuallyDrop::new(waker.clone()).data().cast_mut()
@@ -257,14 +263,16 @@ impl Awaiter {
             if cur.addr() & BOXED != 0
                 && unsafe { &*cur.map_addr(|a| a & !BOXED).cast::<Waker>() }.will_wake(waker)
             {
-                return;
+                return None;
             }
             Box::into_raw(Box::new(waker.clone()))
                 .cast::<()>()
                 .map_addr(|a| a | BOXED)
         };
-        drop(unsafe { self.take() });
+        // the clone may have completed the task and taken the awaiter
+        let old = unsafe { self.take() };
         unsafe { *self.0.get() = new };
+        old
     }
 }
 
@@ -943,8 +951,12 @@ impl<T> Task<T> {
         let hdr = header(self.h);
         if is_owner(self.h) {
             if hdr.state.get() & FINISHED == 0 {
-                unsafe { hdr.awaiter.register(cx.waker()) };
-                return Poll::Pending;
+                // the waker callbacks may poll the runtime and complete the task
+                drop(unsafe { hdr.awaiter.register(cx.waker()) });
+                if hdr.state.get() & FINISHED == 0 {
+                    return Poll::Pending;
+                }
+                drop(unsafe { hdr.awaiter.take() });
             }
         } else if hdr.remote.load(Ordering::Acquire) & R_FINISHED == 0 {
             let mut cur = hdr.remote.load(Ordering::Acquire);
@@ -962,8 +974,10 @@ impl<T> Task<T> {
                     Err(v) => cur = v,
                 }
             }
-            unsafe { hdr.awaiter.register(cx.waker()) };
+            let old = unsafe { hdr.awaiter.register(cx.waker()) };
             let prev = hdr.remote.fetch_and(!R_REGISTERING, Ordering::AcqRel);
+            // dropped outside of the registration, it may wait for the owner thread
+            drop(old);
             if prev & R_FINISHED == 0 {
                 return Poll::Pending;
             }
