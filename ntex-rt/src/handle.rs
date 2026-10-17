@@ -1,7 +1,9 @@
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::{Arc, atomic::AtomicU32, atomic::AtomicU64};
 use std::{fmt, panic::Location, pin::Pin, task::Context, task::Poll, task::ready};
 
 use async_task::Task;
+
+use crate::rt::RunnableQueue;
 
 /// The location a task was spawned at.
 pub(crate) type SpawnLocation = &'static Location<'static>;
@@ -9,6 +11,10 @@ pub(crate) type SpawnLocation = &'static Location<'static>;
 #[derive(Debug)]
 /// Task metadata.
 pub(crate) struct TaskMeta {
+    /// Queue of the runtime the task belongs to, kept here instead of in the
+    /// schedule function so that async-task does not clone a waker around
+    /// each schedule.
+    pub(crate) queue: Arc<RunnableQueue>,
     pub(crate) location: SpawnLocation,
     /// Consecutive polls that woke the task itself, the high bit marks a
     /// reported streak.
@@ -18,8 +24,9 @@ pub(crate) struct TaskMeta {
 }
 
 impl TaskMeta {
-    pub(crate) fn new(location: SpawnLocation) -> Self {
+    pub(crate) fn new(queue: Arc<RunnableQueue>, location: SpawnLocation) -> Self {
         Self {
+            queue,
             location,
             self_wakes: AtomicU32::new(0),
             streak_start: AtomicU64::new(0),
