@@ -400,8 +400,21 @@ impl Handle {
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.
+    ///
+    /// The output is moved to the thread that awaits the [`JoinHandle`], so
+    /// it must be `Send`. Use [`Runtime::spawn`] for non-`Send` outputs.
+    ///
+    /// ```compile_fail
+    /// # fn check(hnd: ntex_rt::Handle) {
+    /// let _ = hnd.spawn(async { std::rc::Rc::new(()) });
+    /// # }
+    /// ```
     #[track_caller]
-    pub fn spawn<F: Future + Send + 'static>(&self, future: F) -> JoinHandle<F::Output> {
+    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send,
+    {
         unsafe { self.queue.spawn(future, Location::caller()) }
     }
 }
