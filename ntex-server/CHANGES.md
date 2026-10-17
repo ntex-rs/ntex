@@ -23,9 +23,10 @@
   workers, by runtime utilization, then open connections and queued items, and
   skips workers blocked by a task. `LoadBalancing::IncomingCpu`, the default,
   sends a connection to the worker placed on the CPU that receives its network
-  packets (the RSS CPU on Windows), unless that worker is busier than the
-  `LeastLoaded` choice, and works like `LeastLoaded` otherwise. Use
-  `LoadBalancing::RoundRobin` for the previous behavior
+  packets (the RSS CPU on Windows, `SO_INCOMING_CPU` on Linux and Android),
+  unless that worker is busier than the `LeastLoaded` choice, and works like
+  `LeastLoaded` otherwise. Use `LoadBalancing::RoundRobin` for the previous
+  behavior
 
 * Add `ServerConfiguration::incoming_cpu()`, the incoming CPU of an item used by
   `LoadBalancing::IncomingCpu`, and `ServerMetrics::{incoming_cpu_hits,

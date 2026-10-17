@@ -82,6 +82,40 @@ async fn test_server_echo() {
     assert!(net::TcpStream::connect(srv.addr()).is_err());
 }
 
+/// Connections with a known incoming CPU are counted as hits or misses.
+#[ntex::test]
+async fn test_incoming_cpu_connections() {
+    let (lst, addr) = local_listener();
+    let srv = build()
+        .workers(2)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    sleep(Millis(100)).await;
+
+    let mut conns = Vec::new();
+    for _ in 0..4 {
+        let io = ntex_net::tcp_connect(addr, SharedCfg::default())
+            .await
+            .unwrap();
+        check_echo(&io).await;
+        conns.push(io);
+    }
+    let m = srv.metrics();
+    let counted = m.incoming_cpu_hits + m.incoming_cpu_misses;
+    // loopback connections have an incoming CPU on Linux, but no RSS CPU
+    // on Windows
+    if cfg!(any(target_os = "linux", target_os = "android")) {
+        assert_eq!(counted, 4);
+    } else {
+        assert_eq!(counted, 0);
+    }
+    srv.stop(false).await;
+}
+
 #[ntex::test]
 async fn test_least_loaded_connections() {
     // the test server runs a single worker

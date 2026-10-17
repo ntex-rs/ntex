@@ -3,9 +3,10 @@
 ## [4.4.0] - Unreleased
 
 * Add `HttpServer::load_balancing()`. New connections go to the worker on the
-  CPU that receives their packets (the RSS CPU on Windows) unless it is busier,
-  and to the least loaded worker otherwise (`LoadBalancing::IncomingCpu`, the
-  default). Use `LoadBalancing::RoundRobin` for the previous behavior
+  CPU that receives their packets (the RSS CPU on Windows, `SO_INCOMING_CPU`
+  on Linux) unless it is busier, and to the least loaded worker otherwise
+  (`LoadBalancing::IncomingCpu`, the default). Use `LoadBalancing::RoundRobin`
+  for the previous behavior
 
 * Add `HttpServer::affinity()`, `enable_affinity()` is deprecated and does
   nothing. Workers are
