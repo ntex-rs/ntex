@@ -4,10 +4,12 @@
 
 * Add `IoMetrics`, per-thread I/O statistics of an I/O configuration: read and write
   backpressure counts, active connections and connection-time under backpressure, bytes
-  held in read and write buffers. `IoConfig::metrics()` returns the metrics of the
-  configuration in the thread's `IoMetricsGroup`, connections report to it and move to the
-  new configuration's metrics on `Io::set_config()`. `IoMetricsGroup::snapshot()` returns
-  one `IoConfigMetrics` per configuration
+  held in read and write buffers. A configuration has its own metrics in the thread's
+  `IoMetricsGroup` if enabled with `IoConfig::set_metrics()` or registered with
+  `IoMetricsGroup::register()`, other connections report to `IoMetricsGroup::other()`.
+  `IoConfig::metrics()` returns the metrics a configuration reports to, connections move to
+  the new configuration's metrics on `Io::set_config()`. `IoMetricsGroup::snapshot()`
+  returns one `IoConfigMetrics` per configuration with its own metrics
 
 * Add `CloseReason`, `IoRef::set_close_reason()` and `IoRef::close_reason()`, the first
   reported reason is kept. `IoMetricsSnapshot::closed` counts closed connections by reason,

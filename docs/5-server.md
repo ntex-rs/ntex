@@ -227,11 +227,13 @@ server has reached its stopped state.
   `active_connections`, `restarts`, and how often and how long the worker
   was not ready (`not_ready`, `not_ready_duration`), for example because it
   reached `max_connections()`. `io` holds the I/O statistics of the
-  worker's connections, one entry per I/O configuration (`id`, `tag` and
-  `service` of the `SharedCfg`), so each listener configuration is reported
-  separately: how often and how long (connection-time) reads and
-  writes were under backpressure, how many connections are under
-  backpressure now, the bytes held in read and write buffers, and the total
+  worker's connections, one entry per listener configuration (`id`, `tag`
+  and `service` of the `SharedCfg`), so each listener is reported
+  separately. Other configurations get their own entry with
+  `IoConfig::set_metrics(true)`, the remaining connections, for example
+  client connections, are counted in `io_other`. Each entry counts how
+  often and how long (connection-time) reads and writes were under
+  backpressure, how many connections are under backpressure now, the bytes held in read and write buffers, and the total
   `bytes_read` and `bytes_written`. `eager_writes` counts writes started in
   place once buffered output reached `IoConfig::set_write_buf_threshold()`,
   `eager_writes_partial` those that left output to the write task, and

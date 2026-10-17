@@ -1,5 +1,6 @@
 use std::{fmt, io, sync::Arc};
 
+use ntex_io::{IoConfig, IoMetricsGroup};
 use ntex_service::{Ctx, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter, services::counter::CounterGuard};
 
@@ -55,12 +56,15 @@ impl<Cfg: ServerAppConfig> ServerConfiguration for StreamServer<Cfg> {
         // construct services
         let mut tokens = HashMap::default();
         let mut services = Vec::new();
+        let group = IoMetricsGroup::current();
 
         for info in &self.services {
             for (svc, _, svc_tokens) in info.create(cfg.clone()).await.map_err(io::Error::other)? {
                 services.push(svc);
                 let idx = services.len() - 1;
                 for (token, cfg) in &svc_tokens {
+                    // listener connections have their own metrics
+                    group.register(&cfg.get::<IoConfig>());
                     tokens.insert(*token, (idx, cfg.clone()));
                 }
             }

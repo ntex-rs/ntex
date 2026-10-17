@@ -219,6 +219,8 @@ async fn test_worker_io_metrics() {
     wait_for(|| tag_metrics("SRV2").closed.total == 1).await;
     assert_eq!(io_metrics().closed.total, 1);
     assert_eq!(io_metrics().bytes_read, 5);
+    // listener configurations are registered, no connection is counted as other
+    assert_eq!(srv.metrics().workers[0].io_other.closed.total, 0);
     srv.stop(false).await;
 }
 
