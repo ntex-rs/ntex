@@ -5,9 +5,12 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
+use crate::io::Close;
 use crate::ops::{Id, Iops, TimerHandle};
 use crate::waiters::{TAG_DISCONNECT, TAG_WRITE, Waiter};
-use crate::{Decoded, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext, IoRef, types};
+use crate::{
+    CloseReason, Decoded, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext, IoRef, types,
+};
 
 impl IoRef {
     #[inline]
@@ -114,6 +117,27 @@ impl IoRef {
     /// [`encode`](Self::encode) and [`write_ready`](Self::write_ready).
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
+    }
+
+    /// Reports why the connection is closing.
+    ///
+    /// Only the first reported reason is kept. It is counted in
+    /// [`IoMetrics`](crate::IoMetrics) when the connection state is released.
+    /// A connection closed without a reason counts as an I/O error if the
+    /// transport failed, and as `other` otherwise.
+    pub fn set_close_reason(&self, reason: CloseReason) {
+        if let Close::Unset = self.0.close.get() {
+            self.0.close.set(Close::Reason(reason));
+        }
+    }
+
+    /// Returns the reason reported with [`set_close_reason`](Self::set_close_reason).
+    pub fn close_reason(&self) -> Option<CloseReason> {
+        if let Close::Reason(reason) = self.0.close.get() {
+            Some(reason)
+        } else {
+            None
+        }
     }
 
     #[inline]

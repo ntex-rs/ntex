@@ -1,5 +1,9 @@
 # Changes
 
+## [4.4.0] - Unreleased
+
+* Report the stop reason to `IoRef::set_close_reason()`
+
 ## [4.3.0] - 2026-10-06
 
 * Service calls, including stop and control items, wait for service readiness

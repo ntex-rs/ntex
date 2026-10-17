@@ -13,7 +13,7 @@ use crate::ctx::IoContext;
 use crate::filter::{Base, Filter, Layer};
 use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
-use crate::metrics::IoMetrics;
+use crate::metrics::{CloseReason, IoMetrics};
 use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
 use crate::utils::{Extensions, WriteDeadline, write_timed_out};
@@ -100,6 +100,16 @@ pub(crate) struct IoState {
     rd_buffered: Cell<u32>,
     /// Write buffer size last reported to `metrics`, saturated at `u32::MAX`.
     wr_buffered: Cell<u32>,
+    pub(super) close: Cell<Close>,
+}
+
+/// Close reason of a connection, counted in `metrics` on drop.
+#[derive(Copy, Clone, Debug)]
+pub(super) enum Close {
+    Unset,
+    Reason(CloseReason),
+    /// Placeholder state of a taken `Io`, not a connection.
+    Uncounted,
 }
 
 impl IoState {
@@ -491,6 +501,11 @@ impl Drop for IoState {
         self.metrics.update_read_buffered(self.rd_buffered.get(), 0);
         self.metrics
             .update_write_buffered(self.wr_buffered.get(), 0);
+        match self.close.get() {
+            Close::Unset => self.metrics.closed(None, self.error.get_mut().is_some()),
+            Close::Reason(reason) => self.metrics.closed(Some(reason), false),
+            Close::Uncounted => (),
+        }
     }
 }
 
@@ -556,6 +571,7 @@ impl Io {
             metrics: IoMetrics::current(),
             rd_buffered: Cell::new(0),
             wr_buffered: Cell::new(0),
+            close: Cell::new(Close::Unset),
         });
         inner.reset_read_size();
         inner.filter.set(Base::new(IoRef(inner.clone())));
@@ -601,6 +617,7 @@ impl IoRef {
             metrics: IoMetrics::current(),
             rd_buffered: Cell::new(0),
             wr_buffered: Cell::new(0),
+            close: Cell::new(Close::Uncounted),
         }))
     }
 }
@@ -2315,6 +2332,43 @@ mod tests {
         let m = metrics.snapshot();
         assert_eq!(m.write_backpressure_active, 0);
         assert_eq!(m.write_buffered, 0);
+    }
+
+    #[ntex::test]
+    async fn close_reason_metrics() {
+        let metrics = IoMetrics::new();
+        IoMetrics::set_current(metrics.clone());
+
+        // the first reported reason is kept
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        assert_eq!(io.close_reason(), None);
+        io.set_close_reason(CloseReason::KeepAlive);
+        io.set_close_reason(CloseReason::Decoder);
+        assert_eq!(io.close_reason(), Some(CloseReason::KeepAlive));
+        // a taken io leaves a placeholder that is not counted
+        let io2 = unsafe { io.take() };
+        drop(io);
+        drop(io2);
+
+        // closed without a reason
+        let (_client, server) = IoTest::create();
+        drop(Io::from(server));
+
+        // transport error without a reason
+        let (client, server) = IoTest::create();
+        let io = Io::from(server);
+        client.read_error(io::Error::other("err"));
+        assert!(io.recv(&BytesCodec).await.is_err());
+        drop(io);
+
+        sleep(Millis(10)).await;
+        let c = metrics.snapshot().closed;
+        assert_eq!(c.total, 3);
+        assert_eq!(c.keepalive, 1);
+        assert_eq!(c.decoder, 0);
+        assert_eq!(c.other, 1);
+        assert_eq!(c.io, 1);
     }
 
     #[ntex::test]

@@ -15,7 +15,7 @@ use std::time::Instant;
 use std::{cell::Cell, fmt, future::Future, future::poll_fn, io, mem, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
-use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
+use ntex_io::{CloseReason, Decoded, IoBoxed, IoStatusUpdate, RecvError};
 use ntex_service::pipeline::{Pipeline, PipelineCall};
 use ntex_util::{spawn, time::Seconds, time::Sleep, time::sleep};
 
@@ -478,6 +478,16 @@ where
     Err: 'static,
 {
     fn stop(&self, reason: Reason<U>) -> DispatcherState<U, Err> {
+        self.shared.io.set_close_reason(match reason {
+            Reason::Service => CloseReason::Service,
+            Reason::Io(None) => CloseReason::PeerGone,
+            Reason::Io(Some(_)) => CloseReason::Io,
+            Reason::Encoder(_) => CloseReason::Encoder,
+            Reason::Decoder(_) => CloseReason::Decoder,
+            Reason::KeepAlive => CloseReason::KeepAlive,
+            Reason::ReadTimeout => CloseReason::ReadTimeout,
+            Reason::WriteTimeout => CloseReason::WriteTimeout,
+        });
         DispatcherState::Stop(StopCall {
             fut: self.shared.call(DispatchItem::Stop(reason)),
             timeout: None,
@@ -1310,6 +1320,7 @@ mod tests {
         assert!(!state.0.is_active());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+        assert_eq!(state.0.close_reason(), Some(CloseReason::KeepAlive));
     }
 
     #[ntex::test]
@@ -1582,7 +1593,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write(input);
 
-        let (disp, _) = Dispatcher::debug(
+        let (disp, state) = Dispatcher::debug(
             Io::from(server),
             BCodec(8),
             ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
@@ -1599,7 +1610,14 @@ mod tests {
         client.close().await;
         sleep(Millis(50)).await;
 
-        reason.borrow_mut().take().expect("dispatcher did not stop")
+        let reason = reason.borrow_mut().take().expect("dispatcher did not stop");
+        let close = if reason.is_some() {
+            CloseReason::Io
+        } else {
+            CloseReason::PeerGone
+        };
+        assert_eq!(state.0.close_reason(), Some(close));
+        reason
     }
 
     /// Frames buffered while the service is not ready are dispatched even

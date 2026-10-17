@@ -1,7 +1,7 @@
 //! HTTP/1 protocol dispatcher
 use std::{future, io, mem, pin::Pin, rc::Rc, task::Context, task::Poll, task::ready};
 
-use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
+use crate::io::{CloseReason, Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
 use crate::{channel::bstream, util::clone_io_error};
 
@@ -740,8 +740,9 @@ where
 
     /// Handles expiry of the write timer.
     ///
-    /// Fails the request payload and returns the write timeout error if
-    /// write backpressure is still enabled, otherwise stops the timer.
+    /// Fails the request payload, records the close reason and returns the
+    /// write timeout error if write backpressure is still enabled, otherwise
+    /// stops the timer.
     /// An expiry during a filter write pause suspends the timer.
     fn write_timer_expired(&mut self) -> io::Result<()> {
         if self.io.is_wr_backpressure() && self.io.is_write_filter_paused() {
@@ -751,6 +752,7 @@ where
             Ok(())
         } else if self.io.is_wr_backpressure() {
             log::trace!("{}: Write backpressure timeout", self.io.tag());
+            self.io.set_close_reason(CloseReason::WriteTimeout);
             self.set_payload_error(PayloadError::Io(write_timeout_error()));
             Err(write_timeout_error())
         } else {
@@ -1005,24 +1007,60 @@ where
         self.control(Control::upgrade(req, self.io.clone(), self.codec.clone()))
     }
 
+    /// `enabled` is false for a connection that is not kept alive, which
+    /// closes without a reason.
     fn ctl_keepalive(&mut self, enabled: bool) -> State<F, B, Err> {
+        if enabled {
+            self.io.set_close_reason(CloseReason::KeepAlive);
+        }
         self.ctl_disconnect(Control::keepalive(enabled))
     }
 
     fn ctl_error(&mut self, err: Err) -> State<F, B, Err> {
+        self.io.set_close_reason(CloseReason::Service);
         self.ctl_disconnect(Control::err(err))
     }
 
     fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, B, Err> {
+        self.io.set_close_reason(match err {
+            ProtocolError::Decode(_) => CloseReason::Decoder,
+            ProtocolError::Encode(_) => CloseReason::Encoder,
+            ProtocolError::SlowRequestTimeout | ProtocolError::SlowPayloadTimeout => {
+                CloseReason::ReadTimeout
+            }
+            ProtocolError::ResponsePayload(_) => CloseReason::Service,
+        });
         self.ctl_disconnect(Control::proto_err(err))
     }
 
     fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, B, Err> {
+        self.io.set_close_reason(if err.is_some() {
+            CloseReason::Io
+        } else {
+            CloseReason::PeerGone
+        });
         self.ctl_disconnect(Control::peer_gone(err))
     }
 
     fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, B, Err> {
+        self.set_close_reason(reason);
         self.ctl_disconnect(Control::svc_disconnect(reason))
+    }
+
+    /// A handled upgrade keeps the connection open, its new owner reports
+    /// the close reason.
+    fn set_close_reason(&self, reason: ServiceDisconnectReason) {
+        match reason {
+            ServiceDisconnectReason::Shutdown => {
+                self.io.set_close_reason(CloseReason::Shutdown);
+            }
+            ServiceDisconnectReason::UpgradeHandled => (),
+            ServiceDisconnectReason::UpgradeFailed
+            | ServiceDisconnectReason::ExpectFailed
+            | ServiceDisconnectReason::PayloadDropped => {
+                self.io.set_close_reason(CloseReason::Service);
+            }
+        }
     }
 
     /// Records a disconnect reason, unless a disconnect has been sent.
@@ -1049,7 +1087,10 @@ where
                 self.disconnect = Disconnect::None;
                 None
             }
-            Disconnect::Pending(reason) => Some(self.control(Control::svc_disconnect(reason))),
+            Disconnect::Pending(reason) => {
+                self.set_close_reason(reason);
+                Some(self.control(Control::svc_disconnect(reason)))
+            }
             Disconnect::Sent => Some(self.stop()),
         }
     }
@@ -1412,6 +1453,41 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(h1.inner.io.close_reason(), Some(nio::CloseReason::PeerGone));
+    }
+
+    /// An expired keep-alive timer closes the connection with the keep-alive
+    /// close reason.
+    #[crate::rt_test]
+    async fn test_keepalive_close_reason() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_keepalive(Seconds(10)))
+            .into();
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new((), async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            None,
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        h1.inner.io.notify_timeout();
+        let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+        assert_eq!(
+            h1.inner.io.close_reason(),
+            Some(nio::CloseReason::KeepAlive)
+        );
     }
 
     #[crate::rt_test]
@@ -1708,6 +1784,10 @@ mod tests {
                 .read_any()
                 .starts_with(b"HTTP/1.1 408 Request Timeout\r\n")
         );
+        assert_eq!(
+            h1.inner.io.close_reason(),
+            Some(nio::CloseReason::ReadTimeout)
+        );
     }
 
     /// The headers read rate starts with the first byte of the first request,
@@ -1906,6 +1986,7 @@ mod tests {
         client.close().await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         assert!(!h1.inner.io.is_active());
+        assert_eq!(h1.inner.io.close_reason(), Some(nio::CloseReason::Decoder));
     }
 
     #[crate::rt_test]
@@ -2424,6 +2505,10 @@ mod tests {
         let res = timeout(Millis(5000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.unwrap().is_ok());
         assert!(client.is_closed());
+        assert_eq!(
+            h1.inner.io.close_reason(),
+            Some(nio::CloseReason::WriteTimeout)
+        );
     }
 
     /// The write timeout stops the dispatcher while sending a response with
