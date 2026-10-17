@@ -1,54 +1,31 @@
-use std::sync::{Arc, atomic::AtomicU32, atomic::AtomicU64};
 use std::{fmt, panic::Location, pin::Pin, task::Context, task::Poll, task::ready};
 
-use async_task::Task;
-
-use crate::rt::RunnableQueue;
+#[cfg(not(ntex_rt_task))]
+type Task<T> = async_task::Task<T, crate::rt::queues::TaskMeta>;
+#[cfg(ntex_rt_task)]
+type Task<T> = crate::raw::Task<T>;
 
 /// The location a task was spawned at.
 pub(crate) type SpawnLocation = &'static Location<'static>;
 
 #[derive(Debug)]
-/// Task metadata.
-pub(crate) struct TaskMeta {
-    /// Queue of the runtime the task belongs to, kept here instead of in the
-    /// schedule function so that async-task does not clone a waker around
-    /// each schedule.
-    pub(crate) queue: Arc<RunnableQueue>,
-    pub(crate) location: SpawnLocation,
-    /// Consecutive polls that woke the task itself, the high bit marks a
-    /// reported streak.
-    pub(crate) self_wakes: AtomicU32,
-    /// Start of the self-wake streak, nanoseconds since the runtime epoch.
-    pub(crate) streak_start: AtomicU64,
-}
-
-impl TaskMeta {
-    pub(crate) fn new(queue: Arc<RunnableQueue>, location: SpawnLocation) -> Self {
-        Self {
-            queue,
-            location,
-            self_wakes: AtomicU32::new(0),
-            streak_start: AtomicU64::new(0),
-        }
-    }
-}
-
-#[derive(Debug)]
 /// A spawned task.
 pub struct JoinHandle<T> {
-    task: Option<Task<T, TaskMeta>>,
+    task: Option<Task<T>>,
 }
 
 impl<T> JoinHandle<T> {
-    pub(crate) fn new(task: Task<T, TaskMeta>) -> Self {
+    pub(crate) fn new(task: Task<T>) -> Self {
         JoinHandle { task: Some(task) }
     }
 
     /// Cancels the task.
     pub fn cancel(mut self) {
         if let Some(t) = self.task.take() {
+            #[cfg(not(ntex_rt_task))]
             drop(t.cancel());
+            #[cfg(ntex_rt_task)]
+            t.cancel();
         }
     }
 
@@ -81,7 +58,10 @@ impl<T> Future for JoinHandle<T> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(match self.task.as_mut() {
+            #[cfg(not(ntex_rt_task))]
             Some(fut) => Ok(ready!(Pin::new(fut).poll(cx))),
+            #[cfg(ntex_rt_task)]
+            Some(fut) => ready!(fut.poll_join(cx)).ok_or(JoinError),
             None => Err(JoinError),
         })
     }

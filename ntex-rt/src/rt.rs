@@ -1,31 +1,61 @@
-use std::cell::{Cell, UnsafeCell};
-use std::collections::VecDeque;
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::{future::Future, io, panic::Location, ptr, thread};
 
-use async_task::Runnable;
-use crossbeam_queue::SegQueue;
-use swap_buffer_queue::error::{TryDequeueError, TryEnqueueError};
-use swap_buffer_queue::{Queue, buffer::ArrayBuffer};
-
-use crate::handle::{JoinHandle, SpawnLocation, TaskMeta};
+use crate::handle::{JoinHandle, SpawnLocation};
 use crate::metrics::{AtomicHistogram, Histogram};
 use crate::{busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult};
 
-type Task = Runnable<TaskMeta>;
+#[cfg(not(ntex_rt_task))]
+use self::queues::{LocalQueue, RemoteQueue, RemoteTask, Task, TaskMeta, task_ref};
+#[cfg(ntex_rt_task)]
+use crate::raw::{LocalQueue, Remote as RemoteTask, RemoteQueue, Runnable as Task, task_ref};
 
 // marks a reported self-wake streak
-const REPORTED: u32 = 1 << 31;
+pub(crate) const REPORTED: u32 = 1 << 31;
+
+#[cfg(not(ntex_rt_task))]
+const MAX_SELF_WAKES: u32 = !REPORTED;
+#[cfg(ntex_rt_task)]
+const MAX_SELF_WAKES: u32 = crate::raw::MAX_SELF_WAKES;
+
+/// Remote tasks run per turn, besides `event_interval` overflow tasks.
+const REMOTE_BATCH: usize = 128;
+
+/// Self-wake bookkeeping of a task, used on the runtime thread only.
+pub(crate) trait TaskStats: Copy {
+    fn location(self) -> SpawnLocation;
+    /// Consecutive self-wakes, `REPORTED` marks a reported streak.
+    fn self_wakes(self) -> u32;
+    fn set_self_wakes(self, wakes: u32);
+    /// Start of the self-wake streak, milliseconds since the runtime epoch.
+    fn streak_start(self) -> u32;
+    fn set_streak_start(self, start: u32);
+}
 
 scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
 
-thread_local!(static THREAD_ID: thread::ThreadId = thread::current().id());
+#[cfg(not(ntex_loom))]
+pub(crate) type ThreadId = thread::ThreadId;
+
+// loom threads share the OS thread, and its thread locals
+#[cfg(ntex_loom)]
+pub(crate) type ThreadId = loom::thread::ThreadId;
+
+#[cfg(not(ntex_loom))]
+thread_local!(static THREAD_ID: ThreadId = thread::current().id());
 
 /// Returns the id of the current thread without cloning its `Thread` handle.
-fn current_thread_id() -> thread::ThreadId {
+#[cfg(not(ntex_loom))]
+pub(crate) fn current_thread_id() -> ThreadId {
     THREAD_ID.with(|id| *id)
+}
+
+#[cfg(ntex_loom)]
+pub(crate) fn current_thread_id() -> ThreadId {
+    loom::thread::current().id()
 }
 
 #[derive(Debug)]
@@ -386,7 +416,7 @@ impl Clone for Handle {
 
 #[derive(Debug)]
 pub(crate) struct RunnableQueue {
-    id: thread::ThreadId,
+    pub(crate) id: ThreadId,
     idle: Cell<bool>,
     // start of the current busy period, valid while not idle
     poll_start: Cell<Instant>,
@@ -406,9 +436,8 @@ pub(crate) struct RunnableQueue {
     event_interval: usize,
     // spawn location of the running task, null between tasks
     current: AtomicPtr<Location<'static>>,
-    local_queue: UnsafeCell<VecDeque<Task>>,
-    sync_fixed_queue: Queue<ArrayBuffer<Task, 128>>,
-    sync_queue: SegQueue<Task>,
+    local_queue: LocalQueue,
+    remote_queue: RemoteQueue,
 }
 
 unsafe impl Send for RunnableQueue {}
@@ -433,9 +462,8 @@ impl RunnableQueue {
             self_wake_time: builder.self_wake_time,
             epoch: now,
             current: AtomicPtr::new(ptr::null_mut()),
-            local_queue: UnsafeCell::new(VecDeque::new()),
-            sync_fixed_queue: Queue::default(),
-            sync_queue: SegQueue::new(),
+            local_queue: LocalQueue::new(),
+            remote_queue: RemoteQueue::new(),
         }
     }
 
@@ -444,6 +472,21 @@ impl RunnableQueue {
     /// # Safety
     ///
     /// The caller should ensure the captured lifetime is long enough.
+    #[cfg(ntex_rt_task)]
+    unsafe fn spawn<F: Future>(
+        self: &Arc<Self>,
+        future: F,
+        location: SpawnLocation,
+    ) -> JoinHandle<F::Output> {
+        JoinHandle::new(unsafe { crate::raw::spawn(future, self.clone(), location) })
+    }
+
+    /// Spawns a task on this queue.
+    ///
+    /// # Safety
+    ///
+    /// The caller should ensure the captured lifetime is long enough.
+    #[cfg(not(ntex_rt_task))]
     unsafe fn spawn<F: Future>(
         self: &Arc<Self>,
         future: F,
@@ -474,6 +517,7 @@ impl RunnableQueue {
         JoinHandle::new(task)
     }
 
+    #[cfg(not(ntex_rt_task))]
     fn schedule(&self, runnable: Task) {
         if self.id == current_thread_id() {
             self.schedule_local(runnable);
@@ -482,8 +526,8 @@ impl RunnableQueue {
         }
     }
 
-    fn schedule_local(&self, runnable: Task) {
-        unsafe { (*self.local_queue.get()).push_back(runnable) };
+    pub(crate) fn schedule_local(&self, runnable: Task) {
+        self.local_queue.push(runnable);
         if self.idle.get() {
             // starts a busy period, `awake` does not reset it
             self.start_busy();
@@ -491,11 +535,8 @@ impl RunnableQueue {
         }
     }
 
-    fn schedule_remote(&self, runnable: Task) {
-        let result = self.sync_fixed_queue.try_enqueue([runnable]);
-        if let Err(TryEnqueueError::InsufficientCapacity([runnable])) = result {
-            self.sync_queue.push(runnable);
-        }
+    pub(crate) fn schedule_remote(&self, runnable: RemoteTask) {
+        self.remote_queue.push(runnable);
         // the driver is already notified, `run` drains this task after
         // clearing the flag
         if !self.notified.swap(true, Ordering::Release) {
@@ -520,35 +561,28 @@ impl RunnableQueue {
             }
         }
 
-        let sync_queue_fixed = match self.sync_fixed_queue.try_dequeue() {
-            Ok(buf) => {
-                for task in buf {
-                    self.run_task(task);
-                }
-                false
-            }
-            Err(TryDequeueError::Empty | TryDequeueError::Closed) => false,
-            Err(_) => true,
-        };
-
-        let sync_queue = {
-            for _ in 0..self.event_interval {
-                if let Some(task) = self.sync_queue.pop() {
-                    self.run_task(task);
-                } else {
-                    break;
-                }
-            }
-            !self.sync_queue.is_empty()
-        };
+        let remote_queue = self
+            .remote_queue
+            .drain(self.event_interval, |task| self.run_remote(task));
 
         // tasks from other threads may schedule local tasks
-        let local_queue = unsafe { !(*self.local_queue.get()).is_empty() };
-        let more_tasks = local_queue || sync_queue_fixed || sync_queue;
+        let more_tasks = !self.local_queue.is_empty() || remote_queue;
         if !more_tasks {
             self.idle.set(true);
         }
         more_tasks
+    }
+
+    #[cfg(not(ntex_rt_task))]
+    fn run_remote(&self, task: RemoteTask) {
+        self.run_task(task);
+    }
+
+    #[cfg(ntex_rt_task)]
+    fn run_remote(&self, task: RemoteTask) {
+        if let Some(task) = task.into_runnable() {
+            self.run_task(task);
+        }
     }
 
     fn run_task(&self, task: Task) {
@@ -560,52 +594,56 @@ impl RunnableQueue {
             }
         }
 
-        let meta: *const TaskMeta = task.metadata();
-        let wakes = {
-            let meta = unsafe { &*meta };
-            self.current
-                .store(ptr::from_ref(meta.location).cast_mut(), Ordering::Relaxed);
-            let wakes = meta.self_wakes.load(Ordering::Relaxed);
-            if wakes != 0 {
-                meta.self_wakes.store(0, Ordering::Relaxed);
-            }
-            wakes
-        };
+        let stats = task_ref(&task);
+        self.current.store(
+            ptr::from_ref(stats.location()).cast_mut(),
+            Ordering::Relaxed,
+        );
+        let wakes = stats.self_wakes();
+        if wakes != 0 {
+            stats.set_self_wakes(0);
+        }
         let _reset = Reset(&self.current);
 
         if task.run() {
             // woken while polled, the task is alive in `local_queue`
-            self.self_wake(unsafe { &*meta }, wakes);
+            self.self_wake(stats, wakes);
         }
     }
 
-    fn self_wake(&self, meta: &TaskMeta, wakes: u32) {
+    fn self_wake(&self, task: impl TaskStats, wakes: u32) {
         let total = self.self_wakes.load(Ordering::Relaxed);
         self.self_wakes
             .store(total.wrapping_add(1), Ordering::Relaxed);
 
         let reported = wakes & REPORTED;
-        let count = ((wakes & !REPORTED) + 1).min(!REPORTED);
-        let now = self.poll_start.get();
+        let count = ((wakes & !REPORTED) + 1).min(MAX_SELF_WAKES);
+        // wraps after 49 days, longer streaks may be measured short
+        #[allow(clippy::cast_possible_truncation)]
+        let now = self
+            .poll_start
+            .get()
+            .saturating_duration_since(self.epoch)
+            .as_millis() as u32;
         if count == 1 {
-            #[allow(clippy::cast_possible_truncation)]
-            let start = now.saturating_duration_since(self.epoch).as_nanos() as u64;
-            meta.streak_start.store(start, Ordering::Relaxed);
+            task.set_streak_start(now);
         }
 
         let mut wakes = count | reported;
-        if reported == 0 && self.self_wake_limit != 0 && count >= self.self_wake_limit {
-            let start = Duration::from_nanos(meta.streak_start.load(Ordering::Relaxed));
-            let elapsed = now.saturating_duration_since(self.epoch + start);
+        if reported == 0
+            && self.self_wake_limit != 0
+            && count >= self.self_wake_limit.min(MAX_SELF_WAKES)
+        {
+            let elapsed = Duration::from_millis(u64::from(now.wrapping_sub(task.streak_start())));
             if elapsed >= self.self_wake_time {
                 log::warn!(
                     "Task spawned at {} woke itself {count} times in {elapsed:?} without waiting, possible busy loop",
-                    meta.location
+                    task.location()
                 );
                 wakes |= REPORTED;
             }
         }
-        meta.self_wakes.store(wakes, Ordering::Relaxed);
+        task.set_self_wakes(wakes);
     }
 
     fn start_busy(&self) {
@@ -626,8 +664,7 @@ impl RunnableQueue {
     }
 
     fn clear(&self) {
-        while self.sync_queue.pop().is_some() {}
-        while self.sync_fixed_queue.try_dequeue().is_ok() {}
+        self.remote_queue.clear();
         // dropped tasks may schedule other tasks, drop each outside of the borrow
         while let Some(task) = self.pop_local() {
             drop(task);
@@ -635,7 +672,181 @@ impl RunnableQueue {
     }
 
     fn pop_local(&self) -> Option<Task> {
-        unsafe { (*self.local_queue.get()).pop_front() }
+        self.local_queue.pop()
+    }
+}
+
+#[cfg(ntex_rt_task)]
+impl RemoteQueue {
+    /// Runs queued tasks, returns `true` if tasks are left.
+    fn drain(&self, limit: usize, mut f: impl FnMut(RemoteTask)) -> bool {
+        for _ in 0..limit + REMOTE_BATCH {
+            match self.pop() {
+                Ok(Some(task)) => f(task),
+                Ok(None) => return false,
+                Err(_) => return true,
+            }
+        }
+        !self.is_empty()
+    }
+
+    fn clear(&self) {
+        loop {
+            match self.pop() {
+                Ok(Some(task)) => drop(task),
+                Ok(None) => break,
+                // a push from another thread is in progress
+                Err(_) => thread::yield_now(),
+            }
+        }
+    }
+}
+
+#[cfg(not(ntex_rt_task))]
+pub(crate) mod queues {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::{cell::UnsafeCell, collections::VecDeque, sync::Arc};
+
+    use async_task::Runnable;
+    use crossbeam_queue::SegQueue;
+    use swap_buffer_queue::error::{TryDequeueError, TryEnqueueError};
+    use swap_buffer_queue::{Queue, buffer::ArrayBuffer};
+
+    use super::{REMOTE_BATCH, RunnableQueue, SpawnLocation, TaskStats};
+
+    pub(crate) type Task = Runnable<TaskMeta>;
+    pub(crate) type RemoteTask = Task;
+
+    #[derive(Debug)]
+    /// Task metadata.
+    pub(crate) struct TaskMeta {
+        /// Queue of the runtime the task belongs to, kept here instead of in
+        /// the schedule function so that async-task does not clone a waker
+        /// around each schedule.
+        pub(crate) queue: Arc<RunnableQueue>,
+        location: SpawnLocation,
+        /// Consecutive polls that woke the task itself, the high bit marks a
+        /// reported streak.
+        self_wakes: AtomicU32,
+        /// Start of the self-wake streak, milliseconds since the runtime epoch.
+        streak_start: AtomicU32,
+    }
+
+    impl TaskMeta {
+        pub(crate) fn new(queue: Arc<RunnableQueue>, location: SpawnLocation) -> Self {
+            Self {
+                queue,
+                location,
+                self_wakes: AtomicU32::new(0),
+                streak_start: AtomicU32::new(0),
+            }
+        }
+    }
+
+    /// Metadata of a task, valid while the task is alive.
+    #[derive(Clone, Copy)]
+    pub(crate) struct MetaRef(*const TaskMeta);
+
+    pub(crate) fn task_ref(task: &Task) -> MetaRef {
+        MetaRef(task.metadata())
+    }
+
+    impl MetaRef {
+        fn get(&self) -> &TaskMeta {
+            unsafe { &*self.0 }
+        }
+    }
+
+    impl TaskStats for MetaRef {
+        fn location(self) -> SpawnLocation {
+            self.get().location
+        }
+
+        fn self_wakes(self) -> u32 {
+            self.get().self_wakes.load(Ordering::Relaxed)
+        }
+
+        fn set_self_wakes(self, wakes: u32) {
+            self.get().self_wakes.store(wakes, Ordering::Relaxed);
+        }
+
+        fn streak_start(self) -> u32 {
+            self.get().streak_start.load(Ordering::Relaxed)
+        }
+
+        fn set_streak_start(self, start: u32) {
+            self.get().streak_start.store(start, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct LocalQueue(UnsafeCell<VecDeque<Task>>);
+
+    impl LocalQueue {
+        pub(crate) fn new() -> Self {
+            Self(UnsafeCell::new(VecDeque::new()))
+        }
+
+        pub(crate) fn push(&self, task: Task) {
+            unsafe { (*self.0.get()).push_back(task) };
+        }
+
+        pub(crate) fn pop(&self) -> Option<Task> {
+            unsafe { (*self.0.get()).pop_front() }
+        }
+
+        pub(crate) fn is_empty(&self) -> bool {
+            unsafe { (*self.0.get()).is_empty() }
+        }
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct RemoteQueue {
+        fixed: Queue<ArrayBuffer<RemoteTask, REMOTE_BATCH>>,
+        overflow: SegQueue<RemoteTask>,
+    }
+
+    impl RemoteQueue {
+        pub(crate) fn new() -> Self {
+            Self {
+                fixed: Queue::default(),
+                overflow: SegQueue::new(),
+            }
+        }
+
+        pub(crate) fn push(&self, task: RemoteTask) {
+            let result = self.fixed.try_enqueue([task]);
+            if let Err(TryEnqueueError::InsufficientCapacity([task])) = result {
+                self.overflow.push(task);
+            }
+        }
+
+        /// Runs queued tasks, returns `true` if tasks are left.
+        pub(crate) fn drain(&self, limit: usize, mut f: impl FnMut(RemoteTask)) -> bool {
+            let fixed = match self.fixed.try_dequeue() {
+                Ok(buf) => {
+                    for task in buf {
+                        f(task);
+                    }
+                    false
+                }
+                Err(TryDequeueError::Empty | TryDequeueError::Closed) => false,
+                Err(_) => true,
+            };
+            for _ in 0..limit {
+                if let Some(task) = self.overflow.pop() {
+                    f(task);
+                } else {
+                    break;
+                }
+            }
+            fixed || !self.overflow.is_empty()
+        }
+
+        pub(crate) fn clear(&self) {
+            while self.overflow.pop().is_some() {}
+            while self.fixed.try_dequeue().is_ok() {}
+        }
     }
 }
 
@@ -694,8 +905,16 @@ impl RuntimeBuilder {
     }
 }
 
+#[cfg(all(test, ntex_rt_task))]
+mod raw_tests;
+
+#[cfg(all(test, ntex_rt_task, ntex_loom))]
+mod raw_loom;
+
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
+    use std::sync::atomic::AtomicUsize;
     use std::task::{Poll, Waker};
     use std::{cell::RefCell, future::poll_fn, rc::Rc};
 
@@ -819,9 +1038,12 @@ mod tests {
         while cnt.load(Ordering::Relaxed) < THREADS * TASKS {
             if rt.poll() == PollResult::Pending {
                 let guard = ev.0.lock().unwrap();
+                // the last tasks may have run in this poll
                 let (mut guard, res) =
-                    ev.1.wait_timeout_while(guard, Duration::from_secs(5), |n| !*n)
-                        .unwrap();
+                    ev.1.wait_timeout_while(guard, Duration::from_secs(5), |n| {
+                        !*n && cnt.load(Ordering::Relaxed) < THREADS * TASKS
+                    })
+                    .unwrap();
                 assert!(!res.timed_out(), "lost wakeup");
                 *guard = false;
             }
@@ -1203,13 +1425,36 @@ mod tests {
 
     #[test]
     fn self_wake_streak() {
-        fn streak(rt: &Runtime, n: u32) -> u32 {
-            let meta = TaskMeta::new(rt.queue.clone(), Location::caller());
-            for _ in 0..n {
-                let wakes = meta.self_wakes.load(Ordering::Relaxed);
-                rt.queue.self_wake(&meta, wakes);
+        #[derive(Default)]
+        struct Stats {
+            wakes: Cell<u32>,
+            start: Cell<u32>,
+        }
+
+        impl TaskStats for &Stats {
+            fn location(self) -> SpawnLocation {
+                Location::caller()
             }
-            meta.self_wakes.load(Ordering::Relaxed)
+            fn self_wakes(self) -> u32 {
+                self.wakes.get()
+            }
+            fn set_self_wakes(self, wakes: u32) {
+                self.wakes.set(wakes);
+            }
+            fn streak_start(self) -> u32 {
+                self.start.get()
+            }
+            fn set_streak_start(self, start: u32) {
+                self.start.set(start);
+            }
+        }
+
+        fn streak(rt: &Runtime, n: u32) -> u32 {
+            let stats = Stats::default();
+            for _ in 0..n {
+                rt.queue.self_wake(&stats, stats.wakes.get());
+            }
+            stats.wakes.get()
         }
 
         let rt = Runtime::builder()
@@ -1231,5 +1476,659 @@ mod tests {
             .self_wake_threshold(0, Duration::ZERO)
             .build(Box::new(NoopNotify));
         assert_eq!(streak(&rt, 5), 5);
+    }
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    type Slot = Arc<std::sync::Mutex<Option<Waker>>>;
+
+    fn poll_until(rt: &Runtime, cond: impl Fn() -> bool) {
+        let start = Instant::now();
+        CURRENT_RUNTIME.set(rt, || {
+            while !cond() {
+                assert!(start.elapsed() < Duration::from_secs(30), "timeout");
+                if rt.poll() == PollResult::Pending {
+                    thread::yield_now();
+                }
+            }
+        });
+    }
+
+    fn block_on_thread<F: Future>(fut: F) -> F::Output {
+        struct ThreadWaker(thread::Thread);
+
+        impl std::task::Wake for ThreadWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+
+        let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
+        let mut cx = std::task::Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(fut);
+        loop {
+            if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+                return v;
+            }
+            thread::park();
+        }
+    }
+
+    /// Stores its waker until polled `n` times.
+    fn wait_polls(
+        slot: Slot,
+        polls: Arc<std::sync::atomic::AtomicUsize>,
+        n: usize,
+    ) -> impl Future<Output = usize> {
+        poll_fn(move |cx| {
+            let cnt = polls.fetch_add(1, Ordering::SeqCst) + 1;
+            if cnt >= n {
+                Poll::Ready(cnt)
+            } else {
+                *slot.lock().unwrap() = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        })
+    }
+
+    #[test]
+    fn remote_wakers() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let slot = Slot::default();
+        let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let h = rt.spawn(wait_polls(slot.clone(), polls.clone(), 4));
+        poll_until(&rt, || polls.load(Ordering::SeqCst) == 1);
+
+        // wake by ref, the thread keeps the waker
+        let w = slot.lock().unwrap().take().unwrap();
+        let th = thread::spawn(move || {
+            w.wake_by_ref();
+            w
+        });
+        let w = th.join().unwrap();
+        poll_until(&rt, || polls.load(Ordering::SeqCst) == 2);
+
+        // clone, drop and wake by value
+        let w2 = slot.lock().unwrap().take().unwrap();
+        thread::spawn(move || {
+            let c = w2.clone();
+            drop(w2);
+            drop(w);
+            c.wake();
+        })
+        .join()
+        .unwrap();
+        poll_until(&rt, || polls.load(Ordering::SeqCst) == 3);
+
+        // joined on another thread while the runtime polls
+        let w = slot.lock().unwrap().take().unwrap();
+        let th = thread::spawn(move || {
+            w.wake();
+            block_on_thread(h)
+        });
+        poll_until(&rt, || th.is_finished());
+        assert_eq!(th.join().unwrap().unwrap(), 4);
+    }
+
+    #[test]
+    fn remote_wakers_stress() {
+        const POLLS: usize = 5000;
+
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let slot = Slot::default();
+        let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let h = rt.spawn(wait_polls(slot.clone(), polls.clone(), POLLS));
+
+        let wakers: Vec<_> = (0..4)
+            .map(|i| {
+                let slot = slot.clone();
+                let stop = stop.clone();
+                thread::spawn(move || {
+                    while !stop.load(Ordering::SeqCst) {
+                        let w = slot.lock().unwrap().clone();
+                        match (w, i % 3) {
+                            (Some(w), 0) => w.wake(),
+                            (Some(w), 1) => w.wake_by_ref(),
+                            (Some(w), _) => drop(w.clone()),
+                            (None, _) => thread::yield_now(),
+                        }
+                    }
+                })
+            })
+            .collect();
+        let joiner = thread::spawn(move || block_on_thread(h));
+
+        poll_until(&rt, || joiner.is_finished());
+        stop.store(true, Ordering::SeqCst);
+        for th in wakers {
+            th.join().unwrap();
+        }
+        assert_eq!(joiner.join().unwrap().unwrap(), POLLS);
+        assert_eq!(polls.load(Ordering::SeqCst), POLLS);
+        poll_until(&rt, || true);
+    }
+
+    #[test]
+    fn last_waker_drops_future() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        for remote in [false, true] {
+            let slot = Slot::default();
+            let dropped = Arc::new(AtomicBool::new(false));
+            let flag = DropFlag(dropped.clone());
+            let slot2 = slot.clone();
+            rt.spawn(async move {
+                let _flag = flag;
+                poll_fn(|cx| {
+                    *slot2.lock().unwrap() = Some(cx.waker().clone());
+                    Poll::<()>::Pending
+                })
+                .await;
+            })
+            .detach();
+            poll_until(&rt, || slot.lock().unwrap().is_some());
+            assert!(!dropped.load(Ordering::SeqCst));
+
+            let w = slot.lock().unwrap().take();
+            if remote {
+                thread::spawn(move || drop(w)).join().unwrap();
+            } else {
+                drop(w);
+            }
+            poll_until(&rt, || dropped.load(Ordering::SeqCst));
+        }
+    }
+
+    #[test]
+    fn remote_cancel() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let flag = DropFlag(dropped.clone());
+        let polled = Rc::new(Cell::new(false));
+        let polled2 = polled.clone();
+        let h = rt.spawn(async move {
+            let _flag = flag;
+            polled2.set(true);
+            poll_fn(|_| Poll::<()>::Pending).await;
+        });
+        poll_until(&rt, || polled.get());
+
+        thread::spawn(move || h.cancel()).join().unwrap();
+        poll_until(&rt, || dropped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cancel_while_running() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let flag = DropFlag(dropped.clone());
+        let handle = Rc::new(RefCell::new(None::<JoinHandle<()>>));
+        let handle2 = handle.clone();
+        let polls = Rc::new(Cell::new(0));
+        let polls2 = polls.clone();
+        let h = rt.spawn(async move {
+            let _flag = flag;
+            poll_fn(|cx| {
+                polls2.set(polls2.get() + 1);
+                if let Some(h) = handle2.borrow_mut().take() {
+                    cx.waker().wake_by_ref();
+                    h.cancel();
+                }
+                Poll::<()>::Pending
+            })
+            .await;
+        });
+        *handle.borrow_mut() = Some(h);
+        poll_until(&rt, || dropped.load(Ordering::SeqCst));
+        assert_eq!(polls.get(), 1);
+    }
+
+    #[test]
+    fn panic_in_poll() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let flag = DropFlag(dropped.clone());
+        let h = rt.spawn(async move {
+            let _flag = flag;
+            panic!("task panic");
+        });
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            CURRENT_RUNTIME.set(&rt, || rt.poll())
+        }));
+        assert!(res.is_err());
+        assert!(dropped.load(Ordering::SeqCst));
+        assert!(h.is_finished());
+        #[cfg(ntex_rt_task)]
+        assert!(block_on_thread(h).is_err());
+
+        // the runtime keeps running tasks
+        let done = Rc::new(Cell::new(false));
+        let done2 = done.clone();
+        rt.spawn(async move { done2.set(true) }).detach();
+        poll_until(&rt, || done.get());
+    }
+
+    #[test]
+    fn drop_runtime_with_tasks() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let remote = Arc::new(AtomicBool::new(false));
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let flag = DropFlag(dropped.clone());
+        let h = rt.spawn(async move {
+            let _flag = flag;
+            poll_fn(|_| Poll::<()>::Pending).await;
+        });
+        let flag = DropFlag(remote.clone());
+        let hnd = rt.handle();
+        thread::spawn(move || {
+            hnd.spawn(async move {
+                let _flag = flag;
+            })
+            .detach();
+        })
+        .join()
+        .unwrap();
+        drop(rt);
+        assert!(dropped.load(Ordering::SeqCst));
+        assert!(remote.load(Ordering::SeqCst));
+        assert!(h.is_finished());
+    }
+
+    #[derive(Debug, Default, Clone)]
+    struct Counter(Arc<AtomicUsize>);
+
+    impl Counter {
+        fn get(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
+        }
+
+        fn inc(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn token(&self) -> Token {
+            Token(self.clone())
+        }
+    }
+
+    /// Increments the counter on drop.
+    #[derive(Debug)]
+    struct Token(Counter);
+
+    impl Drop for Token {
+        fn drop(&mut self) {
+            self.0.inc();
+        }
+    }
+
+    #[derive(Default)]
+    struct CountWaker(AtomicUsize);
+
+    impl std::task::Wake for CountWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn drain(rt: &Runtime) {
+        CURRENT_RUNTIME.set(rt, || while rt.poll() == PollResult::PollAgain {});
+    }
+
+    async fn yield_once() {
+        let mut yielded = false;
+        poll_fn(|cx| {
+            if yielded {
+                Poll::Ready(())
+            } else {
+                yielded = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+        .await;
+    }
+
+    #[test]
+    fn remote_join_race() {
+        const N: usize = 2000;
+
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let (tx, rx) = std::sync::mpsc::channel::<JoinHandle<usize>>();
+        let done = Counter::default();
+        let done2 = done.clone();
+        let th = thread::spawn(move || {
+            for (i, h) in rx.into_iter().enumerate() {
+                assert_eq!(block_on_thread(h).unwrap(), i);
+                done2.inc();
+            }
+        });
+        for i in 0..N {
+            // completes while the joining thread registers its waker
+            let h = rt.spawn(async move {
+                for _ in 0..i % 4 {
+                    yield_once().await;
+                }
+                i
+            });
+            tx.send(h).unwrap();
+            poll_until(&rt, || done.get() == i + 1);
+        }
+        drop(tx);
+        th.join().unwrap();
+    }
+
+    #[test]
+    fn unconsumed_output_dropped() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        for remote in [false, true] {
+            let out = Counter::default();
+            let tok = out.token();
+            let h = rt.spawn(async move { tok });
+            poll_until(&rt, || h.is_finished());
+            assert_eq!(out.get(), 0);
+            if remote {
+                thread::spawn(move || drop(h)).join().unwrap();
+            } else {
+                drop(h);
+            }
+            poll_until(&rt, || out.get() == 1);
+        }
+
+        // detached before completion
+        let out = Counter::default();
+        let tok = out.token();
+        rt.spawn(async move {
+            yield_once().await;
+            tok
+        })
+        .detach();
+        poll_until(&rt, || out.get() == 1);
+
+        // consumed by the join handle
+        let out = Counter::default();
+        let tok = out.token();
+        let h = rt.spawn(async move { tok });
+        poll_until(&rt, || h.is_finished());
+        drop(block_on_thread(h).unwrap());
+        drain(&rt);
+        assert_eq!(out.get(), 1);
+    }
+
+    #[test]
+    fn remote_cancel_before_run() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let polled = Arc::new(AtomicBool::new(false));
+        let hnd = rt.handle();
+        let flag = DropFlag(dropped.clone());
+        let polled2 = polled.clone();
+        thread::spawn(move || {
+            hnd.spawn(async move {
+                let _flag = flag;
+                polled2.store(true, Ordering::SeqCst);
+            })
+            .cancel();
+        })
+        .join()
+        .unwrap();
+        poll_until(&rt, || dropped.load(Ordering::SeqCst));
+        assert!(!polled.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cancel_complete_race() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let created = Counter::default();
+        let out = Counter::default();
+        for _ in 0..500 {
+            let dropped = Arc::new(AtomicBool::new(false));
+            let flag = DropFlag(dropped.clone());
+            let slot = Slot::default();
+            let (slot2, created2, out2) = (slot.clone(), created.clone(), out.clone());
+            let h = rt.spawn(async move {
+                let _flag = flag;
+                let mut first = true;
+                poll_fn(|cx| {
+                    if first {
+                        first = false;
+                        *slot2.lock().unwrap() = Some(cx.waker().clone());
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(())
+                    }
+                })
+                .await;
+                created2.inc();
+                out2.token()
+            });
+            poll_until(&rt, || slot.lock().unwrap().is_some());
+
+            let w = slot.lock().unwrap().take().unwrap();
+            let t1 = thread::spawn(move || w.wake());
+            let t2 = thread::spawn(move || h.cancel());
+            poll_until(&rt, || t1.is_finished() && t2.is_finished());
+            t1.join().unwrap();
+            t2.join().unwrap();
+            // the output is dropped once, whichever side wins
+            poll_until(&rt, || {
+                dropped.load(Ordering::SeqCst) && created.get() == out.get()
+            });
+        }
+    }
+
+    #[test]
+    fn stale_wakers() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let slot = Slot::default();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let out = Counter::default();
+        let tok = out.token();
+        let (slot2, polls2) = (slot.clone(), polls.clone());
+        let h = rt.spawn(async move {
+            wait_polls(slot2, polls2, 2).await;
+            tok
+        });
+        poll_until(&rt, || polls.load(Ordering::SeqCst) == 1);
+
+        let w = slot.lock().unwrap().take().unwrap();
+        let (w2, w3) = (w.clone(), w.clone());
+        w.wake();
+        poll_until(&rt, || h.is_finished());
+
+        // wakes after completion do not run the task
+        w2.wake_by_ref();
+        let w3 = thread::spawn(move || {
+            w3.wake_by_ref();
+            w3
+        })
+        .join()
+        .unwrap();
+        drain(&rt);
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+
+        // the last waker, dropped on another thread, frees the task
+        drop(h);
+        drop(w2);
+        #[cfg(ntex_rt_task)]
+        {
+            drain(&rt);
+            assert_eq!(out.get(), 0);
+        }
+        thread::spawn(move || w3.wake()).join().unwrap();
+        poll_until(&rt, || out.get() == 1);
+    }
+
+    struct ReDrop {
+        waker: Rc<RefCell<Option<Waker>>>,
+        other: Option<JoinHandle<()>>,
+        hnd: Handle,
+        spawned: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for ReDrop {
+        fn drop(&mut self) {
+            // wakes itself, drops a handle and spawns a task
+            if let Some(w) = self.waker.borrow_mut().take() {
+                w.wake();
+            }
+            drop(self.other.take());
+            let flag = DropFlag(self.spawned.clone());
+            self.hnd
+                .spawn(async move {
+                    let _flag = flag;
+                })
+                .detach();
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn reentrant_drop() {
+        for clear in [false, true] {
+            let rt = Runtime::new(Box::new(NoopNotify));
+            let other_dropped = Arc::new(AtomicBool::new(false));
+            let spawned = Arc::new(AtomicBool::new(false));
+            let dropped = Arc::new(AtomicBool::new(false));
+            let flag = DropFlag(other_dropped.clone());
+            let other = rt.spawn(async move {
+                let _flag = flag;
+                poll_fn(|_| Poll::<()>::Pending).await;
+            });
+            let waker = Rc::new(RefCell::new(None::<Waker>));
+            let redrop = ReDrop {
+                waker: waker.clone(),
+                other: Some(other),
+                hnd: rt.handle(),
+                spawned: spawned.clone(),
+                dropped: dropped.clone(),
+            };
+            let waker2 = waker.clone();
+            let h = rt.spawn(async move {
+                let _redrop = redrop;
+                poll_fn(|cx| {
+                    *waker2.borrow_mut() = Some(cx.waker().clone());
+                    Poll::<()>::Pending
+                })
+                .await;
+            });
+            poll_until(&rt, || waker.borrow().is_some());
+
+            if clear {
+                // queued when the runtime is dropped
+                h.detach();
+                waker.borrow().as_ref().unwrap().wake_by_ref();
+                drop(rt);
+            } else {
+                h.cancel();
+                poll_until(&rt, || spawned.load(Ordering::SeqCst));
+            }
+            assert!(dropped.load(Ordering::SeqCst));
+            assert!(other_dropped.load(Ordering::SeqCst));
+            assert!(spawned.load(Ordering::SeqCst));
+        }
+    }
+
+    #[cfg(ntex_rt_task)]
+    #[test]
+    fn panic_in_future_drop() {
+        struct PanicOnDrop(Counter);
+
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                self.0.inc();
+                panic!("drop panic");
+            }
+        }
+
+        struct PanicFut {
+            _panic: PanicOnDrop,
+            _flag: DropFlag,
+            ready: bool,
+        }
+
+        impl Future for PanicFut {
+            type Output = usize;
+
+            fn poll(self: Pin<&mut Self>, _: &mut std::task::Context<'_>) -> Poll<usize> {
+                if self.ready { Poll::Ready(1) } else { Poll::Pending }
+            }
+        }
+
+        let rt = Runtime::new(Box::new(NoopNotify));
+        for ready in [true, false] {
+            let drops = Counter::default();
+            let dropped = Arc::new(AtomicBool::new(false));
+            let h = rt.spawn(PanicFut {
+                _panic: PanicOnDrop(drops.clone()),
+                _flag: DropFlag(dropped.clone()),
+                ready,
+            });
+            let h = if ready {
+                h
+            } else {
+                drain(&rt);
+                h.cancel();
+                rt.spawn(PanicFut {
+                    _panic: PanicOnDrop(drops.clone()),
+                    _flag: DropFlag(dropped.clone()),
+                    ready: true,
+                })
+            };
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drain(&rt)));
+            assert!(res.is_err());
+            assert!(dropped.load(Ordering::SeqCst));
+            if !ready {
+                // the second task panics on the next run
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drain(&rt)));
+                assert!(res.is_err());
+            }
+            assert!(h.is_finished());
+            assert!(block_on_thread(h).is_err());
+            drain(&rt);
+            assert_eq!(drops.get(), if ready { 1 } else { 2 });
+        }
+    }
+
+    #[test]
+    fn join_waker_replaced() {
+        fn poll_with(h: &mut JoinHandle<usize>, w: &Arc<CountWaker>) -> Poll<usize> {
+            let w = Waker::from(w.clone());
+            let mut cx = std::task::Context::from_waker(&w);
+            Pin::new(h).poll(&mut cx).map(Result::unwrap)
+        }
+
+        let rt = Runtime::new(Box::new(NoopNotify));
+        for remote in [false, true] {
+            let slot = Slot::default();
+            let polls = Arc::new(AtomicUsize::new(0));
+            let mut h = rt.spawn(wait_polls(slot.clone(), polls.clone(), 2));
+            poll_until(&rt, || polls.load(Ordering::SeqCst) == 1);
+
+            let a = Arc::new(CountWaker::default());
+            let b = Arc::new(CountWaker::default());
+            let (a2, b2) = (a.clone(), b.clone());
+            let poll_both = move |mut h| {
+                assert!(poll_with(&mut h, &a2).is_pending());
+                assert!(poll_with(&mut h, &b2).is_pending());
+                h
+            };
+            h = if remote {
+                thread::spawn(move || poll_both(h)).join().unwrap()
+            } else {
+                poll_both(h)
+            };
+
+            slot.lock().unwrap().take().unwrap().wake();
+            poll_until(&rt, || b.0.load(Ordering::SeqCst) == 1);
+            assert_eq!(a.0.load(Ordering::SeqCst), 0);
+            assert_eq!(poll_with(&mut h, &b), Poll::Ready(2));
+        }
     }
 }

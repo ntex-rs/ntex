@@ -49,3 +49,14 @@ jobs:
       - name: Run Miri (ntex-io)
         # Run all of your tests inside of Miri interpreter
         run: cargo miri test -p ntex-io -- --test "miri_"
+
+      - name: Run Miri (ntex-rt raw task)
+        env:
+          RUSTFLAGS: --cfg ntex_rt_task
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-many-seeds=0..8
+        run: cargo miri test -p ntex-rt --lib -- raw_tests
+
+      - name: Run loom (ntex-rt raw task)
+        env:
+          RUSTFLAGS: --cfg ntex_rt_task --cfg ntex_loom
+        run: cargo test --release -p ntex-rt --lib -- raw_loom

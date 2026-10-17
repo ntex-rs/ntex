@@ -28,6 +28,8 @@ mod driver;
 mod handle;
 mod metrics;
 mod pool;
+#[cfg(ntex_rt_task)]
+mod raw;
 pub mod signals;
 mod system;
 mod task;
