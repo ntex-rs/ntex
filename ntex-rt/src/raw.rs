@@ -60,6 +60,8 @@ const FINISHED: u32 = 1 << 2;
 const CLOSE: u32 = 1 << 3;
 /// The self-wake streak is reported.
 const WAKES_REPORTED: u32 = 1 << 4;
+/// No join handle, the output is dropped on completion.
+const DETACHED: u32 = 1 << 5;
 /// The state keeps the self-wake count above the flags.
 const WAKES_SHIFT: u32 = 8;
 /// The self-wake count saturates at this value.
@@ -76,7 +78,9 @@ const R_CANCEL: u32 = 1 << 2;
 const R_FINISHED: u32 = 1 << 3;
 /// A join handle on another thread is writing the awaiter.
 const R_REGISTERING: u32 = 1 << 4;
-const R_SHIFT: u32 = 5;
+/// The join handle is dropped on another thread before completion.
+const R_DETACHED: u32 = 1 << 5;
+const R_SHIFT: u32 = 6;
 const R_REF: u32 = 1 << R_SHIFT;
 const R_FLAGS: u32 = R_REF - 1;
 /// Half of the delta range, racing increments stay in range until one of
@@ -89,6 +93,7 @@ struct VTable {
     drop_future: unsafe fn(NonNull<Header>),
     /// Moves the output to `*mut Option<T>`.
     take_output: unsafe fn(NonNull<Header>, *mut ()),
+    drop_output: unsafe fn(NonNull<Header>),
     dealloc: unsafe fn(NonNull<Header>),
 }
 
@@ -137,6 +142,7 @@ impl<F: Future> Fns<F> {
         poll: Self::poll,
         drop_future: Self::drop_future,
         take_output: Self::take_output,
+        drop_output: Self::drop_output,
         dealloc: Self::dealloc,
     };
 
@@ -184,6 +190,15 @@ impl<F: Future> Fns<F> {
                 && let Stage::Finished(v) = ptr::replace(stage, Stage::Consumed)
             {
                 *out.cast::<Option<F::Output>>() = Some(v);
+            }
+        }
+    }
+
+    unsafe fn drop_output(h: NonNull<Header>) {
+        unsafe {
+            let stage = Self::stage(h);
+            if matches!(*stage, Stage::Finished(_)) {
+                drop(ptr::replace(stage, Stage::Consumed));
             }
         }
     }
@@ -443,6 +458,7 @@ fn close(h: NonNull<Header>) {
         fn drop(&mut self) {
             let hdr = header(self.0);
             hdr.state.set(hdr.state.get() | FINISHED);
+            // the future is dropped, there is no output
             complete(self.0);
             release_local(self.0);
         }
@@ -453,7 +469,9 @@ fn close(h: NonNull<Header>) {
 }
 
 /// Publishes completion and wakes the awaiter, on the owner thread.
-fn complete(h: NonNull<Header>) {
+///
+/// Returns `true` if the join handle is dropped, the output has no owner.
+fn complete(h: NonNull<Header>) -> bool {
     let hdr = header(h);
     let prev = hdr.remote.fetch_or(R_FINISHED, Ordering::AcqRel);
     // a registering join handle sees `R_FINISHED` and handles the awaiter
@@ -462,6 +480,22 @@ fn complete(h: NonNull<Header>) {
     {
         w.wake();
     }
+    hdr.state.get() & DETACHED != 0 || prev & R_DETACHED != 0
+}
+
+/// Releases a reference on drop, also while unwinding from an output drop.
+struct Release(NonNull<Header>);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        release(self.0);
+    }
+}
+
+/// Drops the output, then releases a reference of the caller.
+fn drop_output(h: NonNull<Header>) {
+    let release = Release(h);
+    unsafe { (header(release.0).vtable.drop_output)(release.0) };
 }
 
 /// Spawns a task and schedules it on its runtime.
@@ -474,6 +508,29 @@ pub(crate) unsafe fn spawn<F: Future>(
     queue: Arc<RunnableQueue>,
     location: SpawnLocation,
 ) -> Task<F::Output> {
+    let h = unsafe { create(future, queue, location, false) };
+    Task { h, _t: PhantomData }
+}
+
+/// Spawns a task without a join handle, the output is dropped on completion.
+///
+/// # Safety
+///
+/// The caller should ensure the captured lifetime is long enough.
+pub(crate) unsafe fn spawn_detached<F: Future>(
+    future: F,
+    queue: Arc<RunnableQueue>,
+    location: SpawnLocation,
+) {
+    unsafe { create(future, queue, location, true) };
+}
+
+unsafe fn create<F: Future>(
+    future: F,
+    queue: Arc<RunnableQueue>,
+    location: SpawnLocation,
+    detached: bool,
+) -> NonNull<Header> {
     let local = queue.id == current_thread_id();
     let raw = Box::new(RawTask {
         header: Header {
@@ -486,9 +543,11 @@ pub(crate) unsafe fn spawn<F: Future>(
             location,
             awaiter: Awaiter::new(),
             remote: AtomicU32::new(if local { 0 } else { R_QUEUED | R_WOKEN }),
-            state: Cell::new(if local { SCHEDULED } else { 0 }),
+            state: Cell::new(
+                if local { SCHEDULED } else { 0 } | if detached { DETACHED } else { 0 },
+            ),
             // the queue and the join handle
-            refs: Cell::new(2),
+            refs: Cell::new(if detached { 1 } else { 2 }),
             streak_start: Cell::new(0),
         },
         stage: SharedCell::new(Stage::Running(future)),
@@ -497,11 +556,14 @@ pub(crate) unsafe fn spawn<F: Future>(
     let queue = &header(h).queue;
     if local {
         queue.schedule_local(Runnable(h));
+    } else if detached {
+        // the owner thread may free the task once it is queued
+        queue.clone().schedule_remote(Remote(h));
     } else {
         // the join handle keeps the queue alive
         queue.schedule_remote(Remote(h));
     }
-    Task { h, _t: PhantomData }
+    h
 }
 
 /// A task in the local queue, owns a reference.
@@ -556,7 +618,10 @@ impl Runnable {
         let state = hdr.state.get() & !RUNNING;
         if ready {
             hdr.state.set((state | FINISHED) & !(SCHEDULED | CLOSE));
-            complete(h);
+            if complete(h) {
+                drop_output(h);
+                return false;
+            }
         } else if state & CLOSE != 0 {
             hdr.state.set(state & !SCHEDULED);
             close(h);
@@ -611,18 +676,9 @@ impl Remote {
         mem::forget(self);
         let hdr = header(h);
 
-        let mut cur = hdr.remote.load(Ordering::Relaxed);
-        loop {
-            match hdr.remote.compare_exchange_weak(
-                cur,
-                cur & (R_FINISHED | R_REGISTERING),
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(v) => cur = v,
-            }
-        }
+        let cur = hdr
+            .remote
+            .fetch_and(R_FINISHED | R_REGISTERING | R_DETACHED, Ordering::AcqRel);
         let refs = i64::from(hdr.refs.get()) + i64::from(delta(cur));
         hdr.refs
             .set(u32::try_from(refs).unwrap_or_else(|_| abort()));
@@ -855,18 +911,21 @@ impl<T> Task<T> {
         if is_owner(h) {
             let hdr = header(h);
             let state = hdr.state.get();
-            if state & FINISHED == 0 {
-                hdr.state.set(state | CLOSE);
-                if state & (SCHEDULED | RUNNING) == 0 {
-                    hdr.state.set(state | CLOSE | SCHEDULED);
-                    // the handle reference passes to the queue
-                    hdr.queue.schedule_local(Runnable(h));
-                    return;
-                }
+            if state & FINISHED != 0 {
+                drop_output(h);
+                return;
+            }
+            // a running task may still complete
+            hdr.state.set(state | CLOSE | DETACHED);
+            if state & (SCHEDULED | RUNNING) == 0 {
+                hdr.state.set(state | CLOSE | DETACHED | SCHEDULED);
+                // the handle reference passes to the queue
+                hdr.queue.schedule_local(Runnable(h));
+                return;
             }
             release_local(h);
         } else {
-            remote_signal(h, R_CANCEL, true);
+            detach_remote(h, R_CANCEL);
         }
     }
 
@@ -918,8 +977,53 @@ impl<T> Task<T> {
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        release(self.h);
+        let h = self.h;
+        if is_owner(h) {
+            let hdr = header(h);
+            let state = hdr.state.get();
+            if state & FINISHED != 0 {
+                drop_output(h);
+                return;
+            }
+            hdr.state.set(state | DETACHED);
+            release_local(h);
+        } else {
+            detach_remote(h, 0);
+        }
     }
+}
+
+/// Drops a join handle on another thread, sets `flags` like
+/// [`remote_signal`].
+///
+/// The output of a finished task is dropped on this thread, a `Task<T>` on
+/// another thread implies `T: Send`. Otherwise the owner thread drops it on
+/// completion.
+fn detach_remote(h: NonNull<Header>, flags: u32) {
+    let remote = &header(h).remote;
+    let mut cur = remote.load(Ordering::Acquire);
+    loop {
+        if cur & R_FINISHED != 0 {
+            drop_output(h);
+            return;
+        }
+        if delta(cur).abs() > MAX_REFS {
+            abort();
+        }
+        // the fast path of `remote_signal`, this is not the last reference
+        let release = flags == 0 && (cur & R_QUEUED != 0 || delta(cur) > 0);
+        let new = if release {
+            (cur | R_DETACHED).wrapping_sub(R_REF)
+        } else {
+            cur | R_DETACHED
+        };
+        match remote.compare_exchange_weak(cur, new, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) if release => return,
+            Ok(_) => break,
+            Err(v) => cur = v,
+        }
+    }
+    remote_signal(h, flags, true);
 }
 
 impl<T> fmt::Debug for Task<T> {

@@ -263,6 +263,98 @@ fn run_and_cancel() {
 }
 
 #[test]
+fn drop_finished() {
+    for remote in [false, true] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let task = spawn(&rt, p.future(Res::Ready));
+        one_local(&rt).run();
+        p.check(1, 1, 0);
+        if remote {
+            on_thread(move || drop(task));
+            // the release is merged without a run
+            assert!(one_remote(&rt).is_none());
+        } else {
+            drop(task);
+        }
+        // a waker keeps the task alive, the output is dropped anyway
+        p.check(1, 1, 1);
+        drop(p.waker());
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn drop_and_complete() {
+    for (remote, cancel) in [(false, false), (true, false), (false, true), (true, true)] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let fut = p.future(Res::Ready);
+        let task = spawn(&rt, async move {
+            yield_now().await;
+            fut.await
+        });
+        // the first run yields, the task is queued again
+        assert!(one_local(&rt).run());
+        let r = one_local(&rt);
+        let detach = move || {
+            if cancel {
+                task.cancel();
+            } else {
+                drop(task);
+            }
+        };
+        if remote {
+            on_thread(detach);
+            // a remote cancel queues the task, the release is merged
+            if let Some(r) = one_remote(&rt) {
+                assert!(cancel);
+                r.run();
+            }
+        } else {
+            detach();
+        }
+        r.run();
+        let ran = usize::from(!cancel);
+        p.check(ran, 1, ran);
+        if !cancel {
+            drop(p.waker());
+        }
+        assert_freed(&rt);
+    }
+}
+
+#[test]
+fn spawn_detached() {
+    for remote in [false, true] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let fut = p.future(Res::Ready);
+        let q = rt.queue.clone();
+        let spawn = move || unsafe { raw::spawn_detached(fut, q, Location::caller()) };
+        let r = if remote {
+            on_thread(spawn);
+            one_remote(&rt).unwrap()
+        } else {
+            spawn();
+            one_local(&rt)
+        };
+        assert!(!r.run());
+        p.check(1, 1, 1);
+        drop(p.waker());
+        assert_freed(&rt);
+    }
+
+    // dropped without a run
+    let rt = new_rt();
+    let p = Probe::default();
+    unsafe { raw::spawn_detached(p.future(Res::Ready), rt.queue.clone(), Location::caller()) };
+    drop(one_local(&rt));
+    p.check(0, 1, 0);
+    assert_freed(&rt);
+}
+
+#[test]
 fn cancel_pending() {
     let rt = new_rt();
     let p = Probe::default();
@@ -429,8 +521,8 @@ fn wake_completed() {
         one_local(&rt).run();
         let w = p.waker();
         drop(task);
-        // the waker keeps the output alive
-        p.check(1, 1, 0);
+        // the output is dropped with the handle, the waker keeps the task
+        p.check(1, 1, 1);
         if remote {
             on_thread(move || {
                 w.wake_by_ref();
@@ -701,7 +793,12 @@ fn cancel_during_run() {
             });
             assert_eq!(panicked, res == Res::Panic, "{res:?} {order}");
             assert!(rt.queue.local_queue.is_empty());
-            p.check(1, usize::from(res != Res::Pending), 0);
+            // the output is dropped on completion, a waker is still alive
+            p.check(
+                1,
+                usize::from(res != Res::Pending),
+                usize::from(res == Res::Ready),
+            );
             // queued once, a pending future is dropped without a poll
             if let Some(r) = one_remote(&rt) {
                 assert_eq!(res, Res::Pending);
@@ -725,7 +822,11 @@ fn detach_during_run() {
         assert_eq!(panicked, res == Res::Panic);
         // the release is merged without a run
         assert!(one_remote(&rt).is_none());
-        p.check(1, usize::from(res != Res::Pending), 0);
+        p.check(
+            1,
+            usize::from(res != Res::Pending),
+            usize::from(res == Res::Ready),
+        );
         drop(p.waker());
         if res == Res::Pending {
             one_local(&rt).run();

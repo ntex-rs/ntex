@@ -233,7 +233,7 @@ where
                 };
                 let result = ctx.call(&self.svc, item).await.map_err(WsError::Service);
                 if let Some(s) = s {
-                    rt::spawn(async move { s.io().close() });
+                    rt::spawn_detached(async move { s.io().close() });
                 }
                 result
             }

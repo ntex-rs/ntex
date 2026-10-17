@@ -381,7 +381,7 @@ impl Drop for IoTest {
 impl IoStream for IoTest {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let io = Rc::new(self);
-        ntex_util::spawn(run(io.clone(), ctx));
+        ntex_util::spawn_detached(run(io.clone(), ctx));
         Box::new(io)
     }
 }

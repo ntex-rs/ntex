@@ -297,7 +297,7 @@ where
                 .disable_signals()
                 .run();
 
-            crate::rt::spawn(async move {
+            crate::rt::spawn_detached(async move {
                 tx.send((System::current(), srv, local_addr)).unwrap();
             });
             Ok(())

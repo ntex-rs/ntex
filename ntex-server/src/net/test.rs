@@ -111,7 +111,7 @@ where
                     .disable_signals()
                     .run();
 
-                ntex_rt::spawn(async move {
+                ntex_rt::spawn_detached(async move {
                     tx.send((System::current(), local_addr, server))
                         .expect("Failed to send Server to TestServer");
                 });

@@ -131,7 +131,7 @@ impl<T> Worker<T> {
             cpus,
         };
 
-        arbiter.handle().spawn(async move {
+        arbiter.handle().spawn_detached(async move {
             log::info!("Starting worker {n:?}");
 
             // the arbiter is stopped even if the service panics, runtimes
@@ -443,7 +443,7 @@ where
                 }
                 Either::Left(Err(())) => {
                     // re-create service
-                    ntex_rt::spawn(async move {
+                    ntex_rt::spawn_detached(async move {
                         self.svc.shutdown().await;
                     });
                 }

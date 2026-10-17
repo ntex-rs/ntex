@@ -106,8 +106,8 @@ impl System {
         let (stop_tx, stop) = oneshot::channel();
 
         // system support tasks
-        crate::spawn(SystemSupport::new(&sys, stop_tx).run());
-        crate::spawn(controller.run(sys.clone()));
+        crate::spawn_detached(SystemSupport::new(&sys, stop_tx).run());
+        crate::spawn_detached(controller.run(sys.clone()));
 
         (sys, stop)
     }
@@ -426,7 +426,7 @@ impl SystemSupport {
         );
         self.watchdog = crate::watchdog::start(&self.sys);
         if self.sys.0.config.ping_interval != 0 {
-            crate::spawn(ping_arbiters(self.sys.clone()));
+            crate::spawn_detached(ping_arbiters(self.sys.clone()));
         }
 
         loop {
@@ -497,7 +497,7 @@ async fn ping_arbiters(sys: System) {
                 recs.truncate(10);
             });
 
-            crate::spawn(async move {
+            crate::spawn_detached(async move {
                 if fut.await.is_ok() {
                     PINGS.with(|pings| {
                         // a late pong belongs to its own round

@@ -26,6 +26,7 @@ impl Notify for NoopNotify {
 struct State {
     polls: AtomicUsize,
     drops: AtomicUsize,
+    outputs: AtomicUsize,
     // completes the future on the next poll
     ready: AtomicBool,
     waker: Mutex<Option<Waker>>,
@@ -294,5 +295,64 @@ fn remote_spawn() {
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
         assert_eq!(th.join().unwrap(), 42);
         assert_freed(&rt);
+    });
+}
+
+/// Drops the output, counts on the future state.
+struct Out(Arc<State>);
+
+impl Drop for Out {
+    fn drop(&mut self) {
+        self.0.outputs.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The join handle is dropped on another thread while the owner thread
+/// completes the task, the output is dropped once.
+#[test]
+fn remote_detach() {
+    model(|| {
+        let rt = new_rt();
+        let st = Arc::new(State::default());
+        let (fut, st2) = (Fut(st.clone()), st.clone());
+        let task = spawn(&rt, async move {
+            let _ = fut.await;
+            Out(st2)
+        });
+        drain(&rt);
+        st.ready.store(true, Ordering::Release);
+        st.waker().wake();
+        let th = thread::spawn(move || drop(task));
+        drain(&rt);
+        th.join().unwrap();
+        drop(st.waker.lock().unwrap().take());
+        assert_freed(&rt);
+        assert_eq!(st.outputs.load(Ordering::Relaxed), 1);
+    });
+}
+
+/// A detached task spawned from another thread, the owner thread may free
+/// it as soon as it is queued.
+#[test]
+fn remote_spawn_detached() {
+    model(|| {
+        let rt = new_rt();
+        let st = Arc::new(State::default());
+        st.ready.store(true, Ordering::Relaxed);
+        let (q, fut, st2) = (rt.queue.clone(), Fut(st.clone()), st.clone());
+        let th = thread::spawn(move || unsafe {
+            raw::spawn_detached(
+                async move {
+                    let _ = fut.await;
+                    Out(st2)
+                },
+                q,
+                Location::caller(),
+            );
+        });
+        run_until(&rt, || st.outputs.load(Ordering::Relaxed) == 1);
+        th.join().unwrap();
+        assert_freed(&rt);
+        assert_eq!(st.drops.load(Ordering::Relaxed), 1);
     });
 }

@@ -444,7 +444,7 @@ impl WsConnection<Sealed> {
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
-        rt::spawn(async move {
+        rt::spawn_detached(async move {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
             let sink = self.sink();
@@ -512,7 +512,7 @@ impl WsConnection<Sealed> {
                     }
                     if close {
                         let io = io.clone();
-                        rt::spawn(async move { io.close() });
+                        rt::spawn_detached(async move { io.close() });
                     }
                     result
                 }

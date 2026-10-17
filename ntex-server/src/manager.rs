@@ -143,7 +143,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
         }));
 
         // handle cmd
-        ntex_rt::spawn(handle_cmd(mgr.clone(), rx));
+        ntex_rt::spawn_detached(handle_cmd(mgr.clone(), rx));
 
         // CPU placement of each worker
         let plan = affinity::plan(affinity);
@@ -163,7 +163,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
             System::current().enable_signals();
 
             let srv2 = srv.clone();
-            ntex_rt::spawn(async move {
+            ntex_rt::spawn_detached(async move {
                 while let Ok(sigs) = ntex_rt::signals::signal().await {
                     for sig in sigs.as_ref() {
                         srv2.signal(sig.clone());
@@ -224,7 +224,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
 }
 
 fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, placement: Option<Placement>) {
-    ntex_rt::spawn(async move {
+    ntex_rt::spawn_detached(async move {
         let id = mgr.next_id();
         let name = format!("{}:worker:{}", mgr.0.cfg.name, id.0);
         let slot = mgr.0.shared.metrics.worker(id);

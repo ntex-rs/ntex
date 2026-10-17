@@ -9,7 +9,7 @@ use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::service::pipeline::PipelineBinding;
 use crate::service::{Ctx, Service, cfg::Cfg, cfg::SharedCfg};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
-use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
+use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn_detached, time::now};
 
 use super::connection::{Connection, ConnectionType};
 use super::h1proto::host_port;
@@ -88,7 +88,7 @@ impl ConnectionPool {
 
         // start connection pool
         let (stop, stop_rx) = oneshot::channel();
-        crate::rt::spawn(run_connection_pool(
+        crate::rt::spawn_detached(run_connection_pool(
             shared.clone(),
             svc.bind_state(shared.clone()),
             inner.clone(),
@@ -213,7 +213,7 @@ fn acquired(
 
 /// Closes a connection that is not used anymore.
 fn close_io(io: IoBoxed) {
-    spawn(async move {
+    spawn_detached(async move {
         let _ = io.shutdown().await;
     });
 }
@@ -454,7 +454,7 @@ fn open_connection(
     let guard = OpenGuard::new(key.clone(), inner.clone());
     let uri = connect.uri.clone();
 
-    spawn(async move {
+    spawn_detached(async move {
         // open tcp connection
         match pl.call(connect).await {
             Err(err) => {

@@ -59,7 +59,7 @@ impl ntex_rt::Driver for Reactor {
 impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let (tx, rx) = channel::create();
-        ntex_rt::spawn(async move {
+        ntex_rt::spawn_detached(async move {
             let result = async {
                 let sock = tok_io::net::TcpStream::connect(addr).await?;
                 sock.set_nodelay(true)?;
@@ -76,7 +76,7 @@ impl crate::Reactor for Reactor {
         #[cfg(unix)]
         {
             let (tx, rx) = channel::create();
-            ntex_rt::spawn(async move {
+            ntex_rt::spawn_detached(async move {
                 let result = async {
                     let sock = tok_io::net::UnixStream::connect(addr).await?;
                     Ok(Io::new(UnixStream(sock), cfg))

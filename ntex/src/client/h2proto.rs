@@ -85,7 +85,7 @@ async fn send_request_inner(
         // sending body is async process, we can handle upload and download
         // at the same time
         let activity = client.activity.clone();
-        crate::rt::spawn(async move {
+        crate::rt::spawn_detached(async move {
             let _activity = activity;
             if let Err(e) = send_body(body, &snd_stream).await {
                 log::debug!("{}: Cannot send body: {e:?}", snd_stream.tag());
@@ -180,7 +180,7 @@ async fn get_response(
                         );
                         let (pl, payload) = H2Payload::create(stream.empty_capacity());
 
-                        crate::rt::spawn(async move {
+                        crate::rt::spawn_detached(async move {
                             let _activity = activity;
                             loop {
                                 #[allow(unused_variables)]

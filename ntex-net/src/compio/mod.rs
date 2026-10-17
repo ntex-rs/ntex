@@ -175,7 +175,7 @@ impl ntex_rt::Driver for Reactor {
 impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: std::net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let (tx, rx) = channel::create();
-        ntex_rt::spawn(async move {
+        ntex_rt::spawn_detached(async move {
             let result = async {
                 let sock = compio_net::TcpStream::connect(addr)
                     .await
@@ -192,7 +192,7 @@ impl crate::Reactor for Reactor {
 
     fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> Receiver<Io> {
         let (tx, rx) = channel::create();
-        ntex_rt::spawn(async move {
+        ntex_rt::spawn_detached(async move {
             let result = async {
                 let sock = compio_net::UnixStream::connect(addr)
                     .await

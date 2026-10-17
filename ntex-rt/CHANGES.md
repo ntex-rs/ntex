@@ -2,6 +2,12 @@
 
 ## [4.3.0] - 2026-10-17
 
+* Add `spawn_detached()` and `Handle::spawn_detached()`, spawn a task without
+  a join handle, the output is dropped on completion
+
+* Drop the output of a finished neon task when its `JoinHandle` is dropped or
+  cancelled, instead of when the last waker is dropped
+
 * Require `F::Output: Send` for neon `Handle::spawn()`, a remote task could
   return a non-`Send` value to the spawning thread
 

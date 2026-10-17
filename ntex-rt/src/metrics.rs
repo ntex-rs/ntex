@@ -255,7 +255,7 @@ pub(crate) fn start_latency_sampler(stats: &Arc<LatencyStats>, interval_ms: usiz
     stats.interval.store(as_nanos(interval), Ordering::Relaxed);
 
     let stats = stats.clone();
-    crate::spawn(async move {
+    crate::spawn_detached(async move {
         loop {
             let deadline = Instant::now() + interval;
             Delay::new(interval).await;

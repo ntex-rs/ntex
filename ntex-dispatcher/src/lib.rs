@@ -17,7 +17,7 @@ use std::{cell::Cell, fmt, future::Future, future::poll_fn, io, mem, pin::Pin, r
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{CloseReason, Decoded, IoBoxed, IoStatusUpdate, RecvError};
 use ntex_service::pipeline::{Pipeline, PipelineCall};
-use ntex_util::{spawn, time::Seconds, time::Sleep, time::sleep};
+use ntex_util::{spawn_detached, time::Seconds, time::Sleep, time::sleep};
 
 mod timer;
 
@@ -426,7 +426,7 @@ where
                     // the task owns the readiness check from now on
                     let shared = inner.shared.clone();
                     let mut fut = Some(stop.fut);
-                    spawn(poll_fn(move |cx| {
+                    spawn_detached(poll_fn(move |cx| {
                         let _ = shared.service.poll_ready(cx);
                         if let Some(f) = fut.as_mut() {
                             let result = ready!(Pin::new(f).poll(cx));
@@ -504,7 +504,7 @@ where
             self.response = Some(fut);
         } else {
             let shared = self.shared.clone();
-            spawn(async move {
+            spawn_detached(async move {
                 let result = fut.await;
                 shared.handle_result(result, true);
             });
@@ -818,7 +818,7 @@ mod tests {
     use ntex_io::{Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
     use ntex_util::time::{Millis, sleep, timeout};
-    use ntex_util::{channel::condition::Condition, channel::oneshot, future::lazy};
+    use ntex_util::{channel::condition::Condition, channel::oneshot, future::lazy, spawn};
     use rand::Rng;
 
     use super::*;
