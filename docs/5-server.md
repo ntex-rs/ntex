@@ -221,50 +221,251 @@ server has reached its stopped state.
 
 ## Server metrics
 
-`Server::metrics()` returns a snapshot of load counters:
+`Server::metrics()` returns a `ServerMetrics` snapshot. The call is
+synchronous and cheap enough to run periodically. Counters and durations are
+totals since the server started, so take two snapshots and use their
+differences to get rates. Gauges (`active_connections`, `accept_backlog`, the
+`*_active` and `*_buffered` values, cached pages) describe the moment of the
+snapshot.
 
-* `workers`: one entry per worker slot with processed `items`,
-  `active_connections`, `restarts`, and how often and how long the worker
-  was not ready (`not_ready`, `not_ready_duration`), for example because it
-  reached `max_connections()`. `io` holds the I/O statistics of the
-  worker's connections, one entry per listener configuration (`id`, `tag`
-  and `service` of the `SharedCfg`), so each listener is reported
-  separately. Other configurations get their own entry with
-  `IoConfig::set_metrics(true)`, the remaining connections, for example
-  client connections, are counted in `io_other`. Each entry counts how
-  often and how long (connection-time) reads and writes were under
-  backpressure, how many connections are under backpressure now, the bytes held in read and write buffers, and the total
-  `bytes_read` and `bytes_written`. `eager_writes` counts writes started in
-  place once buffered output reached `IoConfig::set_write_buf_threshold()`,
-  `eager_writes_partial` those that left output to the write task, and
-  `scheduled_writes` writes left to the write task (io-uring always uses
-  the write task). `closed`
-  counts closed connections by reason: keep-alive, read or write timeout,
-  peer gone, I/O error, decoder, encoder, service error, server shutdown,
-  application-defined reasons (`custom`), and `other` for connections closed
-  without a reported reason, for example by the application or after a
-  response without keep-alive. An application counts its own reasons with
-  `io.set_close_reason(CloseReason::Custom1)` to `Custom8` before closing the
-  connection; the first reported reason is kept.
-  `page_cache` holds the statistics of the worker thread's buffer page cache
-  per page size: `hits`, `misses`, pages returned to the cache (`cached`) or
-  freed because it was full (`freed`), and the cached `pages` and `bytes`. A
-  high miss rate suggests raising the cache size with
-  `ntex_bytes::set_page_cache_size()`. After a worker restart these statistics
-  may be slightly off, the old and new worker threads can update them at once.
-* `listeners`: name, address and `accepted`, `connection_errors` and
-  `resource_errors` counts for each listener.
-* `accept_pauses`, `accept_paused_duration` and `accept_backlog`: how often
-  and how long the accept loop stopped accepting because no worker was
-  available, and how many accepted connections wait for a worker.
+```rust,no_run
+use ntex::server::Server;
+use ntex::time::{Seconds, sleep};
 
-ntex does not reject connections at the limit. Connections wait in the
-operating system's listen backlog while the accept loop is paused, so growing
-`accept_paused_duration` indicates that the server is saturated. Growing
-write backpressure time means clients read slower than the application
-writes; growing read backpressure time means the application processes input
-slower than it arrives. Growing read timeout closes point to slow or idle
-clients, growing write timeout closes to clients that stopped reading.
+async fn report(server: Server) {
+    let mut prev = server.metrics();
+    loop {
+        sleep(Seconds(10)).await;
+        let cur = server.metrics();
+
+        let paused = cur.accept_paused_duration - prev.accept_paused_duration;
+        println!("accept paused {paused:?}, backlog {}", cur.accept_backlog);
+
+        for (w, p) in cur.workers.iter().zip(&prev.workers) {
+            println!(
+                "worker {:?}: {} new, {} active, not ready {:?}",
+                w.id,
+                w.items - p.items,
+                w.active_connections,
+                w.not_ready_duration - p.not_ready_duration,
+            );
+        }
+        prev = cur;
+    }
+}
+```
+
+The worker list has one entry per worker slot, in the same order in every
+snapshot. A restarted worker keeps the metrics of the worker it replaces.
+
+### Accept loop
+
+These fields are on `ServerMetrics`.
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `accept_pauses` | counter | Number of times the accept loop stopped accepting, because no worker was ready or the server was paused. |
+| `accept_paused_duration` | duration | Total time the accept loop was not accepting, including the current pause. |
+| `accept_backlog` | gauge | Accepted connections waiting for a ready worker. |
+
+ntex does not reject connections at the limit. While the accept loop is
+paused, new connections wait in the operating system's listen backlog, so
+these metrics are the main saturation signal:
+
+* If `accept_paused_duration` grows steadily, all workers are at capacity.
+  Add workers (`workers()`), raise `max_connections()` if workers have spare
+  CPU and memory, or scale out.
+* A non-zero `accept_backlog`, or short frequent pauses, means the server
+  runs at its limit. Clients then see higher connect latency. If load comes
+  in bursts, a larger `backlog()` keeps the operating system from dropping
+  connection attempts.
+* Pauses caused by `Server::pause()` are counted too. Account for them
+  during maintenance windows.
+
+### Listeners
+
+`ServerMetrics::listeners` has one `ListenerMetrics` entry per bound socket.
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `name`, `addr` | label | Service name and address passed to `bind()`. |
+| `accepted` | counter | Connections accepted on the listener. |
+| `connection_errors` | counter | Per-connection accept errors, for example a connection reset before it was accepted. |
+| `resource_errors` | counter | Accept failures caused by resource exhaustion, for example running out of file descriptors. After each one the listener pauses briefly. |
+
+The rate of `accepted` is the connection rate per service; compare it across
+listeners to see where load comes from. A few `connection_errors` are normal
+on the internet; a rising rate suggests clients that give up early or a
+network problem. Treat any `resource_errors` as a capacity problem: raise
+the file descriptor limit (`ulimit -n`) or lower `max_connections()`.
+
+### Workers
+
+`ServerMetrics::workers` has one `WorkerMetrics` entry per worker slot.
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `id` | label | Worker id. |
+| `items` | counter | Connections (or other items) the worker received. |
+| `active_connections` | gauge | Open connections on the worker. Network servers only. |
+| `not_ready` | counter | Number of times the worker's services stopped being ready, for example on reaching `max_connections()`. |
+| `not_ready_duration` | duration | Total time the worker was not ready, including the current period. |
+| `restarts` | counter | Number of times the worker was restarted after a failure. |
+| `io`, `io_other` | | I/O statistics, see below. |
+| `page_cache` | | Buffer page cache statistics of the worker thread, see below. |
+
+* Compare `active_connections` and the rate of `items` across workers to
+  check load balancing. With the default `LoadBalancing::LeastLoaded`, they
+  should be close. A worker with much higher `not_ready_duration` than the
+  others points to long-lived or expensive connections pinned to it.
+* If `not_ready_duration` grows on all workers together with
+  `accept_paused_duration`, the server is at capacity.
+* `active_connections` at the `max_connections()` value with idle CPU
+  means the limit is too low for the workload, for example with many idle
+  keep-alive or WebSocket connections.
+* `restarts` should stay at zero. Any increase means a worker failed;
+  alert on it and check the logs.
+
+### I/O metrics
+
+I/O metrics are collected per I/O configuration (`IoConfig` in a
+`SharedCfg`) on each worker thread. Every listener configuration is
+registered automatically, so `WorkerMetrics::io` has one `IoConfigMetrics`
+entry per listener configuration, identified by `id`, `tag` and `service` of
+the `SharedCfg`. Other configurations, for example the configuration of an
+HTTP client used by the application, get their own entry when created with
+`IoConfig::set_metrics(true)`. Connections whose configuration has no
+metrics of its own are counted together in `io_other`.
+
+To get the totals of a service across the server, add up its entries from
+all workers.
+
+Each entry is an `IoMetricsSnapshot`:
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `bytes_read` | counter | Bytes read from the transport. |
+| `bytes_written` | counter | Bytes written to the transport. |
+| `read_buffered` | gauge | Bytes held in read buffers, not yet consumed by the application. |
+| `write_buffered` | gauge | Bytes in write buffers, or held by the transport and not yet written. |
+| `read_backpressure` | counter | Number of times read backpressure was enabled: the read buffer reached `set_read_backpressure()` and reading stopped. |
+| `read_backpressure_active` | gauge | Connections with read backpressure enabled now. |
+| `read_backpressure_time` | duration | Total connection-time spent under read backpressure. |
+| `write_backpressure` | counter | Number of times write backpressure was enabled: the write buffer reached `set_write_backpressure()`. |
+| `write_backpressure_active` | gauge | Connections with write backpressure enabled now. |
+| `write_backpressure_time` | duration | Total connection-time spent under write backpressure. |
+| `eager_writes` | counter | Writes started in place, as soon as buffered output reached `set_write_buf_threshold()`. |
+| `eager_writes_partial` | counter | Eager writes that could not write all output and left the rest to the write task. |
+| `scheduled_writes` | counter | Writes left to the write task. With io-uring all writes use the write task. |
+| `closed` | | Closed connections by reason, see below. |
+
+Backpressure time is connection-time: ten connections under backpressure
+for one second add ten seconds. Divide its rate by the number of active
+connections to get the share of time a connection spends blocked.
+
+* **Throughput.** Rates of `bytes_read` and `bytes_written` give the
+  bandwidth per service and worker. Divided by the `items` rate they give
+  the average traffic per connection.
+* **Memory.** `read_buffered` plus `write_buffered` is the memory held in
+  connection buffers. If it is high, lower `set_read_backpressure()` and
+  `set_write_backpressure()`, or lower `max_connections()`.
+* **Slow clients.** Growing `write_backpressure_time` means clients read
+  slower than the application writes. A few slow clients are normal; a
+  steady high `write_backpressure_active` holds memory and connection slots.
+  Use `set_write_timeout()` to close clients that stop reading, and watch
+  `closed.write_timeout`.
+* **Slow application.** Growing `read_backpressure_time` means the
+  application processes input slower than it arrives. Look at the service's
+  processing time or worker CPU; a larger `set_read_backpressure()` only
+  helps with short bursts.
+* **Write path.** Most writes should be eager on fast networks. A high
+  share of `eager_writes_partial` means the socket send buffer fills, which
+  is normal for large responses and slow clients. If `scheduled_writes`
+  dominate, output is written in many small pieces; raising
+  `set_write_buf_threshold()` batches more output per system call,
+  lowering it reduces latency.
+
+### Close reasons
+
+`IoMetricsSnapshot::closed` is a `CloseStats`. Each closed connection is
+counted once in `total` and once under the first reason reported for it:
+
+| Metric | Meaning |
+|--------|---------|
+| `total` | Closed connections. |
+| `keepalive` | The connection was idle for longer than the keep-alive timeout. |
+| `read_timeout` | Input did not arrive within the read timeout, for example `set_frame_read_rate()`. |
+| `write_timeout` | Write backpressure stayed enabled for longer than `set_write_timeout()`. |
+| `peer_gone` | The peer closed the connection. |
+| `io` | The transport failed with an I/O error. |
+| `decoder` | Incoming data could not be decoded, for example a malformed request. |
+| `encoder` | Outgoing data could not be encoded. |
+| `service` | The service failed or closed the connection. |
+| `shutdown` | The server was shutting down. |
+| `custom` | Application-defined reasons `Custom1` to `Custom8`, counted in `custom[0]` to `custom[7]`. |
+| `other` | No reason was reported, for example the application closed the connection or the response had no keep-alive. |
+
+* A high share of `keepalive` closes means connections sit idle. Shorten
+  `set_keepalive_timeout()` to free connection slots sooner, or lengthen it
+  if clients reconnect often (compare with the `accepted` rate).
+* Rising `read_timeout` closes point to slow or idle clients, or to
+  slow-read attacks; rising `write_timeout` closes to clients that stopped
+  reading. Check the timeouts against legitimate slow clients before
+  tightening them.
+* `decoder` closes count protocol errors. A sudden increase usually means a
+  broken client release, a scanner, or abuse.
+* `io` and `peer_gone` closes reflect network quality and client behavior.
+  An `io` spike together with `connection_errors` points to a network
+  problem.
+* `service` closes come from the application. Compare their rate with the
+  application's error logs.
+* `shutdown` closes count connections closed because the server or worker
+  was stopping. Expect them during deploys and restarts; elsewhere they
+  point to unexpected stops.
+
+Applications can track their own reasons, for example authentication
+failures, rate-limited clients or upgrades, by setting a reason before
+closing the connection or failing the service:
+
+```rust,ignore
+use ntex::io::CloseReason;
+
+// in a service that owns the connection's `Io`
+io.set_close_reason(CloseReason::Custom1); // for example "auth failed"
+io.close();
+```
+
+The first reported reason is kept, so a reason set by the application is
+not replaced by one the dispatcher reports later, such as `Service`.
+
+### Page cache
+
+`WorkerMetrics::page_cache` holds the statistics of the worker thread's
+buffer page cache. I/O buffers are allocated as pages of fixed sizes, and
+released pages are kept in a per-thread cache for reuse. Use
+`page_cache.get(size)` for one page size, `page_cache.iter()` for all sizes,
+or `page_cache.total()` for the sum. Each entry is a `PageCacheStats`:
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `size` | label | Page size, `BytePageSize::Unset` for totals. |
+| `hits` | counter | Pages taken from the cache. |
+| `misses` | counter | Pages allocated because the cache was empty. |
+| `cached` | counter | Released pages returned to the cache. |
+| `freed` | counter | Released pages freed because the cache was full. |
+| `pages` | gauge | Pages in the cache now. |
+| `bytes` | gauge | Memory held by the cached pages. |
+
+* A high miss rate together with a high `freed` rate for the same size
+  means the cache is too small for the workload: pages are freed and then
+  allocated again. Raise its size for that page size with
+  `ntex_bytes::set_page_cache_size()` on each worker thread, for example
+  from the worker's service factory.
+* If `bytes` stays high while traffic is low and misses are rare, the cache
+  is larger than needed; lowering it frees memory.
+
+After a worker restart these statistics may be slightly off, because the old
+and new worker threads can update them at the same time.
 
 ## Signals and shutdown
 

@@ -15,7 +15,10 @@ mod service;
 mod socket;
 mod test;
 
-pub use crate::{Affinity, LoadBalancing, NoConfig, ServerAppConfig};
+pub use crate::{
+    Affinity, ListenerMetrics, LoadBalancing, NoConfig, ServerAppConfig, ServerMetrics,
+    WorkerMetrics,
+};
 
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
 pub use self::builder::{ServerBuilder, bind_addr, create_tcp_listener};
