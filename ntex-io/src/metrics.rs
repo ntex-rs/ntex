@@ -11,6 +11,14 @@ thread_local! {
 /// A connection reports to the metrics that were current on its thread when it
 /// was created, see [`IoMetrics::current`]. Statistics are updated with relaxed
 /// atomics, a snapshot is not a consistent cut across all fields.
+///
+/// The byte and write counters (`bytes_read`, `bytes_written`, `eager_writes`,
+/// `eager_writes_partial`, `scheduled_writes`) are updated with a plain load
+/// and store, not an atomic read-modify-write, so they must be updated by one
+/// thread at a time. If the same metrics are installed on several threads with
+/// [`IoMetrics::set_current`], concurrent updates can be lost and these
+/// counters undercount. The other statistics use atomic read-modify-write
+/// updates and stay exact.
 #[derive(Debug)]
 pub struct IoMetrics {
     base: Instant,
@@ -18,6 +26,11 @@ pub struct IoMetrics {
     wr: Backpressure,
     read_buffered: AtomicUsize,
     write_buffered: AtomicUsize,
+    bytes_read: AtomicU64,
+    bytes_written: AtomicU64,
+    eager_writes: AtomicU64,
+    eager_writes_partial: AtomicU64,
+    scheduled_writes: AtomicU64,
     closed: [AtomicU64; CLOSE_REASONS],
 }
 
@@ -164,6 +177,20 @@ pub struct IoMetricsSnapshot {
     pub read_buffered: usize,
     /// Bytes held in write buffers or taken by the transport but not written.
     pub write_buffered: usize,
+    /// Bytes read from transports.
+    pub bytes_read: u64,
+    /// Bytes written to transports.
+    pub bytes_written: u64,
+    /// Writes started in place because buffered output reached the write
+    /// buffer threshold, see `IoConfig::set_write_buf_threshold()`.
+    pub eager_writes: u64,
+    /// Eager writes that could not write all buffered output, the rest is
+    /// left to the write task.
+    pub eager_writes_partial: u64,
+    /// Writes left to the write task, below the write buffer threshold or with
+    /// eager writes disabled. The io-uring transport always uses the write
+    /// task.
+    pub scheduled_writes: u64,
     /// Closed connections by reason.
     pub closed: CloseStats,
 }
@@ -177,6 +204,11 @@ impl IoMetrics {
             wr: Backpressure::default(),
             read_buffered: AtomicUsize::new(0),
             write_buffered: AtomicUsize::new(0),
+            bytes_read: AtomicU64::new(0),
+            bytes_written: AtomicU64::new(0),
+            eager_writes: AtomicU64::new(0),
+            eager_writes_partial: AtomicU64::new(0),
+            scheduled_writes: AtomicU64::new(0),
             closed: Default::default(),
         })
     }
@@ -211,6 +243,11 @@ impl IoMetrics {
             write_backpressure_time: self.wr.time(now),
             read_buffered: self.read_buffered.load(Relaxed),
             write_buffered: self.write_buffered.load(Relaxed),
+            bytes_read: self.bytes_read.load(Relaxed),
+            bytes_written: self.bytes_written.load(Relaxed),
+            eager_writes: self.eager_writes.load(Relaxed),
+            eager_writes_partial: self.eager_writes_partial.load(Relaxed),
+            scheduled_writes: self.scheduled_writes.load(Relaxed),
             closed: self.close_stats(),
         }
     }
@@ -267,6 +304,25 @@ impl IoMetrics {
         self.wr.off(self.now());
     }
 
+    pub(crate) fn read(&self, n: usize) {
+        inc(&self.bytes_read, n as u64);
+    }
+
+    pub(crate) fn written(&self, n: usize) {
+        inc(&self.bytes_written, n as u64);
+    }
+
+    pub(crate) fn eager_write(&self, partial: bool) {
+        inc(&self.eager_writes, 1);
+        if partial {
+            inc(&self.eager_writes_partial, 1);
+        }
+    }
+
+    pub(crate) fn scheduled_write(&self) {
+        inc(&self.scheduled_writes, 1);
+    }
+
     pub(crate) fn update_read_buffered(&self, prev: u32, cur: u32) {
         update(&self.read_buffered, prev, cur);
     }
@@ -310,4 +366,10 @@ impl Backpressure {
             Duration::from_nanos(total)
         }
     }
+}
+
+// single writer, cheaper than `fetch_add`
+#[inline]
+fn inc(counter: &AtomicU64, n: u64) {
+    counter.store(counter.load(Relaxed).wrapping_add(n), Relaxed);
 }

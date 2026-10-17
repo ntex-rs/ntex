@@ -169,12 +169,19 @@ async fn test_worker_io_metrics() {
     let m = io_metrics();
     assert_eq!(m.write_backpressure, 1);
     assert!(m.write_backpressure_time > Duration::ZERO);
+    assert_eq!(m.bytes_written, SIZE as u64);
+    // io-uring always uses the write task
+    assert!(m.eager_writes + m.scheduled_writes > 0);
 
     // the worker allocated and released write pages
     let pc = srv.metrics().workers[0].page_cache.total();
     assert!(pc.hits + pc.misses > 0);
     assert!(pc.cached > 0);
     assert_eq!(pc.bytes > 0, pc.pages > 0);
+
+    io.encode_slice(b"hello").unwrap();
+    io.flush(true).await.unwrap();
+    wait_for(|| io_metrics().bytes_read == 5).await;
 
     io.close();
     wait_for(|| {

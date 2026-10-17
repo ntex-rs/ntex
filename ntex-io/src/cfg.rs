@@ -505,6 +505,9 @@ impl IoConfig {
     /// the threshold: it delivers buffered output through the scheduled write
     /// operation, and the sends of all connections are submitted together
     /// once per runtime turn.
+    ///
+    /// [`IoMetricsSnapshot`](crate::IoMetricsSnapshot) counts eager, partial
+    /// eager and scheduled writes for tuning the threshold.
     #[must_use]
     pub fn set_write_buf_threshold(mut self, size: usize) -> Self {
         self.write_buf_threshold = size;
