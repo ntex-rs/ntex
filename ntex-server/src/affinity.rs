@@ -63,13 +63,15 @@ impl fmt::Display for Cpu {
 /// Topology of one logical CPU.
 ///
 /// `core`, `l3` and `node` identify the physical core, L3 cache and NUMA
-/// node. Higher `class` means a faster core.
+/// node. Higher `class` means a faster core. `allowed` is `false` if the
+/// process may not use the CPU.
 struct CpuInfo {
     cpu: Cpu,
     core: usize,
     l3: usize,
     node: usize,
     class: u32,
+    allowed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,8 +79,10 @@ struct CpuInfo {
 pub(crate) struct Placement {
     mode: Affinity,
     cpu: Cpu,
-    /// Logical CPUs of the physical core of `cpu`.
+    /// Logical CPUs of the physical core of `cpu` the process may use.
     core: Vec<Cpu>,
+    /// All logical CPUs of the physical core of `cpu`.
+    siblings: Vec<Cpu>,
 }
 
 impl Placement {
@@ -92,6 +96,7 @@ impl Placement {
             mode: Affinity::Cpu,
             cpu,
             core: vec![cpu],
+            siblings: vec![cpu],
         }
     }
 
@@ -101,11 +106,12 @@ impl Placement {
     }
 
     /// Returns the index of the placement CPU, followed by the indexes of
-    /// its SMT siblings.
+    /// its SMT siblings, including siblings the process may not use. The
+    /// network stack may still process packets on them.
     pub(crate) fn cpus(&self) -> Vec<usize> {
         let mut cpus = vec![sys::index(self.cpu)];
         cpus.extend(
-            self.core
+            self.siblings
                 .iter()
                 .filter(|cpu| **cpu != self.cpu)
                 .map(|cpu| sys::index(*cpu)),
@@ -144,7 +150,12 @@ pub(crate) fn plan(mode: Affinity) -> Vec<Placement> {
     }
     order(&sys::topology())
         .into_iter()
-        .map(|(cpu, core)| Placement { mode, cpu, core })
+        .map(|(cpu, core, siblings)| Placement {
+            mode,
+            cpu,
+            core,
+            siblings,
+        })
         .collect()
 }
 
@@ -152,7 +163,7 @@ pub(crate) fn plan(mode: Affinity) -> Vec<Placement> {
 pub(crate) fn cpu_count() -> usize {
     // std counts only one processor group on Windows
     if cfg!(windows) {
-        let n = sys::topology().len();
+        let n = sys::topology().iter().filter(|info| info.allowed).count();
         if n > 0 {
             return n;
         }
@@ -162,32 +173,40 @@ pub(crate) fn cpu_count() -> usize {
 
 struct Core {
     cpus: Vec<Cpu>,
+    all: Vec<Cpu>,
     l3: usize,
     node: usize,
     class: u32,
 }
 
-/// Orders logical CPUs, see [`Affinity`].
+/// Orders the logical CPUs the process may use, see [`Affinity`].
 ///
-/// Returns each CPU with the CPUs of its physical core.
-fn order(cpus: &[CpuInfo]) -> Vec<(Cpu, Vec<Cpu>)> {
+/// Returns each CPU with the CPUs of its physical core the process may use,
+/// and all CPUs of that core.
+fn order(cpus: &[CpuInfo]) -> Vec<(Cpu, Vec<Cpu>, Vec<Cpu>)> {
     let mut cores = BTreeMap::<usize, Core>::new();
     for info in cpus {
-        cores
-            .entry(info.core)
-            .or_insert_with(|| Core {
-                cpus: Vec::new(),
-                l3: info.l3,
-                node: info.node,
-                class: info.class,
-            })
-            .cpus
-            .push(info.cpu);
+        let core = cores.entry(info.core).or_insert_with(|| Core {
+            cpus: Vec::new(),
+            all: Vec::new(),
+            l3: info.l3,
+            node: info.node,
+            class: info.class,
+        });
+        core.all.push(info.cpu);
+        if info.allowed {
+            core.cpus.push(info.cpu);
+        }
     }
-    let mut cores: Vec<Core> = cores.into_values().collect();
+    let mut cores: Vec<Core> = cores
+        .into_values()
+        .filter(|core| !core.cpus.is_empty())
+        .collect();
     for core in &mut cores {
         core.cpus.sort_unstable();
         core.cpus.dedup();
+        core.all.sort_unstable();
+        core.all.dedup();
     }
     cores.sort_by_key(|core| core.cpus[0]);
 
@@ -222,7 +241,7 @@ fn order(cpus: &[CpuInfo]) -> Vec<(Cpu, Vec<Cpu>)> {
     for idx in 0..depth {
         for core in &seq {
             if let Some(cpu) = core.cpus.get(idx) {
-                result.push((*cpu, core.cpus.clone()));
+                result.push((*cpu, core.cpus.clone(), core.all.clone()));
             }
         }
     }
@@ -249,13 +268,19 @@ mod sys {
     use super::{Affinity, Cpu, CpuInfo};
 
     pub(super) fn topology() -> Vec<CpuInfo> {
-        read(Path::new("/sys/devices/system/cpu"), &allowed())
+        let root = Path::new("/sys/devices/system/cpu");
+        let allowed = allowed();
+        let mut cpus = list(&root.join("online")).unwrap_or_default();
+        cpus.extend(&allowed);
+        cpus.sort_unstable();
+        cpus.dedup();
+        read(root, &cpus, &allowed)
     }
 
-    /// Reads the topology of the `allowed` CPUs from sysfs at `root`.
-    pub(super) fn read(root: &Path, allowed: &[u32]) -> Vec<CpuInfo> {
-        allowed
-            .iter()
+    /// Reads the topology of `cpus` from sysfs at `root`, the process may
+    /// use the `allowed` ones.
+    pub(super) fn read(root: &Path, cpus: &[u32], allowed: &[u32]) -> Vec<CpuInfo> {
+        cpus.iter()
             .map(|&num| {
                 let dir = root.join(format!("cpu{num}"));
                 let first = |files: &[&str]| {
@@ -292,6 +317,7 @@ mod sys {
                     ]),
                     node,
                     class,
+                    allowed: allowed.contains(&num),
                 }
             })
             .collect()
@@ -314,17 +340,67 @@ mod sys {
         Some(cpus)
     }
 
+    /// Returns the CPUs the current thread may run on.
     fn allowed() -> Vec<u32> {
-        // SAFETY: cpu_set_t is plain data, the size matches the set
-        unsafe {
-            let mut set: libc::cpu_set_t = mem::zeroed();
-            if libc::sched_getaffinity(0, mem::size_of::<libc::cpu_set_t>(), &raw mut set) != 0 {
-                return Vec::new();
+        query_mask(|mask| {
+            // SAFETY: the kernel writes at most `size_of_val(mask)` bytes,
+            // the mask has the layout of a larger `cpu_set_t`
+            let res = unsafe {
+                libc::sched_getaffinity(0, mem::size_of_val(mask), mask.as_mut_ptr().cast())
+            };
+            if res == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
             }
-            (0..u32::try_from(libc::CPU_SETSIZE).unwrap_or(0))
-                .filter(|&num| libc::CPU_ISSET(num as usize, &set))
-                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    /// Words of a `cpu_set_t`.
+    const SET_WORDS: usize = mem::size_of::<libc::cpu_set_t>() / mem::size_of::<libc::c_ulong>();
+    /// Largest mask tried, in words.
+    const MAX_WORDS: usize = SET_WORDS << 10;
+
+    /// Reads a CPU mask with `query`.
+    ///
+    /// The kernel mask may be larger than `cpu_set_t`, the query fails with
+    /// `EINVAL` until the mask is large enough.
+    pub(super) fn query_mask(
+        mut query: impl FnMut(&mut [libc::c_ulong]) -> Result<(), i32>,
+    ) -> Option<Vec<u32>> {
+        let mut words = SET_WORDS;
+        loop {
+            let mut mask = vec![0; words];
+            match query(&mut mask) {
+                Ok(()) => {
+                    let bits = libc::c_ulong::BITS;
+                    return Some(
+                        (0u32..)
+                            .zip(&mask)
+                            .flat_map(|(idx, word)| {
+                                (0..bits)
+                                    .filter(move |bit| word & (1 << bit) != 0)
+                                    .map(move |bit| idx * bits + bit)
+                            })
+                            .collect(),
+                    );
+                }
+                Err(libc::EINVAL) if words < MAX_WORDS => words *= 2,
+                Err(_) => return None,
+            }
         }
+    }
+
+    /// Returns a CPU mask of `cpus`, at least the size of `cpu_set_t`.
+    pub(super) fn mask_of(cpus: &[Cpu]) -> Vec<libc::c_ulong> {
+        let bits = libc::c_ulong::BITS;
+        let max = cpus.iter().map(|cpu| cpu.num / bits + 1).max().unwrap_or(0);
+        let mut mask = vec![0; SET_WORDS.max(max as usize)];
+        for cpu in cpus {
+            mask[(cpu.num / bits) as usize] |= 1 << (cpu.num % bits);
+        }
+        mask
     }
 
     pub(super) fn cpu(idx: usize) -> Cpu {
@@ -369,17 +445,17 @@ mod sys {
         } else {
             core
         };
-        // SAFETY: cpu_set_t is plain data, the size matches the set
+        if cpus
+            .iter()
+            .any(|cpu| cpu.num as usize >= MAX_WORDS * libc::c_ulong::BITS as usize)
+        {
+            return false;
+        }
+        let mask = mask_of(cpus);
+        // SAFETY: the kernel reads `size_of_val(mask)` bytes, the mask has
+        // the layout of a larger `cpu_set_t`
         unsafe {
-            let mut set: libc::cpu_set_t = mem::zeroed();
-            // `CPU_SETSIZE` is a `c_int` on Linux and a `usize` on Android
-            let size = u32::try_from(libc::CPU_SETSIZE).unwrap_or(0);
-            for cpu in cpus {
-                if cpu.num < size {
-                    libc::CPU_SET(cpu.num as usize, &mut set);
-                }
-            }
-            libc::sched_setaffinity(0, mem::size_of::<libc::cpu_set_t>(), &raw const set) == 0
+            libc::sched_setaffinity(0, mem::size_of_val(&mask[..]), mask.as_ptr().cast()) == 0
         }
     }
 
@@ -458,6 +534,7 @@ mod sys {
                                 l3: usize::MAX,
                                 node: usize::MAX - usize::from(cpu.group),
                                 class,
+                                allowed: true,
                             }));
                         }
                     }
@@ -496,20 +573,21 @@ mod sys {
             }
         }
 
-        let (groups, mask) = allowed();
-        cpus.retain(|info| {
-            groups.is_empty()
-                || (groups.contains(&info.cpu.group)
-                    && mask.is_none_or(|mask| mask & (1 << info.cpu.num) != 0))
-        });
-        if let Some(allowed) = restricted() {
-            let restricted: Vec<_> = cpus
+        let mask = affinity_mask();
+        for info in &mut cpus {
+            info.allowed = mask.is_none_or(|(group, mask)| {
+                info.cpu.group == group
+                    && info.cpu.num < usize::BITS
+                    && mask & (1 << info.cpu.num) != 0
+            });
+        }
+        if let Some(restricted) = restricted()
+            && cpus
                 .iter()
-                .filter(|info| allowed.contains(&info.cpu))
-                .copied()
-                .collect();
-            if !restricted.is_empty() {
-                cpus = restricted;
+                .any(|info| info.allowed && restricted.contains(&info.cpu))
+        {
+            for info in &mut cpus {
+                info.allowed &= restricted.contains(&info.cpu);
             }
         }
         cpus
@@ -519,7 +597,7 @@ mod sys {
     /// default CPU sets of the process, if any.
     ///
     /// The process affinity mask covers only one processor group.
-    fn restricted() -> Option<Vec<Cpu>> {
+    pub(super) fn restricted() -> Option<Vec<Cpu>> {
         let mut result: Option<Vec<Cpu>> = None;
 
         // SAFETY: buffers hold the lengths passed with them
@@ -649,31 +727,28 @@ mod sys {
             .map(move |num| Cpu { group, num })
     }
 
-    /// Returns the processor groups of the process, and its affinity mask if
-    /// the process runs in a single group.
-    fn allowed() -> (Vec<u16>, Option<usize>) {
-        // SAFETY: buffers hold `count` groups
+    /// Returns the processor group and affinity mask of the process if the
+    /// mask restricts it to part of its group.
+    ///
+    /// A process starts in one processor group, and its threads may move to
+    /// other groups. The groups the process currently runs in do not restrict
+    /// it, an explicit affinity mask (`start /affinity`, job object affinity
+    /// limits) does.
+    pub(super) fn affinity_mask() -> Option<(u16, usize)> {
+        // SAFETY: plain process affinity queries, the buffer holds one group
         unsafe {
             let process = GetCurrentProcess();
-            let mut count = 0u16;
-            GetProcessGroupAffinity(process, &raw mut count, ptr::null_mut());
-            let mut groups = vec![0u16; usize::from(count)];
-            if count == 0
-                || GetProcessGroupAffinity(process, &raw mut count, groups.as_mut_ptr()) == 0
-            {
-                return (Vec::new(), None);
-            }
-            groups.truncate(usize::from(count));
-
             let (mut mask, mut system) = (0, 0);
-            if groups.len() == 1
-                && GetProcessAffinityMask(process, &raw mut mask, &raw mut system) != 0
-                && mask != 0
+            // zero masks if the process runs in several groups
+            if GetProcessAffinityMask(process, &raw mut mask, &raw mut system) == 0
+                || mask == 0
+                || mask == system
             {
-                (groups, Some(mask))
-            } else {
-                (groups, None)
+                return None;
             }
+            let (mut count, mut group) = (1u16, 0u16);
+            (GetProcessGroupAffinity(process, &raw mut count, &raw mut group) != 0)
+                .then_some((group, mask))
         }
     }
 
@@ -848,11 +923,12 @@ mod tests {
             l3,
             node,
             class: 0,
+            allowed: true,
         }
     }
 
     fn nums(cpus: &[CpuInfo]) -> Vec<u32> {
-        order(cpus).into_iter().map(|(cpu, _)| cpu.num).collect()
+        order(cpus).into_iter().map(|(cpu, ..)| cpu.num).collect()
     }
 
     #[test]
@@ -913,6 +989,17 @@ mod tests {
         assert_eq!(order(&cpus)[0].1, [cpu(1)]);
         assert_eq!(order(&cpus)[3].1, [cpu(2), cpu(3)]);
         assert_eq!(order(&[]), []);
+
+        // siblings the process may not use are kept for locality only
+        let mut cpus: Vec<_> = (0..8).map(|n| info(n, n as usize % 4, 0, 0)).collect();
+        for c in &mut cpus {
+            c.allowed = [4, 6].contains(&c.cpu.num);
+        }
+        let order = order(&cpus);
+        assert_eq!(nums(&cpus), [4, 6]);
+        assert_eq!(order[0].1, [cpu(4)]);
+        assert_eq!(order[0].2, [cpu(0), cpu(4)]);
+        assert_eq!(order[1].2, [cpu(2), cpu(6)]);
     }
 
     #[test]
@@ -925,6 +1012,7 @@ mod tests {
             .map(|p| {
                 assert_eq!(p.mode, Affinity::Core);
                 assert!(p.core.contains(&p.cpu));
+                assert!(p.core.iter().all(|cpu| p.siblings.contains(cpu)));
                 p.cpu
             })
             .collect();
@@ -954,6 +1042,7 @@ mod tests {
                 mode,
                 cpu,
                 core: core.clone(),
+                siblings: core.clone(),
             };
             let (cpus, ideal) = std::thread::spawn(move || {
                 assert!(p.apply());
@@ -999,9 +1088,9 @@ mod tests {
         for p in plan(Affinity::Core) {
             let cpus = p.cpus();
             assert_eq!(sys::cpu(cpus[0]), p.cpu);
-            assert_eq!(cpus.len(), p.core.len());
+            assert_eq!(cpus.len(), p.siblings.len());
             for idx in &cpus {
-                assert!(p.core.contains(&sys::cpu(*idx)), "{p}: {cpus:?}");
+                assert!(p.siblings.contains(&sys::cpu(*idx)), "{p}: {cpus:?}");
             }
         }
     }
@@ -1048,11 +1137,103 @@ mod tests {
             fs::write(dir.join("topology/core_cpus_list"), core).unwrap();
             fs::write(dir.join("cache/index3/shared_cpu_list"), "0-3\n").unwrap();
         }
-        let cpus = sys::read(&root, &[0, 1, 2, 3]);
+        let cpus = sys::read(&root, &[0, 1, 2, 3], &[0, 1, 2, 3]);
+        let restricted = sys::read(&root, &[0, 1, 2, 3], &[0, 1, 3]);
         fs::remove_dir_all(&root).unwrap();
 
         let ids: Vec<_> = cpus.iter().map(|c| (c.core, c.l3, c.node)).collect();
         assert_eq!(ids, [(0, 0, 1), (1, 0, 1), (0, 0, 1), (3, 3, 0)]);
         assert_eq!(nums(&cpus), [3, 0, 1, 2]);
+
+        // cpu2 is not allowed, it remains a sibling of cpu0
+        assert_eq!(nums(&restricted), [3, 0, 1]);
+        let (_, core, siblings) = &order(&restricted)[1];
+        assert_eq!(
+            (&core[..], &siblings[..]),
+            (&[cpu(0)][..], &[cpu(0), cpu(2)][..])
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn linux_large_mask() {
+        let bits = libc::c_ulong::BITS;
+        let mask = sys::mask_of(&[cpu(1), cpu(3000)]);
+        assert_eq!(mask.len(), (3000 / bits + 1) as usize);
+        assert_eq!(mask[0], 2);
+        assert_eq!(mask[(3000 / bits) as usize], 1 << (3000 % bits));
+        assert_eq!(
+            sys::mask_of(&[cpu(0)]).len() * size_of::<libc::c_ulong>(),
+            size_of::<libc::cpu_set_t>()
+        );
+
+        // the kernel mask is larger than `cpu_set_t`
+        let mut sizes = Vec::new();
+        let cpus = sys::query_mask(|m| {
+            sizes.push(m.len());
+            if m.len() * bits as usize <= 3000 {
+                return Err(libc::EINVAL);
+            }
+            m[..mask.len()].copy_from_slice(&mask);
+            Ok(())
+        });
+        assert_eq!(cpus, Some(vec![1, 3000]));
+        assert_eq!(sizes.len(), 3, "{sizes:?}");
+        assert_eq!(sys::query_mask(|_| Err(libc::EPERM)), None);
+        assert_eq!(sys::query_mask(|_| Err(libc::EINVAL)), None);
+
+        assert!(!Placement::cpu(usize::MAX >> 1).apply());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_mask() {
+        use windows_sys::Win32::System::Threading::{
+            ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetCurrentProcess,
+            GetProcessAffinityMask, SetProcessAffinityMask,
+        };
+
+        const CHILD: &str = "NTEX_AFFINITY_MASK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // without restrictions, all processor groups are used
+            if sys::affinity_mask().is_none() && sys::restricted().is_none() {
+                // SAFETY: plain processor count query
+                let n = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
+                assert_eq!(plan(Affinity::Core).len(), n as usize);
+            }
+            // the process mask is changed in a separate process
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["affinity::tests::windows_process_mask", "--exact"])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+
+        // SAFETY: plain process affinity calls on the current process
+        unsafe {
+            let process = GetCurrentProcess();
+            let (mut mask, mut system) = (0, 0);
+            assert_ne!(
+                GetProcessAffinityMask(process, &raw mut mask, &raw mut system),
+                0
+            );
+            if mask.count_ones() < 3 {
+                return;
+            }
+            // the two highest CPUs of the group
+            let high = usize::BITS - 1 - mask.leading_zeros();
+            let next = usize::BITS - 1 - (mask & !(1 << high)).leading_zeros();
+            let restricted = (1usize << high) | (1 << next);
+            assert_ne!(SetProcessAffinityMask(process, restricted), 0);
+
+            let (group, mask) = sys::affinity_mask().unwrap();
+            assert_eq!(mask, restricted);
+            let mut cpus: Vec<_> = plan(Affinity::Core).into_iter().map(|p| p.cpu).collect();
+            cpus.sort_unstable();
+            assert_eq!(cpus, [Cpu { group, num: next }, Cpu { group, num: high }]);
+            assert_eq!(cpu_count(), 2);
+        }
     }
 }

@@ -91,6 +91,11 @@ impl IoConfig {
     /// with [`IoMetricsGroup::register`], as server listener configurations
     /// are. Each enabled configuration keeps its metrics on every thread it is
     /// used on, do not enable metrics for short-lived configurations.
+    ///
+    /// I/O metrics are always collected. Disabling only removes the
+    /// configuration's own metrics, its connections then report to the shared
+    /// `other` metrics, or to the registered metrics of a server listener
+    /// configuration.
     pub fn set_metrics(mut self, enabled: bool) -> Self {
         self.metrics = enabled;
         self

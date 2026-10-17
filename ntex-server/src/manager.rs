@@ -254,12 +254,16 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         match upd {
             Update::Available(worker) => match self.workers.binary_search(&worker) {
                 Ok(idx) => {
+                    // a restarted worker runs on a new arbiter
+                    if self.workers[idx].arbiter() != worker.arbiter() {
+                        self.balancer.reset(idx);
+                    }
                     self.workers[idx] = worker;
-                    self.balancer.reset(idx);
                 }
                 Err(idx) => {
+                    self.balancer
+                        .unpark(idx, worker.name(), worker.arbiter().id());
                     self.workers.insert(idx, worker);
-                    self.balancer.insert(idx);
                     if self.workers.len() == 1 {
                         self.mgr.resume();
                     }
@@ -267,7 +271,10 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             },
             Update::Unavailable(worker) => {
                 if let Ok(idx) = self.workers.binary_search(&worker) {
-                    self.remove_worker(idx);
+                    // the worker keeps its runtime and connections, its
+                    // load history stays valid
+                    let wrk = self.workers.remove(idx);
+                    self.balancer.park(idx, wrk.name(), wrk.arbiter().id());
                 }
                 if self.workers.is_empty() {
                     self.mgr.pause();
@@ -276,17 +283,16 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         }
         // handle backlog
         if !self.backlog.is_empty() && !self.workers.is_empty() {
-            while let Some(item) = self.backlog.pop_front() {
-                // handle worker failure
-                if let Err(item) = self.workers[0].send(item) {
-                    self.backlog.push_back(item);
-                    self.remove_worker(0);
-                    if self.workers.is_empty() {
-                        self.mgr.pause();
-                    }
+            let mut items = std::mem::take(&mut self.backlog);
+            while let Some(item) = items.pop_front() {
+                if self.workers.is_empty() {
+                    items.push_front(item);
                     break;
                 }
+                // pushes the item back and pauses if all workers failed
+                self.process(item);
             }
+            self.backlog.extend(items);
         }
     }
 

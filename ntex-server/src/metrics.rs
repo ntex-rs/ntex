@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering, fence};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::{cell::RefCell, panic::Location, time::Duration, time::Instant};
 
@@ -135,36 +135,60 @@ fn as_nanos(d: Duration) -> u64 {
 }
 
 /// Accumulated period, e.g. time the worker was not ready.
+///
+/// The total and the open period are packed into one word, so a reader sees a
+/// coherent value with a single load: `state >> 2` is the total in
+/// nanoseconds, minus the start of the open period if `OPEN` is set. Values
+/// are nanoseconds since the epoch, modulo 2^62 (about 146 years).
 #[derive(Debug, Default)]
 struct Period {
     count: AtomicU64,
-    // nanoseconds
-    total: AtomicU64,
-    // nanoseconds since epoch plus one, zero if not in a period
-    since: AtomicU64,
+    state: AtomicU64,
 }
 
 impl Period {
+    const OPEN: u64 = 1;
+    // the open period is ending, its end time is not stored yet
+    const ENDING: u64 = 2;
+    const MASK: u64 = u64::MAX >> 2;
+
     // single writer
     fn set(&self, epoch: Instant, on: bool) {
-        let since = self.since.load(Ordering::Relaxed);
-        let now = as_nanos(epoch.elapsed()) + 1;
-        if on && since == 0 {
+        let state = self.state.load(Ordering::Relaxed);
+        // called on every readiness check, read the clock only on changes
+        if on == (state & Self::OPEN != 0) {
+            return;
+        }
+        if on {
             self.count.fetch_add(1, Ordering::Relaxed);
-            self.since.store(now, Ordering::Relaxed);
-        } else if !on && since != 0 {
-            self.total
-                .fetch_add(now.saturating_sub(since), Ordering::Relaxed);
-            self.since.store(0, Ordering::Relaxed);
+            let acc = (state >> 2).wrapping_sub(as_nanos(epoch.elapsed()));
+            self.state.store((acc << 2) | Self::OPEN, Ordering::Release);
+        } else {
+            // readers wait for the end time instead of reading a later clock
+            self.state.store(state | Self::ENDING, Ordering::Relaxed);
+            fence(Ordering::SeqCst);
+            let total = (state >> 2).wrapping_add(as_nanos(epoch.elapsed()));
+            self.state.store(total << 2, Ordering::Release);
         }
     }
 
     fn get(&self, epoch: Instant) -> (u64, Duration) {
-        let since = self.since.load(Ordering::Relaxed);
-        let mut total = self.total.load(Ordering::Relaxed);
-        if since != 0 {
-            total += (as_nanos(epoch.elapsed()) + 1).saturating_sub(since);
-        }
+        let total = loop {
+            // acquire, the clock is read after the writer's
+            let state = self.state.load(Ordering::Acquire);
+            if state & Self::OPEN == 0 {
+                break state >> 2;
+            }
+            if state & Self::ENDING == 0 {
+                let now = as_nanos(epoch.elapsed());
+                fence(Ordering::SeqCst);
+                // the period did not start ending before the clock was read
+                if self.state.load(Ordering::Relaxed) == state {
+                    break (state >> 2).wrapping_add(now) & Self::MASK;
+                }
+            }
+            std::thread::yield_now();
+        };
         (
             self.count.load(Ordering::Relaxed),
             Duration::from_nanos(total),
@@ -479,6 +503,8 @@ impl AcceptSlot {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+
     use super::*;
 
     #[test]
@@ -504,6 +530,37 @@ mod tests {
 
         p.set(epoch, true);
         assert_eq!(p.get(epoch).0, 2);
+    }
+
+    #[test]
+    fn period_is_coherent() {
+        let epoch = Instant::now();
+        let p = Arc::new(Period::default());
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (p, stop) = (p.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    p.set(epoch, true);
+                    let start = Instant::now();
+                    while start.elapsed() < Duration::from_micros(20) {}
+                    p.set(epoch, false);
+                }
+            })
+        };
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let mut prev = Duration::ZERO;
+        while Instant::now() < deadline {
+            let (_, total) = p.get(epoch);
+            // a completed period is not counted twice
+            assert!(total >= prev, "{total:?} < {prev:?}");
+            prev = total;
+            // periods do not overlap, the writer is almost always in one
+            let uptime = epoch.elapsed();
+            assert!(total <= uptime, "{total:?} > {uptime:?}");
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
     }
 
     #[test]

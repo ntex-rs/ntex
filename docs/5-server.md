@@ -246,11 +246,13 @@ Windows, the CPUs of processor group 1 are numbered after those of group 0.
   workers over all groups. A `Soft` worker whose ideal processor is in another
   group also gets the affinity of that whole group, because the ideal
   processor must be in the thread's group.
-* The CPUs the process may use come from the process group affinity, the
-  process affinity mask, the group affinity of a job object the process runs
-  in, and the default CPU sets of the process (`start /affinity`,
-  `SetProcessDefaultCpuSets`, container CPU limits). Only Windows 10 APIs are
-  used.
+* The CPUs the process may use come from an explicit process affinity mask
+  (`start /affinity`, job object affinity limits), which also keeps the
+  workers in the process's processor group, the group affinity of a job
+  object the process runs in, and the default CPU sets of the process
+  (`SetProcessDefaultCpuSets`, container CPU limits). The processor groups
+  the process happens to run in are not a restriction, so without these all
+  groups are used. Only Windows 10 APIs are used.
 * `Soft` is a hint. The scheduler runs the worker on its ideal processor when
   that CPU is free, and on another CPU of the group otherwise, so a worker is
   not stuck behind a busy thread or interrupt-heavy CPU. Use `Core` or `Cpu`
@@ -301,7 +303,9 @@ For each connection, `IncomingCpu`:
 1. asks the operating system which CPU receives the connection's packets,
    once, when the connection is accepted;
 2. finds the workers placed on that CPU, or, if none is, the workers whose
-   physical core contains it;
+   physical core contains it. This includes SMT siblings the process may not
+   use, for example with `taskset`, because the network stack may still
+   process packets on them;
 3. takes the one that is not blocked and has the lowest utilization, then
    the fewest connections;
 4. compares it with the `LeastLoaded` choice, and uses it unless its
@@ -316,7 +320,10 @@ others. Under normal load nearly every connection stays local.
 Connections without an incoming CPU use the `LeastLoaded` choice. This
 covers loopback connections on Windows, platforms other than Windows, Linux
 and Android, `Affinity::Disabled`, and custom `ServerConfiguration`
-implementations that do not override `incoming_cpu()`.
+implementations that do not override `incoming_cpu()`. A worker whose
+placement could not be applied is never preferred as local. Connections that
+arrive while no worker is available wait in the server and are balanced the
+same way once a worker becomes available.
 
 The incoming CPU is read once. If the operating system later moves the
 connection's traffic to another CPU, for example when RSS is rebalanced or
@@ -681,7 +688,10 @@ entry per listener configuration, identified by `id`, `tag` and `service` of
 the `SharedCfg`. Other configurations, for example the configuration of an
 HTTP client used by the application, get their own entry when created with
 `IoConfig::set_metrics(true)`. Connections whose configuration has no
-metrics of its own are counted together in `io_other`.
+metrics of its own are counted together in `io_other`. I/O metrics are
+always collected: `set_metrics(false)`, the default, only removes the
+separate entry of a configuration, and does not affect the registered entries
+of listener configurations.
 
 To get the totals of a service across the server, add up its entries from
 all workers.

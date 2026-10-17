@@ -1,6 +1,7 @@
 use std::hash::{BuildHasher, RandomState};
 use std::time::{Duration, Instant};
 
+use ntex_rt::Id;
 use ntex_util::HashMap;
 
 use crate::Worker;
@@ -120,6 +121,8 @@ pub(crate) struct Balancer {
     local: HashMap<usize, Vec<usize>>,
     /// `local` must be rebuilt.
     local_stale: bool,
+    /// Load state of unavailable workers by name, with their arbiter.
+    parked: HashMap<String, (Id, State)>,
 }
 
 impl Balancer {
@@ -133,12 +136,30 @@ impl Balancer {
             rng: RandomState::new().hash_one(0u64) | 1,
             local: HashMap::default(),
             local_stale: true,
+            parked: HashMap::default(),
         }
     }
 
+    #[cfg(test)]
     /// A worker is inserted at `idx`.
     pub(crate) fn insert(&mut self, idx: usize) {
-        self.states.insert(idx, State::default());
+        self.insert_state(idx, State::default());
+    }
+
+    /// A worker that became available again is inserted at `idx`.
+    ///
+    /// Its load state is kept from when it became unavailable, unless the
+    /// worker was restarted on a new arbiter since then.
+    pub(crate) fn unpark(&mut self, idx: usize, name: &str, arbiter: Id) {
+        let state = match self.parked.remove(name) {
+            Some((id, state)) if id == arbiter => state,
+            _ => State::default(),
+        };
+        self.insert_state(idx, state);
+    }
+
+    fn insert_state(&mut self, idx: usize, state: State) {
+        self.states.insert(idx, state);
         self.refreshed = None;
         self.local_stale = true;
     }
@@ -153,6 +174,15 @@ impl Balancer {
     /// The worker at `idx` is removed.
     pub(crate) fn remove(&mut self, idx: usize) {
         self.states.remove(idx);
+        self.refreshed = None;
+        self.local_stale = true;
+    }
+
+    /// The worker at `idx` became unavailable and is removed, its load state
+    /// is kept for [`unpark`](Self::unpark).
+    pub(crate) fn park(&mut self, idx: usize, name: &str, arbiter: Id) {
+        let state = self.states.remove(idx);
+        self.parked.insert(name.to_owned(), (arbiter, state));
         self.refreshed = None;
         self.local_stale = true;
     }
@@ -432,6 +462,35 @@ mod tests {
         let mut b = balancer(1);
         b.refresh(Instant::now(), |_| sample(0, true));
         assert_eq!(b.least_loaded(|_| 0), 0);
+    }
+
+    #[ntex::test]
+    async fn keeps_state_of_unavailable_workers() {
+        let (a1, a2) = (ntex_rt::Arbiter::new(), ntex_rt::Arbiter::new());
+        let t = Instant::now();
+        let mut b = balancer(2);
+        b.refresh(t, |_| sample(0, false));
+        b.refresh(t + MS * 100, |i| {
+            sample(if i == 0 { 100 } else { 10 }, false)
+        });
+        let util = b.states[0].util;
+        assert!(util > b.states[1].util + UTIL_SLACK);
+
+        // the busy worker becomes unavailable and available again
+        b.park(0, "w0", a1.id());
+        b.unpark(0, "w0", a1.id());
+        assert!((b.states[0].util - util).abs() < f64::EPSILON);
+        for _ in 0..100 {
+            assert_eq!(b.least_loaded(|i| [1, 100][i]), 1);
+        }
+
+        // a restarted worker starts over
+        b.park(0, "w0", a1.id());
+        b.unpark(0, "w0", a2.id());
+        assert!(b.states[0].util.abs() < f64::EPSILON);
+        assert!(b.parked.is_empty());
+        a1.stop();
+        a2.stop();
     }
 
     #[test]
