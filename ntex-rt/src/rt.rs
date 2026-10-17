@@ -467,13 +467,25 @@ impl Clone for Handle {
 }
 
 #[derive(Debug)]
+#[repr(C)]
 pub(crate) struct RunnableQueue {
+    // read-only, other threads read `id` on every waker operation
     pub(crate) id: ThreadId,
+    handle: Box<dyn Notify>,
+    epoch: Instant,
+    self_wake_time: Duration,
+    event_interval: usize,
+    self_wake_limit: u32,
+    // written by other threads
+    _remote: [CacheLine; 0],
+    // set by the first remote `schedule` after `run` cleared it
+    notified: AtomicBool,
+    remote_queue: RemoteQueue,
+    // written by the runtime thread
+    _local: [CacheLine; 0],
     idle: Cell<bool>,
     // start of the current busy period, valid while not idle
     poll_start: Cell<Instant>,
-    // set by the first remote `schedule` after `run` cleared it
-    notified: AtomicBool,
     busy: BusyClock,
     // poll counters, written by the runtime thread only
     polls: AtomicU64,
@@ -481,16 +493,16 @@ pub(crate) struct RunnableQueue {
     poll_histogram: AtomicHistogram,
     // self-wake counter, written by the runtime thread only
     self_wakes: AtomicU64,
-    self_wake_limit: u32,
-    self_wake_time: Duration,
-    epoch: Instant,
-    handle: Box<dyn Notify>,
-    event_interval: usize,
     // spawn location of the running task, null between tasks
     current: AtomicPtr<Location<'static>>,
     local_queue: LocalQueue,
-    remote_queue: RemoteQueue,
 }
+
+/// Aligns the next field to a cache line, 128 bytes covers the adjacent line
+/// prefetcher on x86 and the line size on Apple cores.
+#[derive(Debug)]
+#[repr(align(128))]
+struct CacheLine;
 
 unsafe impl Send for RunnableQueue {}
 unsafe impl Sync for RunnableQueue {}
@@ -516,6 +528,8 @@ impl RunnableQueue {
             current: AtomicPtr::new(ptr::null_mut()),
             local_queue: LocalQueue::new(),
             remote_queue: RemoteQueue::new(),
+            _remote: [],
+            _local: [],
         }
     }
 
