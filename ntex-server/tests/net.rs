@@ -129,6 +129,7 @@ async fn test_worker_io_metrics() {
     const SIZE: usize = 8 * 1024 * 1024;
 
     let (lst, addr) = local_listener();
+    let (lst2, addr2) = local_listener();
     let srv = build()
         .workers(1)
         .disable_signals()
@@ -146,8 +147,23 @@ async fn test_worker_io_metrics() {
             },
         )
         .unwrap()
+        .listen("test2", lst2, SharedCfg::new("SRV2"), async |_: &()| {
+            fn_service(async |io: Io| {
+                let _ = io.recv(&BytesCodec).await;
+                Ok::<_, ()>(())
+            })
+        })
+        .unwrap()
         .run();
-    let io_metrics = || srv.metrics().workers[0].io;
+    let tag_metrics = |tag: &str| {
+        srv.metrics().workers[0]
+            .io
+            .iter()
+            .find(|m| m.tag == tag)
+            .map(|m| m.io)
+            .unwrap_or_default()
+    };
+    let io_metrics = || tag_metrics("SRV");
     sleep(Millis(100)).await;
 
     // the client does not read, the server is under write backpressure
@@ -191,6 +207,18 @@ async fn test_worker_io_metrics() {
     .await;
     // the service does not report a close reason
     assert_eq!(io_metrics().closed.other, 1);
+
+    // each listener configuration has its own metrics
+    let io = ntex_net::tcp_connect(addr2, SharedCfg::default())
+        .await
+        .unwrap();
+    io.encode_slice(b"hi").unwrap();
+    io.flush(true).await.unwrap();
+    wait_for(|| tag_metrics("SRV2").bytes_read == 2).await;
+    io.close();
+    wait_for(|| tag_metrics("SRV2").closed.total == 1).await;
+    assert_eq!(io_metrics().closed.total, 1);
+    assert_eq!(io_metrics().bytes_read, 5);
     srv.stop(false).await;
 }
 

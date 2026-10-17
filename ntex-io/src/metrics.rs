@@ -1,22 +1,159 @@
 //! I/O load statistics.
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
-use std::{cell::RefCell, sync::Arc, time::Duration, time::Instant};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::{cell::RefCell, collections::HashMap, time::Duration, time::Instant};
+
+use crate::IoConfig;
 
 thread_local! {
-    static CURRENT: RefCell<Option<Arc<IoMetrics>>> = const { RefCell::new(None) };
+    static CURRENT: RefCell<Option<Current>> = const { RefCell::new(None) };
+    static DETACHED: Arc<IoMetrics> = IoMetrics::new();
+}
+
+/// I/O metrics of one thread, one [`IoMetrics`] per [`IoConfig`].
+///
+/// A connection reports to the metrics of its configuration in the group that
+/// was current on its thread when it was created, see
+/// [`IoMetricsGroup::current`] and [`IoConfig::metrics`]. Connections created
+/// with the same configuration on the thread share the metrics, for example
+/// all connections accepted by one server listener on one worker.
+///
+/// Metrics are created on first use and kept for the lifetime of the group.
+#[derive(Debug, Default)]
+pub struct IoMetricsGroup {
+    configs: Mutex<HashMap<usize, Entry>>,
+}
+
+#[derive(Debug)]
+struct Entry {
+    tag: &'static str,
+    service: &'static str,
+    metrics: Arc<IoMetrics>,
+}
+
+/// The current thread's group and its metrics by configuration id, the group's
+/// lock is taken only the first time a configuration is used on the thread.
+struct Current {
+    group: Arc<IoMetricsGroup>,
+    cache: HashMap<usize, Arc<IoMetrics>>,
+}
+
+impl Current {
+    fn new(group: Arc<IoMetricsGroup>) -> Self {
+        Current {
+            group,
+            cache: HashMap::new(),
+        }
+    }
+}
+
+/// A snapshot of the metrics of one configuration in an [`IoMetricsGroup`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct IoConfigMetrics {
+    /// Id of the shared configuration, see `SharedCfg::id()`.
+    pub id: usize,
+    /// Tag of the shared configuration.
+    pub tag: &'static str,
+    /// Service name of the shared configuration.
+    pub service: &'static str,
+    /// I/O statistics of the configuration's connections.
+    pub io: IoMetricsSnapshot,
+}
+
+impl IoMetricsGroup {
+    /// Creates an empty group.
+    pub fn new() -> Arc<Self> {
+        Arc::default()
+    }
+
+    /// Returns the group of the current thread.
+    ///
+    /// Each thread has its own group, created on first use, unless another
+    /// group was installed with [`IoMetricsGroup::set_current`].
+    pub fn current() -> Arc<Self> {
+        CURRENT
+            .try_with(|c| {
+                c.borrow_mut()
+                    .get_or_insert_with(|| Current::new(IoMetricsGroup::new()))
+                    .group
+                    .clone()
+            })
+            .unwrap_or_else(|_| IoMetricsGroup::new())
+    }
+
+    /// Returns the metrics of `cfg` in the current thread's group.
+    pub(crate) fn current_metrics(cfg: &IoConfig) -> Arc<IoMetrics> {
+        CURRENT
+            .try_with(|c| {
+                let mut c = c.borrow_mut();
+                let c = c.get_or_insert_with(|| Current::new(IoMetricsGroup::new()));
+                c.cache
+                    .entry(cfg.config.id())
+                    .or_insert_with(|| c.group.get(cfg))
+                    .clone()
+            })
+            .unwrap_or_else(|_| IoMetricsGroup::new().get(cfg))
+    }
+
+    /// Installs `group` as the current thread's group.
+    ///
+    /// Connections created afterwards on this thread report to `group`,
+    /// existing connections keep reporting to the previous one.
+    ///
+    /// The byte and write counters of [`IoMetrics`] are single-writer, install
+    /// a group on one thread at a time.
+    pub fn set_current(group: Arc<Self>) {
+        let _ = CURRENT.try_with(|c| *c.borrow_mut() = Some(Current::new(group)));
+    }
+
+    /// Returns the metrics of `cfg`, created on first use.
+    pub fn get(&self, cfg: &IoConfig) -> Arc<IoMetrics> {
+        let ctx = &cfg.config;
+        self.configs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(ctx.id())
+            .or_insert_with(|| Entry {
+                tag: ctx.tag(),
+                service: ctx.service(),
+                metrics: IoMetrics::new(),
+            })
+            .metrics
+            .clone()
+    }
+
+    /// Returns snapshots of all configurations' metrics, ordered by
+    /// configuration id.
+    pub fn snapshot(&self) -> Vec<IoConfigMetrics> {
+        let mut items: Vec<_> = self
+            .configs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(id, e)| IoConfigMetrics {
+                id: *id,
+                tag: e.tag,
+                service: e.service,
+                io: e.metrics.snapshot(),
+            })
+            .collect();
+        items.sort_unstable_by_key(|m| m.id);
+        items
+    }
 }
 
 /// I/O load statistics shared by connections.
 ///
-/// A connection reports to the metrics that were current on its thread when it
-/// was created, see [`IoMetrics::current`]. Statistics are updated with relaxed
-/// atomics, a snapshot is not a consistent cut across all fields.
+/// Metrics belong to a configuration in an [`IoMetricsGroup`], see
+/// [`IoConfig::metrics`]. Statistics are updated with relaxed atomics, a
+/// snapshot is not a consistent cut across all fields.
 ///
 /// The byte and write counters (`bytes_read`, `bytes_written`, `eager_writes`,
 /// `eager_writes_partial`, `scheduled_writes`) are updated with a plain load
 /// and store, not an atomic read-modify-write, so they must be updated by one
-/// thread at a time. If the same metrics are installed on several threads with
-/// [`IoMetrics::set_current`], concurrent updates can be lost and these
+/// thread at a time. If the same group is installed on several threads with
+/// [`IoMetricsGroup::set_current`], concurrent updates can be lost and these
 /// counters undercount. The other statistics use atomic read-modify-write
 /// updates and stay exact.
 #[derive(Debug)]
@@ -196,8 +333,7 @@ pub struct IoMetricsSnapshot {
 }
 
 impl IoMetrics {
-    /// Creates new metrics.
-    pub fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(IoMetrics {
             base: Instant::now(),
             rd: Backpressure::default(),
@@ -213,22 +349,11 @@ impl IoMetrics {
         })
     }
 
-    /// Returns the metrics of the current thread.
-    ///
-    /// Each thread has its own metrics, created on first use, unless other
-    /// metrics were installed with [`IoMetrics::set_current`].
-    pub fn current() -> Arc<Self> {
-        CURRENT
-            .try_with(|c| c.borrow_mut().get_or_insert_with(IoMetrics::new).clone())
+    /// Metrics not in any group, for placeholder connection states.
+    pub(crate) fn detached() -> Arc<Self> {
+        DETACHED
+            .try_with(Clone::clone)
             .unwrap_or_else(|_| IoMetrics::new())
-    }
-
-    /// Installs `metrics` as the current thread's metrics.
-    ///
-    /// Connections created afterwards on this thread report to `metrics`,
-    /// existing connections keep reporting to the previous ones.
-    pub fn set_current(metrics: Arc<Self>) {
-        let _ = CURRENT.try_with(|c| *c.borrow_mut() = Some(metrics));
     }
 
     /// Returns a snapshot of the statistics.
@@ -304,6 +429,23 @@ impl IoMetrics {
         self.wr.off(self.now());
     }
 
+    /// Moves a connection's gauges from `self` to `to`, e.g. after the
+    /// connection's configuration was replaced. Counters stay.
+    pub(crate) fn move_to(&self, to: &IoMetrics, rd_bp: bool, wr_bp: bool, rd: u32, wr: u32) {
+        if rd_bp {
+            self.rd.off(self.now());
+            to.rd.resume(to.now());
+        }
+        if wr_bp {
+            self.wr.off(self.now());
+            to.wr.resume(to.now());
+        }
+        self.update_read_buffered(rd, 0);
+        to.update_read_buffered(0, rd);
+        self.update_write_buffered(wr, 0);
+        to.update_write_buffered(0, wr);
+    }
+
     pub(crate) fn read(&self, n: usize) {
         inc(&self.bytes_read, n as u64);
     }
@@ -343,6 +485,11 @@ fn update(gauge: &AtomicUsize, prev: u32, cur: u32) {
 impl Backpressure {
     fn on(&self, now: u64) {
         self.count.fetch_add(1, Relaxed);
+        self.resume(now);
+    }
+
+    // continues a period started on other metrics, not counted again
+    fn resume(&self, now: u64) {
         self.starts.fetch_add(now, Relaxed);
         self.active.fetch_add(1, Relaxed);
     }
