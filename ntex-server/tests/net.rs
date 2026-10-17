@@ -170,6 +170,12 @@ async fn test_worker_io_metrics() {
     assert_eq!(m.write_backpressure, 1);
     assert!(m.write_backpressure_time > Duration::ZERO);
 
+    // the worker allocated and released write pages
+    let pc = srv.metrics().workers[0].page_cache.total();
+    assert!(pc.hits + pc.misses > 0);
+    assert!(pc.cached > 0);
+    assert_eq!(pc.bytes > 0, pc.pages > 0);
+
     io.close();
     wait_for(|| {
         let m = io_metrics();

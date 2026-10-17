@@ -7,6 +7,8 @@
 
 * Add `WorkerMetrics::io`, I/O backpressure and buffered bytes of the worker's connections
 
+* Add `WorkerMetrics::page_cache`, statistics of the worker thread's buffer page cache
+
 * Add `WorkerPool::load_balancing()` and `ServerBuilder::load_balancing()`.
   `LoadBalancing::LeastLoaded` sends each item to the less loaded of two random
   workers, by runtime utilization, then open connections and queued items, and

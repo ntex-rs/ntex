@@ -75,6 +75,7 @@ pub use crate::buf::{Buf, BufMut};
 
 mod bvec;
 mod bytes;
+mod cache;
 mod debug;
 mod hex;
 mod pages;
@@ -89,6 +90,7 @@ mod stext_arc;
 
 pub use crate::bvec::BytesMut;
 pub use crate::bytes::Bytes;
+pub use crate::cache::{PageCacheMetrics, PageCacheSnapshot, PageCacheStats};
 pub use crate::pages::{BytePage, BytePages};
 pub use crate::size::BytePageSize;
 pub use crate::stext::{StorageExt, StorageExtStr, StorageVTable};

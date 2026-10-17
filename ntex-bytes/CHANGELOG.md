@@ -1,5 +1,10 @@
 # Changes
 
+## [1.13.0] - Unreleased
+
+* Add `PageCacheMetrics`, per-thread page cache statistics: hits, misses, pages returned
+  to the cache, pages freed because the cache was full, cached pages and bytes per page size
+
 ## [1.12.0] (2026-10-12)
 
 * Add `BytePages::iter()` and `BytePages::advance_to()`
