@@ -1,6 +1,8 @@
 # Changes
 
-## [4.3.0] - 2026-10-17
+## [4.3.0] - Unreleased
+
+* Add custom async task implementation
 
 * Add `spawn_detached()` and `Handle::spawn_detached()`, spawn a task without
   a join handle, the output is dropped on completion
