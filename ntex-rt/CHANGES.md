@@ -2,6 +2,9 @@
 
 ## [4.3.0] - 2026-10-17
 
+* Fix compio `JoinHandle` never completing when it is polled on another thread
+  and the task finishes while the handle registers its waker
+
 * Add `Histogram::merge()`, sum of two histograms
 
 * Add `Arbiter::with_init()`, runs a callback on the arbiter's thread before

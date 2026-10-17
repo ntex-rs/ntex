@@ -364,10 +364,10 @@ describe the current worker thread.
 On tokio, `busy_duration` is tokio's worker busy time, which excludes
 handling I/O events.
 
-* Utilization is the difference of `busy_duration` divided by the elapsed
-  time. A worker close to 100% is CPU bound: add workers or cores. Uneven
-  utilization across workers points to expensive connections pinned to a
-  few workers.
+* Utilization is the share of time the worker was busy, see
+  [Worker utilization](#worker-utilization). A worker close to 100% is CPU
+  bound: add workers or cores. Uneven utilization across workers points to
+  expensive connections pinned to a few workers.
 * Scheduling latency is what every request on the worker waits in addition
   to its own processing. Watch high percentiles of the `histogram`
   difference; values of several milliseconds mean the worker is overloaded
@@ -384,6 +384,61 @@ handling I/O events.
 
 The sampling interval and the stall threshold are system builder settings,
 see [Worker stalls and busy loops](#worker-stalls-and-busy-loops).
+
+#### Worker utilization
+
+`busy_duration` is a running total, kept across worker restarts. To get
+utilization, take two snapshots and divide the growth of `busy_duration` by
+the time between them:
+
+```rust,no_run
+use std::time::Instant;
+
+use ntex::server::Server;
+use ntex::time::{Seconds, sleep};
+
+async fn utilization(server: Server) {
+    let mut prev = server.metrics();
+    let mut prev_time = Instant::now();
+    loop {
+        sleep(Seconds(10)).await;
+        let cur = server.metrics();
+        let now = Instant::now();
+        let elapsed = (now - prev_time).as_secs_f64();
+
+        for (w, p) in cur.workers.iter().zip(&prev.workers) {
+            let (Some(busy), Some(prev_busy)) =
+                (w.runtime.busy_duration, p.runtime.busy_duration)
+            else {
+                continue; // not reported by this runtime
+            };
+            let stalled = w.runtime.latency.as_ref().is_some_and(|l| l.stalled);
+            let pct = if stalled {
+                100.0
+            } else {
+                100.0 * busy.saturating_sub(prev_busy).as_secs_f64() / elapsed
+            };
+            println!("worker {:?}: {pct:.1}% busy", w.id);
+        }
+        prev = cur;
+        prev_time = now;
+    }
+}
+```
+
+* Use the same window for all workers. 5 to 10 seconds smooths out short
+  spikes; shorter windows show bursts.
+* On neon and compio `busy_duration` includes the turn that is running now,
+  so a worker held by a long task shows up as 100% busy right away.
+* On tokio, `busy_duration` is reported only for current-thread runtimes.
+  It excludes handling I/O events, so values are lower than on neon or
+  compio for the same load. Tokio adds busy time only after a batch of tasks finishes,
+  so a stalled worker can show low utilization; treat a worker with
+  `latency.stalled` set as fully busy, as the example does.
+* Compare utilization with the rate of `items` and `active_connections`. High
+  utilization with few connections points to expensive requests; high
+  utilization on one worker only points to an imbalance, see the bullets
+  above.
 
 ### I/O metrics
 
