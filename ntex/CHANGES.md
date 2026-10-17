@@ -12,6 +12,9 @@
   `Affinity::Soft` (preferred CPU, no pinning) on Windows, `Affinity::Core` on
   other platforms
 
+* http: The HTTP/1 dispatcher reports the connection close reason to
+  `IoRef::set_close_reason()`
+
 ## [4.3.0] - 2026-10-15
 
 * ws: Add `permessage-deflate` extension support (RFC 7692) to the client and

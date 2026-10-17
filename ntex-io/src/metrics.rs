@@ -18,6 +18,85 @@ pub struct IoMetrics {
     wr: Backpressure,
     read_buffered: AtomicUsize,
     write_buffered: AtomicUsize,
+    closed: [AtomicU64; CLOSE_REASONS],
+}
+
+const CLOSE_REASONS: usize = 10;
+
+/// Reason a connection was closed.
+///
+/// Protocol dispatchers report it with
+/// [`IoRef::set_close_reason`](crate::IoRef::set_close_reason), the first
+/// reported reason is kept. It is counted in [`IoMetrics`] when the connection
+/// state is released.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CloseReason {
+    /// The connection was idle for longer than the keep-alive timeout.
+    KeepAlive,
+    /// Input did not arrive within the read timeout.
+    ReadTimeout,
+    /// Write backpressure stayed enabled for longer than the write timeout.
+    WriteTimeout,
+    /// The peer closed the connection.
+    PeerGone,
+    /// The transport failed with an I/O error.
+    Io,
+    /// Incoming data could not be decoded.
+    Decoder,
+    /// Outgoing data could not be encoded.
+    Encoder,
+    /// The service failed or closed the connection.
+    Service,
+    /// The server is shutting down.
+    Shutdown,
+}
+
+impl CloseReason {
+    fn index(self) -> usize {
+        match self {
+            CloseReason::KeepAlive => 0,
+            CloseReason::ReadTimeout => 1,
+            CloseReason::WriteTimeout => 2,
+            CloseReason::PeerGone => 3,
+            CloseReason::Io => 4,
+            CloseReason::Decoder => 5,
+            CloseReason::Encoder => 6,
+            CloseReason::Service => 7,
+            CloseReason::Shutdown => 8,
+        }
+    }
+}
+
+// connections closed without a reported reason or I/O error
+const CLOSE_OTHER: usize = 9;
+
+/// Closed connections by [`CloseReason`].
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CloseStats {
+    /// Closed connections.
+    pub total: u64,
+    /// Closed by the keep-alive timeout.
+    pub keepalive: u64,
+    /// Closed by the read timeout.
+    pub read_timeout: u64,
+    /// Closed by the write timeout.
+    pub write_timeout: u64,
+    /// Closed by the peer.
+    pub peer_gone: u64,
+    /// Closed by an I/O error, reported or not.
+    pub io: u64,
+    /// Closed because incoming data could not be decoded.
+    pub decoder: u64,
+    /// Closed because outgoing data could not be encoded.
+    pub encoder: u64,
+    /// Closed by the service.
+    pub service: u64,
+    /// Closed by server shutdown.
+    pub shutdown: u64,
+    /// Closed without a reported reason, e.g. by the application.
+    pub other: u64,
 }
 
 /// Backpressure statistics of one direction.
@@ -54,6 +133,8 @@ pub struct IoMetricsSnapshot {
     pub read_buffered: usize,
     /// Bytes held in write buffers or taken by the transport but not written.
     pub write_buffered: usize,
+    /// Closed connections by reason.
+    pub closed: CloseStats,
 }
 
 impl IoMetrics {
@@ -65,6 +146,7 @@ impl IoMetrics {
             wr: Backpressure::default(),
             read_buffered: AtomicUsize::new(0),
             write_buffered: AtomicUsize::new(0),
+            closed: Default::default(),
         })
     }
 
@@ -98,7 +180,35 @@ impl IoMetrics {
             write_backpressure_time: self.wr.time(now),
             read_buffered: self.read_buffered.load(Relaxed),
             write_buffered: self.write_buffered.load(Relaxed),
+            closed: self.close_stats(),
         }
+    }
+
+    fn close_stats(&self) -> CloseStats {
+        let c: [u64; CLOSE_REASONS] = std::array::from_fn(|i| self.closed[i].load(Relaxed));
+        CloseStats {
+            total: c.iter().sum(),
+            keepalive: c[CloseReason::KeepAlive.index()],
+            read_timeout: c[CloseReason::ReadTimeout.index()],
+            write_timeout: c[CloseReason::WriteTimeout.index()],
+            peer_gone: c[CloseReason::PeerGone.index()],
+            io: c[CloseReason::Io.index()],
+            decoder: c[CloseReason::Decoder.index()],
+            encoder: c[CloseReason::Encoder.index()],
+            service: c[CloseReason::Service.index()],
+            shutdown: c[CloseReason::Shutdown.index()],
+            other: c[CLOSE_OTHER],
+        }
+    }
+
+    /// Counts a closed connection.
+    pub(crate) fn closed(&self, reason: Option<CloseReason>, io_error: bool) {
+        let idx = match reason {
+            Some(r) => r.index(),
+            None if io_error => CloseReason::Io.index(),
+            None => CLOSE_OTHER,
+        };
+        self.closed[idx].fetch_add(1, Relaxed);
     }
 
     fn nanos(&self, t: Instant) -> u64 {

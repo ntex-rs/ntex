@@ -7,6 +7,9 @@
   write buffers. Connections report to `IoMetrics::current()` of the thread they were
   created on
 
+* Add `CloseReason`, `IoRef::set_close_reason()` and `IoRef::close_reason()`, the first
+  reported reason is kept. `IoMetricsSnapshot::closed` counts closed connections by reason
+
 * The I/O timer clock starts at `ntex_util::time::now()`, `TimerHandle::remains()`
   could report an extra second when the clock started in the middle of a runtime turn
 

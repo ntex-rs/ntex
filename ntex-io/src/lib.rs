@@ -43,7 +43,7 @@ pub use self::ctx::IoContext;
 pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef};
-pub use self::metrics::{IoMetrics, IoMetricsSnapshot};
+pub use self::metrics::{CloseReason, CloseStats, IoMetrics, IoMetricsSnapshot};
 pub use self::ops::{Id, TimerHandle};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::utils::Decoded;

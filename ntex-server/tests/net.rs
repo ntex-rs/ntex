@@ -179,9 +179,11 @@ async fn test_worker_io_metrics() {
     io.close();
     wait_for(|| {
         let m = io_metrics();
-        m.write_buffered == 0 && m.read_buffered == 0
+        m.write_buffered == 0 && m.read_buffered == 0 && m.closed.total == 1
     })
     .await;
+    // the service does not report a close reason
+    assert_eq!(io_metrics().closed.other, 1);
     srv.stop(false).await;
 }
 
