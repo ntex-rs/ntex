@@ -8,8 +8,12 @@
 //! reference count delta. A remote thread that needs the owner thread to act,
 //! wake or cancel the task, or release a reference, queues the task on the
 //! runtime remote queue once (`R_QUEUED`), the owner thread merges the remote
-//! word when it pops the task. The task is freed on the owner thread only,
-//! once the local count and the delta are both zero.
+//! word when it pops the task. A running task is freed on the owner thread
+//! only, once the local count and the delta are both zero.
+//!
+//! On completion the owner thread moves the local count to the remote word.
+//! The future and the output of a finished task are dropped, the last
+//! reference frees it on any thread, also after the runtime is dropped.
 //!
 //! The runtime queues are intrusive, a task links itself into the local
 //! queue and into the remote queue.
@@ -297,7 +301,8 @@ fn is_owner(h: NonNull<Header>) -> bool {
 
 unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
     let h = unsafe { NonNull::new_unchecked(ptr.cast_mut().cast::<Header>()) };
-    if is_owner(h) {
+    // the remote word counts the references of a finished task
+    if is_owner(h) && header(h).state.get() & FINISHED == 0 {
         inc_local(h);
     } else {
         let prev = header(h).remote.fetch_add(R_REF, Ordering::Relaxed);
@@ -373,10 +378,17 @@ fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
     let remote = &header(h).remote;
     let mut cur = remote.load(Ordering::Relaxed);
     loop {
+        if cur & R_FINISHED != 0 {
+            // nothing to run, the owner thread may be gone
+            if owned {
+                release_shared(h);
+            }
+            return;
+        }
         if delta(cur).abs() > MAX_REFS {
             abort();
         }
-        let set = if cur & R_FINISHED == 0 { flags & !cur } else { 0 };
+        let set = flags & !cur;
         let (new, push) = if cur & R_QUEUED != 0 {
             if owned {
                 ((cur | set).wrapping_sub(R_REF), false)
@@ -412,6 +424,10 @@ fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
 /// Releases a reference on the owner thread.
 fn release_local(h: NonNull<Header>) {
     let hdr = header(h);
+    if hdr.state.get() & FINISHED != 0 {
+        release_shared(h);
+        return;
+    }
     let refs = hdr.refs.get() - 1;
     hdr.refs.set(refs);
     if refs == 0 {
@@ -445,14 +461,24 @@ fn last_ref(h: NonNull<Header>) {
         }
     }
 
+    // a finished task is released by `release_shared`
     let state = hdr.state.get();
-    if state & FINISHED == 0 {
-        // nothing can wake the task, the runner drops the future
-        hdr.refs.set(1);
-        hdr.state.set(state | SCHEDULED | CLOSE);
-        hdr.queue.schedule_local(Runnable(h));
-    } else {
-        unsafe { (hdr.vtable.dealloc)(h) };
+    debug_assert_eq!(state & FINISHED, 0);
+    // nothing can wake the task, the runner drops the future
+    hdr.refs.set(1);
+    hdr.state.set(state | SCHEDULED | CLOSE);
+    hdr.queue.schedule_local(Runnable(h));
+}
+
+/// Releases a reference of a finished task on any thread.
+///
+/// The remote word counts the references of a finished task, the last
+/// reference frees it on the thread that releases it, the owner thread may
+/// be gone. The future and the output are dropped, the rest is `Send`.
+fn release_shared(h: NonNull<Header>) {
+    let prev = header(h).remote.fetch_sub(R_REF, Ordering::AcqRel);
+    if delta(prev) == 1 {
+        unsafe { (header(h).vtable.dealloc)(h) };
     }
 }
 
@@ -486,7 +512,15 @@ fn close(h: NonNull<Header>) {
 /// Returns `true` if the join handle is dropped, the output has no owner.
 fn complete(h: NonNull<Header>) -> bool {
     let hdr = header(h);
-    let prev = hdr.remote.fetch_or(R_FINISHED, Ordering::AcqRel);
+    // the local count moves to the remote word, before any waker callback
+    let refs = hdr.refs.replace(0);
+    if refs > MAX_REFS.cast_unsigned() {
+        abort();
+    }
+    // `R_FINISHED` is not set, the addition sets it
+    let prev = hdr
+        .remote
+        .fetch_add((refs << R_SHIFT) | R_FINISHED, Ordering::AcqRel);
     // a registering join handle sees `R_FINISHED` and handles the awaiter
     if prev & R_REGISTERING == 0
         && let Some(w) = unsafe { hdr.awaiter.take() }
@@ -689,6 +723,14 @@ impl Remote {
         mem::forget(self);
         let hdr = header(h);
 
+        if hdr.state.get() & FINISHED != 0 {
+            // queued before completion, the remote word counts the queue
+            // reference
+            hdr.remote
+                .fetch_and(!(R_QUEUED | R_WOKEN | R_CANCEL), Ordering::Relaxed);
+            release_shared(h);
+            return None;
+        }
         let cur = hdr
             .remote
             .fetch_and(R_FINISHED | R_REGISTERING | R_DETACHED, Ordering::AcqRel);

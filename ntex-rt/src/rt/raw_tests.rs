@@ -5,6 +5,7 @@
 
 // `clone().wake()` exercises the by-value wake path
 #![allow(clippy::waker_clone_wake)]
+use std::future::poll_fn;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Barrier, Mutex};
@@ -271,9 +272,9 @@ fn drop_finished() {
         one_local(&rt).run();
         p.check(1, 1, 0);
         if remote {
+            // a finished task is released without the owner thread
             on_thread(move || drop(task));
-            // the release is merged without a run
-            assert!(one_remote(&rt).is_none());
+            assert_idle(&rt);
         } else {
             drop(task);
         }
@@ -529,8 +530,7 @@ fn wake_completed() {
                 w.clone().wake();
                 w.wake();
             });
-            // the released reference is merged on the owner thread
-            assert!(one_remote(&rt).is_none());
+            // the last reference frees the task on the waking thread
         } else {
             w.wake_by_ref();
             w.clone().wake();
@@ -555,13 +555,75 @@ fn wake_dropped() {
         let w = p.waker();
         if remote {
             on_thread(move || w.wake());
-            assert!(one_remote(&rt).is_none());
         } else {
             w.wake();
         }
         p.check(1, 1, 0);
         assert_freed(&rt);
     }
+}
+
+#[test]
+fn release_after_shutdown() {
+    // the last reference of a finished task, released on another thread
+    // after the runtime is dropped, frees the task and the runtime queue
+    for wake in [false, true] {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let p = Probe::default();
+        let task = spawn(&rt, p.future(Res::Ready));
+        // the probe waker is cloned while the task runs, a local reference
+        one_local(&rt).run();
+        let w = p.waker();
+        let w2 = w.clone();
+        drop(task);
+        drop(rt);
+        assert!(queue.upgrade().is_some());
+        on_thread(move || {
+            if wake {
+                w.wake_by_ref();
+                w2.wake();
+            }
+            drop(w);
+        });
+        p.check(1, 1, 1);
+        assert!(queue.upgrade().is_none(), "task alive");
+    }
+}
+
+#[test]
+fn queued_then_finished() {
+    // queued from another thread, then completed by a local wake
+    let rt = new_rt();
+    let queue = Arc::downgrade(&rt.queue);
+    let slot = Arc::new(Mutex::new(None::<Waker>));
+    let slot2 = slot.clone();
+    let mut polled = false;
+    let task = spawn(
+        &rt,
+        poll_fn(move |cx| {
+            if polled {
+                Poll::Ready(())
+            } else {
+                polled = true;
+                *slot2.lock().unwrap() = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }),
+    );
+    one_local(&rt).run();
+    let w = slot.lock().unwrap().take().unwrap();
+    let w2 = w.clone();
+    on_thread(move || w2.wake());
+    w.wake_by_ref();
+    one_local(&rt).run();
+    assert!(task.is_finished());
+    drop(task);
+    // the runtime drops the queued reference
+    drop(rt);
+    assert!(queue.upgrade().is_some());
+    on_thread(move || drop(w));
+    assert!(queue.upgrade().is_none(), "task alive");
 }
 
 #[test]
