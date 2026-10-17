@@ -1330,11 +1330,8 @@ mod tests {
         let mut last = Duration::ZERO;
         while !done.load(Ordering::Acquire) {
             let busy = hnd.busy_duration().unwrap();
-            assert!(
-                busy + Duration::from_micros(100) >= last,
-                "{busy:?} < {last:?}"
-            );
-            last = last.max(busy);
+            assert!(busy >= last, "{busy:?} < {last:?}");
+            last = busy;
         }
         th.join().unwrap();
     }
