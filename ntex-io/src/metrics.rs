@@ -1,7 +1,9 @@
 //! I/O load statistics.
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicU64, AtomicUsize, Ordering::Acquire, Ordering::Relaxed, Ordering::Release, fence,
+};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::{cell::RefCell, collections::HashMap, ptr, time::Duration, time::Instant};
+use std::{cell::RefCell, collections::HashMap, time::Duration, time::Instant};
 
 use crate::IoConfig;
 
@@ -28,6 +30,8 @@ thread_local! {
 pub struct IoMetricsGroup {
     configs: Mutex<HashMap<usize, Entry>>,
     other: Arc<IoMetrics>,
+    /// Incremented by each registration, invalidates the thread caches.
+    generation: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -37,19 +41,46 @@ struct Entry {
     metrics: Arc<IoMetrics>,
 }
 
-/// The current thread's group and its metrics by configuration id, the group's
-/// lock is taken only the first time a configuration is used on the thread.
+/// The current thread's group and its configurations with own metrics, the
+/// group's lock is taken when a configuration with metrics enabled is first
+/// used on the thread, and once after each registration in the group.
+/// Configurations without own metrics are not cached, they map to `other`.
 struct Current {
     group: Arc<IoMetricsGroup>,
     cache: HashMap<usize, Arc<IoMetrics>>,
+    /// Generation of the group when the cache was filled.
+    generation: u64,
 }
 
 impl Current {
     fn new(group: Arc<IoMetricsGroup>) -> Self {
-        Current {
+        let mut c = Current {
+            generation: 0,
             group,
             cache: HashMap::new(),
+        };
+        c.fill();
+        c
+    }
+
+    /// Refills the cache if configurations were registered since it was
+    /// filled.
+    fn refresh(&mut self) {
+        if self.group.generation.load(Acquire) != self.generation {
+            self.fill();
         }
+    }
+
+    fn fill(&mut self) {
+        self.generation = self.group.generation.load(Acquire);
+        self.cache = self
+            .group
+            .configs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(id, e)| (*id, e.metrics.clone()))
+            .collect();
     }
 }
 
@@ -73,6 +104,7 @@ impl IoMetricsGroup {
         Arc::new(IoMetricsGroup {
             configs: Mutex::default(),
             other: IoMetrics::new(),
+            generation: AtomicU64::new(0),
         })
     }
 
@@ -97,10 +129,17 @@ impl IoMetricsGroup {
             .try_with(|c| {
                 let mut c = c.borrow_mut();
                 let c = c.get_or_insert_with(|| Current::new(IoMetricsGroup::new()));
-                c.cache
-                    .entry(cfg.config.id())
-                    .or_insert_with(|| c.group.get(cfg))
-                    .clone()
+                // a configuration may have been registered on another thread
+                c.refresh();
+                if let Some(m) = c.cache.get(&cfg.config.id()) {
+                    m.clone()
+                } else if cfg.metrics_enabled() {
+                    let m = c.group.entry(cfg);
+                    c.cache.insert(cfg.config.id(), m.clone());
+                    m
+                } else {
+                    c.group.other.clone()
+                }
             })
             .unwrap_or_else(|_| IoMetricsGroup::new().get(cfg))
     }
@@ -118,18 +157,13 @@ impl IoMetricsGroup {
 
     /// Gives `cfg` its own metrics in this group.
     ///
-    /// Connections created afterwards with `cfg` report to these metrics
-    /// instead of the shared [`other`](Self::other) metrics.
+    /// Connections created afterwards with `cfg`, on any thread whose current
+    /// group this is, report to these metrics instead of the shared
+    /// [`other`](Self::other) metrics.
     pub fn register(&self, cfg: &IoConfig) {
         let _ = self.entry(cfg);
-        // forget a cached `other` mapping of the thread's current group
-        let _ = CURRENT.try_with(|c| {
-            if let Some(c) = c.borrow_mut().as_mut()
-                && ptr::eq(Arc::as_ptr(&c.group), self)
-            {
-                c.cache.remove(&cfg.config.id());
-            }
-        });
+        // threads refill their caches on the next lookup
+        self.generation.fetch_add(1, Release);
     }
 
     /// Returns the metrics `cfg` reports to.
@@ -202,8 +236,7 @@ impl IoMetricsGroup {
 /// and store, not an atomic read-modify-write, so they must be updated by one
 /// thread at a time. If the same group is installed on several threads with
 /// [`IoMetricsGroup::set_current`], concurrent updates can be lost and these
-/// counters undercount. The other statistics use atomic read-modify-write
-/// updates and stay exact.
+/// counters undercount. The other statistics stay exact.
 #[derive(Debug)]
 pub struct IoMetrics {
     base: Instant,
@@ -334,8 +367,13 @@ pub struct CloseStats {
 /// plus the open ones. Each period adds its start to `starts` and its end to
 /// `ends`, so the total at time `now` is `ends - starts + active * now`,
 /// without any per-connection state. Times are nanoseconds since `base`.
+///
+/// The fields are updated under a sequence lock, readers retry until they
+/// read the fields of one version, without blocking writers. Writers to the
+/// same metrics on several threads take turns.
 #[derive(Debug, Default)]
 struct Backpressure {
+    seq: AtomicU64,
     count: AtomicU64,
     active: AtomicUsize,
     starts: AtomicU64,
@@ -406,14 +444,17 @@ impl IoMetrics {
 
     /// Returns a snapshot of the statistics.
     pub fn snapshot(&self) -> IoMetricsSnapshot {
-        let now = self.nanos(Instant::now());
+        let (read_backpressure, read_backpressure_active, read_backpressure_time) =
+            self.rd.read(self.base);
+        let (write_backpressure, write_backpressure_active, write_backpressure_time) =
+            self.wr.read(self.base);
         IoMetricsSnapshot {
-            read_backpressure: self.rd.count.load(Relaxed),
-            write_backpressure: self.wr.count.load(Relaxed),
-            read_backpressure_active: self.rd.active.load(Relaxed),
-            write_backpressure_active: self.wr.active.load(Relaxed),
-            read_backpressure_time: self.rd.time(now),
-            write_backpressure_time: self.wr.time(now),
+            read_backpressure,
+            write_backpressure,
+            read_backpressure_active,
+            write_backpressure_active,
+            read_backpressure_time,
+            write_backpressure_time,
             read_buffered: self.read_buffered.load(Relaxed),
             write_buffered: self.write_buffered.load(Relaxed),
             bytes_read: self.bytes_read.load(Relaxed),
@@ -453,12 +494,8 @@ impl IoMetrics {
         self.closed[idx].fetch_add(1, Relaxed);
     }
 
-    fn nanos(&self, t: Instant) -> u64 {
-        u64::try_from(t.saturating_duration_since(self.base).as_nanos()).unwrap_or(u64::MAX)
-    }
-
     fn now(&self) -> u64 {
-        self.nanos(ntex_rt::now())
+        nanos(self.base, ntex_rt::now())
     }
 
     pub(crate) fn rd_backpressure_on(&self) {
@@ -532,39 +569,149 @@ fn update(gauge: &AtomicUsize, prev: u32, cur: u32) {
 
 impl Backpressure {
     fn on(&self, now: u64) {
-        self.count.fetch_add(1, Relaxed);
-        self.resume(now);
+        self.write(|| {
+            inc(&self.count, 1);
+            self.start(now);
+        });
     }
 
     // continues a period started on other metrics, not counted again
     fn resume(&self, now: u64) {
-        self.starts.fetch_add(now, Relaxed);
-        self.active.fetch_add(1, Relaxed);
+        self.write(|| self.start(now));
     }
 
     fn off(&self, now: u64) {
-        self.ends.fetch_add(now, Relaxed);
-        self.active.fetch_sub(1, Relaxed);
+        self.write(|| {
+            inc(&self.ends, now);
+            let active = self.active.load(Relaxed);
+            self.active.store(active.wrapping_sub(1), Relaxed);
+        });
     }
 
-    fn time(&self, now: u64) -> Duration {
-        let active = self.active.load(Relaxed) as u64;
-        let total = self
-            .ends
-            .load(Relaxed)
-            .wrapping_add(active.wrapping_mul(now))
-            .wrapping_sub(self.starts.load(Relaxed));
-        // fields are read one by one, a racing update can make it negative
-        if total > i64::MAX as u64 {
-            Duration::ZERO
-        } else {
-            Duration::from_nanos(total)
+    fn start(&self, now: u64) {
+        inc(&self.starts, now);
+        let active = self.active.load(Relaxed);
+        self.active.store(active.wrapping_add(1), Relaxed);
+    }
+
+    /// Updates the fields under the write lock, `seq` is odd while locked.
+    fn write(&self, f: impl FnOnce()) {
+        let mut seq = self.seq.load(Relaxed);
+        loop {
+            if seq & 1 == 0 {
+                match self
+                    .seq
+                    .compare_exchange_weak(seq, seq + 1, Acquire, Relaxed)
+                {
+                    Ok(_) => break,
+                    Err(s) => seq = s,
+                }
+            } else {
+                std::hint::spin_loop();
+                seq = self.seq.load(Relaxed);
+            }
+        }
+        // field stores are not visible before the odd `seq`
+        fence(Release);
+        f();
+        self.seq.store(seq.wrapping_add(2), Release);
+    }
+
+    /// Returns the count, active periods and total time at the current time,
+    /// read from one version of the fields.
+    fn read(&self, base: Instant) -> (u64, usize, Duration) {
+        loop {
+            let seq = self.seq.load(Acquire);
+            if seq & 1 == 0 {
+                let count = self.count.load(Relaxed);
+                let active = self.active.load(Relaxed);
+                let starts = self.starts.load(Relaxed);
+                let ends = self.ends.load(Relaxed);
+                fence(Acquire);
+                if self.seq.load(Relaxed) == seq {
+                    // after the acquire, not before the writer's times
+                    let now = nanos(base, Instant::now());
+                    let total = ends
+                        .wrapping_add((active as u64).wrapping_mul(now))
+                        .wrapping_sub(starts);
+                    // a writer's cached time may be ahead of `now`
+                    let total = if total > i64::MAX as u64 { 0 } else { total };
+                    return (count, active, Duration::from_nanos(total));
+                }
+            }
+            std::hint::spin_loop();
         }
     }
+}
+
+fn nanos(base: Instant, t: Instant) -> u64 {
+    u64::try_from(t.saturating_duration_since(base).as_nanos()).unwrap_or(u64::MAX)
 }
 
 // single writer, cheaper than `fetch_add`
 #[inline]
 fn inc(counter: &AtomicU64, n: u64) {
     counter.store(counter.load(Relaxed).wrapping_add(n), Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+
+    use ntex_service::cfg::SharedCfg;
+
+    use super::*;
+
+    #[test]
+    fn backpressure_time_is_coherent() {
+        let m = IoMetrics::new();
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (m, stop) = (m.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Relaxed) {
+                    m.rd.on(nanos(m.base, Instant::now()));
+                    m.rd.off(nanos(m.base, Instant::now()));
+                }
+            })
+        };
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < deadline {
+            let s = m.snapshot();
+            // a single connection, its time is bounded by the metrics' uptime
+            let uptime = m.base.elapsed();
+            assert!(
+                s.read_backpressure_time <= uptime,
+                "{:?} > {uptime:?}",
+                s.read_backpressure_time
+            );
+            assert!(s.read_backpressure_active <= 1);
+        }
+        stop.store(true, Relaxed);
+        writer.join().unwrap();
+        let s = m.snapshot();
+        assert_eq!(s.read_backpressure_active, 0);
+        assert!(s.read_backpressure > 0);
+    }
+
+    #[test]
+    fn unregistered_configs_are_not_cached() {
+        let group = IoMetricsGroup::new();
+        IoMetricsGroup::set_current(group.clone());
+        let srv = SharedCfg::new("SRV").build();
+        group.register(&srv.get::<IoConfig>());
+
+        for _ in 0..1000 {
+            let cfg = SharedCfg::new("CLI").build();
+            assert!(Arc::ptr_eq(&cfg.get::<IoConfig>().metrics(), group.other()));
+        }
+        let srv_metrics = srv.get::<IoConfig>().metrics();
+        assert!(Arc::ptr_eq(
+            &srv_metrics,
+            &group.get(&srv.get::<IoConfig>())
+        ));
+        assert!(!Arc::ptr_eq(&srv_metrics, group.other()));
+        let cached = CURRENT.with(|c| c.borrow().as_ref().unwrap().cache.len());
+        assert_eq!(cached, 1);
+    }
 }

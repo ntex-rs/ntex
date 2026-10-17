@@ -257,10 +257,65 @@ async fn pool_least_loaded_skips_blocked_worker() {
     srv.stop(false).await;
 }
 
+/// Returns the indexes of the logical CPUs the process may use.
+fn allowed_cpus() -> Vec<usize> {
+    sys_allowed_cpus().unwrap_or_else(|| {
+        (0..std::thread::available_parallelism().map_or(2, |n| n.get())).collect()
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn sys_allowed_cpus() -> Option<Vec<usize>> {
+    // SAFETY: cpu_set_t is plain data, the size matches the set
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        if libc::sched_getaffinity(0, size_of::<libc::cpu_set_t>(), &raw mut set) != 0 {
+            return None;
+        }
+        // `CPU_SETSIZE` is a `c_int` on Linux and a `usize` on Android
+        let size = u32::try_from(libc::CPU_SETSIZE).unwrap() as usize;
+        Some((0..size).filter(|&n| libc::CPU_ISSET(n, &set)).collect())
+    }
+}
+
+#[cfg(windows)]
+fn sys_allowed_cpus() -> Option<Vec<usize>> {
+    use windows_sys::Win32::System::Threading::{
+        GetActiveProcessorCount, GetCurrentProcess, GetProcessAffinityMask, GetProcessGroupAffinity,
+    };
+
+    // SAFETY: plain process affinity queries
+    unsafe {
+        let process = GetCurrentProcess();
+        let (mut mask, mut system) = (0, 0);
+        let (mut count, mut group) = (1u16, 0u16);
+        // zero mask if the process runs in several processor groups
+        if GetProcessAffinityMask(process, &raw mut mask, &raw mut system) == 0
+            || mask == 0
+            || GetProcessGroupAffinity(process, &raw mut count, &raw mut group) == 0
+        {
+            return None;
+        }
+        // CPUs are numbered across processor groups
+        let base: u32 = (0..group).map(|g| GetActiveProcessorCount(g)).sum();
+        Some(
+            (0..usize::BITS)
+                .filter(|n| mask & (1 << n) != 0)
+                .map(|n| (base + n) as usize)
+                .collect(),
+        )
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
+fn sys_allowed_cpus() -> Option<Vec<usize>> {
+    None
+}
+
 /// Items go to the worker placed on their incoming CPU.
 #[ntex::test]
 async fn pool_incoming_cpu() {
-    let cpus = std::thread::available_parallelism().map_or(2, |n| n.get());
+    let cpus = allowed_cpus();
     for balancing in [LoadBalancing::IncomingCpu, LoadBalancing::LeastLoaded] {
         let c = Counters::default();
         let mut cfg = Cfg::new(&c);
@@ -274,7 +329,7 @@ async fn pool_incoming_cpu() {
 
         let mut total = 0;
         for round in 0..3 {
-            for cpu in 0..cpus {
+            for &cpu in &cpus {
                 // idle workers, the worker on the CPU is not busier
                 process(&srv, round * 1000 + cpu).await;
                 total += 1;
@@ -298,7 +353,7 @@ async fn pool_incoming_cpu() {
             assert!(hits >= 3 && hits % 3 == 0, "{hits}");
             let threads = c.threads();
             let mut local = 0;
-            for cpu in 0..cpus {
+            for &cpu in &cpus {
                 let mut names: Vec<_> = threads
                     .iter()
                     .filter(|(item, _)| item % 1000 == cpu)
@@ -309,10 +364,46 @@ async fn pool_incoming_cpu() {
                     local += 3;
                 }
             }
-            assert!(local >= hits, "{local} {hits} {threads:?}");
+            // with one CPU, both workers are placed on it
+            assert!(
+                cpus.len() < 2 || local >= hits,
+                "{local} {hits} {threads:?}"
+            );
         }
         srv.stop(false).await;
     }
+}
+
+/// Items queued while no worker is available are balanced by their incoming
+/// CPU once workers start.
+#[ntex::test]
+async fn pool_incoming_cpu_backlog() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.incoming_cpu = true;
+    cfg.create_delay = Millis(500);
+    let srv = pool().workers(2).affinity(Affinity::Cpu).run(cfg);
+
+    // items wait in the backlog until the workers are created, resume after
+    // the initial worker updates that pause the server
+    sleep(Millis(100)).await;
+    srv.resume().await;
+    let total = allowed_cpus()
+        .into_iter()
+        .filter(|&cpu| srv.process(cpu).is_ok())
+        .count();
+    assert!(total > 0);
+    wait_for(|| c.items().len() == total).await;
+
+    let m = srv.metrics();
+    let (hits, misses) = (m.incoming_cpu_hits, m.incoming_cpu_misses);
+    if cfg!(any(windows, target_os = "linux", target_os = "android")) {
+        assert_eq!(hits + misses, total as u64);
+        assert!(hits > 0);
+    } else {
+        assert_eq!((hits, misses), (0, 0));
+    }
+    srv.stop(false).await;
 }
 
 /// Worker metrics report the runtime's load and a blocked worker.

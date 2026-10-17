@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, ready};
-use std::{cmp, future::Future, future::poll_fn, hash, pin::Pin, sync::Arc};
+use std::{cmp, future::Future, future::poll_fn, hash, pin::Pin};
 
 use async_channel::{Receiver, Sender, TrySendError, unbounded};
 use atomic_waker::AtomicWaker;
@@ -48,7 +49,8 @@ pub struct Worker<T> {
     avail: WorkerAvailability,
     arbiter: Arbiter,
     metrics: Option<Arc<WorkerSlot>>,
-    cpus: Arc<[usize]>,
+    /// Set once the placement is applied.
+    cpus: Arc<OnceLock<Box<[usize]>>>,
 }
 
 #[derive(Debug)]
@@ -91,16 +93,17 @@ impl<T> Worker<T> {
         let (avail, a_tx) = WorkerAvailability::create();
         let n = name.clone();
         let inner = avail.inner.clone();
-        let cpus = placement
-            .as_ref()
-            .map_or_else(Vec::new, Placement::cpus)
-            .into();
+        let cpus = Arc::new(OnceLock::new());
 
         let n2 = name.clone();
+        let cpus2 = cpus.clone();
         let init = move || {
             if let Some(placement) = placement {
                 if placement.apply() {
                     log::info!("Set affinity to {placement} for worker {n2:?}");
+                    // the worker is not available before init completes,
+                    // the balancer reads the CPUs once it is
+                    let _ = cpus2.set(placement.cpus().into());
                 } else {
                     log::warn!("Cannot set affinity to {placement} for worker {n2:?}");
                 }
@@ -168,9 +171,9 @@ impl<T> Worker<T> {
     }
 
     /// Returns the index of the worker's CPU followed by its SMT siblings,
-    /// empty if the worker is not placed on a CPU.
+    /// empty if the worker is not placed on a CPU or the placement failed.
     pub(crate) fn cpus(&self) -> &[usize] {
-        &self.cpus
+        self.cpus.get().map_or(&[], |cpus| cpus)
     }
 
     #[inline]
@@ -485,5 +488,53 @@ where
         }
 
         log::info!("Worker {:?} has been stopped", self.name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ntex_service::{Ctx, Service};
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct Cfg;
+
+    struct Srv;
+
+    impl Service<(), usize> for Srv {
+        type Res = ();
+        type Error = ();
+
+        async fn call(&self, _: usize, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    impl ServerConfiguration for Cfg {
+        type Item = usize;
+        type Service = Srv;
+
+        async fn create(&self) -> std::io::Result<Srv> {
+            Ok(Srv)
+        }
+    }
+
+    /// The CPUs of a worker are known only if its placement is applied.
+    #[ntex::test]
+    async fn worker_cpus() {
+        let cpu = crate::affinity::plan(crate::Affinity::Cpu).pop();
+        for (placement, placed) in [
+            (Placement::cpu(usize::MAX >> 1), false),
+            (
+                cpu.unwrap_or_else(|| Placement::cpu(0)),
+                cfg!(any(windows, target_os = "linux", target_os = "android")),
+            ),
+        ] {
+            let mut wrk = Worker::start_with("test".into(), Cfg, Some(placement), None);
+            assert_eq!(wrk.wait_for_status().await, WorkerStatus::Available);
+            assert_eq!(!wrk.cpus().is_empty(), placed);
+            wrk.stop(Millis::ZERO).await;
+        }
     }
 }

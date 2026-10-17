@@ -2528,6 +2528,20 @@ mod tests {
             &IoMetricsGroup::current().other().clone(),
             &srv.get::<IoConfig>().metrics()
         ));
+
+        // registration on another thread replaces a cached `other` mapping
+        let group = IoMetricsGroup::current();
+        assert!(Arc::ptr_eq(&cli.get::<IoConfig>().metrics(), group.other()));
+        let (g, cfg) = (group.clone(), cli.clone());
+        std::thread::spawn(move || g.register(&cfg.get::<IoConfig>()))
+            .join()
+            .unwrap();
+        let cli_metrics = cli.get::<IoConfig>().metrics();
+        assert!(!Arc::ptr_eq(&cli_metrics, group.other()));
+        assert!(Arc::ptr_eq(
+            &cli_metrics,
+            &group.get(&cli.get::<IoConfig>())
+        ));
     }
 
     #[ntex::test]
