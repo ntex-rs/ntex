@@ -457,13 +457,18 @@ fn close(h: NonNull<Header>) {
     impl Drop for Finish {
         fn drop(&mut self) {
             let hdr = header(self.0);
-            hdr.state.set(hdr.state.get() | FINISHED);
+            let state = hdr.state.get() & !(RUNNING | SCHEDULED | CLOSE);
+            hdr.state.set(state | FINISHED);
             // the future is dropped, there is no output
             complete(self.0);
             release_local(self.0);
         }
     }
 
+    // the destructor of the future may wake the task and poll the runtime,
+    // a running task is only marked as scheduled
+    let hdr = header(h);
+    hdr.state.set(hdr.state.get() | RUNNING);
     let finish = Finish(h);
     unsafe { (header(finish.0).vtable.drop_future)(finish.0) };
 }

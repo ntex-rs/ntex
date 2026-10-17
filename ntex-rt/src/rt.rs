@@ -2102,6 +2102,61 @@ mod tests {
         }
     }
 
+    /// Wakes its task and polls the runtime on drop.
+    struct PollOnDrop {
+        waker: Rc<RefCell<Option<Waker>>>,
+        drops: Counter,
+    }
+
+    impl Drop for PollOnDrop {
+        fn drop(&mut self) {
+            self.drops.inc();
+            let waker = self.waker.borrow_mut().take();
+            if let Some(w) = waker {
+                w.wake();
+            }
+            Runtime::with_current(|rt| while rt.poll() == PollResult::PollAgain {});
+        }
+    }
+
+    #[test]
+    fn reentrant_poll_in_drop() {
+        for clear in [false, true] {
+            let rt = Runtime::new(Box::new(NoopNotify));
+            let drops = Counter::default();
+            let polls = Counter::default();
+            let waker = Rc::new(RefCell::new(None::<Waker>));
+            let guard = PollOnDrop {
+                waker: waker.clone(),
+                drops: drops.clone(),
+            };
+            let (waker2, polls2) = (waker.clone(), polls.clone());
+            let h = rt.spawn(async move {
+                let _guard = guard;
+                poll_fn(|cx| {
+                    polls2.inc();
+                    *waker2.borrow_mut() = Some(cx.waker().clone());
+                    Poll::<()>::Pending
+                })
+                .await;
+            });
+            poll_until(&rt, || waker.borrow().is_some());
+
+            if clear {
+                // queued when the runtime is dropped
+                h.detach();
+                waker.borrow().as_ref().unwrap().wake_by_ref();
+                drop(rt);
+            } else {
+                h.cancel();
+                drain(&rt);
+            }
+            // the future is neither polled nor dropped again
+            assert_eq!(drops.get(), 1);
+            assert_eq!(polls.get(), 1);
+        }
+    }
+
     #[cfg(ntex_rt_task)]
     #[test]
     fn panic_in_future_drop() {
