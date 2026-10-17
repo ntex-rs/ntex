@@ -54,6 +54,17 @@
 * On Windows, worker placement honors the job object group affinity and the
   default CPU sets of the process
 
+* `Server::process()` and the accept thread send items to workers on the calling
+  thread, instead of passing them through the server's command loop. Connections
+  are no longer delayed by tasks on the thread that started the server.
+  `ServerConfiguration::incoming_cpu()` is called on the submitting thread
+
+* A stop caused by a worker failure with `stop_on_panic` also stops the other
+  workers
+
+* Use the `ntex-polling` fork of `polling` for the accept loop, the same crate as
+  `ntex-net`
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);

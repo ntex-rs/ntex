@@ -493,6 +493,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unused_async_trait_impl)]
     use ntex_service::{Ctx, Service};
 
     use super::*;

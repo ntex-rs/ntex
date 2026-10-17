@@ -1,11 +1,11 @@
 #![allow(clippy::missing_panics_doc)]
 use std::time::{Duration, Instant};
-use std::{cell::Cell, fmt, io, sync::Arc, sync::mpsc, thread};
+use std::{cell::Cell, fmt, io, sync::mpsc, thread};
 use std::{collections::VecDeque, num::NonZeroUsize};
 
+use ntex_polling::{Event, Events, Notifier, Poller};
 use ntex_rt::System;
 use ntex_util::{future::Either, time::Millis, time::sleep};
-use polling::{Event, Events, Poller};
 
 use super::socket::{Connection, Listener, SocketAddr};
 use super::{Server, ServerStatus, Token};
@@ -41,10 +41,10 @@ struct ServerSocketInfo {
 
 /// Handle for sending commands to the accept loop.
 #[derive(Debug, Clone)]
-pub struct AcceptNotify(Arc<Poller>, mpsc::Sender<AcceptorCommand>);
+pub struct AcceptNotify(Notifier, mpsc::Sender<AcceptorCommand>);
 
 impl AcceptNotify {
-    fn new(waker: Arc<Poller>, tx: mpsc::Sender<AcceptorCommand>) -> Self {
+    fn new(waker: Notifier, tx: mpsc::Sender<AcceptorCommand>) -> Self {
         AcceptNotify(waker, tx)
     }
 
@@ -63,7 +63,7 @@ pub struct AcceptLoop {
     name: String,
     testing: bool,
     notify: AcceptNotify,
-    inner: Option<(mpsc::Receiver<AcceptorCommand>, Arc<Poller>)>,
+    inner: Option<(mpsc::Receiver<AcceptorCommand>, Poller)>,
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
@@ -81,14 +81,12 @@ impl AcceptLoop {
     /// Panics if the poller cannot be created.
     pub fn new() -> AcceptLoop {
         // Create a poller instance
-        let poll = Arc::new(
-            Poller::new()
-                .map_err(|e| panic!("Cannot create Poller {e}"))
-                .unwrap(),
-        );
+        let poll = Poller::new()
+            .map_err(|e| panic!("Cannot create Poller {e}"))
+            .unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let notify = AcceptNotify::new(poll.clone(), tx);
+        let notify = AcceptNotify::new(poll.notifier(), tx);
 
         AcceptLoop {
             notify,
@@ -165,7 +163,7 @@ impl fmt::Debug for AcceptLoop {
 
 struct Accept {
     name: String,
-    poller: Arc<Poller>,
+    poller: Poller,
     rx: mpsc::Receiver<AcceptorCommand>,
     tx: Option<oneshot::Sender<()>>,
     sockets: Vec<ServerSocketInfo>,
@@ -182,7 +180,7 @@ impl Accept {
     fn start(
         tx: oneshot::Sender<()>,
         rx: mpsc::Receiver<AcceptorCommand>,
-        poller: Arc<Poller>,
+        poller: Poller,
         socks: Vec<(Token, Listener)>,
         srv: Server,
         name: String,
@@ -216,7 +214,7 @@ impl Accept {
         name: String,
         tx: oneshot::Sender<()>,
         rx: mpsc::Receiver<AcceptorCommand>,
-        poller: Arc<Poller>,
+        poller: Poller,
         socks: Vec<(Token, Listener)>,
         srv: Server,
         notify: AcceptNotify,

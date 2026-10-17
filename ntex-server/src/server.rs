@@ -1,12 +1,13 @@
 #![allow(clippy::missing_panics_doc)]
-use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
 use std::task::{Context, Poll, ready};
 use std::{future::Future, io, pin::Pin};
 
 use async_channel::Sender;
 use ntex_rt::signals::Signal;
 
-use crate::{manager::ServerCommand, metrics::Metrics};
+use crate::manager::{Router, ServerCommand};
+use crate::metrics::Metrics;
 
 #[derive(Debug)]
 pub(crate) struct ServerShared {
@@ -22,6 +23,7 @@ pub(crate) struct ServerShared {
 #[derive(Debug)]
 pub struct Server<T> {
     shared: Arc<ServerShared>,
+    router: Arc<Mutex<Router<T>>>,
     cmd: Sender<ServerCommand<T>>,
     stop: Option<oneshot::AsyncReceiver<()>>,
 }
@@ -34,10 +36,15 @@ impl Server<crate::net::Connection> {
 }
 
 impl<T> Server<T> {
-    pub(crate) fn new(cmd: Sender<ServerCommand<T>>, shared: Arc<ServerShared>) -> Self {
+    pub(crate) fn new(
+        cmd: Sender<ServerCommand<T>>,
+        shared: Arc<ServerShared>,
+        router: Arc<Mutex<Router<T>>>,
+    ) -> Self {
         Server {
             cmd,
             shared,
+            router,
             stop: None,
         }
     }
@@ -57,6 +64,9 @@ impl<T> Server<T> {
 
     /// Submits an item to the worker pool.
     ///
+    /// The worker is chosen on the calling thread, see
+    /// [`LoadBalancing`](crate::LoadBalancing).
+    ///
     /// Returns the item unchanged if the server is paused or cannot accept it.
     ///
     /// The server starts paused and resumes once the first worker is ready.
@@ -64,8 +74,14 @@ impl<T> Server<T> {
     /// right after start or during worker restarts may be rejected.
     pub fn process(&self, item: T) -> Result<(), T> {
         if self.shared.paused.load(Ordering::Acquire) {
-            Err(item)
-        } else if let Err(e) = self.cmd.try_send(ServerCommand::Item(item)) {
+            return Err(item);
+        }
+        let item = match Router::lock(&self.router).dispatch(item, &self.shared.metrics) {
+            Ok(()) => return Ok(()),
+            Err(item) => item,
+        };
+        // no worker is available, the command loop queues the item
+        if let Err(e) = self.cmd.try_send(ServerCommand::Item(item)) {
             if let ServerCommand::Item(item) = e.into_inner() {
                 Err(item)
             } else {
@@ -123,6 +139,7 @@ impl<T> Clone for Server<T> {
         Self {
             cmd: self.cmd.clone(),
             shared: self.shared.clone(),
+            router: self.router.clone(),
             stop: None,
         }
     }

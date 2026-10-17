@@ -226,6 +226,36 @@ async fn pool_process_items() {
     assert!(srv.clone().await.is_ok());
 }
 
+/// Items are sent to the workers on the submitting thread, while the thread
+/// that runs the server's command loop is blocked.
+#[ntex::test]
+async fn pool_dispatch_on_submitting_thread() {
+    let c = Counters::default();
+    let (tx, rx) = mpsc::channel();
+    let mut cfg = Cfg::new(&c);
+    cfg.items = Some(tx);
+    let srv = pool().workers(2).run(cfg);
+    process(&srv, 0).await;
+    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(0));
+
+    // blocks this thread
+    let srv2 = srv.clone();
+    std::thread::spawn(move || {
+        for i in 1..=10 {
+            assert_eq!(srv2.process(i), Ok(()));
+        }
+    })
+    .join()
+    .unwrap();
+    let mut items: Vec<_> = (1..=10)
+        .map(|_| rx.recv_timeout(Duration::from_secs(5)).unwrap())
+        .collect();
+    items.sort_unstable();
+    assert_eq!(items, (1..=10).collect::<Vec<_>>());
+
+    srv.stop(false).await;
+}
+
 #[ntex::test]
 async fn pool_least_loaded_skips_blocked_worker() {
     let c = Counters::default();

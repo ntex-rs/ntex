@@ -276,11 +276,13 @@ Windows, the CPUs of processor group 1 are numbered after those of group 0.
 
 ### Connection load balancing
 
-The accept thread accepts a connection and passes it to the server's command
-loop, which runs on the thread that started the server. The command loop
-chooses a worker and queues the connection to it. The worker turns the socket
-into an ntex `Io` and registers it with its own runtime, so all later I/O of
-the connection runs on that worker.
+The accept thread accepts a connection, chooses a worker and queues the
+connection to it. Items submitted with `Server::process()` are dispatched the
+same way, on the submitting thread. While no worker is available, items go to
+the server's command loop, which runs on the thread that started the server,
+and wait there until a worker is ready. The worker turns the socket into an
+ntex `Io` and registers it with its own runtime, so all later I/O of the
+connection runs on that worker.
 
 Only workers that are ready receive connections, see
 [Workers and service factories](#workers-and-service-factories). Among them,
