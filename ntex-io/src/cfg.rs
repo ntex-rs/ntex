@@ -27,6 +27,8 @@ pub struct IoConfig {
     write_backpressure: usize,
     write_buf_threshold: usize,
 
+    metrics: bool,
+
     // shared config
     pub(crate) config: CfgContext,
 }
@@ -64,12 +66,34 @@ pub struct FrameReadRate {
 }
 
 impl IoConfig {
-    /// Returns the current thread's metrics of this configuration.
+    /// Returns the metrics connections created with this configuration on
+    /// the current thread report to.
     ///
-    /// Connections created with this configuration on the thread report to
-    /// these metrics, see [`IoMetricsGroup`].
+    /// These are the configuration's own metrics if it has metrics enabled or
+    /// is registered in the thread's group, and the group's shared `other`
+    /// metrics otherwise, see [`IoMetricsGroup`].
     pub fn metrics(&self) -> Arc<IoMetrics> {
         IoMetricsGroup::current_metrics(self)
+    }
+
+    #[inline]
+    /// Returns `true` if the configuration has its own metrics, see
+    /// [`set_metrics`](Self::set_metrics).
+    pub fn metrics_enabled(&self) -> bool {
+        self.metrics
+    }
+
+    #[must_use]
+    /// Gives connections of this configuration their own metrics.
+    ///
+    /// By default connections report to the shared `other` metrics of the
+    /// thread's [`IoMetricsGroup`], unless the configuration is registered
+    /// with [`IoMetricsGroup::register`], as server listener configurations
+    /// are. Each enabled configuration keeps its metrics on every thread it is
+    /// used on, do not enable metrics for short-lived configurations.
+    pub fn set_metrics(mut self, enabled: bool) -> Self {
+        self.metrics = enabled;
+        self
     }
 
     #[inline]
@@ -91,6 +115,7 @@ impl IoConfig {
             write_size: BytePageSize::Size16,
             write_backpressure: BytePageSize::Size16.capacity(),
             write_buf_threshold: BytePageSize::Size16.half_capacity(),
+            metrics: false,
         }
     }
 

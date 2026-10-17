@@ -1488,11 +1488,11 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::IoMetricsGroup;
     use crate::waiters::{TAG_DISCONNECT, WaiterEntry};
     use crate::{
         FilterBuf, IoContext, IoTaskStatus, Readiness, Waiter, ops::Iops, testing::IoTest,
     };
-    use crate::{IoMetricsGroup, IoMetricsSnapshot};
     use std::pin::Pin;
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
@@ -2246,6 +2246,7 @@ mod tests {
         let cfg = SharedCfg::new("SRV")
             .add(
                 IoConfig::default()
+                    .set_metrics(true)
                     .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
                     .set_read_backpressure(BytePageSize::Size4.capacity()),
             )
@@ -2301,7 +2302,11 @@ mod tests {
     #[ntex::test]
     async fn write_backpressure_metrics() {
         let cfg = SharedCfg::new("SRV")
-            .add(IoConfig::default().set_write_backpressure(16))
+            .add(
+                IoConfig::default()
+                    .set_metrics(true)
+                    .set_write_backpressure(16),
+            )
             .build();
         let metrics = cfg.get::<IoConfig>().metrics();
 
@@ -2383,10 +2388,10 @@ mod tests {
         }
 
         let cfg = SharedCfg::new("SRV")
-            .add(IoConfig::new().set_write_buf_threshold(4))
+            .add(IoConfig::new().set_metrics(true).set_write_buf_threshold(4))
             .build();
         let cfg0 = SharedCfg::new("SRV")
-            .add(IoConfig::new().set_write_buf_threshold(0))
+            .add(IoConfig::new().set_metrics(true).set_write_buf_threshold(0))
             .build();
         let metrics = cfg.get::<IoConfig>().metrics();
         let new_io = |budget: usize, cfg: &SharedCfg| {
@@ -2487,33 +2492,56 @@ mod tests {
         assert!(Arc::ptr_eq(&IoMetricsGroup::current(), &group));
         assert!(group.snapshot().is_empty());
 
-        // one metrics object per configuration
+        // configurations without metrics share the group's `other` metrics
         let srv = SharedCfg::new("SRV").build();
         let cli = SharedCfg::new("CLI").build();
-        let metrics = srv.get::<IoConfig>().metrics();
-        assert!(Arc::ptr_eq(&metrics, &srv.get::<IoConfig>().metrics()));
-        assert!(!Arc::ptr_eq(&metrics, &cli.get::<IoConfig>().metrics()));
-        assert_eq!(metrics.snapshot(), IoMetricsSnapshot::default());
+        let other = srv.get::<IoConfig>().metrics();
+        assert!(Arc::ptr_eq(&other, group.other()));
+        assert!(Arc::ptr_eq(&other, &cli.get::<IoConfig>().metrics()));
+        let _io = Io::new(IoTest::create().1, cli.clone());
+        assert!(group.snapshot().is_empty());
 
-        let _io = Io::new(IoTest::create().1, srv.clone());
+        // enabled and registered configurations have their own metrics
+        let app = SharedCfg::new("APP")
+            .add(IoConfig::new().set_metrics(true))
+            .build();
+        let metrics = app.get::<IoConfig>().metrics();
+        assert!(!Arc::ptr_eq(&metrics, &other));
+        assert!(Arc::ptr_eq(&metrics, &app.get::<IoConfig>().metrics()));
+        group.register(&srv.get::<IoConfig>());
+        let srv_metrics = srv.get::<IoConfig>().metrics();
+        assert!(!Arc::ptr_eq(&srv_metrics, &other));
+        assert!(!Arc::ptr_eq(&srv_metrics, &metrics));
+
         let _io2 = Io::new(IoTest::create().1, srv.clone());
-        let _io3 = Io::new(IoTest::create().1, cli.clone());
-        let items = group.snapshot();
+        let _io3 = Io::new(IoTest::create().1, srv.clone());
+        let mut items = group.snapshot();
+        items.sort_unstable_by_key(|m| m.tag);
         assert_eq!(items.len(), 2);
-        assert_eq!((items[0].id, items[0].tag), (srv.id(), "SRV"));
-        assert_eq!((items[1].id, items[1].tag), (cli.id(), "CLI"));
+        assert_eq!((items[0].id, items[0].tag), (app.id(), "APP"));
+        assert_eq!((items[1].id, items[1].tag), (srv.id(), "SRV"));
 
         // another group has its own metrics
         IoMetricsGroup::set_current(IoMetricsGroup::new());
-        assert!(!Arc::ptr_eq(&metrics, &srv.get::<IoConfig>().metrics()));
+        assert!(!Arc::ptr_eq(&metrics, &app.get::<IoConfig>().metrics()));
+        assert!(Arc::ptr_eq(
+            &IoMetricsGroup::current().other().clone(),
+            &srv.get::<IoConfig>().metrics()
+        ));
     }
 
     #[ntex::test]
     async fn set_config_moves_metrics() {
         let cfg = SharedCfg::new("A")
-            .add(IoConfig::default().set_write_backpressure(16))
+            .add(
+                IoConfig::default()
+                    .set_metrics(true)
+                    .set_write_backpressure(16),
+            )
             .build();
-        let cfg2 = SharedCfg::new("B").build();
+        let cfg2 = SharedCfg::new("B")
+            .add(IoConfig::default().set_metrics(true))
+            .build();
         let (m1, m2) = (
             cfg.get::<IoConfig>().metrics(),
             cfg2.get::<IoConfig>().metrics(),

@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use std::{cell::RefCell, time::Duration, time::Instant};
 
 use ntex_bytes::{PageCacheMetrics, PageCacheSnapshot};
-use ntex_io::{IoConfigMetrics, IoMetricsGroup};
+use ntex_io::{IoConfigMetrics, IoMetricsGroup, IoMetricsSnapshot};
 
 use crate::WorkerId;
 
@@ -50,8 +50,12 @@ pub struct WorkerMetrics {
     /// Number of times the worker was restarted after a failure.
     pub restarts: u64,
     /// I/O statistics of connections created on the worker, one entry per
-    /// I/O configuration, e.g. per listener configuration.
+    /// listener configuration and per configuration with
+    /// `IoConfig::set_metrics()` enabled.
     pub io: Vec<IoConfigMetrics>,
+    /// I/O statistics of the worker's other connections, e.g. client
+    /// connections of configurations without their own metrics.
+    pub io_other: IoMetricsSnapshot,
     /// Statistics of the worker thread's buffer page cache.
     ///
     /// The metrics are single-writer. While a failed worker's thread is still
@@ -180,6 +184,7 @@ impl Metrics {
                     not_ready_duration,
                     restarts: w.restarts.load(Ordering::Relaxed),
                     io: w.io.snapshot(),
+                    io_other: w.io.other().snapshot(),
                     page_cache: w.page_cache.snapshot(),
                 }
             })

@@ -1,7 +1,7 @@
 //! I/O load statistics.
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::{cell::RefCell, collections::HashMap, time::Duration, time::Instant};
+use std::{cell::RefCell, collections::HashMap, ptr, time::Duration, time::Instant};
 
 use crate::IoConfig;
 
@@ -10,7 +10,7 @@ thread_local! {
     static DETACHED: Arc<IoMetrics> = IoMetrics::new();
 }
 
-/// I/O metrics of one thread, one [`IoMetrics`] per [`IoConfig`].
+/// I/O metrics of one thread, one [`IoMetrics`] per opted-in [`IoConfig`].
 ///
 /// A connection reports to the metrics of its configuration in the group that
 /// was current on its thread when it was created, see
@@ -18,10 +18,16 @@ thread_local! {
 /// with the same configuration on the thread share the metrics, for example
 /// all connections accepted by one server listener on one worker.
 ///
-/// Metrics are created on first use and kept for the lifetime of the group.
-#[derive(Debug, Default)]
+/// A configuration has its own metrics if it was registered in the group with
+/// [`IoMetricsGroup::register`] or enabled with
+/// [`IoConfig::set_metrics`](crate::IoConfig::set_metrics). Connections of
+/// other configurations report to the group's shared
+/// [`other`](IoMetricsGroup::other) metrics. Metrics are kept for the lifetime
+/// of the group.
+#[derive(Debug)]
 pub struct IoMetricsGroup {
     configs: Mutex<HashMap<usize, Entry>>,
+    other: Arc<IoMetrics>,
 }
 
 #[derive(Debug)]
@@ -64,7 +70,10 @@ pub struct IoConfigMetrics {
 impl IoMetricsGroup {
     /// Creates an empty group.
     pub fn new() -> Arc<Self> {
-        Arc::default()
+        Arc::new(IoMetricsGroup {
+            configs: Mutex::default(),
+            other: IoMetrics::new(),
+        })
     }
 
     /// Returns the group of the current thread.
@@ -107,8 +116,46 @@ impl IoMetricsGroup {
         let _ = CURRENT.try_with(|c| *c.borrow_mut() = Some(Current::new(group)));
     }
 
-    /// Returns the metrics of `cfg`, created on first use.
+    /// Gives `cfg` its own metrics in this group.
+    ///
+    /// Connections created afterwards with `cfg` report to these metrics
+    /// instead of the shared [`other`](Self::other) metrics.
+    pub fn register(&self, cfg: &IoConfig) {
+        let _ = self.entry(cfg);
+        // forget a cached `other` mapping of the thread's current group
+        let _ = CURRENT.try_with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut()
+                && ptr::eq(Arc::as_ptr(&c.group), self)
+            {
+                c.cache.remove(&cfg.config.id());
+            }
+        });
+    }
+
+    /// Returns the metrics `cfg` reports to.
+    ///
+    /// These are the configuration's own metrics if it is registered or has
+    /// metrics enabled, and the shared [`other`](Self::other) metrics
+    /// otherwise.
     pub fn get(&self, cfg: &IoConfig) -> Arc<IoMetrics> {
+        if cfg.metrics_enabled() {
+            self.entry(cfg)
+        } else {
+            self.configs
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&cfg.config.id())
+                .map_or_else(|| self.other.clone(), |e| e.metrics.clone())
+        }
+    }
+
+    /// Returns the metrics of connections whose configuration has no metrics
+    /// of its own.
+    pub fn other(&self) -> &Arc<IoMetrics> {
+        &self.other
+    }
+
+    fn entry(&self, cfg: &IoConfig) -> Arc<IoMetrics> {
         let ctx = &cfg.config;
         self.configs
             .lock()
@@ -123,8 +170,9 @@ impl IoMetricsGroup {
             .clone()
     }
 
-    /// Returns snapshots of all configurations' metrics, ordered by
-    /// configuration id.
+    /// Returns snapshots of the metrics of configurations with their own
+    /// metrics, ordered by configuration id. See [`other`](Self::other) for
+    /// the remaining connections.
     pub fn snapshot(&self) -> Vec<IoConfigMetrics> {
         let mut items: Vec<_> = self
             .configs
