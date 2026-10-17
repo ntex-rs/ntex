@@ -344,16 +344,20 @@ mod sys {
 mod sys {
     use std::{mem, ptr};
 
+    use windows_sys::Win32::System::JobObjects::{
+        JobObjectGroupInformationEx, QueryInformationJobObject,
+    };
     use windows_sys::Win32::System::Kernel::PROCESSOR_NUMBER;
     use windows_sys::Win32::System::SystemInformation::{
-        GROUP_AFFINITY, GetLogicalProcessorInformationEx, RelationAll, RelationCache,
-        RelationNumaNode, RelationNumaNodeEx, RelationProcessorCore,
+        CpuSetInformation, GROUP_AFFINITY, GetLogicalProcessorInformationEx,
+        GetSystemCpuSetInformation, RelationAll, RelationCache, RelationNumaNode,
+        RelationNumaNodeEx, RelationProcessorCore, SYSTEM_CPU_SET_INFORMATION,
         SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
     };
     use windows_sys::Win32::System::Threading::{
         GetActiveProcessorCount, GetActiveProcessorGroupCount, GetCurrentProcess, GetCurrentThread,
-        GetProcessAffinityMask, GetProcessGroupAffinity, GetThreadGroupAffinity,
-        SetThreadGroupAffinity, SetThreadIdealProcessorEx,
+        GetProcessAffinityMask, GetProcessDefaultCpuSets, GetProcessGroupAffinity,
+        GetThreadGroupAffinity, SetThreadGroupAffinity, SetThreadIdealProcessorEx,
     };
 
     use super::{Affinity, Cpu, CpuInfo};
@@ -441,7 +445,112 @@ mod sys {
                 || (groups.contains(&info.cpu.group)
                     && mask.is_none_or(|mask| mask & (1 << info.cpu.num) != 0))
         });
+        if let Some(allowed) = restricted() {
+            let restricted: Vec<_> = cpus
+                .iter()
+                .filter(|info| allowed.contains(&info.cpu))
+                .copied()
+                .collect();
+            if !restricted.is_empty() {
+                cpus = restricted;
+            }
+        }
         cpus
+    }
+
+    /// Returns the CPUs allowed by the job object group affinity and the
+    /// default CPU sets of the process, if any.
+    ///
+    /// The process affinity mask covers only one processor group.
+    fn restricted() -> Option<Vec<Cpu>> {
+        let mut result: Option<Vec<Cpu>> = None;
+
+        // SAFETY: buffers hold the lengths passed with them
+        unsafe {
+            let mut masks = [GROUP_AFFINITY::default(); 64];
+            let mut len = 0u32;
+            if QueryInformationJobObject(
+                ptr::null_mut(),
+                JobObjectGroupInformationEx,
+                masks.as_mut_ptr().cast(),
+                u32::try_from(mem::size_of_val(&masks)).unwrap_or(0),
+                &raw mut len,
+            ) != 0
+            {
+                let n = len as usize / mem::size_of::<GROUP_AFFINITY>();
+                let cpus: Vec<Cpu> = masks[..n.min(masks.len())]
+                    .iter()
+                    .flat_map(cpus_of)
+                    .collect();
+                if !cpus.is_empty() {
+                    result = Some(cpus);
+                }
+            }
+
+            let process = GetCurrentProcess();
+            let mut count = 0u32;
+            GetProcessDefaultCpuSets(process, ptr::null_mut(), 0, &raw mut count);
+            let mut ids = vec![0u32; count as usize];
+            if count > 0
+                && GetProcessDefaultCpuSets(process, ids.as_mut_ptr(), count, &raw mut count) != 0
+            {
+                ids.truncate(count as usize);
+                let sets: Vec<Cpu> = cpu_sets()
+                    .into_iter()
+                    .filter(|(id, cpu)| {
+                        ids.contains(id) && result.as_ref().is_none_or(|r| r.contains(cpu))
+                    })
+                    .map(|(_, cpu)| cpu)
+                    .collect();
+                if !sets.is_empty() {
+                    result = Some(sets);
+                }
+            }
+        }
+        result
+    }
+
+    /// Returns the id and CPU of each CPU set of the system.
+    fn cpu_sets() -> Vec<(u32, Cpu)> {
+        let mut result = Vec::new();
+        // SAFETY: the buffer holds `len` bytes and is 8-byte aligned, records
+        // lie within the buffer
+        unsafe {
+            let mut len = 0u32;
+            GetSystemCpuSetInformation(ptr::null_mut(), 0, &raw mut len, ptr::null_mut(), 0);
+            let mut buf = vec![0u64; (len as usize).div_ceil(mem::size_of::<u64>())];
+            if GetSystemCpuSetInformation(
+                buf.as_mut_ptr().cast(),
+                len,
+                &raw mut len,
+                ptr::null_mut(),
+                0,
+            ) == 0
+            {
+                return result;
+            }
+            let base = buf.as_ptr();
+            let mut offset = 0;
+            while offset + mem::size_of::<SYSTEM_CPU_SET_INFORMATION>() <= len as usize {
+                let rec = base.byte_add(offset).cast::<SYSTEM_CPU_SET_INFORMATION>();
+                let size = (*rec).Size as usize;
+                if size == 0 {
+                    break;
+                }
+                if (*rec).Type == CpuSetInformation {
+                    let set = ptr::addr_of!((*rec).Anonymous.CpuSet);
+                    result.push((
+                        (*set).Id,
+                        Cpu {
+                            group: (*set).Group,
+                            num: u32::from((*set).LogicalProcessorIndex),
+                        },
+                    ));
+                }
+                offset += size;
+            }
+        }
+        result
     }
 
     fn query() -> Option<Vec<u64>> {
@@ -727,6 +836,8 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(cpu_count(), plan.len());
         }
+        #[cfg(any(windows, target_os = "linux", target_os = "android"))]
+        assert_ne!(plan, []);
         #[cfg(any(target_os = "linux", target_os = "android"))]
         assert_eq!(sys::current().0.len(), plan.len());
         #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
