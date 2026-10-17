@@ -730,7 +730,7 @@ mod tests {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         assert_eq!(sys::current().0.len(), plan.len());
         #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
-        assert!(plan.is_empty());
+        assert_eq!(plan, []);
     }
 
     #[cfg(any(windows, target_os = "linux", target_os = "android"))]

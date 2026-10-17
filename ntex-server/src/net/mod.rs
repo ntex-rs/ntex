@@ -16,8 +16,8 @@ mod socket;
 mod test;
 
 pub use crate::{
-    Affinity, ListenerMetrics, LoadBalancing, NoConfig, ServerAppConfig, ServerMetrics,
-    WorkerMetrics,
+    Affinity, ListenerMetrics, LoadBalancing, NoConfig, RuntimeMetrics, ServerAppConfig,
+    ServerMetrics, WorkerMetrics,
 };
 
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};

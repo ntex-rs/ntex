@@ -2490,7 +2490,7 @@ mod tests {
         let group = IoMetricsGroup::new();
         IoMetricsGroup::set_current(group.clone());
         assert!(Arc::ptr_eq(&IoMetricsGroup::current(), &group));
-        assert!(group.snapshot().is_empty());
+        assert_eq!(group.snapshot(), []);
 
         // configurations without metrics share the group's `other` metrics
         let srv = SharedCfg::new("SRV").build();
@@ -2499,7 +2499,7 @@ mod tests {
         assert!(Arc::ptr_eq(&other, group.other()));
         assert!(Arc::ptr_eq(&other, &cli.get::<IoConfig>().metrics()));
         let _io = Io::new(IoTest::create().1, cli.clone());
-        assert!(group.snapshot().is_empty());
+        assert_eq!(group.snapshot(), []);
 
         // enabled and registered configurations have their own metrics
         let app = SharedCfg::new("APP")

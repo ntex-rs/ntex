@@ -2,6 +2,8 @@
 
 ## [4.3.0] - Unreleased
 
+* Add `Histogram::merge()`, sum of two histograms
+
 * Add `Runtime::now()`, cached start of the current runtime turn
 
 * Add `ntex_rt::now()`, start of the current runtime turn on neon and compio,

@@ -97,6 +97,9 @@ impl<T> Worker<T> {
             inner.available.store(false, Ordering::Release);
             inner.waker.wake();
         });
+        if let Some(ref m) = metrics {
+            m.set_arbiter(arbiter.clone());
+        }
         let worker = Worker {
             reqs,
             avail,
