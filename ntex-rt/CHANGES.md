@@ -82,6 +82,9 @@
 * Add `ThreadPool::metrics()` and `System::pool_metrics()`, blocking thread pool
   threads, active and queued tasks, total queue wait and execution time
 
+* Neon `Runtime` is no longer `Send`, its tasks must stay on the thread that
+  created it. Use `Handle` to spawn tasks from other threads
+
 ## [4.2.1] - 2026-10-11
 
 * Notify the driver once per poll for tasks scheduled from other threads

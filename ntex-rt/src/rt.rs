@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use std::{future::Future, io, panic::Location, ptr, thread};
+use std::{future::Future, io, marker::PhantomData, panic::Location, ptr, thread};
 
 use crate::handle::{JoinHandle, SpawnLocation};
 use crate::metrics::{AtomicHistogram, Histogram};
@@ -61,10 +61,18 @@ pub(crate) fn current_thread_id() -> ThreadId {
 #[derive(Debug)]
 /// The async runtime for ntex.
 ///
-/// This is a thread-local runtime and cannot be sent to other threads.
+/// This is a thread-local runtime and cannot be sent to other threads, use
+/// [`Handle`] to spawn tasks from other threads.
+///
+/// ```compile_fail
+/// fn assert_send<T: Send>() {}
+/// assert_send::<ntex_rt::Runtime>();
+/// ```
 pub struct Runtime {
     stop: Cell<bool>,
     queue: Arc<RunnableQueue>,
+    // tasks are polled and dropped on the thread that created the runtime
+    _not_send: PhantomData<*const ()>,
 }
 
 impl Runtime {
@@ -83,6 +91,7 @@ impl Runtime {
         Self {
             stop: Cell::new(false),
             queue: Arc::new(RunnableQueue::new(builder, handle)),
+            _not_send: PhantomData,
         }
     }
 
@@ -1323,7 +1332,7 @@ mod tests {
             })
             .detach();
             assert_eq!(rt.poll(), PollResult::Pending);
-            rt
+            assert_eq!(rt.current_turn(), None);
         });
 
         // the task is running, its turn is visible from another thread
@@ -1333,16 +1342,17 @@ mod tests {
         assert!(hnd.current_turn().unwrap() >= sleep / 2);
         done_tx.send(()).unwrap();
 
-        let rt = th.join().unwrap();
+        th.join().unwrap();
         assert!(hnd.busy_duration().unwrap() >= sleep);
         assert_eq!(hnd.current_turn(), None);
-        assert_eq!(rt.current_turn(), None);
     }
 
     #[test]
     fn current_task() {
         let (tx, rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (polled_tx, polled_rx) = std::sync::mpsc::channel::<()>();
+        let (spawned_tx, spawned_rx) = std::sync::mpsc::channel::<()>();
         let th = thread::spawn(move || {
             let rt = Runtime::new(Box::new(NoopNotify));
             let hnd = rt.handle();
@@ -1355,7 +1365,10 @@ mod tests {
             })
             .detach();
             assert_eq!(rt.poll(), PollResult::Pending);
-            rt
+            polled_tx.send(()).unwrap();
+
+            spawned_rx.recv().unwrap();
+            assert_eq!(rt.poll(), PollResult::Pending);
         });
 
         // the running task is visible from another thread
@@ -1364,7 +1377,7 @@ mod tests {
         assert_eq!((task.file(), task.line()), (file!(), line));
         release_tx.send(()).unwrap();
 
-        let rt = th.join().unwrap();
+        polled_rx.recv().unwrap();
         assert_eq!(hnd.current_task(), None);
 
         // tasks spawned from other threads record their location too
@@ -1375,7 +1388,8 @@ mod tests {
             tx.send(hnd2.current_task()).unwrap();
         })
         .detach();
-        assert_eq!(rt.poll(), PollResult::Pending);
+        spawned_tx.send(()).unwrap();
+        th.join().unwrap();
         let task = rx.recv().unwrap().unwrap();
         assert_eq!((task.file(), task.line()), (file!(), line));
         assert_eq!(hnd.current_task(), None);
