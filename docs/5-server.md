@@ -230,6 +230,12 @@ server has reached its stopped state.
   worker's connections: how often and how long (connection-time) reads and
   writes were under backpressure, how many connections are under
   backpressure now, and the bytes held in read and write buffers.
+  `page_cache` holds the statistics of the worker thread's buffer page cache
+  per page size: `hits`, `misses`, pages returned to the cache (`cached`) or
+  freed because it was full (`freed`), and the cached `pages` and `bytes`. A
+  high miss rate suggests raising the cache size with
+  `ntex_bytes::set_page_cache_size()`. After a worker restart these statistics
+  may be slightly off, the old and new worker threads can update them at once.
 * `listeners`: name, address and `accepted`, `connection_errors` and
   `resource_errors` counts for each listener.
 * `accept_pauses`, `accept_paused_duration` and `accept_backlog`: how often

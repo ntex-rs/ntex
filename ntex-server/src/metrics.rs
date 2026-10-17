@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::{cell::RefCell, time::Duration, time::Instant};
 
+use ntex_bytes::{PageCacheMetrics, PageCacheSnapshot};
 use ntex_io::{IoMetrics, IoMetricsSnapshot};
 
 use crate::WorkerId;
@@ -51,6 +52,12 @@ pub struct WorkerMetrics {
     /// I/O statistics of connections created on the worker, backpressure and
     /// buffered bytes.
     pub io: IoMetricsSnapshot,
+    /// Statistics of the worker thread's buffer page cache.
+    ///
+    /// The metrics are single-writer. While a failed worker's thread is still
+    /// releasing pages and its replacement already runs, updates can be lost,
+    /// so after a worker restart the statistics may be slightly off.
+    pub page_cache: PageCacheSnapshot,
 }
 
 /// Metrics of a single listener.
@@ -173,6 +180,7 @@ impl Metrics {
                     not_ready_duration,
                     restarts: w.restarts.load(Ordering::Relaxed),
                     io: w.io.snapshot(),
+                    page_cache: w.page_cache.snapshot(),
                 }
             })
             .collect();
@@ -210,6 +218,7 @@ pub(crate) struct WorkerSlot {
     not_ready: Period,
     restarts: AtomicU64,
     io: Arc<IoMetrics>,
+    page_cache: Arc<PageCacheMetrics>,
 }
 
 thread_local! {
@@ -225,6 +234,7 @@ impl WorkerSlot {
             not_ready: Period::default(),
             restarts: AtomicU64::new(0),
             io: IoMetrics::new(),
+            page_cache: PageCacheMetrics::new(),
         }
     }
 
@@ -234,10 +244,12 @@ impl WorkerSlot {
     }
 
     /// Installs the slot for the current thread, connections created on the
-    /// thread afterwards report I/O statistics to the slot.
+    /// thread afterwards report I/O statistics to the slot, the thread's page
+    /// cache reports to the slot.
     pub(crate) fn set_current(slot: Option<Arc<WorkerSlot>>) {
         if let Some(ref slot) = slot {
             IoMetrics::set_current(slot.io.clone());
+            PageCacheMetrics::set_current(slot.page_cache.clone());
         }
         CURRENT_WORKER.with(|w| *w.borrow_mut() = slot);
     }

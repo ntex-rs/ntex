@@ -138,7 +138,7 @@ impl BytePageSize {
         self.alloc_size() - stvec::METADATA_SIZE
     }
 
-    const fn alloc_size(self) -> usize {
+    pub(crate) const fn alloc_size(self) -> usize {
         match self {
             BytePageSize::Size4 => 4 * 1024,
             BytePageSize::Size8 => 8 * 1024,

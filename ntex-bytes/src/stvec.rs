@@ -2,10 +2,10 @@ use crate::alloc::alloc::{self, Layout, LayoutError};
 
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
-use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
+use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice, sync::Arc};
 
 use crate::storage::{INLINE_CAP, MIN_CAPACITY, Storage};
-use crate::{BytePageSize, buf::UninitSlice};
+use crate::{BytePageSize, PageCacheMetrics, buf::UninitSlice};
 
 #[derive(Debug)]
 /// Thread-safe reference-counted container for the shared storage.
@@ -55,7 +55,12 @@ impl StorageVec {
         let cached = CACHE
             .try_with(|c| {
                 let mut cst = c.take()?;
-                let item = cst.cache[size as usize].pop();
+                let item = cst.pages[size as usize].pop();
+                if item.is_some() {
+                    cst.metrics.hit(size as usize);
+                } else {
+                    cst.metrics.miss(size as usize);
+                }
                 c.set(Some(cst));
                 item
             })
@@ -520,6 +525,31 @@ thread_local! {
     static CACHE: Cell<Option<Box<Cache>>> = Cell::new(Some(Box::default()));
 }
 
+pub(crate) fn cache_metrics() -> Option<Arc<PageCacheMetrics>> {
+    CACHE
+        .try_with(|c| {
+            let cst = c.take()?;
+            let metrics = cst.metrics.clone();
+            c.set(Some(cst));
+            Some(metrics)
+        })
+        .ok()
+        .flatten()
+}
+
+pub(crate) fn set_cache_metrics(metrics: Arc<PageCacheMetrics>) {
+    let _ = CACHE.try_with(|c| {
+        if let Some(mut cst) = c.take() {
+            for (class, pages) in cst.pages.iter().enumerate() {
+                cst.metrics.remove_pages(class, pages.len());
+                metrics.add_pages(class, pages.len());
+            }
+            cst.metrics = metrics;
+            c.set(Some(cst));
+        }
+    });
+}
+
 pub(crate) fn set_pages_cache(size: usize) {
     let _ = CACHE.try_with(|c| {
         if let Some(mut cst) = c.take() {
@@ -551,14 +581,24 @@ const DEFAULT_PAGES_CACHE: [usize; PAGE_CLASSES] = [128, 64, 64, 32, 16, 8, 16, 
 
 struct Cache {
     limits: [usize; PAGE_CLASSES],
-    cache: [Vec<StorageVec>; PAGE_CLASSES],
+    pages: [Vec<StorageVec>; PAGE_CLASSES],
+    metrics: Arc<PageCacheMetrics>,
 }
 
 impl Default for Cache {
     fn default() -> Self {
         Self {
             limits: DEFAULT_PAGES_CACHE,
-            cache: Default::default(),
+            pages: Default::default(),
+            metrics: PageCacheMetrics::new(),
+        }
+    }
+}
+
+impl Drop for Cache {
+    fn drop(&mut self) {
+        for (class, pages) in self.pages.iter().enumerate() {
+            self.metrics.remove_pages(class, pages.len());
         }
     }
 }
@@ -669,13 +709,15 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
                 let Some(mut cst) = c.take() else {
                     return false;
                 };
-                let res = if cst.cache[size as usize].len() < cst.limits[size as usize] {
+                let res = if cst.pages[size as usize].len() < cst.limits[size as usize] {
                     (*ptr).len = 0;
                     (*ptr).offset = METADATA_SIZE_U32;
                     (*ptr).ref_count = AtomicU32::new(1);
-                    cst.cache[size as usize].push(StorageVec(NonNull::new_unchecked(ptr)));
+                    cst.pages[size as usize].push(StorageVec(NonNull::new_unchecked(ptr)));
+                    cst.metrics.cached(size as usize);
                     true
                 } else {
+                    cst.metrics.freed(size as usize);
                     false
                 };
                 c.set(Some(cst));
@@ -738,6 +780,89 @@ mod tests {
 
         let st = StorageVec::sized(BytePageSize::Size8);
         assert_eq!(addr, st.0);
+    }
+
+    #[test]
+    fn cache_metrics() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+        let metrics = PageCacheMetrics::current();
+        assert_eq!(metrics.snapshot(), PageCacheSnapshot::default());
+
+        let size = BytePageSize::Size8;
+        let st = StorageVec::sized(size);
+        let s = *metrics.snapshot().get(size).unwrap();
+        assert_eq!(
+            (s.size, s.hits, s.misses, s.cached, s.pages),
+            (size, 0, 1, 0, 0)
+        );
+
+        drop(st);
+        let s = *metrics.snapshot().get(size).unwrap();
+        assert_eq!(
+            (s.hits, s.misses, s.cached, s.freed, s.pages),
+            (0, 1, 1, 0, 1)
+        );
+        assert_eq!(s.bytes, 8 * 1024);
+
+        let st = StorageVec::sized(size);
+        let s = *metrics.snapshot().get(size).unwrap();
+        assert_eq!(
+            (s.hits, s.misses, s.cached, s.pages, s.bytes),
+            (1, 1, 1, 0, 0)
+        );
+
+        crate::set_page_cache_size(size, 0);
+        drop(st);
+        let s = *metrics.snapshot().get(size).unwrap();
+        assert_eq!((s.cached, s.freed, s.pages), (1, 1, 0));
+
+        // other page sizes are separate, non-page buffers are not counted
+        drop(StorageVec::sized(BytePageSize::Size4));
+        drop(StorageVec::with_capacity(100));
+        let snapshot = metrics.snapshot();
+        let s = *snapshot.get(BytePageSize::Size4).unwrap();
+        assert_eq!((s.misses, s.cached, s.pages), (1, 1, 1));
+        assert!(snapshot.get(BytePageSize::Unset).is_none());
+        assert_eq!(snapshot.iter().count(), 9);
+        let total = snapshot.total();
+        assert_eq!(total.size, BytePageSize::Unset);
+        assert_eq!(
+            (total.hits, total.misses, total.cached, total.freed),
+            (1, 2, 2, 1)
+        );
+        assert_eq!((total.pages, total.bytes), (1, 4 * 1024));
+
+        // a replaced cache leaves the metrics
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+        assert_eq!(metrics.snapshot().total().pages, 0);
+        assert!(!Arc::ptr_eq(&metrics, &PageCacheMetrics::current()));
+    }
+
+    #[test]
+    fn cache_metrics_set_current() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+        let size = BytePageSize::Size16;
+        let old = PageCacheMetrics::current();
+        drop(StorageVec::sized(size));
+        assert_eq!(old.snapshot().get(size).unwrap().pages, 1);
+
+        let metrics = PageCacheMetrics::new();
+        PageCacheMetrics::set_current(metrics.clone());
+        assert!(Arc::ptr_eq(&metrics, &PageCacheMetrics::current()));
+        assert_eq!(old.snapshot().get(size).unwrap().pages, 0);
+        assert_eq!(metrics.snapshot().get(size).unwrap().pages, 1);
+
+        drop(StorageVec::sized(size));
+        let s = *metrics.snapshot().get(size).unwrap();
+        assert_eq!((s.hits, s.misses, s.cached, s.pages), (1, 0, 1, 1));
+        assert_eq!(old.snapshot().get(size).unwrap().hits, 0);
+
+        // other threads have their own metrics
+        let other = std::thread::spawn(PageCacheMetrics::current)
+            .join()
+            .unwrap();
+        assert!(!Arc::ptr_eq(&metrics, &other));
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
     }
 
     #[test]
@@ -1049,7 +1174,7 @@ mod tests {
     fn cached_pages(size: BytePageSize) -> usize {
         super::CACHE.with(|c| {
             let cst = c.take().unwrap();
-            let len = cst.cache[size as usize].len();
+            let len = cst.pages[size as usize].len();
             c.set(Some(cst));
             len
         })
