@@ -1,7 +1,5 @@
 use std::{collections::BTreeMap, fmt};
 
-use core_affinity::CoreId;
-
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 /// CPU affinity of worker threads.
@@ -12,7 +10,8 @@ use core_affinity::CoreId;
 /// cores. When there are more workers than CPUs, the placement starts over.
 ///
 /// The default is [`Soft`](Self::Soft) on Windows and [`Core`](Self::Core) on
-/// other platforms.
+/// other platforms. Affinity is supported on Windows, Linux and Android, other
+/// platforms ignore it.
 pub enum Affinity {
     /// Worker threads are not pinned, the OS scheduler places them.
     Disabled,
@@ -75,73 +74,67 @@ struct CpuInfo {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// CPU placement of a worker thread.
-pub(crate) enum Placement {
-    /// CPU from `core_affinity::get_core_ids()`.
-    CoreId(CoreId),
-    Cpu {
-        mode: Affinity,
-        cpu: Cpu,
-        /// Logical CPUs of the physical core of `cpu`.
-        core: Vec<Cpu>,
-    },
+pub(crate) struct Placement {
+    mode: Affinity,
+    cpu: Cpu,
+    /// Logical CPUs of the physical core of `cpu`.
+    core: Vec<Cpu>,
 }
 
 impl Placement {
+    /// Pins to the logical CPU with index `idx`.
+    ///
+    /// On Windows, CPUs are numbered across processor groups, the CPUs of
+    /// group 1 follow the CPUs of group 0.
+    pub(crate) fn cpu(idx: usize) -> Self {
+        let cpu = sys::cpu(idx);
+        Placement {
+            mode: Affinity::Cpu,
+            cpu,
+            core: vec![cpu],
+        }
+    }
+
     /// Applies the placement to the current thread.
     pub(crate) fn apply(&self) -> bool {
-        match self {
-            Placement::CoreId(cid) => core_affinity::set_for_current(*cid),
-            Placement::Cpu { mode, cpu, core } => sys::apply(*mode, *cpu, core),
-        }
+        sys::apply(self.mode, self.cpu, &self.core)
     }
 }
 
 impl fmt::Display for Placement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Placement::CoreId(cid) => write!(f, "{cid:?}"),
-            Placement::Cpu { mode, cpu, core } => {
-                write!(f, "{mode:?} cpu {cpu} (core")?;
-                for c in core {
-                    write!(f, " {c}")?;
-                }
-                write!(f, ")")
-            }
+        write!(f, "{:?} cpu {} (core", self.mode, self.cpu)?;
+        for c in &self.core {
+            write!(f, " {c}")?;
         }
+        write!(f, ")")
     }
 }
 
 /// Returns worker placements in the order workers should use them.
 ///
-/// Each logical CPU available to the process appears once.
+/// Each logical CPU available to the process appears once. Empty if
+/// affinity is disabled or not supported.
 pub(crate) fn plan(mode: Affinity) -> Vec<Placement> {
     if mode == Affinity::Disabled {
         return Vec::new();
     }
-
-    let mut cpus = sys::topology();
-    if cpus.is_empty() {
-        cpus = core_affinity::get_core_ids()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|cid| {
-                Some(CpuInfo {
-                    cpu: Cpu {
-                        group: 0,
-                        num: u32::try_from(cid.id).ok()?,
-                    },
-                    core: cid.id,
-                    l3: 0,
-                    node: 0,
-                    class: 0,
-                })
-            })
-            .collect();
-    }
-    order(&cpus)
+    order(&sys::topology())
         .into_iter()
-        .map(|(cpu, core)| Placement::Cpu { mode, cpu, core })
+        .map(|(cpu, core)| Placement { mode, cpu, core })
         .collect()
+}
+
+/// Returns the number of logical CPUs the process may use.
+pub(crate) fn cpu_count() -> usize {
+    // std counts only one processor group on Windows
+    if cfg!(windows) {
+        let n = sys::topology().len();
+        if n > 0 {
+            return n;
+        }
+    }
+    std::thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get)
 }
 
 struct Core {
@@ -311,6 +304,13 @@ mod sys {
         }
     }
 
+    pub(super) fn cpu(idx: usize) -> Cpu {
+        Cpu {
+            group: 0,
+            num: u32::try_from(idx).unwrap_or(u32::MAX),
+        }
+    }
+
     pub(super) fn apply(mode: Affinity, cpu: Cpu, core: &[Cpu]) -> bool {
         let cpus = if mode == Affinity::Cpu {
             std::slice::from_ref(&cpu)
@@ -351,9 +351,9 @@ mod sys {
         SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
     };
     use windows_sys::Win32::System::Threading::{
-        GetActiveProcessorCount, GetCurrentProcess, GetCurrentThread, GetProcessAffinityMask,
-        GetProcessGroupAffinity, GetThreadGroupAffinity, SetThreadGroupAffinity,
-        SetThreadIdealProcessorEx,
+        GetActiveProcessorCount, GetActiveProcessorGroupCount, GetCurrentProcess, GetCurrentThread,
+        GetProcessAffinityMask, GetProcessGroupAffinity, GetThreadGroupAffinity,
+        SetThreadGroupAffinity, SetThreadIdealProcessorEx,
     };
 
     use super::{Affinity, Cpu, CpuInfo};
@@ -517,6 +517,24 @@ mod sys {
             .fold(0, |mask, cpu| mask | (1 << cpu.num))
     }
 
+    pub(super) fn cpu(mut idx: usize) -> Cpu {
+        // SAFETY: plain processor count queries
+        unsafe {
+            for group in 0..GetActiveProcessorGroupCount() {
+                let n = GetActiveProcessorCount(group);
+                match u32::try_from(idx) {
+                    Ok(num) if num < n => return Cpu { group, num },
+                    _ => idx -= n as usize,
+                }
+            }
+        }
+        // no such CPU, applying it fails
+        Cpu {
+            group: u16::MAX,
+            num: 0,
+        }
+    }
+
     pub(super) fn apply(mode: Affinity, cpu: Cpu, core: &[Cpu]) -> bool {
         // SAFETY: plain thread affinity calls on the current thread
         unsafe {
@@ -589,18 +607,21 @@ mod sys {
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
 mod sys {
-    use core_affinity::CoreId;
-
     use super::{Affinity, Cpu, CpuInfo};
 
     pub(super) fn topology() -> Vec<CpuInfo> {
         Vec::new()
     }
 
-    pub(super) fn apply(_: Affinity, cpu: Cpu, _: &[Cpu]) -> bool {
-        core_affinity::set_for_current(CoreId {
-            id: cpu.num as usize,
-        })
+    pub(super) fn cpu(idx: usize) -> Cpu {
+        Cpu {
+            group: 0,
+            num: u32::try_from(idx).unwrap_or(u32::MAX),
+        }
+    }
+
+    pub(super) fn apply(_: Affinity, _: Cpu, _: &[Cpu]) -> bool {
+        false
     }
 }
 
@@ -693,45 +714,43 @@ mod tests {
         let plan = plan(Affinity::Core);
         let mut cpus: Vec<_> = plan
             .iter()
-            .map(|p| match p {
-                Placement::Cpu { mode, cpu, core } => {
-                    assert_eq!(*mode, Affinity::Core);
-                    assert!(core.contains(cpu));
-                    *cpu
-                }
-                Placement::CoreId(_) => panic!(),
+            .map(|p| {
+                assert_eq!(p.mode, Affinity::Core);
+                assert!(p.core.contains(&p.cpu));
+                p.cpu
             })
             .collect();
         cpus.sort_unstable();
         cpus.dedup();
         assert_eq!(cpus.len(), plan.len());
-        if let Some(ids) = core_affinity::get_core_ids() {
-            assert_eq!(cpus.len(), ids.len());
+        assert!(cpu_count() > 0);
+        if cfg!(windows) {
+            assert_eq!(cpu_count(), plan.len());
         }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        assert_eq!(sys::current().0.len(), plan.len());
+        #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
+        assert!(plan.is_empty());
     }
 
     #[cfg(any(windows, target_os = "linux", target_os = "android"))]
     #[test]
     fn apply_placement() {
-        let Some(Placement::Cpu { cpu, core, .. }) = plan(Affinity::Core).pop() else {
+        let Some(Placement { cpu, core, .. }) = plan(Affinity::Core).pop() else {
             return;
         };
         for mode in [Affinity::Cpu, Affinity::Core, Affinity::Soft] {
-            let p = Placement::Cpu {
+            let p = Placement {
                 mode,
                 cpu,
                 core: core.clone(),
             };
-            let expected = p.clone();
             let (cpus, ideal) = std::thread::spawn(move || {
                 assert!(p.apply());
                 sys::current()
             })
             .join()
             .unwrap();
-            let Placement::Cpu { core, .. } = expected else {
-                unreachable!()
-            };
             match mode {
                 Affinity::Cpu => assert_eq!(cpus, [cpu]),
                 Affinity::Core => assert_eq!(cpus, core),
@@ -739,6 +758,30 @@ mod tests {
                 _ => assert_eq!(cpus, core),
             }
         }
+    }
+
+    #[cfg(any(windows, target_os = "linux", target_os = "android"))]
+    #[test]
+    fn apply_cpu_index() {
+        let Some(cpu) = plan(Affinity::Core)
+            .into_iter()
+            .map(|p| p.cpu)
+            .filter(|cpu| cpu.group == 0)
+            .max()
+        else {
+            return;
+        };
+        let p = Placement::cpu(cpu.num as usize);
+        assert_eq!(p.cpu, cpu);
+        let (cpus, _) = std::thread::spawn(move || {
+            assert!(p.apply());
+            sys::current()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(cpus, [cpu]);
+
+        assert!(!Placement::cpu(usize::MAX >> 1).apply());
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]

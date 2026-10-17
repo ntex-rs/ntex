@@ -4,7 +4,6 @@ use std::{cmp, future::Future, future::poll_fn, hash, pin::Pin, sync::Arc};
 
 use async_channel::{Receiver, Sender, TrySendError, unbounded};
 use atomic_waker::AtomicWaker;
-use core_affinity::CoreId;
 
 use ntex_rt::{Arbiter, spawn};
 use ntex_service::Pipeline;
@@ -64,13 +63,16 @@ impl<T> Worker<T> {
     ///
     /// Returns immediately. The worker reports
     /// [`Unavailable`](WorkerStatus::Unavailable) until its service is
-    /// created. If `cid` is set, the worker thread is pinned to that core.
-    pub fn start<F>(name: String, cfg: F, cid: Option<CoreId>) -> Worker<T>
+    /// created. If `cpu` is set, the worker thread is pinned to the logical
+    /// CPU with that index. On Windows, CPUs are numbered across processor
+    /// groups, the CPUs of group 1 follow the CPUs of group 0. Pinning is
+    /// supported on Windows, Linux and Android.
+    pub fn start<F>(name: String, cfg: F, cpu: Option<usize>) -> Worker<T>
     where
         T: Send + 'static,
         F: ServerConfiguration<Item = T>,
     {
-        Self::start_with(name, cfg, cid.map(Placement::CoreId), None)
+        Self::start_with(name, cfg, cpu.map(Placement::cpu), None)
     }
 
     pub(crate) fn start_with<F>(

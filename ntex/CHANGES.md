@@ -15,6 +15,14 @@
 * http: The HTTP/1 dispatcher reports the connection close reason to
   `IoRef::set_close_reason()`
 
+* The default number of workers counts the CPUs of all processor groups on
+  Windows, it was limited to 64 before
+
+* Replace `nanorand` with `fastrand` for WebSocket keys and frame masks, and
+  update to ntex-h2 4.3.0, which does the same. `nanorand` does not link
+  `advapi32` on Windows (unresolved `SystemFunction036`), it was only linked
+  through `core_affinity` before
+
 ## [4.3.0] - 2026-10-15
 
 * ws: Add `permessage-deflate` extension support (RFC 7692) to the client and

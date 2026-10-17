@@ -30,7 +30,6 @@ polling = { workspace = true }
 
 async-channel = { workspace = true }
 atomic-waker = { workspace = true }
-core_affinity = { workspace = true }
 oneshot = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }

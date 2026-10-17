@@ -1,5 +1,3 @@
-use nanorand::Rng;
-
 use super::proto::{CloseCode, CloseReason, OpCode};
 use super::{error::ProtocolError, mask::apply_mask};
 use crate::util::{BufMut, BytePage, BytePages, Bytes, BytesMut};
@@ -260,7 +258,7 @@ impl Parser {
         }
 
         if mask {
-            let mask: u32 = nanorand::tls_rng().generate();
+            let mask = fastrand::u32(..);
             let mut buf = BytesMut::from(payload);
             apply_mask(&mut buf, mask);
             dst.extend_from_slice(&mask.to_ne_bytes());

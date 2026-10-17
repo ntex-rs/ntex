@@ -125,7 +125,8 @@ The commonly useful `ServerBuilder` settings are:
 
 * `name()` sets the accept and worker thread-name prefix. It defaults to the
   current system name.
-* `workers()` sets the worker count.
+* `workers()` sets the worker count. It defaults to the number of logical CPUs
+  the process may use, across all processor groups on Windows.
 * `backlog()` sets the listen backlog for listeners created afterward.
 * `max_connections()` sets the process-wide per-worker connection limit.
 * `affinity()` sets the CPU placement of workers. Workers take one logical CPU
@@ -135,7 +136,8 @@ The commonly useful `ServerBuilder` settings are:
   `Affinity::Soft` only sets the preferred CPU (the Windows ideal processor),
   so the scheduler can still move a worker away from a busy CPU. On other
   platforms `Soft` works like `Core`. The default is `Soft` on Windows and
-  `Core` elsewhere, `Affinity::Disabled` leaves placement to the OS.
+  `Core` elsewhere, `Affinity::Disabled` leaves placement to the OS. Affinity
+  is supported on Windows, Linux and Android, other platforms ignore it.
 * `load_balancing()` selects how new connections are distributed between
   workers. The default `LoadBalancing::LeastLoaded` picks two random workers
   and sends the connection to the one with the lower runtime utilization
