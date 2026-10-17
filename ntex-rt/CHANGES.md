@@ -13,6 +13,10 @@
 * Require `F::Output: Send` for neon `Handle::spawn()`, a remote task could
   return a non-`Send` value to the spawning thread
 
+* Keep neon queue fields read or written by other threads on separate cache
+  lines from fields written by the runtime thread, speeds up remote waker
+  clone/drop and remote wakes
+
 * Use a zero-sized schedule function for neon tasks, avoids a waker
   reference count increment and decrement on every wake
 
