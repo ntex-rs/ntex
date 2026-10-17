@@ -2,6 +2,9 @@
 
 ## [4.3.0] - 2026-10-17
 
+* Require `F::Output: Send` for neon `Handle::spawn()`, a remote task could
+  return a non-`Send` value to the spawning thread
+
 * Use a zero-sized schedule function for neon tasks, avoids a waker
   reference count increment and decrement on every wake
 
