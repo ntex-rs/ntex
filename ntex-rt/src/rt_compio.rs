@@ -198,7 +198,16 @@ impl<T> Future for JoinHandle<T> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(match self.task.as_mut() {
-            Some(Either::Compio(fut)) => ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError),
+            Some(Either::Compio(fut)) => {
+                let mut res = Pin::new(&mut *fut).poll(cx);
+                // compio-executor loses the wakeup if the task completes on
+                // its thread while the handle is polled from another thread
+                // and sets its waker, the completion is visible afterwards
+                if res.is_pending() && fut.is_finished() {
+                    res = Pin::new(fut).poll(cx);
+                }
+                ready!(res).map_err(|_| JoinError)
+            }
             Some(Either::Spawn(fut)) => ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError),
             None => Err(JoinError),
         })
