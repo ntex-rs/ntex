@@ -95,7 +95,7 @@ pub(crate) struct IoState {
     /// Consecutive read batches small enough for a smaller page.
     rd_small: Cell<u8>,
     pub(super) extensions: Extensions,
-    metrics: Arc<IoMetrics>,
+    pub(super) metrics: Arc<IoMetrics>,
     /// Read buffer size last reported to `metrics`, saturated at `u32::MAX`.
     rd_buffered: Cell<u32>,
     /// Write buffer size last reported to `metrics`, saturated at `u32::MAX`.
@@ -2332,6 +2332,74 @@ mod tests {
         let m = metrics.snapshot();
         assert_eq!(m.write_backpressure_active, 0);
         assert_eq!(m.write_buffered, 0);
+    }
+
+    #[ntex::test]
+    async fn write_metrics() {
+        #[derive(Debug)]
+        struct Budget(Rc<Cell<usize>>);
+
+        impl IoStream for Budget {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for Budget {
+            fn write(&self, ctx: &IoContext) {
+                let n = ctx.with_write_dst(|buf| {
+                    let n = buf.len().min(self.0.get());
+                    buf.advance_to(n);
+                    n
+                });
+                self.0.set(self.0.get() - n);
+                let _ = ctx.update_write_status(Ok(n));
+            }
+        }
+
+        let metrics = IoMetrics::new();
+        IoMetrics::set_current(metrics.clone());
+        let new_io = |budget: usize, threshold: usize| {
+            Io::new(
+                Budget(Rc::new(Cell::new(budget))),
+                SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(threshold)),
+            )
+        };
+
+        // threshold reached, everything is written in place
+        let io = new_io(usize::MAX, 4);
+        io.encode_slice(&[0; 8]).unwrap();
+        let m = metrics.snapshot();
+        assert_eq!((m.eager_writes, m.eager_writes_partial), (1, 0));
+        assert_eq!((m.scheduled_writes, m.bytes_written), (0, 8));
+
+        // threshold reached, the transport takes only a part
+        let io2 = new_io(3, 4);
+        io2.encode_slice(&[0; 8]).unwrap();
+        let m = metrics.snapshot();
+        assert_eq!((m.eager_writes, m.eager_writes_partial), (2, 1));
+        assert_eq!((m.scheduled_writes, m.bytes_written), (0, 11));
+
+        // below threshold, the write task is scheduled once
+        let io3 = new_io(usize::MAX, 4);
+        io3.encode_slice(&[0; 2]).unwrap();
+        io3.encode_slice(&[0; 1]).unwrap();
+        let m = metrics.snapshot();
+        assert_eq!((m.eager_writes, m.scheduled_writes), (2, 1));
+
+        // eager writes are disabled
+        let io4 = new_io(usize::MAX, 0);
+        io4.encode_slice(&[0; 8]).unwrap();
+        let m = metrics.snapshot();
+        assert_eq!((m.eager_writes, m.scheduled_writes), (2, 2));
+        drop((io, io2, io3, io4));
+
+        // bytes read
+        let (client, server) = IoTest::create();
+        let io = Io::from(server);
+        client.write(BIN);
+        assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), BIN);
+        assert_eq!(metrics.snapshot().bytes_read, BIN.len() as u64);
     }
 
     #[ntex::test]

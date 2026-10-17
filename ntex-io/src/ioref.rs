@@ -564,7 +564,9 @@ impl IoRef {
             // out-of-order writes based on a configured threshold.
             if st.flags.is_direct_wr_enabled() && (force || size >= st.cfg.write_buf_threshold()) {
                 // Send data in-place
-                if self.call_write() == WakeWriteTask::Yes {
+                let partial = self.call_write() == WakeWriteTask::Yes;
+                st.metrics.eager_write(partial);
+                if partial {
                     #[cfg(feature = "trace")]
                     log::trace!(
                         "{}: write-upd == schedule(more):{} flags:{:?}",
@@ -583,6 +585,7 @@ impl IoRef {
             } else if !st.flags.is_wr_send_scheduled() {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: write-upd == schedule(too small)", st.tag());
+                st.metrics.scheduled_write();
                 st.flags.set_wr_send_scheduled();
                 Iops::schedule_write(st.id());
             }

@@ -5,8 +5,8 @@
 * Add `Server::metrics()` with per-worker (`WorkerMetrics`), per-listener (`ListenerMetrics`)
   and accept-loop statistics (`ServerMetrics`)
 
-* Add `WorkerMetrics::io`, I/O backpressure, buffered bytes and close reasons of the
-  worker's connections
+* Add `WorkerMetrics::io`, I/O backpressure, buffered, read and written bytes, eager
+  writes and close reasons of the worker's connections
 
 * Add `WorkerMetrics::page_cache`, statistics of the worker thread's buffer page cache
 

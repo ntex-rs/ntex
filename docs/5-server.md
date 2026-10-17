@@ -229,7 +229,12 @@ server has reached its stopped state.
   reached `max_connections()`. `io` holds the I/O statistics of the
   worker's connections: how often and how long (connection-time) reads and
   writes were under backpressure, how many connections are under
-  backpressure now, and the bytes held in read and write buffers. `closed`
+  backpressure now, the bytes held in read and write buffers, and the total
+  `bytes_read` and `bytes_written`. `eager_writes` counts writes started in
+  place once buffered output reached `IoConfig::set_write_buf_threshold()`,
+  `eager_writes_partial` those that left output to the write task, and
+  `scheduled_writes` writes left to the write task (io-uring always uses
+  the write task). `closed`
   counts closed connections by reason: keep-alive, read or write timeout,
   peer gone, I/O error, decoder, encoder, service error, server shutdown,
   application-defined reasons (`custom`), and `other` for connections closed

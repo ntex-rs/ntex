@@ -12,6 +12,9 @@
   `CloseReason::Custom1` to `Custom8` are counted in `CloseStats::custom` for application
   metrics
 
+* Add `IoMetricsSnapshot::bytes_read` and `bytes_written`, and the eager write counters
+  `eager_writes`, `eager_writes_partial` and `scheduled_writes`
+
 * The I/O timer clock starts at `ntex_util::time::now()`, `TimerHandle::remains()`
   could report an extra second when the clock started in the middle of a runtime turn
 
