@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, rc::Rc};
 
 use async_channel::{Receiver, Sender, unbounded};
 use ntex_rt::{System, signals::PanicSource, signals::Signal};
@@ -41,10 +42,73 @@ struct Inner<F: ServerConfiguration> {
     factory: F,
     cfg: WorkerPool,
     shared: Arc<ServerShared>,
+    router: Arc<Mutex<Router<F::Item>>>,
     stopping: Cell<bool>,
     stopped: Cell<bool>,
     stop_notify: RefCell<Vec<oneshot::Sender<()>>>,
     cmd: Sender<ServerCommand<F::Item>>,
+}
+
+/// Workers that receive new items, and their load balancer.
+///
+/// Shared by the command loop, which adds and removes workers, and the
+/// [`Server`] handles, which send items to the workers on the submitting
+/// thread, e.g. the accept thread.
+pub(crate) struct Router<T> {
+    workers: Vec<Worker<T>>,
+    balancer: Balancer,
+    incoming_cpu: IncomingCpu<T>,
+    /// The server is stopping, items are not sent to workers.
+    closed: bool,
+}
+
+/// See [`ServerConfiguration::incoming_cpu`].
+type IncomingCpu<T> = Box<dyn Fn(&T) -> Option<usize> + Send>;
+
+impl<T> Router<T> {
+    pub(crate) fn lock(router: &Mutex<Self>) -> MutexGuard<'_, Self> {
+        router.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Sends `item` to a worker, returns it if no worker is available.
+    pub(crate) fn dispatch(&mut self, mut item: T, metrics: &Metrics) -> Result<(), T> {
+        if self.closed || self.workers.is_empty() {
+            return Err(item);
+        }
+        let cpu = if self.balancer.uses_incoming_cpu(&self.workers) {
+            (self.incoming_cpu)(&item)
+        } else {
+            None
+        };
+        while !self.workers.is_empty() {
+            let (idx, local) = self.balancer.select(&self.workers, cpu);
+            match self.workers[idx].send(item) {
+                Ok(()) => {
+                    self.balancer.sent(idx, self.workers.len());
+                    if let Some(local) = local {
+                        metrics.incoming_cpu(local);
+                    }
+                    return Ok(());
+                }
+                Err(i) => {
+                    log::trace!("Worker failed while processing item");
+                    item = i;
+                    self.workers.remove(idx);
+                    self.balancer.remove(idx);
+                }
+            }
+        }
+        Err(item)
+    }
+}
+
+impl<T> fmt::Debug for Router<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Router")
+            .field("workers", &self.workers.len())
+            .field("closed", &self.closed)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<F: ServerConfiguration> ServerManager<F> {
@@ -59,11 +123,19 @@ impl<F: ServerConfiguration> ServerManager<F> {
             paused: AtomicBool::new(true),
             metrics: Metrics::new(cfg.num),
         });
+        let f = factory.clone();
+        let router = Arc::new(Mutex::new(Router {
+            workers: Vec::with_capacity(cfg.num),
+            balancer: Balancer::new(cfg.balancing),
+            incoming_cpu: Box::new(move |item| f.incoming_cpu(item)),
+            closed: false,
+        }));
         let mgr = ServerManager(Rc::new(Inner {
             cfg,
             factory,
             id: Cell::new(WorkerId::default()),
             shared: shared.clone(),
+            router: router.clone(),
             stopping: Cell::new(false),
             stopped: Cell::new(false),
             stop_notify: RefCell::new(Vec::new()),
@@ -82,7 +154,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
             start_worker(mgr.clone(), placement);
         }
 
-        let srv = Server::new(tx, shared);
+        let srv = Server::new(tx, shared, router);
 
         // handle signals
         if no_signals {
@@ -194,105 +266,91 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, placement: Option
 }
 
 struct HandleCmdState<F: ServerConfiguration> {
-    balancer: Balancer,
+    /// Items received while no worker was available.
     backlog: VecDeque<F::Item>,
-    workers: Vec<Worker<F::Item>>,
     mgr: ServerManager<F>,
 }
 
 impl<F: ServerConfiguration> HandleCmdState<F> {
     fn new(mgr: ServerManager<F>) -> Self {
         Self {
-            balancer: Balancer::new(mgr.0.cfg.balancing),
             backlog: VecDeque::new(),
-            workers: Vec::with_capacity(mgr.0.cfg.num),
             mgr,
         }
     }
 
-    fn remove_worker(&mut self, idx: usize) {
-        self.workers.remove(idx);
-        self.balancer.remove(idx);
+    fn process(&mut self, item: F::Item) {
+        let router = self.mgr.0.router.clone();
+        if self.dispatch(&mut Router::lock(&router), item) {
+            self.mgr.pause();
+        }
     }
 
-    fn process(&mut self, mut item: F::Item) {
-        let cpu = if self.balancer.uses_incoming_cpu(&self.workers) {
-            self.mgr.0.factory.incoming_cpu(&item)
+    /// Sends `item` to a worker, or queues it if no worker is available.
+    ///
+    /// Returns `true` if the item was queued, the server must be paused. The
+    /// configuration's callbacks are not called under the router's lock.
+    fn dispatch(&mut self, router: &mut Router<F::Item>, item: F::Item) -> bool {
+        if let Err(item) = router.dispatch(item, &self.mgr.0.shared.metrics)
+            && !self.mgr.0.stopping.get()
+        {
+            log::error!("No workers");
+            self.backlog.push_back(item);
+            true
         } else {
-            None
-        };
-        loop {
-            if self.workers.is_empty() {
-                if !self.mgr.0.stopping.get() {
-                    log::error!("No workers");
-                    self.backlog.push_back(item);
-                    self.mgr.pause();
-                }
-                break;
-            }
-            let (idx, local) = self.balancer.select(&self.workers, cpu);
-            match self.workers[idx].send(item) {
-                Ok(()) => {
-                    self.balancer.sent(idx, self.workers.len());
-                    if let Some(local) = local {
-                        self.mgr.0.shared.metrics.incoming_cpu(local);
-                    }
-                    break;
-                }
-                Err(i) => {
-                    if !self.mgr.0.stopping.get() {
-                        log::trace!("Worker failed while processing item");
-                    }
-                    item = i;
-                    self.remove_worker(idx);
-                }
-            }
+            false
         }
     }
 
     fn update_workers(&mut self, upd: Update<F::Item>) {
+        let router = self.mgr.0.router.clone();
+        let mut router = Router::lock(&router);
+        let r = &mut *router;
+        let was_empty = r.workers.is_empty();
         match upd {
-            Update::Available(worker) => match self.workers.binary_search(&worker) {
+            Update::Available(worker) => match r.workers.binary_search(&worker) {
                 Ok(idx) => {
                     // a restarted worker runs on a new arbiter
-                    if self.workers[idx].arbiter() != worker.arbiter() {
-                        self.balancer.reset(idx);
+                    if r.workers[idx].arbiter() != worker.arbiter() {
+                        r.balancer.reset(idx);
                     }
-                    self.workers[idx] = worker;
+                    r.workers[idx] = worker;
                 }
                 Err(idx) => {
-                    self.balancer
-                        .unpark(idx, worker.name(), worker.arbiter().id());
-                    self.workers.insert(idx, worker);
-                    if self.workers.len() == 1 {
-                        self.mgr.resume();
-                    }
+                    r.balancer.unpark(idx, worker.name(), worker.arbiter().id());
+                    r.workers.insert(idx, worker);
                 }
             },
             Update::Unavailable(worker) => {
-                if let Ok(idx) = self.workers.binary_search(&worker) {
+                if let Ok(idx) = r.workers.binary_search(&worker) {
                     // the worker keeps its runtime and connections, its
                     // load history stays valid
-                    let wrk = self.workers.remove(idx);
-                    self.balancer.park(idx, wrk.name(), wrk.arbiter().id());
-                }
-                if self.workers.is_empty() {
-                    self.mgr.pause();
+                    let wrk = r.workers.remove(idx);
+                    r.balancer.park(idx, wrk.name(), wrk.arbiter().id());
                 }
             }
         }
-        // handle backlog
-        if !self.backlog.is_empty() && !self.workers.is_empty() {
+        // handle backlog, the server is paused while it is not empty, so new
+        // items do not overtake it
+        if !self.backlog.is_empty() && !r.workers.is_empty() {
             let mut items = std::mem::take(&mut self.backlog);
             while let Some(item) = items.pop_front() {
-                if self.workers.is_empty() {
+                if r.workers.is_empty() {
                     items.push_front(item);
                     break;
                 }
-                // pushes the item back and pauses if all workers failed
-                self.process(item);
+                // pushes the item back if all workers failed
+                self.dispatch(r, item);
             }
             self.backlog.extend(items);
+        }
+        let is_empty = r.workers.is_empty();
+        drop(router);
+
+        if is_empty {
+            self.mgr.pause();
+        } else if was_empty {
+            self.mgr.resume();
         }
     }
 
@@ -312,20 +370,27 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
 
         self.mgr.0.stopping.set(true);
 
+        // new items are not sent to the workers
+        let workers = {
+            let mut router = Router::lock(&self.mgr.0.router);
+            router.closed = true;
+            std::mem::take(&mut router.workers)
+        };
+
         // stop server
         self.mgr.0.factory.stop().await;
 
         // stop workers
-        if !self.workers.is_empty() {
+        if !workers.is_empty() {
             let to = self.mgr.0.cfg.graceful_shutdown_timeout;
             if graceful && !to.is_zero() {
-                let futs: Vec<_> = self.workers.iter().map(|worker| worker.stop(to)).collect();
+                let futs: Vec<_> = workers.iter().map(|worker| worker.stop(to)).collect();
 
                 let _ = timeout(to, join_all(futs)).await;
             } else {
-                self.workers.iter().for_each(|worker| {
+                for worker in &workers {
                     worker.stop(Millis::ZERO);
-                });
+                }
             }
         }
 

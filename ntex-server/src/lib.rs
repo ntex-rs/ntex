@@ -89,6 +89,9 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     /// servers return the receive-side scaling (RSS) CPU of the connection on
     /// Windows, and its `SO_INCOMING_CPU` on Linux and Android. The default
     /// returns `None`.
+    ///
+    /// Called on the thread that submits the item with [`Server::process`],
+    /// e.g. the accept thread of a network server.
     fn incoming_cpu(&self, item: &Self::Item) -> Option<usize> {
         let _ = item;
         None

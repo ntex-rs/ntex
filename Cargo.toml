@@ -108,7 +108,6 @@ tls_openssl = { version = "0.10", package = "openssl" }
 openssl-sys = "0.9"
 foreign-types-shared = "0.1"
 parking_lot = "0.12.5"
-polling = "3.11.0"
 pin-project-lite = "0.2"
 proc-macro2 = "1.0.105"
 quote = "1.0.43"
