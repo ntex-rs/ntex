@@ -6,7 +6,7 @@
   and accept-loop statistics (`ServerMetrics`)
 
 * Add `WorkerMetrics::io`, I/O backpressure, buffered, read and written bytes, eager
-  writes and close reasons of the worker's connections
+  writes and close reasons of the worker's connections, one entry per I/O configuration
 
 * Add `WorkerMetrics::page_cache`, statistics of the worker thread's buffer page cache
 

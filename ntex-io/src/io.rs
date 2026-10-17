@@ -95,7 +95,7 @@ pub(crate) struct IoState {
     /// Consecutive read batches small enough for a smaller page.
     rd_small: Cell<u8>,
     pub(super) extensions: Extensions,
-    pub(super) metrics: Arc<IoMetrics>,
+    metrics: UnsafeCell<Arc<IoMetrics>>,
     /// Read buffer size last reported to `metrics`, saturated at `u32::MAX`.
     rd_buffered: Cell<u32>,
     /// Write buffer size last reported to `metrics`, saturated at `u32::MAX`.
@@ -357,6 +357,13 @@ impl IoState {
     }
 
     /// Records bytes taken by, or returned from, the transport.
+    #[inline]
+    pub(super) fn metrics(&self) -> &IoMetrics {
+        // SAFETY: replaced only by `Io::set_config()`, which requires that no
+        // reference into the connection state is live
+        unsafe { &*self.metrics.get() }
+    }
+
     pub(super) fn track_wr_inflight(&self, before: usize, after: usize) {
         let inflight = self.wr_inflight.get();
         if after < before {
@@ -377,31 +384,31 @@ impl IoState {
 
     pub(super) fn set_wr_backpressure(&self) {
         if self.flags.set_wr_backpressure() {
-            self.metrics.wr_backpressure_on();
+            self.metrics().wr_backpressure_on();
         }
     }
 
     pub(super) fn unset_wr_backpressure(&self) {
         if self.flags.unset_wr_backpressure() {
-            self.metrics.wr_backpressure_off();
+            self.metrics().wr_backpressure_off();
         }
     }
 
     pub(super) fn unset_wr_backpressure_and_flush(&self) {
         if self.flags.unset_wr_backpressure_and_flush() {
-            self.metrics.wr_backpressure_off();
+            self.metrics().wr_backpressure_off();
         }
     }
 
     pub(super) fn set_read_ready_and_backpressure(&self) {
         if self.flags.set_read_ready_and_backpressure() {
-            self.metrics.rd_backpressure_on();
+            self.metrics().rd_backpressure_on();
         }
     }
 
     pub(super) fn unset_read_ready_and_backpressure(&self) {
         if self.flags.unset_read_ready_and_backpressure() {
-            self.metrics.rd_backpressure_off();
+            self.metrics().rd_backpressure_off();
         }
     }
 
@@ -412,14 +419,14 @@ impl IoState {
     pub(super) fn sync_read_buffered(&self) {
         let size = u32::try_from(self.buffer.read_buf_size()).unwrap_or(u32::MAX);
         let prev = self.rd_buffered.replace(size);
-        self.metrics.update_read_buffered(prev, size);
+        self.metrics().update_read_buffered(prev, size);
     }
 
     /// Reports the current write buffer size to the metrics.
     pub(super) fn sync_write_buffered(&self) {
         let size = u32::try_from(self.write_outstanding()).unwrap_or(u32::MAX);
         let prev = self.wr_buffered.replace(size);
-        self.metrics.update_write_buffered(prev, size);
+        self.metrics().update_write_buffered(prev, size);
     }
 
     pub(super) fn wake_read_task(&self) {
@@ -493,17 +500,21 @@ impl Drop for IoState {
     fn drop(&mut self) {
         // a connection can go away under backpressure
         if self.flags.is_rd_backpressure() {
-            self.metrics.rd_backpressure_off();
+            self.metrics().rd_backpressure_off();
         }
         if self.flags.is_wr_backpressure() {
-            self.metrics.wr_backpressure_off();
+            self.metrics().wr_backpressure_off();
         }
-        self.metrics.update_read_buffered(self.rd_buffered.get(), 0);
-        self.metrics
+        self.metrics()
+            .update_read_buffered(self.rd_buffered.get(), 0);
+        self.metrics()
             .update_write_buffered(self.wr_buffered.get(), 0);
         match self.close.get() {
-            Close::Unset => self.metrics.closed(None, self.error.get_mut().is_some()),
-            Close::Reason(reason) => self.metrics.closed(Some(reason), false),
+            Close::Unset => {
+                let io_error = self.error.get_mut().is_some();
+                self.metrics().closed(None, io_error);
+            }
+            Close::Reason(reason) => self.metrics().closed(Some(reason), false),
             Close::Uncounted => (),
         }
     }
@@ -549,6 +560,7 @@ impl Io {
         let cfg = cfg.into().get::<IoConfig>();
         let size = cfg.write_size();
         let flags = Flags::new(cfg.write_buf_threshold() > 0);
+        let metrics = cfg.metrics();
 
         let inner = Rc::new(IoState {
             cfg,
@@ -568,7 +580,7 @@ impl Io {
             rd_batch: Cell::new(0),
             rd_small: Cell::new(0),
             extensions: Extensions::default(),
-            metrics: IoMetrics::current(),
+            metrics: UnsafeCell::new(metrics),
             rd_buffered: Cell::new(0),
             wr_buffered: Cell::new(0),
             close: Cell::new(Close::Unset),
@@ -614,7 +626,7 @@ impl IoRef {
             rd_batch: Cell::new(0),
             rd_small: Cell::new(0),
             extensions: Extensions::default(),
-            metrics: IoMetrics::current(),
+            metrics: UnsafeCell::new(IoMetrics::detached()),
             rd_buffered: Cell::new(0),
             wr_buffered: Cell::new(0),
             close: Cell::new(Close::Uncounted),
@@ -692,10 +704,25 @@ impl<F> Io<F> {
         self.st()
             .flags
             .set_direct_wr_enabled(cfg.write_buf_threshold() > 0);
-        unsafe {
-            self.st().cfg.replace(cfg);
+        let st = self.st();
+        let metrics = cfg.metrics();
+        if !ptr::eq(st.metrics(), Arc::as_ptr(&metrics)) {
+            st.metrics().move_to(
+                &metrics,
+                st.flags.is_rd_backpressure(),
+                st.flags.is_wr_backpressure(),
+                st.rd_buffered.get(),
+                st.wr_buffered.get(),
+            );
+            // SAFETY: the caller guarantees no reference into the state is live
+            unsafe {
+                *st.metrics.get() = metrics;
+            }
         }
-        self.st().reset_read_size();
+        unsafe {
+            st.cfg.replace(cfg);
+        }
+        st.reset_read_size();
     }
 }
 
@@ -1461,11 +1488,11 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::IoMetricsSnapshot;
     use crate::waiters::{TAG_DISCONNECT, WaiterEntry};
     use crate::{
         FilterBuf, IoContext, IoTaskStatus, Readiness, Waiter, ops::Iops, testing::IoTest,
     };
+    use crate::{IoMetricsGroup, IoMetricsSnapshot};
     use std::pin::Pin;
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
@@ -2216,18 +2243,17 @@ mod tests {
 
     #[ntex::test]
     async fn read_backpressure_metrics() {
-        let metrics = IoMetrics::new();
-        IoMetrics::set_current(metrics.clone());
-
-        let (client, server) = IoTest::create();
-        let io = Io::new(
-            server,
-            SharedCfg::new("SRV").add(
+        let cfg = SharedCfg::new("SRV")
+            .add(
                 IoConfig::default()
                     .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
                     .set_read_backpressure(BytePageSize::Size4.capacity()),
-            ),
-        );
+            )
+            .build();
+        let metrics = cfg.get::<IoConfig>().metrics();
+
+        let (client, server) = IoTest::create();
+        let io = Io::new(server, cfg);
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
         let size = BytePageSize::Size4.capacity();
@@ -2274,15 +2300,14 @@ mod tests {
 
     #[ntex::test]
     async fn write_backpressure_metrics() {
-        let metrics = IoMetrics::new();
-        IoMetrics::set_current(metrics.clone());
+        let cfg = SharedCfg::new("SRV")
+            .add(IoConfig::default().set_write_backpressure(16))
+            .build();
+        let metrics = cfg.get::<IoConfig>().metrics();
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
-        let io = Io::new(
-            server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
-        );
+        let io = Io::new(server, cfg);
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
         io.encode_slice(b"1234").unwrap();
@@ -2357,46 +2382,49 @@ mod tests {
             }
         }
 
-        let metrics = IoMetrics::new();
-        IoMetrics::set_current(metrics.clone());
-        let new_io = |budget: usize, threshold: usize| {
-            Io::new(
-                Budget(Rc::new(Cell::new(budget))),
-                SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(threshold)),
-            )
+        let cfg = SharedCfg::new("SRV")
+            .add(IoConfig::new().set_write_buf_threshold(4))
+            .build();
+        let cfg0 = SharedCfg::new("SRV")
+            .add(IoConfig::new().set_write_buf_threshold(0))
+            .build();
+        let metrics = cfg.get::<IoConfig>().metrics();
+        let new_io = |budget: usize, cfg: &SharedCfg| {
+            Io::new(Budget(Rc::new(Cell::new(budget))), cfg.clone())
         };
 
         // threshold reached, everything is written in place
-        let io = new_io(usize::MAX, 4);
+        let io = new_io(usize::MAX, &cfg);
         io.encode_slice(&[0; 8]).unwrap();
         let m = metrics.snapshot();
         assert_eq!((m.eager_writes, m.eager_writes_partial), (1, 0));
         assert_eq!((m.scheduled_writes, m.bytes_written), (0, 8));
 
         // threshold reached, the transport takes only a part
-        let io2 = new_io(3, 4);
+        let io2 = new_io(3, &cfg);
         io2.encode_slice(&[0; 8]).unwrap();
         let m = metrics.snapshot();
         assert_eq!((m.eager_writes, m.eager_writes_partial), (2, 1));
         assert_eq!((m.scheduled_writes, m.bytes_written), (0, 11));
 
         // below threshold, the write task is scheduled once
-        let io3 = new_io(usize::MAX, 4);
+        let io3 = new_io(usize::MAX, &cfg);
         io3.encode_slice(&[0; 2]).unwrap();
         io3.encode_slice(&[0; 1]).unwrap();
         let m = metrics.snapshot();
         assert_eq!((m.eager_writes, m.scheduled_writes), (2, 1));
 
         // eager writes are disabled
-        let io4 = new_io(usize::MAX, 0);
+        let io4 = new_io(usize::MAX, &cfg0);
         io4.encode_slice(&[0; 8]).unwrap();
-        let m = metrics.snapshot();
-        assert_eq!((m.eager_writes, m.scheduled_writes), (2, 2));
+        let m = cfg0.get::<IoConfig>().metrics().snapshot();
+        assert_eq!((m.eager_writes, m.scheduled_writes), (0, 1));
+        assert_eq!(metrics.snapshot().scheduled_writes, 1);
         drop((io, io2, io3, io4));
 
         // bytes read
         let (client, server) = IoTest::create();
-        let io = Io::from(server);
+        let io = Io::new(server, cfg);
         client.write(BIN);
         assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), BIN);
         assert_eq!(metrics.snapshot().bytes_read, BIN.len() as u64);
@@ -2404,8 +2432,8 @@ mod tests {
 
     #[ntex::test]
     async fn close_reason_metrics() {
-        let metrics = IoMetrics::new();
-        IoMetrics::set_current(metrics.clone());
+        IoMetricsGroup::set_current(IoMetricsGroup::new());
+        let metrics = SharedCfg::default().get::<IoConfig>().metrics();
 
         // the first reported reason is kept
         let (_client, server) = IoTest::create();
@@ -2453,15 +2481,71 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn metrics_current() {
-        let metrics = IoMetrics::new();
-        IoMetrics::set_current(metrics.clone());
-        assert!(Arc::ptr_eq(&IoMetrics::current(), &metrics));
+    async fn metrics_group() {
+        let group = IoMetricsGroup::new();
+        IoMetricsGroup::set_current(group.clone());
+        assert!(Arc::ptr_eq(&IoMetricsGroup::current(), &group));
+        assert!(group.snapshot().is_empty());
+
+        // one metrics object per configuration
+        let srv = SharedCfg::new("SRV").build();
+        let cli = SharedCfg::new("CLI").build();
+        let metrics = srv.get::<IoConfig>().metrics();
+        assert!(Arc::ptr_eq(&metrics, &srv.get::<IoConfig>().metrics()));
+        assert!(!Arc::ptr_eq(&metrics, &cli.get::<IoConfig>().metrics()));
         assert_eq!(metrics.snapshot(), IoMetricsSnapshot::default());
 
-        let other = IoMetrics::new();
-        IoMetrics::set_current(other.clone());
-        assert!(Arc::ptr_eq(&IoMetrics::current(), &other));
+        let _io = Io::new(IoTest::create().1, srv.clone());
+        let _io2 = Io::new(IoTest::create().1, srv.clone());
+        let _io3 = Io::new(IoTest::create().1, cli.clone());
+        let items = group.snapshot();
+        assert_eq!(items.len(), 2);
+        assert_eq!((items[0].id, items[0].tag), (srv.id(), "SRV"));
+        assert_eq!((items[1].id, items[1].tag), (cli.id(), "CLI"));
+
+        // another group has its own metrics
+        IoMetricsGroup::set_current(IoMetricsGroup::new());
+        assert!(!Arc::ptr_eq(&metrics, &srv.get::<IoConfig>().metrics()));
+    }
+
+    #[ntex::test]
+    async fn set_config_moves_metrics() {
+        let cfg = SharedCfg::new("A")
+            .add(IoConfig::default().set_write_backpressure(16))
+            .build();
+        let cfg2 = SharedCfg::new("B").build();
+        let (m1, m2) = (
+            cfg.get::<IoConfig>().metrics(),
+            cfg2.get::<IoConfig>().metrics(),
+        );
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(server, cfg);
+        io.encode_slice(&[b'x'; 32]).unwrap();
+        sleep(Millis(10)).await;
+        assert!(io.flags().is_wr_backpressure());
+        assert_eq!(m1.snapshot().write_backpressure_active, 1);
+
+        // SAFETY: no reference returned by `io.cfg()` is retained.
+        unsafe { io.set_config(cfg2) };
+        let (s1, s2) = (m1.snapshot(), m2.snapshot());
+        assert_eq!(
+            (s1.write_backpressure, s1.write_backpressure_active),
+            (1, 0)
+        );
+        assert_eq!(
+            (s2.write_backpressure, s2.write_backpressure_active),
+            (0, 1)
+        );
+        assert_eq!((s1.write_buffered, s2.write_buffered), (0, 32));
+
+        drop(io);
+        sleep(Millis(10)).await;
+        let (s1, s2) = (m1.snapshot(), m2.snapshot());
+        assert_eq!(s2.write_backpressure_active, 0);
+        assert_eq!(s2.write_buffered, 0);
+        assert_eq!((s1.closed.total, s2.closed.total), (0, 1));
     }
 
     #[ntex::test]

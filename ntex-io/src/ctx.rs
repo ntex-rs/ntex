@@ -495,7 +495,7 @@ impl IoContext {
         match status {
             Ok(written) => {
                 st.wr_inflight_written(written);
-                st.metrics.written(written);
+                st.metrics().written(written);
                 st.sync_write_buffered();
 
                 let len = st.buffer.write_buf_size();
@@ -732,7 +732,7 @@ fn stop_filters(st: &IoState, err: Option<io::Error>) {
 fn track_read(st: &IoState, buf: &BytesMut, status: &Poll<io::Result<usize>>) {
     match status {
         Poll::Ready(Ok(n)) => {
-            st.metrics.read(*n);
+            st.metrics().read(*n);
             st.track_read(*n, *n != 0 && buf.len() == buf.capacity());
         }
         Poll::Pending => st.track_read(0, false),

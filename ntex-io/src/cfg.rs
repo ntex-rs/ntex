@@ -1,8 +1,12 @@
 //! I/O buffer, timeout, and frame-rate configuration.
 
+use std::sync::Arc;
+
 use ntex_bytes::BytePageSize;
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
+
+use crate::{IoMetrics, IoMetricsGroup};
 
 #[derive(Debug)]
 /// Shared configuration for an [`crate::Io`] stream.
@@ -60,6 +64,14 @@ pub struct FrameReadRate {
 }
 
 impl IoConfig {
+    /// Returns the current thread's metrics of this configuration.
+    ///
+    /// Connections created with this configuration on the thread report to
+    /// these metrics, see [`IoMetricsGroup`].
+    pub fn metrics(&self) -> Arc<IoMetrics> {
+        IoMetricsGroup::current_metrics(self)
+    }
+
     #[inline]
     #[must_use]
     /// Creates an I/O configuration with default settings.
