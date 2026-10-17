@@ -21,8 +21,15 @@
 * Add `WorkerPool::load_balancing()` and `ServerBuilder::load_balancing()`.
   `LoadBalancing::LeastLoaded` sends each item to the less loaded of two random
   workers, by runtime utilization, then open connections and queued items, and
-  skips workers blocked by a task. It is the default, use
+  skips workers blocked by a task. `LoadBalancing::IncomingCpu`, the default,
+  sends a connection to the worker placed on the CPU that receives its network
+  packets (the RSS CPU on Windows), unless that worker is busier than the
+  `LeastLoaded` choice, and works like `LeastLoaded` otherwise. Use
   `LoadBalancing::RoundRobin` for the previous behavior
+
+* Add `ServerConfiguration::incoming_cpu()`, the incoming CPU of an item used by
+  `LoadBalancing::IncomingCpu`, and `ServerMetrics::{incoming_cpu_hits,
+  incoming_cpu_misses}`
 
 * Add `WorkerPool::affinity()` and `ServerBuilder::affinity()` with
   `Affinity::{Disabled, Cpu, Core, Soft}`. `enable_affinity()` is deprecated

@@ -48,6 +48,7 @@ pub struct Worker<T> {
     avail: WorkerAvailability,
     arbiter: Arbiter,
     metrics: Option<Arc<WorkerSlot>>,
+    cpus: Arc<[usize]>,
 }
 
 #[derive(Debug)]
@@ -90,6 +91,10 @@ impl<T> Worker<T> {
         let (avail, a_tx) = WorkerAvailability::create();
         let n = name.clone();
         let inner = avail.inner.clone();
+        let cpus = placement
+            .as_ref()
+            .map_or_else(Vec::new, Placement::cpus)
+            .into();
 
         let n2 = name.clone();
         let init = move || {
@@ -120,6 +125,7 @@ impl<T> Worker<T> {
             name,
             arbiter: arbiter.clone(),
             metrics: metrics.clone(),
+            cpus,
         };
 
         arbiter.handle().spawn(async move {
@@ -159,6 +165,12 @@ impl<T> Worker<T> {
     /// Returns the number of open connections plus queued items.
     pub(crate) fn load(&self) -> usize {
         self.metrics.as_ref().map_or(0, |m| m.active()) + self.reqs.len()
+    }
+
+    /// Returns the index of the worker's CPU followed by its SMT siblings,
+    /// empty if the worker is not placed on a CPU.
+    pub(crate) fn cpus(&self) -> &[usize] {
+        &self.cpus
     }
 
     #[inline]
@@ -240,6 +252,7 @@ impl<T> Clone for Worker<T> {
             avail: self.avail.clone(),
             arbiter: self.arbiter.clone(),
             metrics: self.metrics.clone(),
+            cpus: self.cpus.clone(),
         }
     }
 }

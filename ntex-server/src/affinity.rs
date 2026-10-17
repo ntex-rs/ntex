@@ -99,6 +99,28 @@ impl Placement {
     pub(crate) fn apply(&self) -> bool {
         sys::apply(self.mode, self.cpu, &self.core)
     }
+
+    /// Returns the index of the placement CPU, followed by the indexes of
+    /// its SMT siblings.
+    pub(crate) fn cpus(&self) -> Vec<usize> {
+        let mut cpus = vec![sys::index(self.cpu)];
+        cpus.extend(
+            self.core
+                .iter()
+                .filter(|cpu| **cpu != self.cpu)
+                .map(|cpu| sys::index(*cpu)),
+        );
+        cpus
+    }
+}
+
+/// Returns the index of the logical CPU that receives the packets of the
+/// connection, if known.
+///
+/// On Windows, this is the receive-side scaling (RSS) CPU of the connection.
+/// Not supported on other platforms yet.
+pub(crate) fn incoming_cpu(stream: &std::net::TcpStream) -> Option<usize> {
+    sys::incoming_cpu(stream).map(sys::index)
 }
 
 impl fmt::Display for Placement {
@@ -311,6 +333,14 @@ mod sys {
         }
     }
 
+    pub(super) fn index(cpu: Cpu) -> usize {
+        usize::try_from(cpu.num).unwrap_or(usize::MAX)
+    }
+
+    pub(super) fn incoming_cpu(_: &std::net::TcpStream) -> Option<Cpu> {
+        None
+    }
+
     pub(super) fn apply(mode: Affinity, cpu: Cpu, core: &[Cpu]) -> bool {
         let cpus = if mode == Affinity::Cpu {
             std::slice::from_ref(&cpu)
@@ -342,8 +372,11 @@ mod sys {
 
 #[cfg(windows)]
 mod sys {
-    use std::{mem, ptr};
+    use std::{mem, net::TcpStream, os::windows::io::AsRawSocket, ptr};
 
+    use windows_sys::Win32::Networking::WinSock::{
+        SIO_QUERY_RSS_PROCESSOR_INFO, SOCKET, SOCKET_PROCESSOR_AFFINITY, WSAIoctl,
+    };
     use windows_sys::Win32::System::JobObjects::{
         JobObjectGroupInformationEx, QueryInformationJobObject,
     };
@@ -644,6 +677,40 @@ mod sys {
         }
     }
 
+    pub(super) fn index(cpu: Cpu) -> usize {
+        // SAFETY: plain processor count queries
+        let before: u32 = (0..cpu.group)
+            .map(|group| unsafe { GetActiveProcessorCount(group) })
+            .sum();
+        (before + cpu.num) as usize
+    }
+
+    // sockets are pointer-sized, the output buffer has a few bytes
+    #[allow(clippy::cast_possible_truncation)]
+    pub(super) fn incoming_cpu(stream: &TcpStream) -> Option<Cpu> {
+        let mut info = SOCKET_PROCESSOR_AFFINITY::default();
+        let mut len = 0u32;
+        // SAFETY: the output buffer holds the length passed with it, the
+        // call completes synchronously without an overlapped structure
+        let res = unsafe {
+            WSAIoctl(
+                stream.as_raw_socket() as SOCKET,
+                SIO_QUERY_RSS_PROCESSOR_INFO,
+                ptr::null(),
+                0,
+                (&raw mut info).cast(),
+                mem::size_of::<SOCKET_PROCESSOR_AFFINITY>() as u32,
+                &raw mut len,
+                ptr::null_mut(),
+                None,
+            )
+        };
+        (res == 0 && len as usize >= mem::size_of::<SOCKET_PROCESSOR_AFFINITY>()).then_some(Cpu {
+            group: info.Processor.Group,
+            num: u32::from(info.Processor.Number),
+        })
+    }
+
     pub(super) fn apply(mode: Affinity, cpu: Cpu, core: &[Cpu]) -> bool {
         // SAFETY: plain thread affinity calls on the current thread
         unsafe {
@@ -727,6 +794,14 @@ mod sys {
             group: 0,
             num: u32::try_from(idx).unwrap_or(u32::MAX),
         }
+    }
+
+    pub(super) fn index(cpu: Cpu) -> usize {
+        usize::try_from(cpu.num).unwrap_or(usize::MAX)
+    }
+
+    pub(super) fn incoming_cpu(_: &std::net::TcpStream) -> Option<Cpu> {
+        None
     }
 
     pub(super) fn apply(_: Affinity, _: Cpu, _: &[Cpu]) -> bool {
@@ -893,6 +968,31 @@ mod tests {
         assert_eq!(cpus, [cpu]);
 
         assert!(!Placement::cpu(usize::MAX >> 1).apply());
+    }
+
+    #[test]
+    fn cpu_indexes() {
+        for p in plan(Affinity::Core) {
+            let cpus = p.cpus();
+            assert_eq!(sys::cpu(cpus[0]), p.cpu);
+            assert_eq!(cpus.len(), p.core.len());
+            for idx in &cpus {
+                assert!(p.core.contains(&sys::cpu(*idx)), "{p}: {cpus:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn incoming_cpu_loopback() {
+        let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = std::net::TcpStream::connect(lst.local_addr().unwrap()).unwrap();
+        let (server, _) = lst.accept().unwrap();
+        // loopback connections have no RSS CPU, if known it must be valid
+        for stream in [&client, &server] {
+            if let Some(cpu) = incoming_cpu(stream) {
+                assert!(cpu < cpu_count(), "{cpu}");
+            }
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
