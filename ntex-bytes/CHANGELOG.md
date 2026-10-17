@@ -1,6 +1,6 @@
 # Changes
 
-## [1.13.0] - Unreleased
+## [1.13.0] - 2026-10-17
 
 * Add `PageCacheMetrics`, per-thread page cache statistics: hits, misses, pages returned
   to the cache, pages freed because the cache was full, cached pages and bytes per page size

@@ -29,10 +29,7 @@ impl WorkerPool {
     #[must_use]
     /// Creates a worker pool with default settings.
     pub fn new() -> Self {
-        let num = core_affinity::get_core_ids().map_or_else(
-            || std::thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get),
-            |v| v.len(),
-        );
+        let num = crate::affinity::cpu_count();
 
         WorkerPool {
             num,

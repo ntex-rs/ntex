@@ -26,7 +26,14 @@
   caches, then on SMT siblings, instead of taking CPUs from the highest number
   down. `Soft` sets the Windows ideal processor without pinning, and is group
   aware. Affinity is now enabled by default: `Soft` on Windows, `Core` (pin to
-  the CPUs of one physical core) on other platforms
+  the CPUs of one physical core) on other platforms. Affinity is supported on
+  Windows, Linux and Android, other platforms ignore it
+
+* Remove the `core_affinity` dependency. `Worker::start()` takes the index of a
+  logical CPU (`Option<usize>`) instead of `core_affinity::CoreId`
+
+* The default number of workers counts the CPUs of all processor groups on
+  Windows, it was limited to 64 before
 
 ## [4.2.0] - 2026-10-01
 

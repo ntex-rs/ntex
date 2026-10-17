@@ -12,7 +12,6 @@ use crate::connect::rustls::{TlsClientFilter, TlsConnector};
 use tls_rustls::ClientConfig as RustlsClientConfig;
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
-use nanorand::Rng;
 use urly::Url;
 
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse, host_header};
@@ -156,7 +155,7 @@ where
         // a base64-encoded (see Section 4 of [RFC4648]) value that,
         // when decoded, is 16 bytes in length (RFC 6455)
         let mut sec_key: [u8; 16] = [0; 16];
-        nanorand::tls_rng().fill(&mut sec_key);
+        fastrand::fill(&mut sec_key);
         let key = base64.encode(sec_key);
 
         head.headers.insert(

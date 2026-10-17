@@ -91,7 +91,7 @@ regex = { workspace = true }
 serde = { workspace = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
-nanorand = { workspace = true }
+fastrand = { workspace = true }
 variadics_please = { workspace = true }
 uuid = { workspace = true }
 
