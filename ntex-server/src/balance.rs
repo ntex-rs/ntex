@@ -28,8 +28,10 @@ pub enum LoadBalancing {
     /// incoming CPU, it works like [`LeastLoaded`](Self::LeastLoaded).
     ///
     /// The incoming CPU is the receive-side scaling (RSS) CPU of the
-    /// connection, known on Windows for connections over network adapters
-    /// with RSS. Requires worker affinity, see [`Affinity`](crate::Affinity).
+    /// connection on Windows, known for connections over network adapters
+    /// with RSS, and the CPU that processed the connection's last packet
+    /// (`SO_INCOMING_CPU`) on Linux and Android. Requires worker affinity, see
+    /// [`Affinity`](crate::Affinity).
     ///
     /// This is the default.
     #[default]

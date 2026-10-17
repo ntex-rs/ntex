@@ -129,31 +129,15 @@ The commonly useful `ServerBuilder` settings are:
   the process may use, across all processor groups on Windows.
 * `backlog()` sets the listen backlog for listeners created afterward.
 * `max_connections()` sets the process-wide per-worker connection limit.
-* `affinity()` sets the CPU placement of workers. Workers take one logical CPU
-  of each physical core first, spread across NUMA nodes and L3 caches, then
-  the SMT siblings. `Affinity::Cpu` pins a worker to one logical CPU,
-  `Affinity::Core` to the logical CPUs of one physical core, and
-  `Affinity::Soft` only sets the preferred CPU (the Windows ideal processor),
-  so the scheduler can still move a worker away from a busy CPU. On other
-  platforms `Soft` works like `Core`. The default is `Soft` on Windows and
-  `Core` elsewhere, `Affinity::Disabled` leaves placement to the OS. Affinity
-  is supported on Windows, Linux and Android, other platforms ignore it.
+* `affinity()` sets the CPU placement of workers, see
+  [Worker placement](#worker-placement). The default is `Affinity::Soft` on
+  Windows and `Affinity::Core` elsewhere.
 * `load_balancing()` selects how new connections are distributed between
-  workers. `LoadBalancing::LeastLoaded` picks two random workers
-  and sends the connection to the one with the lower runtime utilization
-  (averaged over ~250 ms), or, when both are similarly busy, the one with
-  fewer open and queued connections. Workers whose runtime is blocked by a
-  task are skipped. It helps when connections are long-lived or their load is
-  uneven. The default `LoadBalancing::IncomingCpu` works the same, but first
-  tries the worker placed on the CPU that receives the connection's network
-  packets (on an SMT sibling of it if that CPU has no worker), so the
-  connection's packets and its worker share the CPU caches. That worker is
-  used unless its utilization exceeds the least loaded choice by more than
-  20% or its load by more than half plus 16. The incoming CPU is the
-  receive-side scaling (RSS) CPU on Windows, other platforms and loopback
-  connections have none and fall back to `LeastLoaded`, as does
-  `Affinity::Disabled`. `LoadBalancing::RoundRobin` sends connections to the
-  workers in turn.
+  workers, see [Connection load balancing](#connection-load-balancing). The
+  default `LoadBalancing::IncomingCpu` sends a connection to the worker on the
+  CPU that receives its network packets unless that worker is busier than
+  others, `LoadBalancing::LeastLoaded` to the less loaded of two random
+  workers, and `LoadBalancing::RoundRobin` to the workers in turn.
 * `graceful_shutdown_timeout()` bounds how long a graceful stop waits for
   workers. The default is 30 seconds.
 * `stop_on_panic()` stops the server instead of restarting a worker that fails.
@@ -186,6 +170,226 @@ system. It runs on the accept thread and reports when listeners pause or
 resume. The status describes acceptance state, not whether every worker is
 healthy, and the same status may be reported more than once. Keep the handler
 quick and non-blocking.
+
+## Worker placement and load balancing
+
+Two settings decide where a connection is processed. `affinity()` places each
+worker thread on a CPU, and `load_balancing()` chooses the worker for each new
+connection. With the defaults, a connection is handled on the CPU, or at least
+the physical core, that receives its network packets. The packet data, the
+socket state and the worker's own data then stay in the same CPU caches and
+on the same NUMA node, and the network stack does not have to wake a thread
+on another CPU for every received packet.
+
+```rust,no_run
+use ntex::server::{Affinity, LoadBalancing};
+
+let builder = ntex::server::build()
+    .workers(8)
+    .affinity(Affinity::Core)
+    .load_balancing(LoadBalancing::IncomingCpu);
+```
+
+### Worker placement
+
+When the server starts, ntex reads the CPU topology and orders the logical
+CPUs the process may use:
+
+1. On hybrid CPUs, faster cores come first: performance cores before
+   efficiency cores.
+2. Within each class, one logical CPU of every physical core, interleaved
+   across the L3 caches of a NUMA node and then across NUMA nodes. With four
+   workers on a two-socket machine, each socket gets two workers, on
+   different L3 caches if the socket has several.
+3. Then the remaining SMT siblings (hyper-threads), in the same order.
+
+Worker `i` takes entry `i` of that list, and the list starts over when there
+are more workers than CPUs. Workers never share a physical core until every
+core has a worker. A restarted worker keeps the placement of the worker it
+replaces.
+
+The placement is applied with one of the `Affinity` modes:
+
+| Mode | Windows | Linux and Android |
+|------|---------|-------------------|
+| `Disabled` | not placed | not placed |
+| `Cpu` | pinned to one logical CPU (`SetThreadGroupAffinity`) | pinned to one logical CPU (`sched_setaffinity`) |
+| `Core` | pinned to the logical CPUs of one physical core | pinned to the logical CPUs of one physical core |
+| `Soft` | preferred CPU only, the ideal processor (`SetThreadIdealProcessorEx`) | same as `Core` |
+
+The default is `Soft` on Windows and `Core` on Linux and Android. `Core` lets
+the scheduler move a worker between the SMT siblings of its core, which share
+its L1 and L2 caches. Other platforms have no topology support and ignore
+affinity.
+
+Placement is applied on the worker thread before the worker's runtime is
+created. The runtime, its timers and the worker's buffer page cache are
+therefore allocated on the NUMA node of the worker's CPU. Each placement is
+logged at `info` level:
+
+```text
+Set affinity to Soft cpu 2 (core 2 3) for worker "api:worker:1"
+```
+
+`Worker::start()` takes a logical CPU index for workers started directly. On
+Windows, the CPUs of processor group 1 are numbered after those of group 0.
+
+#### Windows
+
+* The topology comes from `GetLogicalProcessorInformationEx`: physical cores
+  with their efficiency class, L3 caches and NUMA nodes, across all processor
+  groups.
+* Windows splits machines with more than 64 logical CPUs into processor
+  groups, and a thread runs in one group at a time.
+  `std::thread::available_parallelism()` counts only the current group, ntex
+  counts all of them for the default number of workers and spreads the
+  workers over all groups. A `Soft` worker whose ideal processor is in another
+  group also gets the affinity of that whole group, because the ideal
+  processor must be in the thread's group.
+* The CPUs the process may use come from the process group affinity, the
+  process affinity mask, the group affinity of a job object the process runs
+  in, and the default CPU sets of the process (`start /affinity`,
+  `SetProcessDefaultCpuSets`, container CPU limits). Only Windows 10 APIs are
+  used.
+* `Soft` is a hint. The scheduler runs the worker on its ideal processor when
+  that CPU is free, and on another CPU of the group otherwise, so a worker is
+  not stuck behind a busy thread or interrupt-heavy CPU. Use `Core` or `Cpu`
+  on dedicated machines when strict isolation matters more.
+
+#### Linux and Android
+
+* The topology comes from sysfs, `/sys/devices/system/cpu/cpuN/`:
+  `topology/core_cpus_list` (or `thread_siblings_list`) for the physical
+  core, `cache/index3/shared_cpu_list` for the L3 cache (the package if there
+  is none), the `nodeN` link for the NUMA node, and `cpu_capacity` for
+  big.LITTLE cores.
+* The CPUs the process may use come from `sched_getaffinity()`, so `taskset`,
+  cgroup cpusets (`docker run --cpuset-cpus`) and systemd's `CPUAffinity=`
+  are honored.
+* Linux has no preferred-CPU hint, so `Soft` works like `Core`.
+* The default number of workers follows
+  `std::thread::available_parallelism()`, which also honors a cgroup CPU
+  quota (`docker run --cpus`). A quota does not restrict which CPUs run the
+  process, so the workers are still spread over all allowed CPUs.
+
+### Connection load balancing
+
+The accept thread accepts a connection and passes it to the server's command
+loop, which runs on the thread that started the server. The command loop
+chooses a worker and queues the connection to it. The worker turns the socket
+into an ntex `Io` and registers it with its own runtime, so all later I/O of
+the connection runs on that worker.
+
+Only workers that are ready receive connections, see
+[Workers and service factories](#workers-and-service-factories). Among them,
+`LoadBalancing` decides:
+
+* `RoundRobin` sends connections to the workers in turn.
+* `LeastLoaded` picks two random workers and takes the one with the lower
+  runtime utilization, the share of time the worker's runtime was busy,
+  averaged over about 250 ms and sampled at most every 10 ms. If the two
+  differ by less than 10%, the one with fewer open and queued connections
+  wins. Workers blocked by a task are skipped while another worker is
+  available, see [Stall detection](#stall-detection). On tokio, busy time is
+  available only for current-thread runtimes, otherwise the connection count
+  decides.
+* `IncomingCpu`, the default, prefers the worker on the CPU that receives the
+  connection's packets, and works like `LeastLoaded` otherwise.
+
+For each connection, `IncomingCpu`:
+
+1. asks the operating system which CPU receives the connection's packets,
+   once, when the connection is accepted;
+2. finds the workers placed on that CPU, or, if none is, the workers whose
+   physical core contains it;
+3. takes the one that is not blocked and has the lowest utilization, then
+   the fewest connections;
+4. compares it with the `LeastLoaded` choice, and uses it unless its
+   utilization is more than 20% higher or its load exceeds the other worker's
+   load by more than half plus 16 connections.
+
+The limits keep the preference from overloading workers when the network
+adapter delivers traffic to only a few CPUs, when its hash spreads
+connections unevenly, or when some connections are much more expensive than
+others. Under normal load nearly every connection stays local.
+
+Connections without an incoming CPU use the `LeastLoaded` choice. This
+covers loopback connections on Windows, platforms other than Windows, Linux
+and Android, `Affinity::Disabled`, and custom `ServerConfiguration`
+implementations that do not override `incoming_cpu()`.
+
+The incoming CPU is read once. If the operating system later moves the
+connection's traffic to another CPU, for example when RSS is rebalanced or
+irqbalance moves an interrupt, the connection stays on its worker.
+
+`ServerMetrics::incoming_cpu_hits` and `incoming_cpu_misses` show how well
+this works, see [Incoming CPU](#incoming-cpu).
+
+#### Windows: receive-side scaling
+
+A network adapter with receive-side scaling (RSS) hashes each connection's
+addresses and ports into an indirection table that selects a receive queue,
+and each queue is served by one CPU, where NDIS runs the receive processing.
+ntex reads that CPU with `WSAIoctl(SIO_QUERY_RSS_PROCESSOR_INFO)`, which
+returns its processor group and number.
+
+* With `Affinity::Soft`, the ideal processor of the chosen worker is the RSS
+  CPU, so the receive processing that completes the worker's I/O and the
+  worker thread it wakes usually run on the same CPU.
+* By default, RSS uses one logical CPU per physical core, starting at the
+  adapter's base processor. Worker placement also takes one logical CPU of
+  every core first, so with a worker per core the RSS CPUs have their own
+  workers.
+* Loopback connections (`127.0.0.1`, `::1`) do not pass through an adapter
+  and have no RSS CPU. Connections to one of the machine's own adapter
+  addresses, including connections from WSL, do have one, which is useful to
+  test this on a single machine. Adapters without RSS, or with RSS disabled,
+  report none.
+* `Get-NetAdapterRss` shows the adapter's RSS settings, including
+  `BaseProcessorNumber`, `MaxProcessors` and the processors the indirection
+  table uses. If many connections miss, align the RSS processors with the
+  worker CPUs, for example:
+
+```powershell
+Set-NetAdapterRss -Name "Ethernet" -BaseProcessorNumber 0 -MaxProcessors 8
+```
+
+#### Linux and Android: `SO_INCOMING_CPU`
+
+ntex reads `getsockopt(SOL_SOCKET, SO_INCOMING_CPU)` (Linux 3.19 or later),
+the CPU on which the network stack processed the last packet received for
+the socket. For a newly accepted connection, that is the CPU that processed
+the last packet of the TCP handshake.
+
+* That CPU is set by the interrupt affinity of the adapter's receive queue
+  (`/proc/irq/N/smp_affinity_list`), and changed by Receive Packet Steering
+  (`/sys/class/net/<dev>/queues/rx-N/rps_cpus`), which moves packet
+  processing to other CPUs, and by Receive Flow Steering, which moves it to
+  the CPU where the consuming thread last ran.
+* Loopback packets are processed on the sending CPU, so loopback connections
+  report the client's CPU. Test servers on loopback therefore count hits and
+  misses too.
+* `ethtool -l <dev>` shows the number of receive queues, `ethtool -L <dev>
+  combined N` changes it, and `/proc/interrupts` shows which CPUs handle the
+  queues. For the best locality, use one queue per worker and pin the queue
+  interrupts to the worker CPUs. irqbalance may move them again, unless it is
+  stopped or told to leave those interrupts alone.
+
+### Choosing the settings
+
+* The defaults suit most servers, including servers without a multi-queue
+  network adapter, where `IncomingCpu` behaves like `LeastLoaded`.
+* Use `LoadBalancing::LeastLoaded` if per-worker `active_connections` stay
+  uneven under `IncomingCpu`, for example when an adapter has fewer queues
+  than the server has workers and its CPUs carry most connections.
+* On machines shared with other busy processes, prefer `Affinity::Soft` on
+  Windows, or `Affinity::Disabled`, so the scheduler can move workers away
+  from busy CPUs.
+* With more workers than CPUs, several workers share a CPU, and
+  `IncomingCpu` chooses the least loaded of them.
+* `LoadBalancing::RoundRobin` distributes connections the way earlier ntex
+  versions did, which keeps tests that count connections per worker
+  predictable.
 
 ## Controlling a running server
 
@@ -302,13 +506,14 @@ These fields are on `ServerMetrics`, see `LoadBalancing::IncomingCpu`.
 | `incoming_cpu_hits` | counter | Connections sent to the worker on the CPU that receives their packets. |
 | `incoming_cpu_misses` | counter | Connections with a known incoming CPU sent to another worker, because no worker is placed on that CPU or its worker was busier. |
 
-Connections without a known incoming CPU, e.g. loopback connections or
-servers on platforms other than Windows, are counted in neither. Many
-misses mean the network adapter delivers packets to CPUs without workers,
-for example CPUs outside the process affinity, or that the workers on the
-RSS CPUs are busier than the others, for example RSS uses fewer CPUs than
-the server has workers. Check the adapter's RSS settings
-(`Get-NetAdapterRss`) against the worker placement.
+Connections without a known incoming CPU, e.g. loopback connections on
+Windows or servers on platforms other than Windows, Linux and Android, are
+counted in neither. Many misses mean the network adapter delivers packets
+to CPUs without workers, for example CPUs outside the process affinity, or
+that the workers on the receiving CPUs are busier than the others, for
+example the adapter uses fewer queues than the server has workers. Check
+the adapter's RSS settings (`Get-NetAdapterRss` on Windows, `ethtool -l`
+and `/proc/interrupts` on Linux) against the worker placement.
 
 ### Listeners
 

@@ -117,8 +117,9 @@ impl Placement {
 /// Returns the index of the logical CPU that receives the packets of the
 /// connection, if known.
 ///
-/// On Windows, this is the receive-side scaling (RSS) CPU of the connection.
-/// Not supported on other platforms yet.
+/// On Windows, this is the receive-side scaling (RSS) CPU of the connection,
+/// on Linux and Android the CPU that processed its last received packet
+/// (`SO_INCOMING_CPU`). Not supported on other platforms.
 pub(crate) fn incoming_cpu(stream: &std::net::TcpStream) -> Option<usize> {
     sys::incoming_cpu(stream).map(sys::index)
 }
@@ -337,8 +338,29 @@ mod sys {
         usize::try_from(cpu.num).unwrap_or(usize::MAX)
     }
 
-    pub(super) fn incoming_cpu(_: &std::net::TcpStream) -> Option<Cpu> {
-        None
+    pub(super) fn incoming_cpu(stream: &std::net::TcpStream) -> Option<Cpu> {
+        use std::os::fd::AsRawFd;
+
+        #[cfg(target_os = "linux")]
+        const SO_INCOMING_CPU: libc::c_int = libc::SO_INCOMING_CPU;
+        #[cfg(target_os = "android")]
+        const SO_INCOMING_CPU: libc::c_int = 49;
+
+        let mut cpu: libc::c_int = -1;
+        let mut len = libc::socklen_t::try_from(mem::size_of::<libc::c_int>()).ok()?;
+        // SAFETY: the output buffer holds `len` bytes
+        let res = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                SO_INCOMING_CPU,
+                (&raw mut cpu).cast(),
+                &raw mut len,
+            )
+        };
+        // -1 if no packet was received yet
+        let num = u32::try_from(cpu).ok().filter(|_| res == 0)?;
+        Some(Cpu { group: 0, num })
     }
 
     pub(super) fn apply(mode: Affinity, cpu: Cpu, core: &[Cpu]) -> bool {
@@ -350,8 +372,10 @@ mod sys {
         // SAFETY: cpu_set_t is plain data, the size matches the set
         unsafe {
             let mut set: libc::cpu_set_t = mem::zeroed();
+            // `CPU_SETSIZE` is a `c_int` on Linux and a `usize` on Android
+            let size = u32::try_from(libc::CPU_SETSIZE).unwrap_or(0);
             for cpu in cpus {
-                if i64::from(cpu.num) < i64::from(libc::CPU_SETSIZE) {
+                if cpu.num < size {
                     libc::CPU_SET(cpu.num as usize, &mut set);
                 }
             }
@@ -987,11 +1011,15 @@ mod tests {
         let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let client = std::net::TcpStream::connect(lst.local_addr().unwrap()).unwrap();
         let (server, _) = lst.accept().unwrap();
-        // loopback connections have no RSS CPU, if known it must be valid
+        // loopback connections have no RSS CPU on Windows, if known the CPU
+        // must exist
         for stream in [&client, &server] {
-            if let Some(cpu) = incoming_cpu(stream) {
-                assert!(cpu < cpu_count(), "{cpu}");
+            let cpu = incoming_cpu(stream);
+            if let Some(cpu) = cpu {
+                assert_eq!(sys::index(sys::cpu(cpu)), cpu);
             }
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            assert!(cpu.is_some());
         }
     }
 
