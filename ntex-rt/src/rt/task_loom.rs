@@ -1,8 +1,8 @@
-//! Loom models of the raw task protocol between the owner thread and other
+//! Loom models of the task protocol between the owner thread and other
 //! threads: the remote word, the remote queue, the join handle awaiter and
 //! the output hand-off, scheduler shutdown and parked-driver notifications.
 //!
-//! `RUSTFLAGS="--cfg ntex_loom" cargo test --release -p ntex-rt --lib raw_loom`
+//! `RUSTFLAGS="--cfg ntex_loom" cargo test --release -p ntex-rt --lib task_loom`
 use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 
@@ -10,7 +10,7 @@ use loom::sync::atomic::{AtomicBool, AtomicUsize};
 use loom::thread;
 
 use super::{Arc, Future, Location, Notify, Ordering, PollResult, Runtime, io};
-use crate::rt::raw::{self, Task};
+use crate::rt::task::{self, Task};
 
 #[derive(Debug)]
 struct NoopNotify;
@@ -104,7 +104,7 @@ fn new_rt() -> Runtime {
 }
 
 fn spawn<F: Future>(rt: &Runtime, f: F) -> Task<F::Output> {
-    unsafe { raw::spawn::<_, true>(f, &rt.queue, Location::caller()) }
+    unsafe { task::spawn::<_, true>(f, &rt.queue, Location::caller()) }
 }
 
 /// Runs queued tasks until both queues are empty.
@@ -426,7 +426,7 @@ fn remote_spawn() {
         st.ready.store(true, Ordering::Relaxed);
         let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
         let th = thread::spawn(move || {
-            let task = unsafe { raw::spawn::<_, false>(fut, &q, Location::caller()) };
+            let task = unsafe { task::spawn::<_, false>(fut, &q, Location::caller()) };
             *join(task).unwrap()
         });
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
@@ -478,7 +478,7 @@ fn remote_spawn_detached() {
         st.ready.store(true, Ordering::Relaxed);
         let (q, fut, st2) = (rt.queue.clone(), Fut(st.clone()), st.clone());
         let th = thread::spawn(move || unsafe {
-            raw::spawn_detached::<_, false>(
+            task::spawn_detached::<_, false>(
                 async move {
                     let _ = fut.await;
                     Out(st2)
@@ -648,9 +648,9 @@ fn spawn_shutdown(detached: bool) {
                     let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
                     thread::spawn(move || unsafe {
                         if detached {
-                            raw::spawn_detached::<_, false>(fut, &q, Location::caller());
+                            task::spawn_detached::<_, false>(fut, &q, Location::caller());
                         } else {
-                            drop(raw::spawn::<_, false>(fut, &q, Location::caller()));
+                            drop(task::spawn::<_, false>(fut, &q, Location::caller()));
                         }
                     })
                 })

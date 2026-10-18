@@ -670,6 +670,45 @@ mod tests {
         });
     }
 
+    #[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
+    #[test]
+    fn panicking_arbiter() {
+        /// Returns a panic of the event loop as an error, like the ntex-net
+        /// runners.
+        struct CatchRunner;
+
+        impl crate::Runner for CatchRunner {
+            fn block_on(
+                &self,
+                fut: crate::BlockFuture,
+            ) -> Result<(), Box<dyn std::any::Any + Send>> {
+                panic::catch_unwind(panic::AssertUnwindSafe(|| TestRunner.block_on(fut)))?
+            }
+        }
+
+        System::new("arb-panic", CatchRunner).block_on(async {
+            let sys = System::current();
+            let mut arb = Arbiter::with_name("panics".to_string());
+            let (tx, rx) = oneshot::channel();
+            arb.handle()
+                .spawn(async move {
+                    Arbiter::on_shutdown(move || {
+                        let _ = tx.send(());
+                    });
+                    panic!("arbiter boom");
+                })
+                .detach();
+
+            // the panic of the event loop is returned by `join`
+            let err = arb.join().unwrap_err();
+            assert_eq!(err.downcast_ref::<&str>(), Some(&"arbiter boom"));
+            // the arbiter is unregistered and its shutdown callbacks ran
+            assert!(rx.recv().is_ok());
+            assert!(!arb.is_running());
+            sys.list_arbiters(|arbs| assert!(!arbs.contains(&arb)));
+        });
+    }
+
     #[test]
     fn arbiter_values() {
         System::new("test", TestRunner).block_on(async {

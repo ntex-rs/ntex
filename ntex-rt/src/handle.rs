@@ -1,6 +1,6 @@
 use std::{fmt, panic::Location, pin::Pin, task::Context, task::Poll, task::ready};
 
-type Task<T> = crate::rt::raw::Task<T>;
+type Task<T> = crate::rt::task::Task<T>;
 
 /// The location a task was spawned at.
 pub(crate) type SpawnLocation = &'static Location<'static>;
