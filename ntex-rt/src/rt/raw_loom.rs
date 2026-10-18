@@ -280,6 +280,39 @@ fn remote_release() {
     });
 }
 
+/// A completed output is released while another thread clones and drops
+/// the remaining waker, after the runtime is gone.
+#[test]
+fn completed_output_release() {
+    model(|| {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let st = Arc::new(State::default());
+        let (fut, st2) = (Fut(st.clone()), st.clone());
+        let task = spawn(&rt, async move {
+            let _ = fut.await;
+            Out(st2)
+        });
+        drain(&rt);
+        let w = st.waker.lock().unwrap().take().unwrap();
+        st.ready.store(true, Ordering::Release);
+        w.wake_by_ref();
+        drain(&rt);
+        assert!(task.is_finished());
+        drop(rt);
+        let th = thread::spawn(move || {
+            let cloned = w.clone();
+            drop(w);
+            drop(cloned);
+        });
+        drop(task);
+        th.join().unwrap();
+        assert_eq!(st.drops.load(Ordering::Relaxed), 1);
+        assert_eq!(st.outputs.load(Ordering::Relaxed), 1);
+        assert!(queue.upgrade().is_none(), "task alive");
+    });
+}
+
 /// A task spawned from another thread is run and joined there.
 #[test]
 fn remote_spawn() {

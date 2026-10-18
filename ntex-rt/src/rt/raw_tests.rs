@@ -193,6 +193,18 @@ fn on_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
 }
 
 #[test]
+#[cfg(debug_assertions)]
+#[cfg_attr(miri, ignore = "leaks the task")]
+fn run_off_owner_thread() {
+    let rt = new_rt();
+    let task = spawn(&rt, async {});
+    let r = one_local(&rt);
+    // the runnable is dropped on the other thread, the task leaks
+    assert!(thread::spawn(move || r.run()).join().is_err());
+    drop(task);
+}
+
+#[test]
 fn drop_and_detach() {
     let rt = new_rt();
     let p = Probe::default();
@@ -649,6 +661,50 @@ fn release_after_shutdown() {
         });
         p.check(1, 1, 1);
         assert!(queue.upgrade().is_none(), "task alive");
+    }
+}
+
+#[test]
+fn release_output_after_shutdown() {
+    struct Output {
+        waker: Option<Waker>,
+        panics: bool,
+        _drop: Token,
+    }
+
+    impl Drop for Output {
+        fn drop(&mut self) {
+            // The output guard becomes the last reference during destruction.
+            drop(self.waker.take());
+            assert!(!self.panics, "output drop");
+        }
+    }
+
+    for remote in [false, true] {
+        for panics in [false, true] {
+            let rt = new_rt();
+            let queue = Arc::downgrade(&rt.queue);
+            let drops = Counter::default();
+            let mut token = Some(drops.token());
+            let task = spawn(
+                &rt,
+                poll_fn(move |cx| {
+                    Poll::Ready(Output {
+                        waker: Some(cx.waker().clone()),
+                        panics,
+                        _drop: token.take().unwrap(),
+                    })
+                }),
+            );
+            one_local(&rt).run();
+            drop(rt);
+            assert!(queue.upgrade().is_some());
+            let release = move || catch_unwind(AssertUnwindSafe(|| drop(task))).is_err();
+            let panicked = if remote { on_thread(release) } else { release() };
+            assert_eq!(panicked, panics);
+            assert_eq!(drops.get(), 1);
+            assert!(queue.upgrade().is_none(), "task alive");
+        }
     }
 }
 

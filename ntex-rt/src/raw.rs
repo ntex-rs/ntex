@@ -555,16 +555,25 @@ fn finish_unshared(h: NonNull<Header>) {
     unsafe { (hdr.vtable.drop_output)(task.0) };
 }
 
-/// Releases a reference on drop, also while unwinding from an output drop.
+/// Releases a reference after completion was published, also while
+/// unwinding from an output drop.
 struct Release(NonNull<Header>);
 
 impl Drop for Release {
     fn drop(&mut self) {
-        release(self.0);
+        let h = self.0;
+        let cur = header(h).remote.load(Ordering::Acquire);
+        debug_assert_ne!(cur & R_FINISHED, 0);
+        if delta(cur) == 1 {
+            unsafe { (header(h).vtable.dealloc)(h) };
+        } else {
+            release_shared(h);
+        }
     }
 }
 
-/// Drops the output, then releases a reference of the caller.
+/// Drops the output after completion is published, then releases a
+/// reference of the caller.
 fn drop_output(h: NonNull<Header>) {
     let release = Release(h);
     unsafe { (header(release.0).vtable.drop_output)(release.0) };
@@ -663,6 +672,8 @@ impl Runnable {
             }
         }
 
+        // the future may be `!Send`
+        debug_assert!(is_owner(self.0), "task polled off its runtime thread");
         let h = self.0;
         mem::forget(self);
         let hdr = header(h);
@@ -749,6 +760,7 @@ impl Remote {
     /// Merges remote updates on the owner thread, returns the task if it
     /// should run.
     pub(crate) fn into_runnable(self) -> Option<Runnable> {
+        debug_assert!(is_owner(self.0), "task merged off its runtime thread");
         let h = self.0;
         mem::forget(self);
         let hdr = header(h);
