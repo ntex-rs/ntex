@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::{io, marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
 use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
@@ -8,7 +8,6 @@ use super::{ServerAppConfig, Token, service::ConnGuard};
 
 pub(super) type FactoryServiceType<St> = Box<dyn FactoryService<St>>;
 type CreateResult = Vec<(Box<dyn NetService>, Arc<str>, Vec<(Token, SharedCfg)>)>;
-type SvcFactory<St> = dyn Fn(St) -> BoxFuture<'static, Box<dyn NetService>>;
 
 pub(crate) trait NetService {
     fn call(&self, _: Io, _: ConnGuard);
@@ -24,10 +23,12 @@ pub(crate) trait FactoryService<Cfg: ServerAppConfig>: Send {
     fn create(&self, st: Cfg::State) -> BoxFuture<'static, io::Result<CreateResult>>;
 }
 
-struct Factory<Cfg: ServerAppConfig> {
+// Each instance owns its factory, `F` is cloned, never shared between threads
+struct Factory<Cfg, F, S> {
     name: Arc<str>,
     tokens: Vec<(Token, SharedCfg)>,
-    fac: Arc<SvcFactory<Cfg::State>>,
+    f: F,
+    _t: PhantomData<fn() -> (Cfg, S)>,
 }
 
 pub(crate) fn create_factory_service<Cfg, F, S, I>(
@@ -41,36 +42,41 @@ where
     I: IntoService<S, Cfg::State, Io> + 'static,
     S: Service<Cfg::State, Io> + 'static,
 {
-    Box::from(Factory {
+    Box::new(Factory {
         tokens,
         name: Arc::from(name),
-        fac: Arc::new(move |cfg: Cfg::State| {
-            let f = f.clone();
-            Box::pin(async move {
-                let svc = (f)(&cfg).await.into_service();
-                let pipeline = Pipeline::new(cfg, svc.map(|_| ()).map_err(|_| ()));
-                let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
-                svc
-            })
-        }),
+        f,
+        _t: PhantomData::<fn() -> (Cfg, S)>,
     })
 }
 
-impl<Cfg: ServerAppConfig> FactoryService<Cfg> for Factory<Cfg> {
+impl<Cfg, F, S, I> FactoryService<Cfg> for Factory<Cfg, F, S>
+where
+    Cfg: ServerAppConfig,
+    F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+    I: IntoService<S, Cfg::State, Io> + 'static,
+    S: Service<Cfg::State, Io> + 'static,
+{
     fn clo(&self) -> FactoryServiceType<Cfg> {
         Box::new(Factory {
             name: self.name.clone(),
             tokens: self.tokens.clone(),
-            fac: self.fac.clone(),
+            f: self.f.clone(),
+            _t: PhantomData::<fn() -> (Cfg, S)>,
         })
     }
 
     fn create(&self, st: Cfg::State) -> BoxFuture<'static, io::Result<CreateResult>> {
         let name = self.name.clone();
         let tokens = self.tokens.clone();
-        let factory_fut = (self.fac)(st);
+        let f = self.f.clone();
 
-        Box::pin(async move { Ok(vec![(factory_fut.await, name, tokens)]) })
+        Box::pin(async move {
+            let svc = f(&st).await.into_service();
+            let pipeline = Pipeline::new(st, svc.map(|_| ()).map_err(|_| ()));
+            let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
+            Ok(vec![(svc, name, tokens)])
+        })
     }
 }
 
@@ -96,6 +102,50 @@ impl NetService for ServerService {
     }
 }
 
-// SAFETY: Send cannot be provided authomatically because of E and R params
-// but R always get executed in one thread and never leave it
-unsafe impl<Cfg: ServerAppConfig> Send for Factory<Cfg> {}
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    // Send but not Sync, clone mutates the source
+    struct CloneCounter(Cell<usize>);
+
+    impl Clone for CloneCounter {
+        fn clone(&self) -> Self {
+            self.0.set(self.0.get() + 1);
+            Self(Cell::new(0))
+        }
+    }
+
+    impl CloneCounter {
+        fn touch(&self) -> usize {
+            self.0.get()
+        }
+    }
+
+    // Under miri, a factory shared between instances is a data race
+    #[test]
+    fn factory_not_shared_between_threads() {
+        let counter = CloneCounter(Cell::new(0));
+        let first = create_factory_service::<crate::NoConfig, _, _, _>(
+            "test".to_owned(),
+            Vec::new(),
+            async move |(): &()| {
+                let _ = counter.touch();
+                ntex_service::fn_service(async |_: Io| Ok::<_, ()>(()))
+            },
+        );
+        let second = first.clo();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            for fac in [first, second] {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    drop(fac.create(()));
+                });
+            }
+        });
+    }
+}
