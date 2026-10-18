@@ -39,6 +39,15 @@
 * A cancelled full flush no longer suppresses the wake of a later partial flush once
   output drops below the write backpressure threshold
 
+* Breaking: `Filter::poll_ready()` replaces `Filter::poll_read_ready()` and
+  `Filter::poll_write_ready()`, the transport read task polls it. A chain that is not ready
+  pauses transport reads, transport writes are not paused, eager and scheduled writes could
+  bypass the write readiness before. Input and output the chain holds are processed again
+  once it is ready, an error terminates the connection
+
+* Breaking: `IoRef::is_filter_paused()` replaces `IoRef::is_read_filter_paused()` and
+  `IoRef::is_write_filter_paused()`
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`

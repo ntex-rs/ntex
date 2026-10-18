@@ -1,19 +1,11 @@
-/// Implements [`Filter::poll_read_ready`] and [`Filter::poll_write_ready`] by
-/// forwarding readiness checks to a field.
-///
-/// [`Filter::poll_read_ready`]: crate::Filter::poll_read_ready
-/// [`Filter::poll_write_ready`]: crate::Filter::poll_write_ready
+/// Implements [`Filter::poll_ready`](crate::Filter::poll_ready) by forwarding
+/// the readiness check to a field.
 #[macro_export]
 macro_rules! forward_ready {
     ($field:ident) => {
         #[inline]
-        fn poll_read_ready(&self, cx: &mut std::task::Context<'_>) -> Poll<$crate::Readiness> {
-            self.$field.poll_read_ready(cx)
-        }
-
-        #[inline]
-        fn poll_write_ready(&self, cx: &mut std::task::Context<'_>) -> Poll<$crate::Readiness> {
-            self.$field.poll_write_ready(cx)
+        fn poll_ready(&self, cx: &mut std::task::Context<'_>) -> Poll<std::io::Result<()>> {
+            self.$field.poll_ready(cx)
         }
     };
 }

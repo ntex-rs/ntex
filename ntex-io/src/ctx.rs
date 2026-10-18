@@ -94,39 +94,82 @@ impl IoContext {
     /// paused for the transport shutdown phase, so `Close` is resolved here
     /// only once the connection is terminated.
     ///
-    /// A filter that is not ready while the io state allows reads pauses
-    /// them, see [`IoRef::is_read_filter_paused`]. The dispatcher is notified
-    /// when the pause starts and when it ends.
+    /// The read task drives the filter chain readiness, see
+    /// [`Filter::poll_ready`](crate::Filter::poll_ready). A chain that is not
+    /// ready pauses reads, see [`IoRef::is_filter_paused`]. The task must keep
+    /// polling this until it reports `Close` or `Terminate`, also while reads
+    /// are paused, so that the end of a pause is observed.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = self.st();
         if st.flags.is_force_closing() {
-            // The filter chain is replaced by `NullFilter` when `Io` is
-            // dropped, so the force-close decision is made here rather than in
-            // the chain: it has to survive that replacement.
+            // The filter chain is removed when `Io` is dropped, so the
+            // force-close decision is made here rather than in the chain: it
+            // has to survive that removal.
             return Poll::Ready(Readiness::Terminate);
         }
         self.poll_filters_shutdown(cx);
-        let res = {
-            let _borrow = st.buffer.borrow();
-            self.0.filter().poll_read_ready(cx)
-        };
-
-        if res.is_pending() {
-            // A pause the io state accounts for is known to the dispatcher. A
-            // filter pause is kept until the chain is ready again.
-            if !st.flags.is_read_filter_paused()
-                && read_readiness(st) == Poll::Ready(Readiness::Ready)
-            {
-                log::trace!("{}: Filter is not ready, pause reading", st.tag());
-                st.flags.set_read_filter_paused();
-                st.wake_dispatch_task();
-            }
-        } else if st.flags.is_read_filter_paused() {
-            log::trace!("{}: Filter is ready, resume reading", st.tag());
-            st.flags.unset_read_filter_paused();
-            st.wake_dispatch_task();
+        if st.is_io_dropped() {
+            // The filter chain is gone, nothing is left that could process
+            // buffered data, the transport closes the connection gracefully.
+            // Output that never reached the peer forced a close above.
+            return Poll::Ready(Readiness::Close);
         }
-        res
+
+        let res = read_readiness(st);
+        if matches!(res, Poll::Ready(Readiness::Close | Readiness::Terminate)) {
+            return res;
+        }
+        st.read_task.register(cx.waker());
+
+        // The filters are done in the transport shutdown phase
+        if st.flags.is_stopping() {
+            return res;
+        }
+
+        let ready = {
+            let _borrow = st.buffer.borrow();
+            self.0.filter().poll_ready(cx)
+        };
+        match ready {
+            Poll::Ready(Ok(())) => {
+                if st.flags.is_filter_paused() {
+                    log::trace!("{}: Filter is ready, resume", st.tag());
+                    st.flags.unset_filter_paused();
+                    st.wake_dispatch_task();
+                    self.resume_filters();
+                    return read_readiness(st);
+                }
+                res
+            }
+            Poll::Ready(Err(err)) => {
+                st.terminate_connection(Some(err));
+                read_readiness(st)
+            }
+            Poll::Pending => {
+                if !st.flags.is_filter_paused() {
+                    log::trace!("{}: Filter is not ready, pause", st.tag());
+                    st.flags.set_filter_paused();
+                    st.wake_dispatch_task();
+                }
+                Poll::Pending
+            }
+        }
+    }
+
+    /// Processes input and output the filter chain holds, once it is ready
+    /// again after a pause.
+    ///
+    /// The chain may hold either in any layer, including intermediate ones
+    /// whose buffers are not visible here, so both directions are processed
+    /// once without waiting for new transport input.
+    fn resume_filters(&self) {
+        let st = self.st();
+        let orig = st.buffer.read_dst_size();
+        let result = self.process_read_input(orig).and_then(|()| {
+            st.buffer.process_write_buf_force(&self.0)?;
+            self.0.consolidate_write_state(false)
+        });
+        let _ = self.read_task_status(result);
     }
 
     #[inline]
@@ -137,9 +180,8 @@ impl IoContext {
     /// reports `Close` at the end of a graceful shutdown as well, once buffered
     /// output has been drained, so the task must not flush again.
     ///
-    /// A filter that is not ready while output is waiting pauses writes, see
-    /// [`IoRef::is_write_filter_paused`]. The dispatcher is notified when the
-    /// pause starts and when it ends.
+    /// Writes do not depend on the filter chain readiness, output that reached
+    /// the transport is always delivered.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = self.st();
         if st.flags.is_force_closing() {
@@ -147,24 +189,14 @@ impl IoContext {
             return Poll::Ready(Readiness::Terminate);
         }
         self.poll_shutdown_deadline(cx);
-        let res = {
-            let _borrow = st.buffer.borrow();
-            self.0.filter().poll_write_ready(cx)
-        };
-
-        if res.is_pending() {
+        if st.is_io_dropped() {
             // see `poll_read_ready`
-            if !st.flags.is_write_filter_paused()
-                && write_readiness(st) == Poll::Ready(Readiness::Ready)
-            {
-                log::trace!("{}: Filter is not ready, pause writing", st.tag());
-                st.flags.set_write_filter_paused();
-                st.wake_dispatch_task();
-            }
-        } else if st.flags.is_write_filter_paused() {
-            log::trace!("{}: Filter is ready, resume writing", st.tag());
-            st.flags.unset_write_filter_paused();
-            st.wake_dispatch_task();
+            return Poll::Ready(Readiness::Close);
+        }
+
+        let res = write_readiness(st);
+        if !matches!(res, Poll::Ready(Readiness::Close | Readiness::Terminate)) {
+            st.write_task.register(cx.waker());
         }
         res
     }
@@ -356,68 +388,79 @@ impl IoContext {
                     st.flags.set_read_eof();
                     st.wake_dispatch_task();
                 }
-
-                st.buffer.process_read_buf(&self.0).and_then(|status| {
-                    let size = st.buffer.read_dst_size();
-
-                    // The destination read buffer has new data, wake up the dispatcher
-                    if size > orig {
-                        if st.is_rd_backpressure_needed(size) {
-                            log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
-                            st.set_read_ready_and_backpressure();
-                        } else {
-                            st.flags.set_read_ready();
-                        }
-                        #[cfg(feature = "trace")]
-                        log::trace!("{}: New {size} bytes available", st.tag());
-                        st.wake_dispatch_task();
-                    }
-
-                    if st.flags.is_read_notify() {
-                        // If the "notify" flag is set, we must wake the
-                        // dispatcher task whenever data is read from the source.
-                        st.wake_dispatch_task();
-                        st.flags.set_read_notified();
-                    }
-
-                    // A filter may write data while processing reads, for
-                    // example a TLS handshake record. Such output can land in
-                    // an intermediate buffer that `write_buf_size()` does not
-                    // account for, so the write chain is forced from the
-                    // outermost layer to move it to the transport.
-                    if status.wants_write {
-                        st.buffer.process_write_buf_force(&self.0)?;
-                        self.0.consolidate_write_state(false)?;
-
-                        // Output produced by reading, for example replies to
-                        // peer pings, must not grow without bound while the
-                        // peer does not read. Reads pause until it drains or
-                        // the dispatcher asks for more input.
-                        if st.is_wr_backpressure_needed(st.transport_outstanding()) {
-                            log::trace!("{}: Write buf is full, pause reading", st.tag());
-                            st.flags.set_read_wr_backpressure();
-                        }
-                    } else if st.flags.is_write_paused()
-                        && st.buffer.write_buf_size() != st.buffer.write_dst_size()
-                    {
-                        // A filter holds output back, the input may be what it
-                        // waits for. The write task paused on that output, so
-                        // it is scheduled to let the filter retry.
-                        self.0.consolidate_write_state(false)?;
-                    }
-
-                    // The input may be what a filter waits for to complete its
-                    // shutdown, e.g. the peer's TLS close_notify, which is
-                    // polled by the read task. Only actual input wakes it, a
-                    // pending read would make the read task spin until the
-                    // shutdown deadline.
-                    if st.flags.is_shutting_down_filters() {
-                        st.wake_read_task();
-                    }
-                    Ok(())
-                })
+                self.process_read_input(orig)
             }),
         };
+        self.read_task_status(result)
+    }
+
+    /// Runs the read filter chain over buffered transport input.
+    fn process_read_input(&self, orig: usize) -> io::Result<()> {
+        let st = self.st();
+        st.buffer.process_read_buf(&self.0).and_then(|status| {
+            let size = st.buffer.read_dst_size();
+
+            // The destination read buffer has new data, wake up the dispatcher
+            if size > orig {
+                if st.is_rd_backpressure_needed(size) {
+                    log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
+                    st.set_read_ready_and_backpressure();
+                } else {
+                    st.flags.set_read_ready();
+                }
+                #[cfg(feature = "trace")]
+                log::trace!("{}: New {size} bytes available", st.tag());
+                st.wake_dispatch_task();
+            }
+
+            if st.flags.is_read_notify() {
+                // If the "notify" flag is set, we must wake the
+                // dispatcher task whenever data is read from the source.
+                st.wake_dispatch_task();
+                st.flags.set_read_notified();
+            }
+
+            // A filter may write data while processing reads, for
+            // example a TLS handshake record. Such output can land in
+            // an intermediate buffer that `write_buf_size()` does not
+            // account for, so the write chain is forced from the
+            // outermost layer to move it to the transport.
+            if status.wants_write {
+                st.buffer.process_write_buf_force(&self.0)?;
+                self.0.consolidate_write_state(false)?;
+
+                // Output produced by reading, for example replies to
+                // peer pings, must not grow without bound while the
+                // peer does not read. Reads pause until it drains or
+                // the dispatcher asks for more input.
+                if st.is_wr_backpressure_needed(st.transport_outstanding()) {
+                    log::trace!("{}: Write buf is full, pause reading", st.tag());
+                    st.flags.set_read_wr_backpressure();
+                }
+            } else if st.flags.is_write_paused()
+                && st.buffer.write_buf_size() != st.buffer.write_dst_size()
+            {
+                // A filter holds output back, the input may be what it
+                // waits for. The write task paused on that output, so
+                // it is scheduled to let the filter retry.
+                self.0.consolidate_write_state(false)?;
+            }
+
+            // The input may be what a filter waits for to complete its
+            // shutdown, e.g. the peer's TLS close_notify, which is
+            // polled by the read task. Only actual input wakes it, a
+            // pending read would make the read task spin until the
+            // shutdown deadline.
+            if st.flags.is_shutting_down_filters() {
+                st.wake_read_task();
+            }
+            Ok(())
+        })
+    }
+
+    /// Completes read processing, returns the read task status.
+    fn read_task_status(&self, result: io::Result<()>) -> IoTaskStatus {
+        let st = self.st();
         st.sync_read_buffered();
 
         if let Err(err) = result {
@@ -440,7 +483,7 @@ impl IoContext {
             IoTaskStatus::Stop
         } else if st.flags.is_read_eof()
             || st.flags.is_read_paused_or_backpressure()
-            || st.flags.is_read_filter_paused()
+            || st.flags.is_filter_paused()
             || (st.flags.is_read_wr_backpressure() && !st.flags.is_stopping_filters())
         {
             IoTaskStatus::Pause
@@ -571,11 +614,6 @@ impl IoContext {
                         // one that splits them is not.
                         st.wake_write_task();
                     }
-                    IoTaskStatus::Pause
-                } else if st.flags.is_write_filter_paused() {
-                    // the write task waits for the filter chain, it is
-                    // not paused for lack of output
-                    st.flags.unset_write_paused();
                     IoTaskStatus::Pause
                 } else if st.buffer.write_dst_size() == 0 {
                     // A filter holds the output back, for example application

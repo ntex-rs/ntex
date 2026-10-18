@@ -1,6 +1,6 @@
 use std::{any::Any, any::TypeId, fmt, io, ops, task::Context, task::Poll};
 
-use crate::{Filter, FilterCtx, Io, Readiness};
+use crate::{Filter, FilterCtx, Io};
 
 /// Type-erased filter chain used by [`IoBoxed`].
 pub struct Sealed(pub(crate) Box<dyn Filter>);
@@ -33,13 +33,8 @@ impl Filter for Sealed {
     }
 
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        self.0.poll_read_ready(cx)
-    }
-
-    #[inline]
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        self.0.poll_write_ready(cx)
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.0.poll_ready(cx)
     }
 }
 

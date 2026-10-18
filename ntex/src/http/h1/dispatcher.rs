@@ -237,7 +237,7 @@ where
 
             log::trace!("{}: Trying to read http message", self.io.tag());
             self.release_write_timer();
-            if !self.io.is_read_filter_paused() {
+            if !self.io.is_filter_paused() {
                 self.timers.resume_read(&self.io);
             }
 
@@ -273,7 +273,7 @@ where
                     } else {
                         // the filter chain pauses reading, the peer is not
                         // charged for it
-                        if self.io.is_read_filter_paused() {
+                        if self.io.is_filter_paused() {
                             self.timers.suspend_read(&self.io);
                         }
                         return Poll::Pending;
@@ -644,7 +644,7 @@ where
                                 None => {
                                     // the filter chain pauses reading, the
                                     // peer is not charged for it
-                                    if self.io.is_read_filter_paused() {
+                                    if self.io.is_filter_paused() {
                                         self.timers.suspend_read(&self.io);
                                     }
                                     break;
@@ -743,10 +743,10 @@ where
     /// Fails the request payload, records the close reason and returns the
     /// write timeout error if write backpressure is still enabled, otherwise
     /// stops the timer.
-    /// An expiry during a filter write pause suspends the timer.
+    /// An expiry during a filter pause suspends the timer.
     fn write_timer_expired(&mut self) -> io::Result<()> {
-        if self.io.is_wr_backpressure() && self.io.is_write_filter_paused() {
-            // the filter chain paused writing before the dispatcher noticed
+        if self.io.is_wr_backpressure() && self.io.is_filter_paused() {
+            // the filter chain paused before the dispatcher noticed
             self.timers
                 .start_write(&self.io, self.codec.cfg.write_timeout);
             Ok(())
@@ -4111,41 +4111,63 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct GateDir {
+    struct Gate {
         blocked: Cell<bool>,
+        hold: Cell<bool>,
         waker: RefCell<Option<std::task::Waker>>,
     }
 
-    impl GateDir {
-        fn poll(&self, res: Poll<nio::Readiness>, cx: &Context<'_>) -> Poll<nio::Readiness> {
-            match res {
-                Poll::Ready(nio::Readiness::Ready) if self.blocked.get() => {
-                    *self.waker.borrow_mut() = Some(cx.waker().clone());
-                    Poll::Pending
-                }
-                res => res,
-            }
-        }
+    /// Gate control, a blocked filter chain is not ready and holds output.
+    #[derive(Clone, Default)]
+    struct GateCtl(Rc<Gate>);
 
-        fn set(&self, blocked: bool) {
-            self.blocked.set(blocked);
-            if !blocked && let Some(waker) = self.waker.borrow_mut().take() {
-                waker.wake();
-            }
+    impl std::fmt::Debug for GateCtl {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("GateCtl").finish()
         }
     }
 
-    /// Gate control, a blocked filter chain is not ready for reads or writes.
-    #[derive(Clone, Default)]
-    struct GateCtl(Rc<(GateDir, GateDir)>);
-
     impl GateCtl {
-        fn block_read(&self, blocked: bool) {
-            self.0.0.set(blocked);
+        /// Blocks the chain, it holds output and is not ready. The read task
+        /// is woken to observe the change, as a filter would do.
+        fn block(&self, blocked: bool) {
+            self.0.blocked.set(blocked);
+            self.0.hold.set(blocked);
+            if let Some(waker) = self.0.waker.borrow_mut().take() {
+                waker.wake();
+            }
         }
 
-        fn block_write(&self, blocked: bool) {
-            self.0.1.set(blocked);
+        /// Holds output while the chain stays ready.
+        fn hold(&self) {
+            self.0.hold.set(true);
+        }
+    }
+
+    /// Passes data through, holds output while the gate is blocked.
+    #[derive(Debug)]
+    struct GateLayer(GateCtl);
+
+    impl nio::FilterLayer for GateLayer {
+        fn process_read_buf(&self, buf: &nio::FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src {
+                    dst.extend_from_slice(src);
+                    src.clear();
+                }
+            });
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &nio::FilterBuf<'_>) -> io::Result<()> {
+            if !self.0.0.hold.get() {
+                buf.with_write_buffers(ntex_bytes::BytePages::move_to);
+            }
+            Ok(())
+        }
+
+        fn shutdown(&self, _: &nio::FilterBuf<'_>) -> io::Result<Poll<()>> {
+            Ok(Poll::Ready(()))
         }
     }
 
@@ -4168,16 +4190,17 @@ mod tests {
             self.0.shutdown(ctx)
         }
 
-        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<nio::Readiness> {
-            self.1.0.0.poll(self.0.poll_read_ready(cx), cx)
-        }
-
-        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<nio::Readiness> {
-            self.1.0.1.poll(self.0.poll_write_ready(cx), cx)
+        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            *self.1.0.waker.borrow_mut() = Some(cx.waker().clone());
+            if self.1.0.blocked.get() {
+                Poll::Pending
+            } else {
+                self.0.poll_ready(cx)
+            }
         }
     }
 
-    type GatedH1 = Dispatcher<GateFilter<Base>, body::Body, io::Error>;
+    type GatedH1 = Dispatcher<GateFilter<nio::Layer<GateLayer, Base>>, body::Body, io::Error>;
 
     /// Dispatcher over a gated filter chain, the service reads the request
     /// payload and responds with a body of `size` bytes.
@@ -4185,7 +4208,9 @@ mod tests {
         let gate = GateCtl::default();
         let g = gate.clone();
         let config: SharedCfg = SharedCfg::new("SVC").add(cfg).into();
-        let io = nio::Io::new(server, config).map_filter(move |f| GateFilter(f, g));
+        let io = nio::Io::new(server, config)
+            .add_filter(GateLayer(gate.clone()))
+            .map_filter(move |f| GateFilter(f, g));
         let h1 = Dispatcher::new(
             0,
             io,
@@ -4253,13 +4278,13 @@ mod tests {
         );
 
         // the peer sends a request while the filter is not ready
-        gate.block_read(true);
+        gate.block(true);
         client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
         wait_until(Millis(1000), || {
-            io.is_read_filter_paused() && !io.timer_handle().is_set()
+            io.is_filter_paused() && !io.timer_handle().is_set()
         })
         .await;
-        assert!(io.is_read_filter_paused());
+        assert!(io.is_filter_paused());
         // the keep-alive timer is not armed while reading is paused
         assert!(!io.timer_handle().is_set());
 
@@ -4267,7 +4292,7 @@ mod tests {
         assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
-        gate.block_read(false);
+        gate.block(false);
         assert!(
             read_response(&client, 1)
                 .await
@@ -4298,13 +4323,13 @@ mod tests {
         sleep(Millis(100)).await;
         assert!(io.timer_handle().is_set());
 
-        gate.block_read(true);
+        gate.block(true);
         client.write("host: localhost\r\n");
         wait_until(Millis(1000), || {
-            io.is_read_filter_paused() && !io.timer_handle().is_set()
+            io.is_filter_paused() && !io.timer_handle().is_set()
         })
         .await;
-        assert!(io.is_read_filter_paused());
+        assert!(io.is_filter_paused());
         // the request-head timer is not armed while reading is paused
         assert!(!io.timer_handle().is_set());
 
@@ -4313,9 +4338,9 @@ mod tests {
         assert!(io.is_active());
 
         // the timer resumes once reading resumes
-        gate.block_read(false);
-        wait_until(Millis(1000), || !io.is_read_filter_paused()).await;
-        assert!(!io.is_read_filter_paused());
+        gate.block(false);
+        wait_until(Millis(1000), || !io.is_filter_paused()).await;
+        assert!(!io.is_filter_paused());
         assert!(io.is_active());
         wait_until(Millis(4000), || !io.is_active()).await;
         assert!(!io.is_active());
@@ -4341,13 +4366,13 @@ mod tests {
         sleep(Millis(100)).await;
         assert!(io.timer_handle().is_set());
 
-        gate.block_read(true);
+        gate.block(true);
         client.write("cd");
         wait_until(Millis(1000), || {
-            io.is_read_filter_paused() && !io.timer_handle().is_set()
+            io.is_filter_paused() && !io.timer_handle().is_set()
         })
         .await;
-        assert!(io.is_read_filter_paused());
+        assert!(io.is_filter_paused());
         // the payload timer is not armed while reading is paused
         assert!(!io.timer_handle().is_set());
 
@@ -4355,7 +4380,7 @@ mod tests {
         assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
-        gate.block_read(false);
+        gate.block(false);
         assert!(
             read_response(&client, 1)
                 .await
@@ -4363,7 +4388,7 @@ mod tests {
         );
     }
 
-    /// The write timer does not run while the filter chain pauses writing.
+    /// The write timer does not run while the filter chain is paused.
     #[crate::rt_test]
     async fn test_filter_pause_suspends_write_timeout() {
         let (client, server) = IoTest::create();
@@ -4375,29 +4400,32 @@ mod tests {
             size,
         );
 
-        // the response waits for the filter, write backpressure is enabled
-        gate.block_write(true);
+        // the filter holds the response, write backpressure is enabled
+        gate.hold();
         client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        wait_until(Millis(2000), || io.is_wr_backpressure()).await;
+        assert!(io.is_wr_backpressure());
+        gate.block(true);
         wait_until(Millis(2000), || {
-            io.is_write_filter_paused() && io.is_wr_backpressure() && !io.timer_handle().is_set()
+            io.is_filter_paused() && io.is_wr_backpressure() && !io.timer_handle().is_set()
         })
         .await;
-        assert!(io.is_write_filter_paused());
+        assert!(io.is_filter_paused());
         assert!(io.is_wr_backpressure());
-        // the write timer is not armed while writing is paused
+        // the write timer is not armed while the filter is paused
         assert!(!io.timer_handle().is_set());
 
         sleep(Millis(500)).await;
         assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
-        gate.block_write(false);
+        gate.block(false);
         let buf = read_response(&client, size).await;
         assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"));
-        assert!(!io.is_write_filter_paused());
+        assert!(!io.is_filter_paused());
     }
 
-    /// The write timer starts over once the filter chain resumes writing.
+    /// The write timer starts over once the filter chain resumes.
     #[crate::rt_test]
     async fn test_write_timeout_restarts_after_filter_pause() {
         let (client, server) = IoTest::create();
@@ -4408,32 +4436,35 @@ mod tests {
             128 * 1024,
         );
 
-        gate.block_write(true);
+        gate.hold();
         client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        wait_until(Millis(2000), || io.is_wr_backpressure()).await;
+        assert!(io.is_wr_backpressure());
+        gate.block(true);
         wait_until(Millis(2000), || {
-            io.is_write_filter_paused() && !io.timer_handle().is_set()
+            io.is_filter_paused() && !io.timer_handle().is_set()
         })
         .await;
-        assert!(io.is_write_filter_paused());
+        assert!(io.is_filter_paused());
         // the write timer is stopped, nothing is left armed from before
         assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
-        // the peer does not read, the timeout starts over once writes resume
-        gate.block_write(false);
+        // the peer does not read, the timeout starts over once the filter resumes
+        gate.block(false);
         wait_until(Millis(1000), || {
-            !io.is_write_filter_paused() && io.timer_handle().is_set()
+            !io.is_filter_paused() && io.timer_handle().is_set()
         })
         .await;
-        assert!(!io.is_write_filter_paused());
+        assert!(!io.is_filter_paused());
         assert!(io.is_active());
         assert_eq!(io.timer_handle().remains(), Seconds(1));
         wait_until(Millis(4000), || client.is_closed()).await;
         assert!(client.is_closed());
     }
 
-    /// A write timer expiry before the dispatcher notices a filter write
-    /// pause suspends the timer.
+    /// A write timer expiry before the dispatcher notices a filter pause
+    /// suspends the timer.
     #[crate::rt_test]
     async fn test_write_timer_expiry_during_filter_pause() {
         let (client, server) = IoTest::create();
@@ -4454,17 +4485,17 @@ mod tests {
 
         // a read event turns the io task, it notices the pause. The "G" stays
         // as a partial next request, the client timeout must outlast the checks
-        gate.block_write(true);
+        gate.block(true);
         client.write("G");
         sleep(Millis(50)).await;
-        assert!(h1.inner.io.is_write_filter_paused());
+        assert!(h1.inner.io.is_filter_paused());
 
         assert!(h1.inner.write_timer_expired().is_ok());
         assert_eq!(h1.inner.timers.active, Timer::Write);
         assert!(h1.inner.timers.write_suspended);
         assert!(!h1.inner.io.timer_handle().is_set());
 
-        gate.block_write(false);
+        gate.block(false);
         client.remote_buffer_cap(1_048_576);
         let res = timeout(Millis(500), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.is_err());

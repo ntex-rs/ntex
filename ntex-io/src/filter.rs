@@ -55,27 +55,27 @@ pub trait Filter: 'static {
     /// transport.
     fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>>;
 
-    /// Checks whether transport read operations may proceed.
+    /// Checks whether the chain is ready to process more input.
     ///
-    /// Reads continue through the filter shutdown phase so that filters can
-    /// complete theirs, and are paused for the transport shutdown phase, so
-    /// [`Readiness::Close`] is resolved only once the connection is
-    /// terminated. A force close reports [`Readiness::Terminate`] instead,
-    /// which releases the connection without a graceful close. That decision is
-    /// made by [`IoContext`](crate::IoContext) rather than by the chain, so
-    /// that it survives the chain being dropped along with
-    /// [`Io`](crate::Io).
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
-
-    /// Checks whether transport write operations may proceed.
+    /// This is polled by the transport read task only, a chain that is not
+    /// ready pauses transport reads until it wakes the task given in `cx`. The
+    /// dispatcher is notified when the pause starts and when it ends, see
+    /// [`IoRef::is_filter_paused`](crate::IoRef::is_filter_paused). Once the
+    /// chain is ready again, input and output it holds are processed again
+    /// without waiting for new transport input. A chain that stops being ready
+    /// between polls is only observed by the next poll, it can wake the task
+    /// given to the previous one.
     ///
-    /// Resolves to [`Readiness::Close`] once the connection enters a graceful
-    /// shutdown and all buffered output has reached the transport, or as soon
-    /// as it ends because of a failure. See [`poll_read_ready`] for the
-    /// force-close case.
+    /// Transport writes are not paused, output that reached the transport is
+    /// always delivered. A filter that is not ready to produce output keeps it
+    /// in its own buffers instead, see
+    /// [`FilterLayer::process_write_buf`]. A filter that waits for input from
+    /// the peer, for example during a TLS handshake, must not report `Pending`
+    /// here, that input would never be read.
     ///
-    /// [`poll_read_ready`]: Self::poll_read_ready
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
+    /// Graceful shutdown and its deadline do not depend on the chain being
+    /// ready. An error terminates the connection.
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 }
 
 /// Transport read readiness as decided by the io state, without the filter
@@ -160,22 +160,9 @@ impl Filter for Base {
         }
     }
 
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        let st = &self.0.0;
-        let res = read_readiness(st);
-        if !matches!(res, Poll::Ready(Readiness::Close | Readiness::Terminate)) {
-            st.read_task.register(cx.waker());
-        }
-        res
-    }
-
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        let st = &self.0.0;
-        let res = write_readiness(st);
-        if !matches!(res, Poll::Ready(Readiness::Close | Readiness::Terminate)) {
-            st.write_task.register(cx.waker());
-        }
-        res
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
     #[inline]
@@ -243,13 +230,8 @@ where
     }
 
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        self.1.poll_read_ready(cx)
-    }
-
-    #[inline]
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        self.1.poll_write_ready(cx)
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.1.poll_ready(cx)
     }
 }
 
@@ -259,19 +241,11 @@ impl Filter for NullFilter {
         None
     }
 
-    // The filter chain is gone once `Io` has been dropped, so nothing is left
-    // that could process buffered data. The connection is closed gracefully;
-    // `IoContext` reports `Readiness::Terminate` on top of this when the
-    // application asked for a force close, or when the drop had to discard
-    // output that never reached the peer.
+    // The filter chain is gone once `Io` has been dropped, `IoContext`
+    // reports the connection closed then and does not poll the chain.
     #[inline]
-    fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Close)
-    }
-
-    #[inline]
-    fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Close)
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
     #[inline]

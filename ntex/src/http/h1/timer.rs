@@ -14,7 +14,7 @@ pub(super) struct Timers {
     /// Unused part of the period of a read timer suspended by a filter
     /// pause, see [`Timers::suspend_read`].
     pub(super) suspended: Option<Seconds>,
-    /// The write timer is not armed while the filter chain pauses writing.
+    /// The write timer is not armed while the filter chain is paused.
     pub(super) write_suspended: bool,
 }
 
@@ -243,7 +243,7 @@ impl Timers {
     pub(super) fn payload_decoded(&mut self, io: &IoRef, consumed: u32) {
         match self.active {
             Timer::Payload => self.payload_consumed(consumed),
-            Timer::PayloadPaused if !io.is_read_filter_paused() => {
+            Timer::PayloadPaused if !io.is_filter_paused() => {
                 let period = self.progress.period;
                 log::trace!("{}: Resume payload timer {:?}", io.tag(), period);
                 self.active = Timer::Payload;
@@ -310,9 +310,9 @@ impl Timers {
     /// running.
     ///
     /// Running payload timing is paused, other read timers are stopped.
-    /// The timer does not run while the filter chain pauses writing, the
-    /// peer is not charged for the pause, and starts over once writing
-    /// resumes.
+    /// The timer does not run while the filter chain is paused and holds
+    /// output, the peer is not charged for the pause, and starts over once
+    /// the chain resumes.
     pub(super) fn start_write(&mut self, io: &IoRef, timeout: Seconds) {
         if timeout.is_zero() {
             return;
@@ -329,7 +329,7 @@ impl Timers {
             self.write_suspended = true;
             io.stop_timer();
         }
-        if io.is_write_filter_paused() {
+        if io.is_filter_paused() {
             if !self.write_suspended {
                 log::trace!("{}: Suspend write timer", io.tag());
                 self.write_suspended = true;

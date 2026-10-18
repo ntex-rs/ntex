@@ -1,8 +1,10 @@
 # Changes
 
-## [4.4.0] - Unreleased
+## [4.4.0] - 2026-10-19
 
 * Report the stop reason to `IoRef::set_close_reason()`
+
+* Use `IoRef::is_filter_paused()`, a filter chain that is not ready pauses reads only
 
 ## [4.3.0] - 2026-10-06
 
