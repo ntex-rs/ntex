@@ -31,7 +31,7 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use super::{Overlapped, TcpStream, connect, stream::StreamOps};
 use crate::channel::Receiver;
 
-pub trait Handler {
+pub(crate) trait Handler {
     /// Operation is completed.
     fn completed(&mut self, udata: u32, result: io::Result<usize>, optr: *mut Overlapped);
 
@@ -47,14 +47,15 @@ pub trait Handler {
 }
 
 /// IOCP reactor api.
-pub struct ReactorApi {
+pub(crate) struct ReactorApi {
     hnd: u32,
     reactor: Arc<ReactorInner>,
 }
 
 impl ReactorApi {
     /// Attach handle
-    pub fn attach(&self, hnd: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
+    #[cfg(test)]
+    pub(crate) fn attach(&self, hnd: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         self.reactor.attach(hnd, skip_iocp_on_success)
     }
 
@@ -74,13 +75,9 @@ impl ReactorApi {
     }
 
     /// Get overlapped.
-    pub fn overlapped(&self, id: u32) -> Overlapped {
+    pub(crate) fn overlapped(&self, id: u32) -> Overlapped {
         Overlapped::new(self.hnd, id)
     }
-
-    #[inline]
-    /// Attempt to cancel an already issued operation.
-    pub fn cancel(&self, _h: RawHandle) {}
 }
 
 /// IOCP reactor.
@@ -108,7 +105,7 @@ impl Reactor {
     }
 
     /// Register updates handler
-    pub fn register<F>(&self, f: F)
+    pub(crate) fn register<F>(&self, f: F)
     where
         F: FnOnce(ReactorApi) -> Box<dyn Handler>,
     {
@@ -355,6 +352,7 @@ impl ReactorInner {
         })
     }
 
+    #[cfg(test)]
     fn attach(&self, h: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         if skip_iocp_on_success {
             check_ifs_socket(h)?;

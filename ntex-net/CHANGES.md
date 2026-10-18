@@ -3,6 +3,9 @@
 
 ## [4.6.0] - Unreleased
 
+* **Breaking:** make IOCP `Handler`, `ReactorApi`, `Overlapped` and
+  `Reactor::register()` crate-private; `Reactor` remains public
+
 * iocp: queued blocking closes continue when shutdown is cancelled or the
   runtime stops, without losing their sockets
 

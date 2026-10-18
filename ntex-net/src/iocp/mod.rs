@@ -9,9 +9,10 @@ mod ops;
 mod reactor;
 mod stream;
 
+pub use self::reactor::Reactor;
 #[cfg(feature = "compio")]
 pub(crate) use self::reactor::map_socket_error;
-pub use self::reactor::{Handler, Reactor, ReactorApi};
+pub(crate) use self::reactor::{Handler, ReactorApi};
 
 /// Tcp stream wrapper for neon `TcpStream`
 struct TcpStream(Socket, Option<net::SocketAddr>, stream::StreamOps);
@@ -21,15 +22,12 @@ struct UnixStream(Socket, stream::StreamOps);
 
 /// The overlapped struct for IOCP ops.
 #[repr(C)]
-pub struct Overlapped {
+pub(crate) struct Overlapped {
     /// The base [`OVERLAPPED`].
     pub(crate) base: OVERLAPPED,
     /// User data
     pub(crate) hnd: u32,
     pub(crate) udata: u32,
-    /// Pointer to `base`, handed to the kernel. Set by [`OpBox::new`] from
-    /// the allocation pointer, preserving provenance for completion handling.
-    this: *mut OVERLAPPED,
 }
 
 impl Overlapped {
@@ -38,18 +36,7 @@ impl Overlapped {
             hnd,
             udata,
             base: unsafe { std::mem::zeroed() },
-            this: ptr::null_mut(),
         }
-    }
-
-    /// Returns the pointer passed to the kernel for ops of an [`OpBox`].
-    pub fn as_overlapped(&self) -> *mut OVERLAPPED {
-        debug_assert!(!self.this.is_null(), "Overlapped is not owned by an OpBox");
-        self.this
-    }
-
-    pub fn user_data(&self) -> u32 {
-        self.udata
     }
 }
 
@@ -82,11 +69,8 @@ pub(crate) struct OpBox<T>(ptr::NonNull<Op<T>>);
 impl<T> OpBox<T> {
     pub(crate) fn new(overlapped: Overlapped, state: T) -> Self {
         let ptr = Box::into_raw(Box::new(Op { overlapped, state }));
-        // SAFETY: `ptr` is a fresh allocation, its header is at offset zero
-        unsafe {
-            (*ptr).overlapped.this = ptr.cast();
-            OpBox(ptr::NonNull::new_unchecked(ptr))
-        }
+        // SAFETY: `ptr` is a fresh, non-null allocation
+        unsafe { OpBox(ptr::NonNull::new_unchecked(ptr)) }
     }
 
     /// Returns a pointer to the application state, excluding the kernel header.
