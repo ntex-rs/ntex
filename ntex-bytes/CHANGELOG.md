@@ -10,6 +10,8 @@
 
 * Copy only the requested range in `Bytes::slice()` of external storage
 
+* Remove `Buf` for `&str`, it panicked on reads that end inside a multi-byte char, use `str::as_bytes()`
+
 ## [1.13.0] - 2026-10-17
 
 * Add `PageCacheMetrics`, per-thread page cache statistics: hits, misses, pages returned

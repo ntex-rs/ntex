@@ -788,7 +788,7 @@ mod tests {
         bv.reserve(5);
         assert_eq!(bv.capacity(), 12);
         assert_eq!(bv.remaining_mut(), 6);
-        bv.put("world");
+        bv.put_slice(b"world");
         assert_eq!(bv, "hello world");
         bv.advance_to(6);
         assert_eq!(bv, "world");
