@@ -1,8 +1,10 @@
-use std::cell::Cell;
-use std::sync::Arc;
+use std::cell::{Cell, RefCell};
+use std::future::poll_fn;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 use std::{future::Future, io, marker::PhantomData, panic::Location, ptr, thread};
+use std::{pin::Pin, rc::Rc, sync::Arc};
 
 use crate::handle::{JoinHandle, SpawnLocation};
 use crate::metrics::{AtomicHistogram, Histogram};
@@ -329,21 +331,48 @@ impl Runtime {
 
         CURRENT_RUNTIME.set(self, || {
             let mut result = None;
+
+            // the task outlives this call if the driver fails or panics, it
+            // reaches the borrowing future only through the slot, which the
+            // guard empties before the borrows end
+            let slot = BlockOnSlot(Rc::new(RefCell::new(Some(Box::pin(async {
+                result = Some(future.await);
+                self.stop.set(true);
+                let _ = self.queue.handle.notify();
+            })))));
+            let task = slot.0.clone();
             unsafe {
                 self.spawn_detached_at(
-                    async {
-                        result = Some(future.await);
-                        self.stop.set(true);
-                        let _ = self.queue.handle.notify();
-                    },
+                    poll_fn(move |cx| {
+                        let mut fut = task.borrow_mut();
+                        if let Some(f) = fut.as_mut()
+                            && f.as_mut().poll(cx).is_pending()
+                        {
+                            return Poll::Pending;
+                        }
+                        *fut = None;
+                        Poll::Ready(())
+                    }),
                     location,
                 );
             }
 
             ntex_error::set_backtrace_start_alt("src/raw.rs", 0);
-            driver.run(self).expect("Driver failed");
+            let res = driver.run(self);
+            drop(slot);
+            res.expect("Driver failed");
             result.expect("Driver failed to poll")
         })
+    }
+}
+
+/// Drops the [`Runtime::block_on`] future when the call returns or unwinds.
+struct BlockOnSlot<F>(Rc<RefCell<Option<Pin<Box<F>>>>>);
+
+impl<F> Drop for BlockOnSlot<F> {
+    fn drop(&mut self) {
+        let fut = self.0.borrow_mut().take();
+        drop(fut);
     }
 }
 
@@ -1844,6 +1873,74 @@ mod tests {
         assert!(dropped.load(Ordering::SeqCst));
         assert!(remote.load(Ordering::SeqCst));
         assert!(h.is_finished());
+    }
+
+    /// Pending future that borrows the caller's frame and sets a flag on drop.
+    struct Borrowing<'a>(&'a Cell<bool>, Option<Waker>);
+
+    impl Future for Borrowing<'_> {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            assert!(!self.0.get());
+            self.1 = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+
+    impl Drop for Borrowing<'_> {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+
+    #[test]
+    fn block_on_drops_future_on_driver_error() {
+        struct ErrorDriver;
+
+        impl Driver for ErrorDriver {
+            fn handle(&self) -> Box<dyn Notify> {
+                Box::new(NoopNotify)
+            }
+
+            fn run(&self, _: &Runtime) -> io::Result<()> {
+                Err(io::Error::other("driver stopped"))
+            }
+        }
+
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let dropped = Cell::new(false);
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rt.block_on(Borrowing(&dropped, None), &ErrorDriver);
+        }));
+        assert!(res.is_err());
+        assert!(dropped.get());
+        rt.poll();
+    }
+
+    #[test]
+    fn block_on_drops_future_on_driver_panic() {
+        struct PanicDriver;
+
+        impl Driver for PanicDriver {
+            fn handle(&self) -> Box<dyn Notify> {
+                Box::new(NoopNotify)
+            }
+
+            fn run(&self, rt: &Runtime) -> io::Result<()> {
+                rt.poll();
+                panic!("driver panic");
+            }
+        }
+
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let dropped = Cell::new(false);
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rt.block_on(Borrowing(&dropped, None), &PanicDriver);
+        }));
+        assert!(res.is_err());
+        assert!(dropped.get());
+        rt.poll();
     }
 
     #[derive(Debug, Default, Clone)]
