@@ -33,6 +33,9 @@
   stopped or the connection is force-closed, it was kept until `Io` was dropped. Buffered
   input stays readable
 
+* Wakes and waiter registrations made from filter callbacks or wakers are no longer lost,
+  and filter callbacks that drop the `Io` no longer keep the connection state alive
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`

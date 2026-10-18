@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::io;
+use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 use ntex_service::state::{RequestState, State};
@@ -19,122 +20,156 @@ pub struct Decoded<T> {
     pub consumed: usize,
 }
 
-pub(crate) struct Extensions(Cell<Option<Box<ExtensionsInner>>>);
+// capacity of the wake buffer kept for reuse
+const MAX_SPARE_WAKERS: usize = 1024;
 
 #[derive(Default)]
-pub(crate) struct ExtensionsInner {
-    // tasks waiting for io events, by tag
-    waiters: Waiters,
+pub(crate) struct Extensions {
+    // tasks waiting for io events, by tag, allocated on first registration
+    waiters: Cell<Option<Box<Waiters>>>,
     // filter callbacks registered for io events
-    pub(crate) callbacks: Option<Box<dyn IoCallbacks>>,
-}
-
-impl Default for Extensions {
-    fn default() -> Extensions {
-        Extensions(Cell::new(None))
-    }
+    callbacks: Cell<Option<Rc<dyn IoCallbacks>>>,
 }
 
 impl Extensions {
-    fn with<F, R>(&self, f: F) -> R
+    /// Runs `f` with the waiters, allocating them if needed.
+    ///
+    /// The waiters are taken out while `f` runs, so `f` must not run user
+    /// code, wakers are woken and dropped by the caller after `f`.
+    fn with_waiters<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut ExtensionsInner) -> R,
+        F: FnOnce(&mut Waiters) -> R,
     {
-        let mut inner = if let Some(inner) = self.0.take() {
-            inner
-        } else {
-            Box::new(ExtensionsInner::default())
-        };
-        let result = f(&mut inner);
-        self.0.set(Some(inner));
+        let mut waiters = self.waiters.take().unwrap_or_default();
+        let result = f(&mut waiters);
+        self.waiters.set(Some(waiters));
         result
     }
 
-    fn with_opt<F>(&self, f: F)
+    /// Runs `f` with the waiters if they are allocated, see [`Self::with_waiters`].
+    fn with_waiters_opt<F, R>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(&mut ExtensionsInner),
+        F: FnOnce(&mut Waiters) -> R,
     {
-        if let Some(mut inner) = self.0.take() {
-            f(&mut inner);
-            self.0.set(Some(inner));
-        }
+        let mut waiters = self.waiters.take()?;
+        let result = f(&mut waiters);
+        self.waiters.set(Some(waiters));
+        Some(result)
     }
 
     /// Registers the waker of the waiter, a woken waiter gets a new entry.
     pub(super) fn register_waker(&self, waiter: &WaiterEntry, waker: &Waker) {
-        self.with(|inner| {
-            let waiters = &mut inner.waiters;
-            if !waiter.id.get().is_some_and(|id| waiters.update(id, waker)) {
+        let replaced = self.with_waiters(|waiters| {
+            if let Some(id) = waiter.id.get()
+                && let Some(replaced) = waiters.update(id, waker)
+            {
+                replaced
+            } else {
                 waiter.id.set(Some(waiters.register(waiter.tag, waker)));
+                None
             }
         });
+        drop(replaced);
     }
 
     /// Registers the waiter, or reports that its registration was woken.
     ///
     /// A reported wake clears the registration, the next poll registers again.
     pub(super) fn poll_waker(&self, waiter: &WaiterEntry, waker: &Waker) -> Poll<()> {
-        self.with(|inner| {
-            let waiters = &mut inner.waiters;
-            match waiter.id.get() {
-                None => {
-                    waiter.id.set(Some(waiters.register(waiter.tag, waker)));
-                    Poll::Pending
-                }
-                Some(id) if waiters.update(id, waker) => Poll::Pending,
-                Some(_) => {
+        let (result, replaced) = self.with_waiters(|waiters| match waiter.id.get() {
+            None => {
+                waiter.id.set(Some(waiters.register(waiter.tag, waker)));
+                (Poll::Pending, None)
+            }
+            Some(id) => {
+                if let Some(replaced) = waiters.update(id, waker) {
+                    (Poll::Pending, replaced)
+                } else {
                     waiter.id.set(None);
-                    Poll::Ready(())
+                    (Poll::Ready(()), None)
                 }
             }
-        })
+        });
+        drop(replaced);
+        result
     }
 
     /// Removes the waiter entry unless it is woken.
     pub(super) fn remove_waker(&self, waiter: &WaiterEntry) {
         if let Some(id) = waiter.id.take() {
-            self.with_opt(|inner| inner.waiters.remove(id, waiter.tag));
+            let waker = self.with_waiters_opt(|waiters| waiters.remove(id, waiter.tag));
+            drop(waker);
         }
     }
 
     /// Wakes and removes all wakers of the tag.
     pub(super) fn wake(&self, tag: usize) {
-        self.with_opt(|inner| inner.waiters.wake(tag));
+        self.wake_with(|waiters, wakers| waiters.take(tag, wakers));
     }
 
     /// Wakes and removes all wakers.
     pub(super) fn wake_all(&self) {
-        self.with_opt(|inner| inner.waiters.wake_all());
+        self.wake_with(Waiters::take_all);
+    }
+
+    /// Collects wakers with `f` and wakes them once the waiters are put back.
+    ///
+    /// The wakers are collected into a per-thread buffer that is reused
+    /// across wakes, a nested wake allocates its own.
+    fn wake_with<F>(&self, f: F)
+    where
+        F: FnOnce(&mut Waiters, &mut Vec<Waker>),
+    {
+        thread_local! {
+            // boxed, so taking and returning the buffer moves a single pointer
+            #[allow(clippy::box_collection)]
+            static WAKERS: Cell<Option<Box<Vec<Waker>>>> = const { Cell::new(None) };
+        }
+
+        let Some(mut waiters) = self.waiters.take() else {
+            return;
+        };
+        let mut wakers = WAKERS
+            .try_with(Cell::take)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        f(&mut waiters, &mut wakers);
+        self.waiters.set(Some(waiters));
+
+        wakers.drain(..).for_each(Waker::wake);
+        if wakers.capacity() <= MAX_SPARE_WAKERS {
+            let _ = WAKERS.try_with(|spare| spare.set(Some(wakers)));
+        }
     }
 
     #[cfg(test)]
     pub(super) fn wakers_len(&self) -> usize {
-        let mut len = 0;
-        self.with_opt(|inner| len = inner.waiters.len());
-        len
+        self.with_waiters_opt(|waiters| waiters.len()).unwrap_or(0)
     }
 
     pub(super) fn register_filter_callbacks<T: IoCallbacks + 'static>(&self, cb: T) {
-        self.with(|inner| {
-            inner.callbacks = Some(Box::new(cb));
-        });
+        drop(self.callbacks.replace(Some(Rc::new(cb))));
     }
 
-    pub(super) fn take_callbacks(&self) -> Option<Box<dyn IoCallbacks>> {
-        let mut callbacks = None;
-        self.with_opt(|inner| callbacks = inner.callbacks.take());
-        callbacks
+    pub(super) fn take_callbacks(&self) -> Option<Rc<dyn IoCallbacks>> {
+        self.callbacks.take()
     }
 
+    /// Calls `f` with the registered callbacks.
+    ///
+    /// The callbacks stay registered while `f` runs, they may be replaced
+    /// or taken by `f` and are dropped once `f` returns.
     pub(crate) fn with_callbacks<F>(&self, f: F)
     where
         F: FnOnce(&dyn IoCallbacks),
     {
-        self.with_opt(|inner| {
-            if let Some(ref cb) = inner.callbacks {
-                f(cb.as_ref());
-            }
-        });
+        let callbacks = self.callbacks.take();
+        let cb = callbacks.clone();
+        self.callbacks.set(callbacks);
+        if let Some(cb) = cb {
+            f(cb.as_ref());
+        }
     }
 }
 

@@ -123,26 +123,25 @@ impl Waiters {
 
     /// Replaces the waker of a registered entry.
     ///
-    /// Returns `false` if the entry is woken or removed.
-    pub(crate) fn update(&mut self, id: WaiterId, waker: &Waker) -> bool {
-        if let Some(entry) = self.get(id)
-            && let Some(ref mut w) = entry.waker
-        {
-            w.clone_from(waker);
-            true
+    /// Returns `None` if the entry is woken or removed, otherwise the
+    /// replaced waker unless it wakes the same task.
+    #[allow(clippy::option_option)]
+    pub(crate) fn update(&mut self, id: WaiterId, waker: &Waker) -> Option<Option<Waker>> {
+        let w = self.get(id)?.waker.as_mut()?;
+        if w.will_wake(waker) {
+            Some(None)
         } else {
-            false
+            Some(Some(std::mem::replace(w, waker.clone())))
         }
     }
 
-    /// Removes a registered entry, a woken or removed entry is ignored.
+    /// Removes a registered entry and returns its waker, a woken or removed
+    /// entry is ignored.
     ///
     /// The tag must be the one the entry is registered with, otherwise
     /// the tag lists are corrupted.
-    pub(crate) fn remove(&mut self, id: WaiterId, tag: usize) {
-        let Some(entry) = self.get(id) else {
-            return;
-        };
+    pub(crate) fn remove(&mut self, id: WaiterId, tag: usize) -> Option<Waker> {
+        let entry = self.get(id)?;
         let (prev, next) = (entry.prev, entry.next);
         if prev != NONE {
             self.entries[prev as usize].next = next;
@@ -154,29 +153,41 @@ impl Waiters {
         if next != NONE {
             self.entries[next as usize].prev = prev;
         }
-        drop(self.release(id.idx));
+        self.release(id.idx)
     }
 
-    /// Wakes and removes all entries.
-    pub(crate) fn wake_all(&mut self) {
+    /// Removes all entries and moves their wakers to `out`.
+    pub(crate) fn take_all(&mut self, out: &mut Vec<Waker>) {
         while let Some(&tag) = self.tags.keys().next() {
-            self.wake(tag);
+            self.take(tag, out);
         }
     }
 
-    /// Wakes and removes all entries of the tag.
-    pub(crate) fn wake(&mut self, tag: usize) {
+    /// Removes all entries of the tag and moves their wakers to `out`.
+    pub(crate) fn take(&mut self, tag: usize, out: &mut Vec<Waker>) {
         let Some(mut idx) = self.tags.remove(&tag) else {
             return;
         };
 
         while idx != NONE {
             let next = self.entries[idx as usize].next;
-            if let Some(waker) = self.release(idx) {
-                waker.wake();
-            }
+            out.extend(self.release(idx));
             idx = next;
         }
+    }
+
+    #[cfg(test)]
+    fn wake_all(&mut self) {
+        let mut wakers = Vec::new();
+        self.take_all(&mut wakers);
+        wakers.into_iter().for_each(Waker::wake);
+    }
+
+    #[cfg(test)]
+    fn wake(&mut self, tag: usize) {
+        let mut wakers = Vec::new();
+        self.take(tag, &mut wakers);
+        wakers.into_iter().for_each(Waker::wake);
     }
 
     #[cfg(test)]
@@ -455,10 +466,10 @@ mod tests {
         let (c2, w2) = waker();
 
         let id = wakers.register(0, &w1);
-        assert!(wakers.update(id, &w2));
+        assert!(wakers.update(id, &w2).is_some());
         wakers.wake(0);
         assert_eq!((count(&c1), count(&c2)), (0, 1));
-        assert!(!wakers.update(id, &w1));
+        assert!(wakers.update(id, &w1).is_none());
     }
 
     #[test]
@@ -490,7 +501,7 @@ mod tests {
         let id = wakers.register(0, &w2);
         assert_eq!(id.idx, stale.idx);
         assert!(!wakers.is_registered(stale));
-        assert!(!wakers.update(stale, &w1));
+        assert!(wakers.update(stale, &w1).is_none());
         wakers.remove(stale, 0);
         assert!(wakers.is_registered(id));
 

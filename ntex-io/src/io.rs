@@ -1508,7 +1508,7 @@ fn as_u32(v: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, cell::RefCell, rc::Rc, task::Waker};
 
     use ntex_bytes::{BufMut, BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
@@ -1753,6 +1753,130 @@ mod tests {
         server.register_filter_callbacks(Cb(server.get_ref(), calls.clone()));
         server.with_callbacks(|cb| cb.before_processing(&server));
         assert_eq!(calls.get(), 0);
+    }
+
+    /// Callbacks may wake and register waiters.
+    #[ntex::test]
+    async fn callbacks_reenter_waiters() {
+        struct Cb(Rc<Waiter<'static>>);
+        impl crate::IoCallbacks for Cb {
+            fn before_processing(&self, io: &IoRef) {
+                io.wake(7);
+                let _ = self.0.poll_ready(&mut Context::from_waker(Waker::noop()));
+            }
+            fn after_processing(&self, _: &IoRef) {}
+        }
+
+        let (_client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV"));
+        let woken = io.waiter(7);
+        assert!(lazy(|cx| woken.poll_ready(cx)).await.is_pending());
+        let registered = Rc::new(io.waiter(8).into_static());
+        io.register_filter_callbacks(Cb(registered.clone()));
+        io.with_buf(|_| ()).unwrap();
+
+        assert!(lazy(|cx| woken.poll_ready(cx)).await.is_ready());
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 1);
+        io.wake(8);
+        assert!(lazy(|cx| registered.poll_ready(cx)).await.is_ready());
+    }
+
+    /// Callbacks that drop the `Io` must not keep the connection state alive.
+    #[ntex::test]
+    async fn callbacks_dropping_io_release_state() {
+        struct Cb(Rc<RefCell<Option<Io>>>, #[allow(dead_code)] IoRef);
+        impl crate::IoCallbacks for Cb {
+            fn before_processing(&self, _: &IoRef) {
+                drop(self.0.borrow_mut().take());
+            }
+            fn after_processing(&self, _: &IoRef) {}
+        }
+
+        let (client, server) = IoTest::create();
+        let server = Io::new(server, SharedCfg::new("SRV"));
+        let io = server.get_ref();
+        let state = Rc::downgrade(&io.0);
+        let slot = Rc::new(RefCell::new(None));
+        server.register_filter_callbacks(Cb(slot.clone(), io.clone()));
+        *slot.borrow_mut() = Some(server);
+
+        let _ = io.with_buf(|_| ());
+        assert!(slot.borrow().is_none());
+        drop(io);
+        client.close().await;
+        sleep(Millis(50)).await;
+        assert!(state.upgrade().is_none());
+    }
+
+    thread_local! {
+        static REENTER: RefCell<Option<(IoRef, usize)>> = const { RefCell::new(None) };
+    }
+
+    /// Wakes the tag of `REENTER` when woken or dropped.
+    struct Reenter;
+
+    impl Reenter {
+        fn wake_tag() {
+            if let Some((io, tag)) = REENTER.with_borrow(Clone::clone) {
+                io.wake(tag);
+            }
+        }
+    }
+
+    impl std::task::Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            Self::wake_tag();
+        }
+    }
+
+    impl Drop for Reenter {
+        fn drop(&mut self) {
+            Self::wake_tag();
+        }
+    }
+
+    /// Wakers may wake other tags when they are woken or dropped.
+    #[ntex::test]
+    async fn wakers_reenter_waiters() {
+        let (_client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV"));
+        REENTER.set(Some((io.get_ref(), 8)));
+        let (a, b) = (io.waiter(7), io.waiter(8));
+        let reenter = || Waker::from(Arc::new(Reenter));
+        let pending = async || assert!(lazy(|cx| b.poll_ready(cx)).await.is_pending());
+        let woken = async || assert!(lazy(|cx| b.poll_ready(cx)).await.is_ready());
+
+        // woken
+        let waker = reenter();
+        assert!(a.poll_ready(&mut Context::from_waker(&waker)).is_pending());
+        pending().await;
+        io.wake(7);
+        woken().await;
+        assert!(a.poll_ready(&mut Context::from_waker(&waker)).is_ready());
+        drop(waker);
+
+        // replaced
+        assert!(
+            a.poll_ready(&mut Context::from_waker(&reenter()))
+                .is_pending()
+        );
+        pending().await;
+        assert!(
+            a.poll_ready(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        woken().await;
+
+        // removed
+        assert!(
+            a.poll_ready(&mut Context::from_waker(&reenter()))
+                .is_pending()
+        );
+        pending().await;
+        drop(a);
+        woken().await;
+
+        REENTER.set(None);
     }
 
     #[ntex::test]
