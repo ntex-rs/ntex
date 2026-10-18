@@ -167,9 +167,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{
-        Base, FilterBuf, FilterCtx, Handle, Io, IoContext, IoStream, Readiness, testing::IoTest,
-    };
+    use crate::{Base, FilterBuf, FilterCtx, Handle, Io, IoContext, IoStream, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -364,11 +362,10 @@ mod tests {
         }
     }
 
-    /// Runs a hook when the transport polls readiness.
+    /// Runs a hook when the read task polls the filter readiness.
     struct PollHook<F> {
         inner: F,
         hook: Hook,
-        read: bool,
     }
 
     impl<F: Filter> Filter for PollHook<F> {
@@ -388,18 +385,9 @@ mod tests {
             self.inner.process_write_buf(ctx)
         }
 
-        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-            if self.read {
-                run(&self.hook);
-            }
-            self.inner.poll_read_ready(cx)
-        }
-
-        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-            if !self.read {
-                run(&self.hook);
-            }
-            self.inner.poll_write_ready(cx)
+        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            run(&self.hook);
+            self.inner.poll_ready(cx)
         }
     }
 
@@ -505,11 +493,11 @@ mod tests {
     #[ntex::test]
     async fn change_from_filter_panics() {
         for change in Change::ALL {
-            for trigger in ["read", "write", "read-reply", "read-ready", "write-ready"] {
+            for trigger in ["read", "write", "read-reply", "ready"] {
                 let (client, server) = IoTest::create();
                 client.remote_buffer_cap(1024);
                 let slot = Hook::default();
-                let poll = trigger.ends_with("-ready");
+                let poll = trigger == "ready";
                 let io = Io::from(server).add_filter(HookFilter {
                     hook: if poll { Hook::default() } else { slot.clone() },
                     at: if trigger == "read-reply" {
@@ -521,9 +509,8 @@ mod tests {
                 let ioref = io.get_ref();
                 let panicked = if poll {
                     let hook = slot.clone();
-                    let read = trigger == "read-ready";
                     arm(
-                        io.map_filter(|inner| PollHook { inner, hook, read }),
+                        io.map_filter(|inner| PollHook { inner, hook }),
                         change,
                         &slot,
                     )
@@ -531,7 +518,7 @@ mod tests {
                     arm(io, change, &slot)
                 };
 
-                if trigger.starts_with("read") {
+                if trigger.starts_with("read") || poll {
                     client.write(TEXT);
                 } else {
                     let _ = ioref.encode_slice(b"out");

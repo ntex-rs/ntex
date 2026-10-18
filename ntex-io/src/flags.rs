@@ -83,8 +83,8 @@ bitflags::bitflags! {
 
         /// read paused, output a filter produced while reading filled the write buffer
         const RD_WR_BACKPRESSURE  = 1 << 6;
-        /// read paused, the filter chain is not ready for transport reads
-        const RD_FILTER_PAUSED    = 1 << 7;
+        /// read paused, the filter chain is not ready for more input
+        const FILTER_PAUSED       = 1 << 7;
 
         /// new data is available in read buffer
         const BUF_R_READY         = 1 << 8;
@@ -95,8 +95,6 @@ bitflags::bitflags! {
         const WR_PAUSED           = 1 << 10;
         /// write op is scheduled
         const WR_SEND_OP          = 1 << 11;
-        /// write paused, the filter chain is not ready for transport writes
-        const WR_FILTER_PAUSED    = 1 << 12;
 
         /// timeout occurred
         const DSP_TIMEOUT         = 1 << 13;
@@ -308,28 +306,16 @@ impl Flags {
         self.remove(FlagsKind::RD_WR_BACKPRESSURE);
     }
 
-    pub(crate) fn is_read_filter_paused(&self) -> bool {
-        self.contains(FlagsKind::RD_FILTER_PAUSED)
+    pub(crate) fn is_filter_paused(&self) -> bool {
+        self.contains(FlagsKind::FILTER_PAUSED)
     }
 
-    pub(crate) fn set_read_filter_paused(&self) {
-        self.insert(FlagsKind::RD_FILTER_PAUSED);
+    pub(crate) fn set_filter_paused(&self) {
+        self.insert(FlagsKind::FILTER_PAUSED);
     }
 
-    pub(crate) fn unset_read_filter_paused(&self) {
-        self.remove(FlagsKind::RD_FILTER_PAUSED);
-    }
-
-    pub(crate) fn is_write_filter_paused(&self) -> bool {
-        self.contains(FlagsKind::WR_FILTER_PAUSED)
-    }
-
-    pub(crate) fn set_write_filter_paused(&self) {
-        self.insert(FlagsKind::WR_FILTER_PAUSED);
-    }
-
-    pub(crate) fn unset_write_filter_paused(&self) {
-        self.remove(FlagsKind::WR_FILTER_PAUSED);
+    pub(crate) fn unset_filter_paused(&self) {
+        self.remove(FlagsKind::FILTER_PAUSED);
     }
 
     pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {

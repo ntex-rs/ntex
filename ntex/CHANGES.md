@@ -1,6 +1,6 @@
 # Changes
 
-## [4.4.0] - Unreleased
+## [4.4.0] - 2026-10-19
 
 * Add `HttpServer::load_balancing()`. New connections go to the worker on the
   CPU that receives their packets (the RSS CPU on Windows, `SO_INCOMING_CPU`
@@ -24,6 +24,8 @@
   update to ntex-h2 4.3.0, which does the same. `nanorand` does not link
   `advapi32` on Windows (unresolved `SystemFunction036`), it was only linked
   through `core_affinity` before
+
+* http/1: Use `IoRef::is_filter_paused()`, a filter chain that is not ready pauses reads only
 
 ## [4.3.0] - 2026-10-15
 

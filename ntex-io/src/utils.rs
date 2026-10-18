@@ -263,17 +263,12 @@ mod tests {
                 .unwrap()
                 .is_ready()
         );
-        // The chain is gone, so the transport closes the connection
-        // gracefully. `IoContext` escalates to `Terminate` when the connection
-        // was force-closed; `NullFilter` itself cannot see that state.
-        assert_eq!(
-            std::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
-            crate::Readiness::Close
-        );
-        assert_eq!(
-            std::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
-            crate::Readiness::Close
-        );
+        // `IoContext` closes the connection once the chain is gone, the
+        // placeholder never pauses it.
+        assert!(matches!(
+            std::future::poll_fn(|cx| NullFilter.poll_ready(cx)).await,
+            Ok(())
+        ));
         assert!(
             stack
                 .with_filter(&ioref, |ctx| NullFilter.process_write_buf(ctx))

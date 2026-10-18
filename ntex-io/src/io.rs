@@ -5444,9 +5444,75 @@ mod tests {
         assert!(!io.flags().is_wr_backpressure());
     }
 
-    /// Filter chain wrapper that is not ready for reads or writes while
-    /// blocked.
-    struct Gate<F>(F, Rc<Cell<bool>>, Rc<Cell<bool>>);
+    #[derive(Default)]
+    struct GateState {
+        blocked: Cell<bool>,
+        hold: Cell<bool>,
+        fail: Cell<bool>,
+        polls: Cell<usize>,
+        waker: RefCell<Option<Waker>>,
+    }
+
+    /// Gate control, a blocked filter chain is not ready and its layers hold
+    /// data back.
+    #[derive(Clone, Default)]
+    struct GateCtl(Rc<GateState>);
+
+    impl fmt::Debug for GateCtl {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("GateCtl").finish()
+        }
+    }
+
+    impl GateCtl {
+        fn set(&self, blocked: bool) {
+            self.0.blocked.set(blocked);
+            self.0.hold.set(blocked);
+            if let Some(waker) = self.0.waker.borrow_mut().take() {
+                waker.wake();
+            }
+        }
+
+        fn hold(&self) {
+            self.0.hold.set(true);
+        }
+
+        fn polls(&self) -> usize {
+            self.0.polls.get()
+        }
+    }
+
+    /// Passes data through, holds input or output while the gate holds.
+    #[derive(Debug)]
+    struct GateLayer {
+        ctl: GateCtl,
+        input: bool,
+        output: bool,
+    }
+
+    impl FilterLayer for GateLayer {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            if !(self.input && self.ctl.0.hold.get()) {
+                buf.with_read_buffers(|src, dst| {
+                    if let Some(src) = src {
+                        dst.extend_from_slice(src);
+                        src.clear();
+                    }
+                });
+            }
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            if !(self.output && self.ctl.0.hold.get()) {
+                buf.with_write_buffers(BytePages::move_to);
+            }
+            Ok(())
+        }
+    }
+
+    /// Filter chain wrapper that is not ready while the gate is blocked.
+    struct Gate<F>(F, GateCtl);
 
     impl<F: Filter> Filter for Gate<F> {
         fn query(&self, id: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
@@ -5465,17 +5531,16 @@ mod tests {
             self.0.shutdown(ctx)
         }
 
-        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-            match self.0.poll_read_ready(cx) {
-                Poll::Ready(Readiness::Ready) if self.1.get() => Poll::Pending,
-                res => res,
-            }
-        }
-
-        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-            match self.0.poll_write_ready(cx) {
-                Poll::Ready(Readiness::Ready) if self.2.get() => Poll::Pending,
-                res => res,
+        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            let st = &self.1.0;
+            st.polls.set(st.polls.get() + 1);
+            *st.waker.borrow_mut() = Some(cx.waker().clone());
+            if st.fail.get() {
+                Poll::Ready(Err(io::Error::other("gate")))
+            } else if st.blocked.get() {
+                Poll::Pending
+            } else {
+                self.0.poll_ready(cx)
             }
         }
     }
@@ -5491,25 +5556,47 @@ mod tests {
 
     impl Handle for GateTransport {}
 
+    fn gated<F: Filter>(io: Io<F>) -> (GateCtl, Io<Gate<F>>) {
+        let gate = GateCtl::default();
+        let g = gate.clone();
+        (gate, io.map_filter(move |f| Gate(f, g)))
+    }
+
+    /// Two layers over the transport, the inner one holds output and the
+    /// outer one holds input in the intermediate buffers while blocked.
+    fn gated_layers(server: IoTest) -> (GateCtl, Io<impl Filter>) {
+        let gate = GateCtl::default();
+        let io = Io::from(server)
+            .add_filter(GateLayer {
+                ctl: gate.clone(),
+                input: false,
+                output: true,
+            })
+            .add_filter(GateLayer {
+                ctl: gate.clone(),
+                input: true,
+                output: false,
+            });
+        let g = gate.clone();
+        (gate, io.map_filter(move |f| Gate(f, g)))
+    }
+
     #[ntex::test]
     async fn filter_pause_pauses_reading() {
-        let blocked = Rc::new(Cell::new(false));
-        let b = blocked.clone();
-        let io = Io::new(GateTransport, SharedCfg::default())
-            .map_filter(move |f| Gate(f, b, Rc::default()));
+        let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
         let ctx = IoContext::new(io.get_ref());
 
         assert_eq!(
             lazy(|cx| ctx.poll_read_ready(cx)).await,
             Poll::Ready(Readiness::Ready)
         );
-        assert!(!io.is_read_filter_paused());
+        assert!(!io.is_filter_paused());
 
         // the filter is not ready while the io state allows reads
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
-        blocked.set(true);
+        gate.set(true);
         assert!(lazy(|cx| ctx.poll_read_ready(cx)).await.is_pending());
-        assert!(io.is_read_filter_paused());
+        assert!(io.is_filter_paused());
         assert!(!io.st().dispatch_task.is_set(), "dispatcher is notified");
 
         // a continued pause does not notify again
@@ -5532,12 +5619,12 @@ mod tests {
 
         // the filter is ready again
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
-        blocked.set(false);
+        gate.set(false);
         assert_eq!(
             lazy(|cx| ctx.poll_read_ready(cx)).await,
             Poll::Ready(Readiness::Ready)
         );
-        assert!(!io.is_read_filter_paused());
+        assert!(!io.is_filter_paused());
         assert!(!io.st().dispatch_task.is_set(), "dispatcher is notified");
         assert_eq!(
             ctx.with_read_buf(|_| Poll::<io::Result<usize>>::Pending),
@@ -5546,78 +5633,131 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn io_state_pause_is_not_filter_pause() {
-        let blocked = Rc::new(Cell::new(true));
-        let b = blocked.clone();
-        let io = Io::new(GateTransport, SharedCfg::default())
-            .map_filter(move |f| Gate(f, b, Rc::default()));
+    async fn filter_pause_is_tracked_while_reads_are_paused() {
+        let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
         let ctx = IoContext::new(io.get_ref());
+        gate.set(true);
 
-        // the dispatcher paused reads, the filter pause is not reported
+        // the dispatcher paused reads, the filter pause is still observed
         io.st().flags.set_read_paused();
         assert!(lazy(|cx| ctx.poll_read_ready(cx)).await.is_pending());
-        assert!(!io.is_read_filter_paused());
+        assert!(io.is_filter_paused());
 
-        // the dispatcher resumes reads while the filter is still not ready
-        io.st().flags.unset_read_paused();
+        // and so is its end, reads stay paused by the io state
+        gate.set(false);
         assert!(lazy(|cx| ctx.poll_read_ready(cx)).await.is_pending());
-        assert!(io.is_read_filter_paused());
+        assert!(!io.is_filter_paused());
 
-        // the io state pauses reads again, the filter pause is kept
-        io.st().flags.set_read_paused();
-        assert!(lazy(|cx| ctx.poll_read_ready(cx)).await.is_pending());
-        assert!(io.is_read_filter_paused());
-
-        // a ready chain ends the filter pause
-        blocked.set(false);
         io.st().flags.unset_read_paused();
         assert_eq!(
             lazy(|cx| ctx.poll_read_ready(cx)).await,
             Poll::Ready(Readiness::Ready)
         );
-        assert!(!io.is_read_filter_paused());
     }
 
     #[ntex::test]
-    async fn filter_pause_pauses_writing() {
-        let blocked = Rc::new(Cell::new(true));
-        let b = blocked.clone();
-        let io = Io::new(GateTransport, SharedCfg::default())
-            .map_filter(move |f| Gate(f, Rc::default(), b));
+    async fn filter_pause_does_not_pause_writing() {
+        let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
         let ctx = IoContext::new(io.get_ref());
+        gate.set(true);
+        assert!(lazy(|cx| ctx.poll_read_ready(cx)).await.is_pending());
+        assert!(io.is_filter_paused());
+        let polls = gate.polls();
 
-        // no output is waiting, the filter pause is not reported
-        assert!(lazy(|cx| ctx.poll_write_ready(cx)).await.is_pending());
-        assert!(!io.is_write_filter_paused());
-
-        // output waits for the filter
+        // output that reached the transport is written, the filter is not
+        // polled for it
         io.encode_slice(b"1234").unwrap();
-        sleep(Millis(10)).await;
-        assert!(!io.st().flags.is_write_paused());
-        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
-        assert!(lazy(|cx| ctx.poll_write_ready(cx)).await.is_pending());
-        assert!(io.is_write_filter_paused());
-        assert!(!io.st().dispatch_task.is_set(), "dispatcher is notified");
-
-        // a write already in flight completes, writing stays paused
-        ctx.with_write_dst(|dst| {
-            let mut page = dst.take().unwrap();
-            page.advance_to(2);
-            dst.prepend(page);
-        });
-        assert_eq!(ctx.update_write_status(Ok(2)), IoTaskStatus::Pause);
-        assert!(!io.st().flags.is_write_paused());
-        assert_eq!(io.st().buffer.write_buf_size(), 2);
-
-        // the filter is ready again
-        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
-        blocked.set(false);
+        sleep(Millis(5)).await;
         assert_eq!(
             lazy(|cx| ctx.poll_write_ready(cx)).await,
             Poll::Ready(Readiness::Ready)
         );
-        assert!(!io.is_write_filter_paused());
-        assert!(!io.st().dispatch_task.is_set(), "dispatcher is notified");
-        assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Io);
+        assert_eq!(gate.polls(), polls);
+        ctx.with_write_dst(|dst| drop(dst.take()));
+        assert_eq!(ctx.update_write_status(Ok(4)), IoTaskStatus::Pause);
+        assert_eq!(io.st().buffer.write_buf_size(), 0);
+        assert!(io.is_filter_paused());
+    }
+
+    #[ntex::test]
+    async fn held_output_is_written_on_resume() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1 << 20);
+        let (gate, io) = gated_layers(server);
+
+        // eager and scheduled writes do not bypass the filter, it holds the
+        // output in an intermediate buffer
+        gate.set(true);
+        sleep(Millis(10)).await;
+        assert!(io.is_filter_paused());
+        io.encode_slice(b"12345678").unwrap();
+        io.encode_slice(&vec![b'x'; 65536]).unwrap();
+        sleep(Millis(50)).await;
+        assert_eq!(client.read_any(), b"");
+
+        // the output is written once the filter is ready, without new input
+        gate.set(false);
+        let buf = timeout(Millis(1000), async {
+            let mut buf = BytesMut::new();
+            while buf.len() < 65544 {
+                buf.extend_from_slice(&client.read().await.unwrap());
+            }
+            buf
+        })
+        .await
+        .unwrap();
+        assert_eq!(&buf[..8], b"12345678");
+        assert!(!io.is_filter_paused());
+    }
+
+    #[ntex::test]
+    async fn held_input_is_processed_on_resume() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let (gate, io) = gated_layers(server);
+
+        // the input reaches the filter before it pauses, it is held in an
+        // intermediate buffer
+        gate.hold();
+        client.write(TEXT);
+        sleep(Millis(50)).await;
+        assert_eq!(io.with_read_dst(|buf| buf.len()), 0);
+        gate.set(true);
+        sleep(Millis(10)).await;
+        assert!(io.is_filter_paused());
+
+        // the input is processed once the filter is ready, without new input
+        gate.set(false);
+        let item = timeout(Millis(500), io.recv(&BytesCodec)).await;
+        assert_eq!(item.unwrap().unwrap().unwrap(), Bytes::from_static(BIN));
+    }
+
+    #[ntex::test]
+    async fn filter_readiness_error_terminates() {
+        let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
+        let ctx = IoContext::new(io.get_ref());
+
+        gate.0.fail.set(true);
+        assert!(matches!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Close | Readiness::Terminate)
+        ));
+        assert!(!io.is_active());
+        assert_eq!(io.st().error().unwrap().to_string(), "gate");
+    }
+
+    #[ntex::test]
+    async fn shutdown_does_not_wait_for_filter_readiness() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let (gate, io) = gated_layers(server);
+        gate.0.blocked.set(true);
+        client.write(TEXT);
+        sleep(Millis(50)).await;
+        assert!(io.is_filter_paused());
+
+        let res = timeout(Millis(1000), io.shutdown()).await;
+        assert!(res.is_ok());
+        assert!(client.is_closed());
     }
 }

@@ -611,11 +611,11 @@ where
     ///
     /// Frames are not decoded during backpressure, so read-side timers are
     /// stopped when no write timeout is configured. The timeout does not run
-    /// while the filter chain pauses writes, the peer is not charged for it,
-    /// and starts over once writes resume.
+    /// while the filter chain is paused, it holds output back and the peer is
+    /// not charged for it. The timeout starts over once the chain resumes.
     fn start_write_timer(&mut self) {
         let timeout = self.shared.io.cfg().write_timeout();
-        if timeout.is_zero() || self.shared.io.is_write_filter_paused() {
+        if timeout.is_zero() || self.shared.io.is_filter_paused() {
             self.stop_timer();
         } else if self.timers.active != Timer::Write {
             self.timers.active = Timer::Write;
@@ -633,7 +633,7 @@ where
         );
 
         // the filter chain pauses reading, the peer is not charged for it
-        if !item && self.shared.io.is_read_filter_paused() {
+        if !item && self.shared.io.is_filter_paused() {
             if self.timers.active != Timer::Write {
                 self.stop_timer();
             }
@@ -731,8 +731,8 @@ where
                 self.timers.active = Timer::Stopped;
                 Ok(())
             }
-            // the filter chain paused writes before the dispatcher noticed
-            Timer::Write if self.shared.io.is_write_filter_paused() => {
+            // the filter chain paused before the dispatcher noticed
+            Timer::Write if self.shared.io.is_filter_paused() => {
                 self.stop_timer();
                 Ok(())
             }
@@ -3023,53 +3023,71 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct GateDir {
+    struct GateState {
         blocked: Cell<bool>,
+        hold: Cell<bool>,
         waker: RefCell<Option<std::task::Waker>>,
     }
 
-    impl GateDir {
-        fn poll(
-            &self,
-            res: Poll<ntex_io::Readiness>,
-            cx: &Context<'_>,
-        ) -> Poll<ntex_io::Readiness> {
-            match res {
-                Poll::Ready(ntex_io::Readiness::Ready) if self.blocked.get() => {
-                    *self.waker.borrow_mut() = Some(cx.waker().clone());
-                    Poll::Pending
-                }
-                res => res,
-            }
+    /// Gate control, a blocked filter chain is not ready and holds output.
+    #[derive(Clone, Default)]
+    struct GateCtl(Rc<GateState>);
+
+    impl fmt::Debug for GateCtl {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("GateCtl").finish()
+        }
+    }
+
+    impl GateCtl {
+        /// Blocks the chain, it holds output and is not ready. The read task
+        /// is woken to observe the change, as a filter would do.
+        fn block(&self) {
+            self.set(true);
+        }
+
+        fn unblock(&self) {
+            self.set(false);
+        }
+
+        /// Holds output while the chain stays ready.
+        fn hold(&self) {
+            self.0.hold.set(true);
         }
 
         fn set(&self, blocked: bool) {
-            self.blocked.set(blocked);
-            if !blocked && let Some(waker) = self.waker.borrow_mut().take() {
+            self.0.blocked.set(blocked);
+            self.0.hold.set(blocked);
+            if let Some(waker) = self.0.waker.borrow_mut().take() {
                 waker.wake();
             }
         }
     }
 
-    /// Gate control, a blocked filter chain is not ready for reads or writes.
-    #[derive(Clone, Default)]
-    struct GateCtl(Rc<(GateDir, GateDir)>);
+    /// Passes data through, holds output while the gate is blocked.
+    #[derive(Debug)]
+    struct GateLayer(GateCtl);
 
-    impl GateCtl {
-        fn block(&self) {
-            self.0.0.set(true);
+    impl ntex_io::FilterLayer for GateLayer {
+        fn process_read_buf(&self, buf: &ntex_io::FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src {
+                    dst.extend_from_slice(src);
+                    src.clear();
+                }
+            });
+            Ok(())
         }
 
-        fn unblock(&self) {
-            self.0.0.set(false);
+        fn process_write_buf(&self, buf: &ntex_io::FilterBuf<'_>) -> io::Result<()> {
+            if !self.0.0.hold.get() {
+                buf.with_write_buffers(BytePages::move_to);
+            }
+            Ok(())
         }
 
-        fn block_write(&self) {
-            self.0.1.set(true);
-        }
-
-        fn unblock_write(&self) {
-            self.0.1.set(false);
+        fn shutdown(&self, _: &ntex_io::FilterBuf<'_>) -> io::Result<Poll<()>> {
+            Ok(Poll::Ready(()))
         }
     }
 
@@ -3092,13 +3110,25 @@ mod tests {
             self.0.shutdown(ctx)
         }
 
-        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ntex_io::Readiness> {
-            self.1.0.0.poll(self.0.poll_read_ready(cx), cx)
+        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            *self.1.0.waker.borrow_mut() = Some(cx.waker().clone());
+            if self.1.0.blocked.get() {
+                Poll::Pending
+            } else {
+                self.0.poll_ready(cx)
+            }
         }
+    }
 
-        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<ntex_io::Readiness> {
-            self.1.0.1.poll(self.0.poll_write_ready(cx), cx)
-        }
+    fn gated_io(
+        server: IoTest,
+        cfg: impl Into<SharedCfg>,
+        gate: &GateCtl,
+    ) -> Io<impl ntex_io::Filter> {
+        let g = gate.clone();
+        Io::new(server, cfg)
+            .add_filter(GateLayer(gate.clone()))
+            .map_filter(move |f| GateFilter(f, g))
     }
 
     /// Echo dispatcher over a gated filter chain, records items as `0` and
@@ -3109,9 +3139,7 @@ mod tests {
         data: Rc<RefCell<Vec<u8>>>,
     ) -> (GateCtl, IoRef) {
         let gate = GateCtl::default();
-        let g = gate.clone();
-        let io =
-            Io::new(server, SharedCfg::new("TEST").add(cfg)).map_filter(move |f| GateFilter(f, g));
+        let io = gated_io(server, SharedCfg::new("TEST").add(cfg), &gate);
         let ioref = io.get_ref();
 
         let disp = Dispatcher::new(
@@ -3164,7 +3192,7 @@ mod tests {
         gate.block();
         client.write("5678");
         sleep(Millis(100)).await;
-        assert!(io.is_read_filter_paused());
+        assert!(io.is_filter_paused());
 
         // the frame read timer does not run during the pause
         sleep(Millis(3000)).await;
@@ -3174,7 +3202,7 @@ mod tests {
         gate.unblock();
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"12345678"));
-        assert!(!io.is_read_filter_paused());
+        assert!(!io.is_filter_paused());
         assert_eq!(&data.borrow()[..], &[0]);
     }
 
@@ -3196,7 +3224,7 @@ mod tests {
         gate.block();
         client.write("12345678");
         sleep(Millis(100)).await;
-        assert!(io.is_read_filter_paused());
+        assert!(io.is_filter_paused());
 
         // keep-alive does not run during the pause
         sleep(Millis(2000)).await;
@@ -3224,13 +3252,12 @@ mod tests {
         size: usize,
     ) -> (GateCtl, IoRef, Events) {
         let gate = GateCtl::default();
-        let g = gate.clone();
         let events = Rc::new(RefCell::new(Vec::new()));
-        let io = Io::new(
+        let io = gated_io(
             server,
             SharedCfg::new("TEST").add(cfg.set_write_backpressure(1024)),
-        )
-        .map_filter(move |f| GateFilter(f, g));
+            &gate,
+        );
         let ioref = io.get_ref();
         let disp = Dispatcher::new(
             io,
@@ -3257,24 +3284,26 @@ mod tests {
         let (gate, io, events) =
             gated_write_dispatcher(server, IoConfig::new().set_write_timeout(Seconds(1)), 8192);
 
-        // the response waits for the filter, write backpressure is enabled
-        gate.block_write();
+        // the filter holds the response, write backpressure is enabled
+        gate.hold();
         client.write("12345678");
         sleep(Millis(100)).await;
-        assert!(io.is_write_filter_paused());
         assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+        gate.block();
+        sleep(Millis(100)).await;
+        assert!(io.is_filter_paused());
 
         // the write timeout does not run during the pause
         sleep(Millis(2500)).await;
         assert!(io.is_active());
         assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
 
-        gate.unblock_write();
+        gate.unblock();
         let mut received = 0;
         while received < 8192 {
             received += client.read().await.unwrap().len();
         }
-        assert!(!io.is_write_filter_paused());
+        assert!(!io.is_filter_paused());
         wait_until(Millis(1000), || events.borrow().len() == 3).await;
         assert_eq!(&events.borrow()[..], &["item", "bp-on", "bp-off"]);
     }
@@ -3286,16 +3315,18 @@ mod tests {
         let (gate, io, events) =
             gated_write_dispatcher(server, IoConfig::new().set_write_timeout(Seconds(1)), 8192);
 
-        gate.block_write();
+        gate.hold();
         client.write("12345678");
+        sleep(Millis(100)).await;
+        gate.block();
         sleep(Millis(1500)).await;
-        assert!(io.is_write_filter_paused());
+        assert!(io.is_filter_paused());
         assert!(io.is_active());
 
-        // the peer does not read, the timeout starts over once writes resume
-        gate.unblock_write();
+        // the peer does not read, the timeout starts over once the filter resumes
+        gate.unblock();
         sleep(Millis(500)).await;
-        assert!(!io.is_write_filter_paused());
+        assert!(!io.is_filter_paused());
         assert!(io.is_active());
         wait_closed(&client, Millis(2000)).await;
         assert!(client.is_closed());

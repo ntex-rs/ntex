@@ -141,26 +141,15 @@ impl IoRef {
     }
 
     #[inline]
-    /// Checks whether transport reads are paused by the filter chain.
+    /// Checks whether the filter chain is not ready, see
+    /// [`Filter::poll_ready`](crate::Filter::poll_ready).
     ///
-    /// This is `true` while a filter is not ready for transport reads although
-    /// the io state allows them, for example a filter that waits for its own
-    /// resources. No input arrives during the pause, it is not caused by the
-    /// peer, so read timeouts should not run. The dispatcher is notified when
-    /// the pause starts and when it ends.
-    pub fn is_read_filter_paused(&self) -> bool {
-        self.0.flags.is_read_filter_paused()
-    }
-
-    #[inline]
-    /// Checks whether transport writes are paused by the filter chain.
-    ///
-    /// This is `true` while buffered output is waiting for a filter that is
-    /// not ready for transport writes. Output does not drain during the pause,
-    /// it is not caused by the peer, so write timeouts should not run. The
-    /// dispatcher is notified when the pause starts and when it ends.
-    pub fn is_write_filter_paused(&self) -> bool {
-        self.0.flags.is_write_filter_paused()
+    /// Transport reads are paused and output the chain holds does not reach
+    /// the transport during the pause. It is not caused by the peer, so read
+    /// and write timeouts should not run. The dispatcher is notified when the
+    /// pause starts and when it ends.
+    pub fn is_filter_paused(&self) -> bool {
+        self.0.flags.is_filter_paused()
     }
 
     /// Waits until the write buffer can accept more output.
