@@ -171,6 +171,32 @@ fn remote_wake() {
     });
 }
 
+/// A coalesced remote wake publishes the writes before it, the owner thread
+/// may have consumed the pending wake before the readiness is set.
+#[test]
+fn coalesced_remote_wake() {
+    model(|| {
+        let rt = new_rt();
+        let (st, task) = pending(&rt);
+        let (st2, w) = (st.clone(), st.waker());
+        let th = thread::spawn(move || {
+            w.wake_by_ref();
+            st2.ready.store(true, Ordering::Release);
+            w.wake_by_ref();
+            w
+        });
+        drain(&rt);
+        let w = th.join().unwrap();
+        drain(&rt);
+        let finished = task.is_finished();
+        drop(w);
+        drop(st.waker.lock().unwrap().take());
+        task.cancel();
+        assert_freed(&rt);
+        assert!(finished, "coalesced wake did not publish readiness");
+    });
+}
+
 /// Two threads wake two tasks, the remote queue has two producers.
 #[test]
 fn two_producers() {
