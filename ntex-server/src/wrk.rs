@@ -1,10 +1,10 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, ready};
 use std::{cmp, future::Future, future::poll_fn, hash, pin::Pin};
 
 use async_channel::{Receiver, Sender, TrySendError, unbounded};
-use atomic_waker::AtomicWaker;
+use event_listener::Event;
 
 use ntex_rt::{Arbiter, spawn};
 use ntex_service::Pipeline;
@@ -112,12 +112,8 @@ impl<T> Worker<T> {
 
         // placement is applied before the runtime is created, so its memory
         // is allocated on the NUMA node of the worker's CPU
-        let arbiter = Arbiter::with_init(name.clone(), init).on_stop(move || {
-            inner.failed.store(true, Ordering::Release);
-            inner.updated.store(true, Ordering::Release);
-            inner.available.store(false, Ordering::Release);
-            inner.waker.wake();
-        });
+        let arbiter =
+            Arbiter::with_init(name.clone(), init).on_stop(move || inner.set_failed(true));
         if let Some(ref m) = metrics {
             m.set_arbiter(arbiter.clone());
         }
@@ -188,25 +184,18 @@ impl<T> Worker<T> {
 
     /// Returns the current worker status.
     pub fn status(&self) -> WorkerStatus {
-        if self.avail.failed() {
-            WorkerStatus::Failed
-        } else if self.avail.available() {
-            WorkerStatus::Available
-        } else {
-            WorkerStatus::Unavailable
-        }
+        self.avail.inner.status()
     }
 
-    /// Waits for the next worker status change and returns the new status.
+    /// Waits for a status change not yet reported by this handle and
+    /// returns the current status.
     ///
-    /// Returns immediately if the worker has failed.
+    /// Each handle tracks the changes it has reported, so every clone
+    /// observes every change. A clone starts with the reported changes of
+    /// the handle it was cloned from. Several changes between calls are
+    /// reported once. Returns immediately if the worker has failed.
     pub async fn wait_for_status(&mut self) -> WorkerStatus {
-        if self.avail.failed() {
-            WorkerStatus::Failed
-        } else {
-            self.avail.wait_for_update().await;
-            self.status()
-        }
+        self.avail.wait_for_update().await
     }
 
     /// Stops the worker.
@@ -274,6 +263,8 @@ impl Future for WorkerStop {
 #[derive(Debug, Clone)]
 struct WorkerAvailability {
     inner: Arc<Inner>,
+    /// The last state reported by this handle.
+    seen: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -281,71 +272,114 @@ struct WorkerAvailabilityTx {
     inner: Arc<Inner>,
 }
 
+const UNAVAILABLE: u64 = 0;
+const AVAILABLE: u64 = 1;
+const FAILED: u64 = 2;
+const STATUS_BITS: u32 = 2;
+const STATUS_MASK: u64 = (1 << STATUS_BITS) - 1;
+
 #[derive(Debug)]
 struct Inner {
-    waker: AtomicWaker,
-    updated: AtomicBool,
-    available: AtomicBool,
-    failed: AtomicBool,
+    /// Change counter in the high bits, status in the low bits.
+    state: AtomicU64,
+    event: Event,
+}
+
+fn status(state: u64) -> WorkerStatus {
+    match state & STATUS_MASK {
+        AVAILABLE => WorkerStatus::Available,
+        FAILED => WorkerStatus::Failed,
+        _ => WorkerStatus::Unavailable,
+    }
+}
+
+impl Inner {
+    fn status(&self) -> WorkerStatus {
+        status(self.state.load(Ordering::Acquire))
+    }
+
+    /// Sets the status, returns `true` if it has changed.
+    ///
+    /// `Failed` is terminal.
+    fn update(&self, st: u64) -> bool {
+        let mut cur = self.state.load(Ordering::Acquire);
+        loop {
+            let old = cur & STATUS_MASK;
+            if old == st || old == FAILED {
+                return false;
+            }
+            let next = (((cur >> STATUS_BITS).wrapping_add(1)) << STATUS_BITS) | st;
+            match self
+                .state
+                .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return true,
+                Err(val) => cur = val,
+            }
+        }
+    }
+
+    fn set_failed(&self, notify: bool) {
+        self.update(FAILED);
+        if notify {
+            self.event.notify(usize::MAX);
+        }
+    }
 }
 
 impl WorkerAvailability {
     fn create() -> (Self, WorkerAvailabilityTx) {
         let inner = Arc::new(Inner {
-            waker: AtomicWaker::new(),
-            updated: AtomicBool::new(false),
-            available: AtomicBool::new(false),
-            failed: AtomicBool::new(false),
+            state: AtomicU64::new(UNAVAILABLE),
+            event: Event::new(),
         });
 
         let avail = WorkerAvailability {
             inner: inner.clone(),
+            seen: UNAVAILABLE,
         };
         let avail_tx = WorkerAvailabilityTx { inner };
         (avail, avail_tx)
     }
 
-    fn failed(&self) -> bool {
-        self.inner.failed.load(Ordering::Acquire)
+    fn changed(&mut self) -> Option<WorkerStatus> {
+        let cur = self.inner.state.load(Ordering::Acquire);
+        let st = status(cur);
+        if cur != self.seen || st == WorkerStatus::Failed {
+            self.seen = cur;
+            Some(st)
+        } else {
+            None
+        }
     }
 
-    fn available(&self) -> bool {
-        self.inner.available.load(Ordering::Acquire)
-    }
-
-    async fn wait_for_update(&self) {
-        poll_fn(|cx| {
-            self.inner.waker.register(cx.waker());
-            if self.inner.updated.swap(false, Ordering::AcqRel) {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
+    async fn wait_for_update(&mut self) -> WorkerStatus {
+        loop {
+            if let Some(st) = self.changed() {
+                return st;
             }
-        })
-        .await;
+            let listener = self.inner.event.listen();
+            if let Some(st) = self.changed() {
+                return st;
+            }
+            listener.await;
+        }
     }
 }
 
 impl WorkerAvailabilityTx {
     fn set(&self, val: bool) {
-        let old = self.inner.available.swap(val, Ordering::Release);
-        if old != val {
-            self.inner.updated.store(true, Ordering::Release);
-            self.inner.waker.wake();
+        if self.inner.update(if val { AVAILABLE } else { UNAVAILABLE }) {
+            self.inner.event.notify(usize::MAX);
         }
     }
 }
 
 impl Drop for WorkerAvailabilityTx {
     fn drop(&mut self) {
-        self.inner.failed.store(true, Ordering::Release);
-        self.inner.updated.store(true, Ordering::Release);
-        self.inner.available.store(false, Ordering::Release);
-        // the arbiter `on_stop` callback wakes the waiter. compio aborts the
+        // the arbiter `on_stop` callback wakes the waiters. compio aborts the
         // process if a task on another thread is woken during unwinding
-        if !std::thread::panicking() {
-            self.inner.waker.wake();
-        }
+        self.inner.set_failed(!std::thread::panicking());
     }
 }
 
@@ -494,9 +528,91 @@ where
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
+    use std::sync::atomic::AtomicUsize;
+    use std::task::{Wake, Waker};
+
     use ntex_service::{Ctx, Service};
 
     use super::*;
+
+    #[derive(Default)]
+    struct WakeCount(AtomicUsize);
+
+    impl Wake for WakeCount {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn poll<F: Future>(fut: Pin<&mut F>, wake: &Arc<WakeCount>) -> Poll<F::Output> {
+        let waker = Waker::from(wake.clone());
+        fut.poll(&mut Context::from_waker(&waker))
+    }
+
+    /// Every clone observes every status change.
+    #[test]
+    fn status_cloned_observers() {
+        let (mut a, tx) = WorkerAvailability::create();
+        let mut b = a.clone();
+        let (w1, w2) = (
+            Arc::new(WakeCount::default()),
+            Arc::new(WakeCount::default()),
+        );
+        {
+            let mut first = std::pin::pin!(a.wait_for_update());
+            let mut second = std::pin::pin!(b.wait_for_update());
+            assert!(poll(first.as_mut(), &w1).is_pending());
+            assert!(poll(second.as_mut(), &w2).is_pending());
+
+            tx.set(true);
+            assert_eq!(w1.0.load(Ordering::SeqCst), 1);
+            assert_eq!(w2.0.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                poll(second.as_mut(), &w2),
+                Poll::Ready(WorkerStatus::Available)
+            );
+            assert_eq!(
+                poll(first.as_mut(), &w1),
+                Poll::Ready(WorkerStatus::Available)
+            );
+        }
+
+        // reported changes are not reported again
+        let mut c = a.clone();
+        assert!(poll(std::pin::pin!(a.wait_for_update()), &w1).is_pending());
+        assert!(poll(std::pin::pin!(c.wait_for_update()), &w1).is_pending());
+
+        // a change between calls is reported, with the current status
+        tx.set(false);
+        tx.set(true);
+        tx.set(false);
+        let st = poll(std::pin::pin!(a.wait_for_update()), &w1);
+        assert_eq!(st, Poll::Ready(WorkerStatus::Unavailable));
+        assert!(poll(std::pin::pin!(a.wait_for_update()), &w1).is_pending());
+
+        // failed is terminal and reported immediately to every clone
+        let mut d = a.clone();
+        let mut fut = std::pin::pin!(d.wait_for_update());
+        assert!(poll(fut.as_mut(), &w2).is_pending());
+        drop(tx);
+        assert_eq!(poll(fut.as_mut(), &w2), Poll::Ready(WorkerStatus::Failed));
+        for wrk in [&mut a, &mut b, &mut c] {
+            for _ in 0..2 {
+                let st = poll(std::pin::pin!(wrk.wait_for_update()), &w1);
+                assert_eq!(st, Poll::Ready(WorkerStatus::Failed));
+            }
+        }
+        assert_eq!(a.inner.status(), WorkerStatus::Failed);
+    }
+
+    /// The status cannot change after the worker has failed.
+    #[test]
+    fn status_failed_is_terminal() {
+        let (a, tx) = WorkerAvailability::create();
+        a.inner.set_failed(false);
+        tx.set(true);
+        assert_eq!(a.inner.status(), WorkerStatus::Failed);
+    }
 
     #[derive(Clone)]
     struct Cfg;

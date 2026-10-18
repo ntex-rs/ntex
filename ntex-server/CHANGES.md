@@ -82,6 +82,9 @@
   with `Server::pause()` stays paused when workers become available, and resuming a
   server without available workers no longer resumes the listeners
 
+* Fix `Worker::wait_for_status()` missing status changes when several clones of a
+  worker wait at the same time. Each clone now observes every change
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);

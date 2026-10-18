@@ -147,16 +147,6 @@ where
     }
 
     #[must_use]
-    #[deprecated(
-        since = "4.3.0",
-        note = "affinity is enabled by default, use `affinity()` to change it"
-    )]
-    /// Does nothing, affinity is enabled by default.
-    pub fn enable_affinity(self) -> Self {
-        self
-    }
-
-    #[must_use]
     /// Sets the CPU affinity of worker threads.
     ///
     /// See [`WorkerPool::affinity`].
