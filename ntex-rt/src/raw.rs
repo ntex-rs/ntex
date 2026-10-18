@@ -16,7 +16,8 @@
 //! reference frees it on any thread, also after the runtime is dropped.
 //!
 //! The runtime queues are intrusive, a task links itself into the local
-//! queue and into the remote queue.
+//! queue and into the remote queue. The runtime also lists its unfinished
+//! tasks, it drops their futures when it is dropped.
 use std::cell::Cell;
 use std::sync::{Arc, atomic::Ordering};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
@@ -66,6 +67,8 @@ const CLOSE: u32 = 1 << 3;
 const WAKES_REPORTED: u32 = 1 << 4;
 /// No join handle, the output is dropped on completion.
 const DETACHED: u32 = 1 << 5;
+/// In the task list of the runtime.
+const LISTED: u32 = 1 << 6;
 /// The state keeps the self-wake count above the flags.
 const WAKES_SHIFT: u32 = 8;
 /// The self-wake count saturates at this value.
@@ -112,6 +115,9 @@ struct Header {
     link: Link,
     /// Local queue link.
     next: Cell<*mut Header>,
+    /// Task list links.
+    list_prev: Cell<*mut Header>,
+    list_next: Cell<*mut Header>,
     vtable: &'static VTable,
     queue: Arc<RunnableQueue>,
     location: SpawnLocation,
@@ -125,7 +131,7 @@ struct Header {
 }
 
 #[cfg(all(target_pointer_width = "64", not(ntex_loom)))]
-const _: () = assert!(mem::size_of::<Header>() == 64);
+const _: () = assert!(mem::size_of::<Header>() == 80);
 
 enum Stage<F: Future> {
     Running(F),
@@ -500,8 +506,7 @@ fn close(h: NonNull<Header>) {
     impl Drop for Finish {
         fn drop(&mut self) {
             let hdr = header(self.0);
-            let state = hdr.state.get() & !(RUNNING | SCHEDULED | CLOSE);
-            hdr.state.set(state | FINISHED);
+            finish(self.0, hdr.state.get() & !(RUNNING | SCHEDULED | CLOSE));
             // the future is dropped, there is no output
             let completed = complete(self.0);
             release_local(self.0);
@@ -515,6 +520,16 @@ fn close(h: NonNull<Header>) {
     hdr.state.set(hdr.state.get() | RUNNING);
     let finish = Finish(h);
     unsafe { (header(finish.0).vtable.drop_future)(finish.0) };
+}
+
+/// Sets `state` with `FINISHED` on the owner thread, the task leaves the task
+/// list.
+fn finish(h: NonNull<Header>, state: u32) {
+    let hdr = header(h);
+    hdr.state.set((state | FINISHED) & !LISTED);
+    if state & LISTED != 0 {
+        hdr.queue.tasks.remove(h);
+    }
 }
 
 /// Completion of a task, the awaiter is notified once the caller releases
@@ -645,13 +660,16 @@ unsafe fn create<F: Future>(
                 next: AtomicPtr::new(ptr::null_mut()),
             },
             next: Cell::new(ptr::null_mut()),
+            list_prev: Cell::new(ptr::null_mut()),
+            list_next: Cell::new(ptr::null_mut()),
             vtable: &Fns::<F>::VTABLE,
             queue: queue.clone(),
             location,
             awaiter: Awaiter::new(),
             remote: AtomicU32::new(if local { 0 } else { R_QUEUED | R_WOKEN }),
+            // a task spawned on another thread is listed on its first merge
             state: Cell::new(
-                if local { SCHEDULED } else { 0 } | if detached { DETACHED } else { 0 },
+                if local { SCHEDULED | LISTED } else { 0 } | if detached { DETACHED } else { 0 },
             ),
             // the queue and the join handle
             refs: Cell::new(if detached { 1 } else { 2 }),
@@ -663,6 +681,7 @@ unsafe fn create<F: Future>(
     // the owner thread may free the task once it is queued, the queue of the
     // caller outlives the call
     if local {
+        queue.tasks.push(h);
         queue.schedule_local(Runnable(h));
     } else {
         queue.schedule_remote(Remote(h));
@@ -723,7 +742,7 @@ impl Runnable {
 
         let state = hdr.state.get() & !RUNNING;
         if ready {
-            hdr.state.set((state | FINISHED) & !(SCHEDULED | CLOSE));
+            finish(h, state & !(SCHEDULED | CLOSE));
             // only the run reference is left, nothing observes the completion
             if hdr.refs.get() == 1 && hdr.remote.load(Ordering::Acquire) == 0 {
                 finish_unshared(h);
@@ -806,6 +825,12 @@ impl Remote {
             .set(u32::try_from(refs).unwrap_or_else(|_| abort()));
 
         let mut state = hdr.state.get();
+        if state & LISTED == 0 {
+            // the first merge of a task spawned on another thread
+            state |= LISTED;
+            hdr.state.set(state);
+            hdr.queue.tasks.push(h);
+        }
         if cur & R_CANCEL != 0 && state & FINISHED == 0 {
             state |= CLOSE;
             hdr.state.set(state);
@@ -913,6 +938,72 @@ impl LocalQueue {
 impl fmt::Debug for LocalQueue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalQueue").finish_non_exhaustive()
+    }
+}
+
+/// Intrusive list of the unfinished tasks of a runtime, used on the owner
+/// thread only.
+///
+/// A task waiting on a waker is in no queue, the runtime drops its future
+/// through the list when it is dropped. The list holds no references.
+pub(crate) struct TaskList {
+    head: Cell<*mut Header>,
+}
+
+impl TaskList {
+    pub(crate) const fn new() -> Self {
+        Self {
+            head: Cell::new(ptr::null_mut()),
+        }
+    }
+
+    fn push(&self, h: NonNull<Header>) {
+        let hdr = header(h);
+        let head = self.head.replace(h.as_ptr());
+        hdr.list_prev.set(ptr::null_mut());
+        hdr.list_next.set(head);
+        if !head.is_null() {
+            unsafe { (*head).list_prev.set(h.as_ptr()) };
+        }
+    }
+
+    fn remove(&self, h: NonNull<Header>) {
+        let hdr = header(h);
+        let (prev, next) = (hdr.list_prev.get(), hdr.list_next.get());
+        if prev.is_null() {
+            self.head.set(next);
+        } else {
+            unsafe { (*prev).list_next.set(next) };
+        }
+        if !next.is_null() {
+            unsafe { (*next).list_prev.set(prev) };
+        }
+    }
+
+    /// Drops the future of the first task, returns `false` if the list is
+    /// empty.
+    pub(crate) fn close_first(&self) -> bool {
+        let Some(h) = NonNull::new(self.head.get()) else {
+            return false;
+        };
+        let hdr = header(h);
+        let state = hdr.state.get();
+        if state & RUNNING != 0 {
+            // polled or dropped up the stack, it is left to its runner
+            hdr.state.set(state & !LISTED);
+            self.remove(h);
+        } else {
+            // a reference for `close`, a queued task is finished when popped
+            inc_local(h);
+            close(h);
+        }
+        true
+    }
+}
+
+impl fmt::Debug for TaskList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskList").finish_non_exhaustive()
     }
 }
 

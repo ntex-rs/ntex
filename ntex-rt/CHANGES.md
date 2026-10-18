@@ -14,6 +14,9 @@
   the waker is dropped right away on the runtime thread, or when the task
   completes or is freed if the handle is dropped on another thread
 
+* Drop the futures of pending neon tasks when the runtime is dropped, a task
+  waiting on a waker kept its future and the runtime queue alive
+
 * Require `F::Output: Send` for neon `Handle::spawn()`, a remote task could
   return a non-`Send` value to the spawning thread
 
