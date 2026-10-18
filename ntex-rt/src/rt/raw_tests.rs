@@ -7,7 +7,7 @@
 #![allow(clippy::waker_clone_wake)]
 use std::future::poll_fn;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Barrier, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::thread;
@@ -982,10 +982,14 @@ fn shutdown_with_blocked_notification() {
     struct BlockingNotify {
         entered: mpsc::Sender<()>,
         release: Mutex<mpsc::Receiver<()>>,
+        interrupted: AtomicBool,
     }
 
     impl Notify for BlockingNotify {
         fn notify(&self) -> io::Result<()> {
+            if !self.interrupted.swap(true, Ordering::Relaxed) {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
             self.entered.send(()).unwrap();
             self.release
                 .lock()
@@ -1013,6 +1017,7 @@ fn shutdown_with_blocked_notification() {
         let rt = Runtime::new(Box::new(BlockingNotify {
             entered,
             release: Mutex::new(release),
+            interrupted: AtomicBool::new(false),
         }));
         rt.awake();
         let queue = Arc::downgrade(&rt.queue);

@@ -13,6 +13,10 @@
 * Coordinate remote task publication with shutdown so late spawns, wakes and
   releases cannot leave tasks queued after the final drain
 
+* Retry interrupted scheduler notifications; log and abort on other notification
+  errors instead of silently leaving queued tasks stranded. Explicit
+  `Handle::notify()` calls continue to return errors to the caller
+
 * Skip the thread-local owner lookup when spawning through `Runtime`,
   while `Handle` spawning still selects the local or remote queue dynamically
 

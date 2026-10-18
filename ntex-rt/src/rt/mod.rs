@@ -364,7 +364,7 @@ impl Runtime {
             let slot = BlockOnSlot(Rc::new(RefCell::new(Some(Box::pin(async {
                 result = Some(future.await);
                 self.stop.set(true);
-                let _ = self.queue.handle.notify();
+                self.queue.notify();
             })))));
             let task = slot.0.clone();
             unsafe {
@@ -427,6 +427,9 @@ impl Handle {
     }
 
     /// Wakes the runtime's driver.
+    ///
+    /// Returns notification errors to the caller without retrying, unlike
+    /// internal scheduler notifications.
     pub fn notify(&self) -> io::Result<()> {
         self.queue.handle.notify()
     }
@@ -644,7 +647,23 @@ impl RunnableQueue {
             // the poll running a task picks up tasks it schedules, a notify
             // could reenter the runtime and free the running task
             if self.current.load(Ordering::Relaxed).is_null() {
-                self.handle.notify().ok();
+                self.notify();
+            }
+        }
+    }
+
+    fn notify(&self) {
+        #[cold]
+        fn failed(err: &io::Error) -> ! {
+            log::error!("Failed to notify runtime driver: {err}; aborting");
+            std::process::abort();
+        }
+
+        // Keep responsibility for this wakeup: other producers may already
+        // have coalesced behind it, even if no later submission arrives.
+        while let Err(err) = self.handle.notify() {
+            if err.kind() != io::ErrorKind::Interrupted {
+                failed(&err);
             }
         }
     }
@@ -855,7 +874,7 @@ impl RemotePermit<'_> {
         let queue = self.queue.take().unwrap();
         queue.admission.fetch_sub(1, Ordering::Release);
         if !queue.notified.swap(true, Ordering::Release) {
-            queue.handle.notify().ok();
+            queue.notify();
         }
     }
 }
@@ -997,6 +1016,176 @@ mod tests {
         fn notify(&self) -> io::Result<()> {
             self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailNotify {
+        calls: Arc<AtomicUsize>,
+        failures: usize,
+        kind: io::ErrorKind,
+    }
+
+    impl Notify for FailNotify {
+        fn notify(&self) -> io::Result<()> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) < self.failures {
+                Err(self.kind.into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct PollDriver;
+
+    impl Driver for PollDriver {
+        fn handle(&self) -> Box<dyn Notify> {
+            Box::new(NoopNotify)
+        }
+
+        fn run(&self, rt: &Runtime) -> io::Result<()> {
+            while rt.poll() != PollResult::Ready {}
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn interrupted_scheduler_notifications() {
+        for remote in [false, true] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let done = Arc::new(AtomicUsize::new(0));
+            let rt = Runtime::new(Box::new(FailNotify {
+                calls: calls.clone(),
+                failures: 2,
+                kind: io::ErrorKind::Interrupted,
+            }));
+            for round in 0..2 {
+                let (handle, done2) = (rt.handle(), done.clone());
+                let submit = move || {
+                    for _ in 0..2 {
+                        let done = done2.clone();
+                        handle.spawn_detached(async move {
+                            done.fetch_add(1, Ordering::Relaxed);
+                        });
+                    }
+                };
+                if remote {
+                    thread::spawn(submit).join().unwrap();
+                } else {
+                    submit();
+                }
+                assert_eq!(calls.load(Ordering::Relaxed), 3 + round);
+                assert_eq!(rt.poll(), PollResult::Pending);
+                assert_eq!(done.load(Ordering::Relaxed), 2 * (round + 1));
+            }
+        }
+    }
+
+    #[test]
+    fn interrupted_block_on_notification() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rt = Runtime::new(Box::new(FailNotify {
+            calls: calls.clone(),
+            failures: 2,
+            kind: io::ErrorKind::Interrupted,
+        }));
+        rt.awake();
+        assert_eq!(rt.block_on(async { 42 }, &PollDriver), 42);
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn handle_notify_returns_errors() {
+        for kind in [io::ErrorKind::Interrupted, io::ErrorKind::Other] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let rt = Runtime::new(Box::new(FailNotify {
+                calls: calls.clone(),
+                failures: usize::MAX,
+                kind,
+            }));
+            assert_eq!(rt.handle().notify().unwrap_err().kind(), kind);
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    #[cfg(not(any(miri, ntex_loom)))]
+    #[test]
+    fn failed_scheduler_notification_aborts() {
+        use std::process::{Command, Stdio};
+
+        const CHILD: &str = "NTEX_RT_NOTIFY_ABORT_CHILD";
+        if let Some(path) = std::env::var_os(CHILD) {
+            struct Logger;
+            impl log::Log for Logger {
+                fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                    true
+                }
+                fn log(&self, record: &log::Record<'_>) {
+                    eprintln!("{}", record.args());
+                }
+                fn flush(&self) {}
+            }
+            log::set_logger(&Logger).unwrap();
+            log::set_max_level(log::LevelFilter::Error);
+            let rt = Runtime::new(Box::new(FailNotify {
+                calls: Arc::new(AtomicUsize::new(0)),
+                failures: usize::MAX,
+                kind: io::ErrorKind::Other,
+            }));
+            match path.to_str().unwrap() {
+                "local" => rt.spawn_detached(async {}),
+                "remote" => {
+                    let handle = rt.handle();
+                    thread::spawn(move || handle.spawn_detached(async {}))
+                        .join()
+                        .unwrap();
+                }
+                "block_on" => {
+                    rt.awake();
+                    rt.block_on(async {}, &PollDriver);
+                }
+                _ => panic!("unknown notification path"),
+            }
+            panic!("notification failure did not abort");
+        }
+
+        for path in ["local", "remote", "block_on"] {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "rt::tests::failed_scheduler_notification_aborts",
+                    "--nocapture",
+                ])
+                .env(CHILD, path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let start = Instant::now();
+            while child.try_wait().unwrap().is_none() {
+                if start.elapsed() > WAIT {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("{path}: notification failure did not terminate the process");
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            let output = child.wait_with_output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("Failed to notify runtime driver:"),
+                "{stderr}"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(output.status.signal(), Some(libc::SIGABRT), "{stderr}");
+            }
+            #[cfg(not(unix))]
+            {
+                assert!(!output.status.success(), "{stderr}");
+                assert_ne!(output.status.code(), Some(101), "{stderr}");
+            }
         }
     }
 
