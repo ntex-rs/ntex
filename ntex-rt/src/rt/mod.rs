@@ -88,6 +88,10 @@ pub(crate) fn current_thread_id() -> ThreadId {
 /// This is a thread-local runtime and cannot be sent to other threads, use
 /// [`Handle`] to spawn tasks from other threads.
 ///
+/// Dropping the runtime cancels its tasks. If cleanup panics, shutdown finishes
+/// before the first panic is resumed. Secondary cleanup panics are logged and
+/// suppressed, including when the runtime is dropped during an existing unwind.
+///
 /// ```compile_fail
 /// fn assert_send<T: Send>() {}
 /// assert_send::<ntex_rt::Runtime>();
@@ -837,20 +841,38 @@ impl RunnableQueue {
 
     /// Drops the futures of all tasks, also of tasks waiting on a waker.
     fn shutdown(&self) {
-        // dropped futures may wake or spawn tasks
-        loop {
-            self.clear();
-            if !self.tasks.close_first() {
-                break;
+        fn cleanup(f: impl Fn(), first_panic: &mut Option<Box<dyn std::any::Any + Send>>) {
+            while let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f)) {
+                if first_panic.is_none() && !std::thread::panicking() {
+                    *first_panic = Some(payload);
+                } else {
+                    suppress_cleanup_panic(payload);
+                }
             }
         }
+
+        let mut first_panic = None;
+        // Each entry is removed or completed before its cleanup can unwind.
+        // Retry the phase so remaining and callback-generated work is drained.
+        cleanup(
+            || loop {
+                self.clear();
+                if !self.tasks.close_first() {
+                    break;
+                }
+            },
+            &mut first_panic,
+        );
         self.admission.fetch_or(CLOSED, Ordering::AcqRel);
         // A reserved task may not have entered the MPSC queue yet.
         while self.admission.load(Ordering::Acquire) != CLOSED {
             yield_now();
         }
         // All admitted publications are linked; rejected ones cannot enqueue.
-        self.clear();
+        cleanup(|| self.clear(), &mut first_panic);
+        if let Some(payload) = first_panic {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     /// The runtime is dropped, its tasks never run.
@@ -861,6 +883,28 @@ impl RunnableQueue {
     fn pop_local(&self) -> Option<Task> {
         self.local_queue.pop()
     }
+}
+
+#[cold]
+fn suppress_cleanup_panic(payload: Box<dyn std::any::Any + Send>) {
+    fn discard(result: std::thread::Result<()>) {
+        if let Err(payload) = result {
+            // Do not recursively run arbitrary destructors after disposal or
+            // logging itself panics. Standard message payloads are safe to drop.
+            if payload.is::<&'static str>() || payload.is::<String>() {
+                drop(payload);
+            } else {
+                std::mem::forget(payload);
+            }
+        }
+    }
+
+    discard(std::panic::catch_unwind(|| {
+        log::error!("Panic during runtime cleanup suppressed to preserve the original panic");
+    }));
+    discard(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || drop(payload),
+    )));
 }
 
 pub(crate) struct RemotePermit<'a> {
