@@ -662,6 +662,14 @@ impl<F> Io<F> {
         unsafe { mem::replace(&mut *self.0.get(), IoRef::create_empty()) }
     }
 
+    /// Moves the shared state out of `self` without a placeholder, `Drop`
+    /// does not run for `self`.
+    fn into_io_ref(self) -> IoRef {
+        let this = mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is not used or dropped afterwards
+        unsafe { ptr::read(this.0.get()) }
+    }
+
     /// Panics if the filter chain is in use, it cannot be changed then.
     #[track_caller]
     fn check_not_borrowed(&self) {
@@ -744,7 +752,7 @@ impl<F: Filter> Io<F> {
     /// for example from a closure, codec or filter invoked by this connection.
     pub fn seal(self) -> Io<Sealed> {
         self.check_not_borrowed();
-        let state = self.take_io_ref();
+        let state = self.into_io_ref();
         state.0.filter.seal::<F>();
 
         Io(UnsafeCell::new(state), marker::PhantomData)
@@ -753,7 +761,7 @@ impl<F: Filter> Io<F> {
     #[inline]
     /// Converts the current I/O stream into a boxed version.
     pub fn boxed(self) -> IoBoxed {
-        self.seal().into()
+        IoBoxed(self.seal())
     }
 
     #[inline]
@@ -776,7 +784,7 @@ impl<F: Filter> Io<F> {
             self.st().terminate_connection(Some(e));
         }
 
-        let state = self.take_io_ref();
+        let state = self.into_io_ref();
 
         // Add the buffers layer
         state.0.buffer.add_layer(state.0.cfg.write_size());
@@ -834,7 +842,7 @@ impl<F: Filter> Io<F> {
         self.st().filter.map_filter::<F, U, R>(f);
         mem::forget(guard);
 
-        let state = self.take_io_ref();
+        let state = self.into_io_ref();
         let io = Io(UnsafeCell::new(state), marker::PhantomData);
         io.with_callbacks(|cb| cb.after_processing(&io));
         io
