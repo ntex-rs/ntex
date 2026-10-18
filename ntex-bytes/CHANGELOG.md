@@ -12,6 +12,8 @@
 
 * Remove `Buf` for `&str`, it panicked on reads that end inside a multi-byte char, use `str::as_bytes()`
 
+* Fix `Buf::advance(0)` panic for `io::Cursor` positioned past the end, check bounds without truncating the position on 32-bit targets
+
 ## [1.13.0] - 2026-10-17
 
 * Add `PageCacheMetrics`, per-thread page cache statistics: hits, misses, pages returned
