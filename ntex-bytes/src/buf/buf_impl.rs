@@ -879,12 +879,13 @@ impl<T: AsRef<[u8]>> Buf for std::io::Cursor<T> {
     }
 
     fn advance(&mut self, cnt: usize) {
-        let pos = (self.position() as usize)
-            .checked_add(cnt)
-            .expect("overflow");
+        if cnt == 0 {
+            return;
+        }
+        let pos = self.position().checked_add(cnt as u64).expect("overflow");
 
-        assert!(pos <= self.get_ref().as_ref().len());
-        self.set_position(pos as u64);
+        assert!(pos <= self.get_ref().as_ref().len() as u64);
+        self.set_position(pos);
     }
 }
 
@@ -1015,6 +1016,25 @@ mod tests {
 
         let bytes = (&b"hello world"[..]).to_bytes();
         assert_eq!(&bytes[..], &b"hello world"[..]);
+    }
+
+    #[test]
+    fn cursor_advance_past_end() {
+        let mut buf = std::io::Cursor::new(b"abc");
+        buf.set_position(10);
+        assert_eq!(buf.remaining(), 0);
+        assert_eq!(buf.chunk(), b"");
+        buf.advance(0);
+        assert_eq!(buf.position(), 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn cursor_advance_high_position() {
+        // must not wrap to a valid offset on 32-bit targets
+        let mut buf = std::io::Cursor::new(b"abc");
+        buf.set_position((1u64 << 32) + 1);
+        buf.advance(1);
     }
 
     struct Chunks(Vec<&'static [u8]>);
