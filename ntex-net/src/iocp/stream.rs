@@ -73,10 +73,7 @@ impl Close {
     async fn wait(self) -> io::Result<()> {
         match self {
             Close::Done(res) => res,
-            Close::Blocking(close) => ntex_rt::spawn_blocking(move || close.run())
-                .await
-                .map_err(io::Error::other)
-                .and_then(|res| res),
+            Close::Blocking(close) => close.spawn().await,
         }
     }
 
@@ -109,6 +106,22 @@ impl Close {
 }
 
 impl BlockingClose {
+    /// Starts the close independently of the future awaiting its result.
+    fn spawn(self) -> impl Future<Output = io::Result<()>> {
+        let (tx, rx) = oneshot::async_channel();
+        // Dropping a BlockingResult cancels queued work. Detach the job itself,
+        // and use a separate channel so cancellation cannot discard the socket.
+        ntex_rt::spawn_blocking(move || {
+            let _ = tx.send(self.run());
+        })
+        .detach();
+        async move {
+            rx.await
+                .map_err(|_| io::Error::other(ntex_rt::BlockingError))
+                .and_then(|res| res)
+        }
+    }
+
     /// Closes the socket in blocking mode, waiting for the linger timeout.
     fn run(self) -> io::Result<()> {
         // a non-blocking socket would fail the close with `WSAEWOULDBLOCK` again
@@ -314,9 +327,9 @@ impl Handler for StreamOpsHandler {
                             // below: if the runtime stops before that task
                             // runs, the socket must still be closed, and
                             // `cleanup()` skips `CLOSED` items.
-                            let close = ntex_rt::spawn_blocking(move || close.run());
+                            let close = close.spawn();
                             ntex_rt::spawn(async move {
-                                let res = close.await.map_err(io::Error::other).and_then(|res| res);
+                                let res = close.await;
                                 #[cfg(feature = "trace")]
                                 log::trace!("{_tag}: WaitClosed({:?})", io);
                                 let _ = tx.send(res);
@@ -948,6 +961,119 @@ mod tests {
         assert_eq!(std::io::Read::read(peer, &mut buf).unwrap(), 0);
     }
 
+    /// Occupies the sole worker until the sender is used or dropped.
+    fn block_worker() -> std::sync::mpsc::Sender<()> {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        ntex_rt::spawn_blocking(move || {
+            started_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        })
+        .detach();
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        release_tx
+    }
+
+    #[test]
+    fn blocking_close_survives_cancelled_shutdown() {
+        ntex_rt::System::build()
+            .thread_pool_limit(1)
+            .testing()
+            .build(crate::DefaultRuntime)
+            .block_on(async {
+                let release = block_worker();
+                let reactor = Reactor::new().unwrap();
+                let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+                ops.0.with(|st| st.streams[ctl.id].rd_op.fake_blocking());
+
+                {
+                    let mut shutdown = pin!(ctl.shutdown(false));
+                    std::future::poll_fn(|cx| {
+                        assert!(shutdown.as_mut().poll(cx).is_pending());
+                        std::task::Poll::Ready(())
+                    })
+                    .await;
+                }
+
+                // Cleanup must leave the socket to the queued close job.
+                cleanup(&ops);
+                assert!(is_ours(raw, &peer.peer_addr().unwrap().into()));
+                release.send(()).unwrap();
+                ntex_rt::spawn_blocking(|| ()).await.unwrap();
+                assert_closed(raw, &mut peer);
+                drop((ctl, io));
+            });
+    }
+
+    #[test]
+    fn blocking_close_survives_runtime_shutdown() {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let (release, raw, mut peer) = ntex_rt::System::build()
+            .thread_pool_limit(1)
+            .testing()
+            .build(crate::DefaultRuntime)
+            .block_on(async {
+                let release = block_worker();
+                let reactor = Reactor::new().unwrap();
+                let (io, ctl, ops, raw, peer) = registered(&reactor);
+                ops.0.with(|st| {
+                    st.streams[ctl.id].rd_op.fake_blocking();
+                    st.streams[ctl.id].rd_op.fake_pending();
+                });
+
+                {
+                    let mut shutdown = pin!(ctl.shutdown(false));
+                    std::future::poll_fn(|cx| {
+                        assert!(shutdown.as_mut().poll(cx).is_pending());
+                        std::task::Poll::Ready(())
+                    })
+                    .await;
+                    complete_aborted_recv(&ops, ctl.id);
+                }
+
+                cleanup(&ops);
+                drop((ctl, io));
+                // A fence behind the close lets us observe the drained queue
+                // after runtime teardown has dropped its async result relay.
+                ntex_rt::spawn_blocking(move || done_tx.send(()).unwrap()).detach();
+                (release, raw, peer)
+            });
+
+        assert!(is_ours(raw, &peer.peer_addr().unwrap().into()));
+        release.send(()).unwrap();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_closed(raw, &mut peer);
+    }
+
+    #[ntex::test]
+    async fn blocking_close_reports_shutdown_error() {
+        let sock = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+        sock.bind(
+            &"127.0.0.1:0"
+                .parse::<std::net::SocketAddr>()
+                .unwrap()
+                .into(),
+        )
+        .unwrap();
+        let addr = sock.local_addr().unwrap();
+        let raw = sock.into_raw_socket() as WinSock::SOCKET;
+
+        let result = close_socket(raw, false, false).wait().await;
+        let open = is_ours(raw, &addr);
+        if open {
+            unsafe { WinSock::closesocket(raw) };
+        }
+        assert!(!open, "blocking close leaked the socket");
+        assert_eq!(
+            result.unwrap_err().raw_os_error(),
+            Some(WinSock::WSAENOTCONN)
+        );
+    }
+
     /// A socket that is still open when the runtime stops must be closed by
     /// `cleanup()`, and handles dropped afterwards must not touch it again.
     #[ntex::test]
@@ -1076,6 +1202,7 @@ mod tests {
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         let id = ctl.id;
         ops.0.with(|st| {
+            st.streams[id].rd_op.fake_blocking();
             st.streams[id].rd_op.fake_pending();
             st.streams[id].wr_op.fake_pending_with(&[b"data"]);
         });

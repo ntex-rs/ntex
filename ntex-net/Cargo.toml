@@ -73,6 +73,7 @@ ntex-io-uring = { workspace = true, features = ["direct-syscall"] }
 
 # Windows specific dependencies
 [target.'cfg(windows)'.dependencies]
+oneshot = { workspace = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Networking_WinSock",
