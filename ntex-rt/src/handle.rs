@@ -1,8 +1,5 @@
 use std::{fmt, panic::Location, pin::Pin, task::Context, task::Poll, task::ready};
 
-#[cfg(not(ntex_rt_task))]
-type Task<T> = async_task::Task<T, crate::rt::queues::TaskMeta>;
-#[cfg(ntex_rt_task)]
 type Task<T> = crate::rt::raw::Task<T>;
 
 /// The location a task was spawned at.
@@ -22,9 +19,6 @@ impl<T> JoinHandle<T> {
     /// Cancels the task.
     pub fn cancel(mut self) {
         if let Some(t) = self.task.take() {
-            #[cfg(not(ntex_rt_task))]
-            drop(t.cancel());
-            #[cfg(ntex_rt_task)]
             t.cancel();
         }
     }
@@ -58,9 +52,6 @@ impl<T> Future for JoinHandle<T> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(match self.task.as_mut() {
-            #[cfg(not(ntex_rt_task))]
-            Some(fut) => Ok(ready!(Pin::new(fut).poll(cx))),
-            #[cfg(ntex_rt_task)]
             Some(fut) => ready!(fut.poll_join(cx)).ok_or(JoinError),
             None => Err(JoinError),
         })

@@ -34,9 +34,7 @@ ntex-error = { workspace = true }
 
 atomic-waker = { workspace = true }
 async-channel = { workspace = true }
-async-task = { workspace = true }
 backtrace = { workspace = true }
-crossbeam-queue = { workspace = true }
 crossbeam-channel = { workspace = true }
 foldhash = { workspace = true }
 futures-timer = { workspace = true }
@@ -46,7 +44,6 @@ nix = { workspace = true, features = ["signal"] }
 oneshot = { workspace = true }
 parking_lot = { workspace = true }
 scoped-tls = { workspace = true }
-swap-buffer-queue = { workspace = true }
 
 compio-driver = { workspace = true, optional = true }
 compio-runtime = { workspace = true, optional = true }
@@ -64,7 +61,7 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Threading",
 ] }
 
-# loom models of the raw task, `RUSTFLAGS="--cfg ntex_rt_task --cfg ntex_loom"`
+# loom models of the raw task, `RUSTFLAGS="--cfg ntex_loom"`
 [target.'cfg(ntex_loom)'.dependencies]
 loom = "0.7"
 
