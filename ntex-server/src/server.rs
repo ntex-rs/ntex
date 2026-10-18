@@ -1,5 +1,5 @@
 #![allow(clippy::missing_panics_doc)]
-use std::sync::{Arc, Mutex, atomic::AtomicU64, atomic::Ordering};
+use std::sync::{Arc, atomic::AtomicU64, atomic::Ordering};
 use std::task::{Context, Poll, ready};
 use std::{future::Future, io, pin::Pin};
 
@@ -7,7 +7,7 @@ use async_channel::Sender;
 use event_listener::Event;
 use ntex_rt::signals::Signal;
 
-use crate::manager::{Router, ServerCommand};
+use crate::manager::{Routing, ServerCommand};
 use crate::{ServerStatus, metrics::Metrics};
 
 #[derive(Debug)]
@@ -56,7 +56,7 @@ fn status(val: u64) -> ServerStatus {
 #[derive(Debug)]
 pub struct Server<T> {
     shared: Arc<ServerShared>,
-    router: Arc<Mutex<Router<T>>>,
+    router: Arc<Routing<T>>,
     cmd: Sender<ServerCommand<T>>,
     stop: Option<oneshot::AsyncReceiver<()>>,
 }
@@ -72,7 +72,7 @@ impl<T> Server<T> {
     pub(crate) fn new(
         cmd: Sender<ServerCommand<T>>,
         shared: Arc<ServerShared>,
-        router: Arc<Mutex<Router<T>>>,
+        router: Arc<Routing<T>>,
     ) -> Self {
         Server {
             cmd,
@@ -108,7 +108,7 @@ impl<T> Server<T> {
         if self.shared.status() != ServerStatus::Ready {
             return Err(item);
         }
-        let item = match Router::lock(&self.router).dispatch(item, &self.shared.metrics) {
+        let item = match self.router.dispatch(item, &self.shared.metrics) {
             Ok(()) => return Ok(()),
             Err(item) => item,
         };

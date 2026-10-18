@@ -717,6 +717,38 @@ async fn pool_signals_release_stopped_server() {
     assert!(released, "the stopped server's factory is still alive");
 }
 
+/// A paused server stays paused while a failed worker is restarted.
+#[ntex::test]
+async fn pool_pause_survives_worker_restart() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.panic_on = Some(1);
+    let srv = pool().workers(1).run(cfg);
+    wait_status(&srv, ServerStatus::Ready).await;
+    assert_eq!(c.resume.load(Relaxed), 1);
+
+    assert_eq!(srv.process(1), Ok(()));
+    srv.pause().await;
+    assert_eq!(srv.status(), ServerStatus::Paused);
+
+    for _ in 0..200 {
+        if c.created.load(Relaxed) == 2 {
+            break;
+        }
+        sleep(Millis(10)).await;
+    }
+    assert_eq!(c.created.load(Relaxed), 2, "the worker is not restarted");
+    sleep(Millis(100)).await;
+    assert_eq!(srv.status(), ServerStatus::Paused);
+    assert_eq!(c.resume.load(Relaxed), 1);
+    assert_eq!(srv.process(2), Err(2));
+
+    srv.resume().await;
+    assert_eq!(srv.status(), ServerStatus::Ready);
+    assert_eq!(c.resume.load(Relaxed), 2);
+    srv.stop(true).await;
+}
+
 /// A paused server stays paused when workers become available, and a server
 /// without available workers does not become ready when it is resumed.
 #[ntex::test]

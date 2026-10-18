@@ -79,13 +79,17 @@
   use `Server::status_changed()`
 
 * `Server::process()` accepts items only while the server is `Ready`. A server paused
-  with `Server::pause()` stays paused when workers become available, and resuming a
-  server without available workers no longer resumes the listeners
+  with `Server::pause()` stays paused when workers become available or restart, and
+  resuming a server without available workers no longer resumes the listeners
 
 * Fix `Worker::wait_for_status()` missing status changes when several clones of a
   worker wait at the same time. Each clone now observes every change
 
 * Fix the signal handling task keeping a stopped server and its factory alive
+
+* Fix a deadlock when `ServerConfiguration::incoming_cpu()` submits an item to the same
+  server. The callback no longer runs under the server's routing lock, an item submitted
+  while the callback runs, by itself or by another thread, is sent without its CPU
 
 ## [4.2.0] - 2026-10-01
 

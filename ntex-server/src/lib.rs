@@ -94,6 +94,8 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     ///
     /// Called on the thread that submits the item with [`Server::process`],
     /// e.g. the accept thread of a network server.
+    /// Calls are not concurrent. An item submitted while the method runs,
+    /// e.g. by the method itself, is sent without its incoming CPU.
     fn incoming_cpu(&self, item: &Self::Item) -> Option<usize> {
         let _ = item;
         None

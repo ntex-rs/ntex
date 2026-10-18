@@ -172,6 +172,11 @@ impl<T> Worker<T> {
         self.cpus.get().map_or(&[], |cpus| cpus)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_cpus(&self, cpus: &[usize]) {
+        let _ = self.cpus.set(cpus.into());
+    }
+
     #[inline]
     /// Sends a message to the worker.
     ///

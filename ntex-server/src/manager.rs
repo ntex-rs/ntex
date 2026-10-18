@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, pin::pin, rc::Rc};
 
 use async_channel::{Receiver, Sender, unbounded};
@@ -42,7 +42,7 @@ struct Inner<F: ServerConfiguration> {
     factory: F,
     cfg: WorkerPool,
     shared: Arc<ServerShared>,
-    router: Arc<Mutex<Router<F::Item>>>,
+    router: Arc<Routing<F::Item>>,
     /// All running workers, including unavailable ones.
     workers: RefCell<Vec<Worker<F::Item>>>,
     /// Paused with [`Server::pause`].
@@ -57,15 +57,22 @@ struct Inner<F: ServerConfiguration> {
     cmd: Sender<ServerCommand<F::Item>>,
 }
 
-/// Workers that receive new items, and their load balancer.
+/// Sends items to the workers.
 ///
 /// Shared by the command loop, which adds and removes workers, and the
 /// [`Server`] handles, which send items to the workers on the submitting
 /// thread, e.g. the accept thread.
+pub(crate) struct Routing<T> {
+    router: Mutex<Router<T>>,
+    /// Called without holding the router's lock, so it can take time or
+    /// submit items to the server.
+    incoming_cpu: Mutex<IncomingCpu<T>>,
+}
+
+/// Workers that receive new items, and their load balancer.
 pub(crate) struct Router<T> {
     workers: Vec<Worker<T>>,
     balancer: Balancer,
-    incoming_cpu: IncomingCpu<T>,
     /// The server is stopping, items are not sent to workers.
     closed: bool,
 }
@@ -73,21 +80,52 @@ pub(crate) struct Router<T> {
 /// See [`ServerConfiguration::incoming_cpu`].
 type IncomingCpu<T> = Box<dyn Fn(&T) -> Option<usize> + Send>;
 
-impl<T> Router<T> {
-    pub(crate) fn lock(router: &Mutex<Self>) -> MutexGuard<'_, Self> {
-        router.lock().unwrap_or_else(PoisonError::into_inner)
+impl<T> Routing<T> {
+    fn new(balancer: Balancer, capacity: usize, incoming_cpu: IncomingCpu<T>) -> Self {
+        Routing {
+            router: Mutex::new(Router {
+                workers: Vec::with_capacity(capacity),
+                balancer,
+                closed: false,
+            }),
+            incoming_cpu: Mutex::new(incoming_cpu),
+        }
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Router<T>> {
+        self.router.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Sends `item` to a worker, returns it if no worker is available.
-    pub(crate) fn dispatch(&mut self, mut item: T, metrics: &Metrics) -> Result<(), T> {
-        if self.closed || self.workers.is_empty() {
-            return Err(item);
-        }
-        let cpu = if self.balancer.uses_incoming_cpu(&self.workers) {
-            (self.incoming_cpu)(&item)
+    pub(crate) fn dispatch(&self, item: T, metrics: &Metrics) -> Result<(), T> {
+        let uses_cpu = {
+            let mut r = self.lock();
+            if r.closed || r.workers.is_empty() {
+                return Err(item);
+            }
+            let r = &mut *r;
+            r.balancer.uses_incoming_cpu(&r.workers)
+        };
+        // the callback is busy if it submits the item to this server, or
+        // another thread runs it, the item is sent without its cpu
+        let cpu = if uses_cpu {
+            match self.incoming_cpu.try_lock() {
+                Ok(f) => f(&item),
+                Err(TryLockError::Poisoned(f)) => f.into_inner()(&item),
+                Err(TryLockError::WouldBlock) => None,
+            }
         } else {
             None
         };
+        self.lock().dispatch(item, cpu, metrics)
+    }
+}
+
+impl<T> Router<T> {
+    fn dispatch(&mut self, mut item: T, cpu: Option<usize>, metrics: &Metrics) -> Result<(), T> {
+        if self.closed {
+            return Err(item);
+        }
         while !self.workers.is_empty() {
             let (idx, local) = self.balancer.select(&self.workers, cpu);
             match self.workers[idx].send(item) {
@@ -110,11 +148,12 @@ impl<T> Router<T> {
     }
 }
 
-impl<T> fmt::Debug for Router<T> {
+impl<T> fmt::Debug for Routing<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Router")
-            .field("workers", &self.workers.len())
-            .field("closed", &self.closed)
+        let r = self.lock();
+        f.debug_struct("Routing")
+            .field("workers", &r.workers.len())
+            .field("closed", &r.closed)
             .finish_non_exhaustive()
     }
 }
@@ -129,12 +168,11 @@ impl<F: ServerConfiguration> ServerManager<F> {
         let no_signals = cfg.no_signals;
         let shared = Arc::new(ServerShared::new(Metrics::new(cfg.num)));
         let f = factory.clone();
-        let router = Arc::new(Mutex::new(Router {
-            workers: Vec::with_capacity(cfg.num),
-            balancer: Balancer::new(cfg.balancing),
-            incoming_cpu: Box::new(move |item| f.incoming_cpu(item)),
-            closed: false,
-        }));
+        let router = Arc::new(Routing::new(
+            Balancer::new(cfg.balancing),
+            cfg.num,
+            Box::new(move |item| f.incoming_cpu(item)),
+        ));
         let mgr = ServerManager(Rc::new(Inner {
             workers: RefCell::new(Vec::with_capacity(cfg.num)),
             cfg,
@@ -356,31 +394,18 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 
     fn process(&mut self, item: F::Item) {
-        let router = self.mgr.0.router.clone();
-        if self.dispatch(&mut Router::lock(&router), item) {
-            self.mgr.set_available(false);
-        }
-    }
-
-    /// Sends `item` to a worker, or queues it if no worker is available.
-    ///
-    /// Returns `true` if the item was queued, the server is unavailable. The
-    /// configuration's callbacks are not called under the router's lock.
-    fn dispatch(&mut self, router: &mut Router<F::Item>, item: F::Item) -> bool {
-        if let Err(item) = router.dispatch(item, &self.mgr.0.shared.metrics)
+        if let Err(item) = self.mgr.0.router.dispatch(item, &self.mgr.0.shared.metrics)
             && !self.mgr.0.stopping.get()
         {
             log::error!("No workers");
             self.backlog.push_back(item);
-            true
-        } else {
-            false
+            self.mgr.set_available(false);
         }
     }
 
     fn update_workers(&mut self, upd: Update<F::Item>) {
-        let router = self.mgr.0.router.clone();
-        let mut router = Router::lock(&router);
+        let routing = self.mgr.0.router.clone();
+        let mut router = routing.lock();
         let r = &mut *router;
         match upd {
             Update::Available(worker) => match r.workers.binary_search(&worker) {
@@ -405,23 +430,17 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 }
             }
         }
-        // handle backlog, the server is unavailable while it is not empty, so
-        // new items do not overtake it
-        if !self.backlog.is_empty() && !r.workers.is_empty() {
-            let mut items = std::mem::take(&mut self.backlog);
-            while let Some(item) = items.pop_front() {
-                if r.workers.is_empty() {
-                    items.push_front(item);
-                    break;
-                }
-                // pushes the item back if all workers failed
-                self.dispatch(r, item);
-            }
-            self.backlog.extend(items);
-        }
-        let available = !r.workers.is_empty() && self.backlog.is_empty();
         drop(router);
 
+        // handle backlog, the server is unavailable while it is not empty, so
+        // new items do not overtake it
+        while let Some(item) = self.backlog.pop_front() {
+            if let Err(item) = routing.dispatch(item, &self.mgr.0.shared.metrics) {
+                self.backlog.push_front(item);
+                break;
+            }
+        }
+        let available = self.backlog.is_empty() && !routing.lock().workers.is_empty();
         self.mgr.set_available(available);
     }
 
@@ -444,7 +463,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
 
         // new items are not sent to the workers
         {
-            let mut router = Router::lock(&self.mgr.0.router);
+            let mut router = self.mgr.0.router.lock();
             router.closed = true;
             router.workers.clear();
         }
@@ -589,5 +608,78 @@ async fn handle_cmd<F: ServerConfiguration>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unused_async_trait_impl)]
+    use std::sync::{OnceLock, Weak, atomic::AtomicUsize, atomic::Ordering, mpsc};
+    use std::time::Duration;
+
+    use ntex_service::{Ctx, Service};
+
+    use super::*;
+    use crate::LoadBalancing;
+
+    #[derive(Clone)]
+    struct Cfg;
+
+    struct Srv;
+
+    impl Service<(), usize> for Srv {
+        type Res = ();
+        type Error = ();
+
+        async fn call(&self, _: usize, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    impl ServerConfiguration for Cfg {
+        type Item = usize;
+        type Service = Srv;
+
+        async fn create(&self) -> std::io::Result<Srv> {
+            Ok(Srv)
+        }
+    }
+
+    /// The incoming CPU callback runs without the router's lock, an item it
+    /// submits to the same server is sent without its CPU.
+    #[ntex::test]
+    async fn incoming_cpu_reentrant_dispatch() {
+        let mut wrk = Worker::start("test".into(), Cfg, None);
+        assert_eq!(wrk.wait_for_status().await, WorkerStatus::Available);
+        wrk.set_cpus(&[0]);
+
+        let routing: Arc<OnceLock<Weak<Routing<usize>>>> = Arc::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (r2, calls2) = (routing.clone(), calls.clone());
+        let callback: IncomingCpu<usize> = Box::new(move |item| {
+            calls2.fetch_add(1, Ordering::SeqCst);
+            if *item == 1 {
+                let r = r2.get().unwrap().upgrade().unwrap();
+                assert_eq!(r.dispatch(2, &Metrics::new(1)), Ok(()));
+            }
+            Some(0)
+        });
+        let mut balancer = Balancer::new(LoadBalancing::IncomingCpu);
+        balancer.insert(0);
+        let r = Arc::new(Routing::new(balancer, 1, callback));
+        r.lock().workers.push(wrk.clone());
+        routing.set(Arc::downgrade(&r)).unwrap();
+
+        // a deadlocked dispatch blocks its thread
+        let (tx, rx) = mpsc::channel();
+        let r2 = r.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(r2.dispatch(1, &Metrics::new(1)));
+        });
+        let res = rx.recv_timeout(Duration::from_secs(5));
+        assert_eq!(res, Ok(Ok(())), "dispatch deadlocked");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        wrk.stop(Millis::ZERO).await;
     }
 }
