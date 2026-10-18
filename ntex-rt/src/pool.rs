@@ -1,6 +1,6 @@
 //! A thread pool for blocking operations.
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering, fence};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{any::Any, fmt, future::Future, panic, pin::Pin, thread};
@@ -46,15 +46,18 @@ impl fmt::Display for BlockingError {
 #[derive(Debug)]
 pub struct BlockingResult<T> {
     rx: oneshot::AsyncReceiver<Result<T, Box<dyn Any + Send>>>,
+    detached: Option<Arc<AtomicBool>>,
 }
 
-impl<T: 'static> BlockingResult<T> {
+impl<T> BlockingResult<T> {
     /// Detaches the task so it can continue without awaiting its result.
+    ///
+    /// Does not require a running runtime.
     pub fn detach(self) {
-        crate::spawn(async move {
-            let _ = self.await;
-        })
-        .detach();
+        if let Some(detached) = &self.detached {
+            // published by dropping the receiver
+            detached.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -243,7 +246,7 @@ impl ThreadPool {
         let (tx, rx) = oneshot::async_channel();
         let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
         let _ = tx.send(result);
-        BlockingResult { rx }
+        BlockingResult { rx, detached: None }
     }
 
     #[allow(clippy::missing_panics_doc)]
@@ -259,11 +262,20 @@ impl ThreadPool {
         R: Send + 'static,
     {
         let (tx, rx) = oneshot::async_channel();
+        let detached = Arc::new(AtomicBool::new(false));
+        let res = BlockingResult {
+            rx,
+            detached: Some(detached.clone()),
+        };
         let stats = self.stats.clone();
         let queued = Instant::now();
         let f = Box::new(move || {
-            // do not execute operation if receiver is dropped
-            if !tx.is_closed() {
+            // do not execute operation if receiver is dropped, unless detached,
+            // the fence pairs with the receiver drop in `detach`
+            if !tx.is_closed() || {
+                fence(Ordering::Acquire);
+                detached.load(Ordering::Relaxed)
+            } {
                 let start = Instant::now();
                 stats.tasks.fetch_add(1, Ordering::Relaxed);
                 stats
@@ -283,7 +295,7 @@ impl ThreadPool {
 
         // hand over to an idle worker
         let f = match self.sender_low_prio.try_send(f) {
-            Ok(()) => return BlockingResult { rx },
+            Ok(()) => return res,
             Err(TrySendError::Full(f)) => f,
             Err(TrySendError::Disconnected(_)) => {
                 unreachable!("receiver should not all disconnected")
@@ -318,7 +330,7 @@ impl ThreadPool {
                 }
             }
         }
-        BlockingResult { rx }
+        res
     }
 }
 
@@ -435,6 +447,35 @@ mod tests {
             spawn_blocking(move || tx.send(1).unwrap()).detach();
             assert_eq!(rx.await, Ok(1));
         });
+    }
+
+    #[test]
+    fn detach_without_runtime() {
+        thread::spawn(|| spawn_blocking(|| 1).detach())
+            .join()
+            .unwrap();
+
+        // occupy the only worker, the next tasks wait in the queue
+        let pool = ThreadPool::new("test", 1, Duration::from_secs(1));
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let first = pool.execute(move || {
+            start_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        start_rx.recv().unwrap();
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped2 = dropped.clone();
+        drop(pool.execute(move || dropped2.store(true, Ordering::Relaxed)));
+        let (tx, rx) = std::sync::mpsc::channel();
+        pool.execute(move || tx.send(1).unwrap()).detach();
+        release_tx.send(()).unwrap();
+
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(1));
+        assert_eq!(wait(first, Duration::from_secs(5)), Some(Ok(())));
+        // dropped results cancel queued work
+        assert!(!dropped.load(Ordering::Relaxed));
     }
 
     #[test]
