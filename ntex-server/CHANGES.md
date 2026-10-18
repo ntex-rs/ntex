@@ -68,6 +68,9 @@
 * Fix a data race between workers cloning a service factory that is `Send` but
   not `Sync`, each worker gets its own copy of the factory
 
+* Stop all workers when the server stops, including workers that are not ready
+  or still creating their service
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);
