@@ -6,7 +6,8 @@ use std::{io, time::Duration};
 
 use ntex::time::{Millis, sleep};
 use ntex_server::{
-    Affinity, LoadBalancing, Server, ServerConfiguration, Worker, WorkerPool, WorkerStatus,
+    Affinity, LoadBalancing, Server, ServerConfiguration, ServerStatus, Worker, WorkerPool,
+    WorkerStatus,
 };
 use ntex_service::{Ctx, Service};
 
@@ -172,6 +173,22 @@ async fn process(srv: &Server<usize>, item: usize) {
         sleep(Millis(10)).await;
     }
     panic!("server does not accept items");
+}
+
+/// Waits until the server has the status.
+async fn wait_status(srv: &Server<usize>, status: ServerStatus) {
+    let wait = async {
+        loop {
+            let changed = srv.status_changed();
+            if srv.status() == status {
+                return;
+            }
+            changed.await;
+        }
+    };
+    ntex::time::timeout(Millis(5000), wait)
+        .await
+        .unwrap_or_else(|()| panic!("status is not {status:?}: {:?}", srv.status()));
 }
 
 async fn wait_for(f: impl Fn() -> bool) {
@@ -411,28 +428,41 @@ async fn pool_incoming_cpu() {
 }
 
 /// Items queued while no worker is available are balanced by their incoming
-/// CPU once workers start.
+/// CPU once workers restart.
 #[ntex::test]
 async fn pool_incoming_cpu_backlog() {
+    const PANIC: usize = 1_000_000;
     let c = Counters::default();
     let mut cfg = Cfg::new(&c);
     cfg.incoming_cpu = true;
-    cfg.create_delay = Millis(500);
+    cfg.panic_on = Some(PANIC);
     let srv = pool().workers(2).affinity(Affinity::Cpu).run(cfg);
+    wait_for(|| c.created.load(Relaxed) == 2).await;
+    wait_status(&srv, ServerStatus::Ready).await;
 
-    // items wait in the backlog until the workers are created, resume after
-    // the initial worker updates that pause the server
-    sleep(Millis(100)).await;
-    srv.resume().await;
-    let total = allowed_cpus()
-        .into_iter()
-        .filter(|&cpu| srv.process(cpu).is_ok())
-        .count();
-    assert!(total > 0);
+    // blocks the command loop, the failed workers are not restarted and the
+    // server stays ready, the items that find no worker wait in the backlog
+    let srv2 = srv.clone();
+    let total = std::thread::spawn(move || {
+        for _ in 0..2 {
+            assert_eq!(srv2.process(PANIC), Ok(()));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        allowed_cpus()
+            .into_iter()
+            .filter(|&cpu| srv2.process(cpu).is_ok())
+            .count()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(total, allowed_cpus().len());
+    let m = srv.metrics();
+    let (hits0, misses0) = (m.incoming_cpu_hits, m.incoming_cpu_misses);
     wait_for(|| c.items().len() == total).await;
 
     let m = srv.metrics();
-    let (hits, misses) = (m.incoming_cpu_hits, m.incoming_cpu_misses);
+    assert!(m.workers.iter().all(|w| w.restarts == 1));
+    let (hits, misses) = (m.incoming_cpu_hits - hits0, m.incoming_cpu_misses - misses0);
     if cfg!(any(windows, target_os = "linux", target_os = "android")) {
         assert_eq!(hits + misses, total as u64);
         assert!(hits > 0);
@@ -613,6 +643,84 @@ async fn pool_stop_on_failure() {
         .unwrap();
     assert_eq!(c.stop.load(Relaxed), 1);
     assert_eq!(c.created.load(Relaxed), 0);
+}
+
+/// The server status follows the workers, pause, resume and stop.
+#[ntex::test]
+async fn pool_status() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.create_delay = Millis(100);
+    cfg.shutdown_delay = Millis(200);
+    cfg.panic_on = Some(1);
+    let srv = pool()
+        .workers(1)
+        .graceful_shutdown_timeout(Millis(1000))
+        .run(cfg);
+    assert_eq!(srv.status(), ServerStatus::Starting);
+    assert_eq!(srv.process(0), Err(0));
+    assert_eq!(srv.status_changed().await, ServerStatus::Ready);
+    assert_eq!(c.resume.load(Relaxed), 1);
+
+    srv.pause().await;
+    assert_eq!(srv.status(), ServerStatus::Paused);
+    assert_eq!(srv.process(0), Err(0));
+    assert_eq!(c.pause.load(Relaxed), 1);
+    srv.resume().await;
+    assert_eq!(srv.status(), ServerStatus::Ready);
+    assert_eq!(c.resume.load(Relaxed), 2);
+
+    // the failed worker is restarted
+    let changed = srv.status_changed();
+    assert_eq!(srv.process(1), Ok(()));
+    assert_eq!(changed.await, ServerStatus::Unavailable);
+    assert_eq!(srv.process(0), Err(0));
+    assert_eq!(c.pause.load(Relaxed), 2);
+    assert_eq!(srv.status_changed().await, ServerStatus::Ready);
+    assert_eq!(c.resume.load(Relaxed), 3);
+
+    let changed = srv.status_changed();
+    let stop = srv.stop(true);
+    assert_eq!(changed.await, ServerStatus::Stopping);
+    assert_eq!(srv.process(0), Err(0));
+    assert_eq!(srv.status_changed().await, ServerStatus::Stopped);
+    stop.await;
+    assert_eq!(srv.status(), ServerStatus::Stopped);
+    assert_eq!(srv.status_changed().await, ServerStatus::Stopped);
+    // the configuration is stopped, not paused
+    assert_eq!(c.pause.load(Relaxed), 2);
+    assert_eq!(c.shutdown.load(Relaxed), 1);
+}
+
+/// A paused server stays paused when workers become available, and a server
+/// without available workers does not become ready when it is resumed.
+#[ntex::test]
+async fn pool_pause_while_starting() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.create_delay = Millis(300);
+    let srv = pool().workers(2).run(cfg);
+
+    srv.pause().await;
+    assert_eq!(srv.status(), ServerStatus::Paused);
+    srv.resume().await;
+    assert_eq!(srv.status(), ServerStatus::Starting);
+    assert_eq!(srv.process(0), Err(0));
+    srv.pause().await;
+
+    wait_for(|| c.created.load(Relaxed) == 2).await;
+    sleep(Millis(100)).await;
+    assert_eq!(srv.status(), ServerStatus::Paused);
+    assert_eq!(srv.process(0), Err(0));
+    assert_eq!(c.resume.load(Relaxed), 0);
+
+    srv.resume().await;
+    assert_eq!(srv.status(), ServerStatus::Ready);
+    assert_eq!(c.resume.load(Relaxed), 1);
+    process(&srv, 0).await;
+    wait_for(|| c.items() == [0]).await;
+    srv.stop(false).await;
+    assert_eq!(c.pause.load(Relaxed), 0);
 }
 
 /// A worker that panics is restarted.

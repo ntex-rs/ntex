@@ -522,27 +522,30 @@ async fn test_bind_uds_error() {
 #[ntex::test]
 async fn test_pause_resume_status() {
     let (lst, addr) = local_listener();
-    let (tx, rx) = mpsc::channel();
     let srv = build_test_server(ntex_server::NoConfig, async move |builder| {
         builder
-            .status_handler(move |st| {
-                let _ = tx.send(st);
-            })
             .listen("test", lst, SharedCfg::default(), async |_: &()| {
                 fn_service(echo)
             })
             .unwrap()
     })
     .set_addr(addr);
-    let recv = || rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    assert_eq!(recv(), ServerStatus::Ready);
+    let server = srv.server();
+    ntex::time::timeout(Millis(3000), async {
+        while server.status() != ServerStatus::Ready {
+            server.status_changed().await;
+        }
+    })
+    .await
+    .unwrap();
 
     let io = srv.connect().await.unwrap();
     check_echo(&io).await;
 
-    let server = srv.server();
+    let changed = server.status_changed();
     server.pause().await;
-    assert_eq!(recv(), ServerStatus::NotReady);
+    assert_eq!(server.status(), ServerStatus::Paused);
+    assert_eq!(changed.await, ServerStatus::Paused);
 
     // the connection waits in the listen backlog
     let io2 = srv.connect().await.unwrap();
@@ -558,12 +561,13 @@ async fn test_pause_resume_status() {
     check_echo(&io).await;
 
     server.resume().await;
-    assert_eq!(recv(), ServerStatus::Ready);
+    assert_eq!(server.status(), ServerStatus::Ready);
     let msg = io2.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(msg, Bytes::from_static(b"hello"));
 
     server.stop(false).await;
-    assert_eq!(recv(), ServerStatus::NotReady);
+    assert_eq!(server.status(), ServerStatus::Stopped);
+    assert_eq!(server.status_changed().await, ServerStatus::Stopped);
     assert!(net::TcpStream::connect(addr).is_err());
 }
 
@@ -681,9 +685,8 @@ async fn test_builder_debug() {
     let mut accept = AcceptLoop::default();
     accept.name("acc");
     accept.testing();
-    accept.set_status_handler(|_| ());
     let s = format!("{accept:?}");
-    assert!(s.contains("acc:accept") && s.contains("status_handler: true"));
+    assert!(s.contains("acc:accept"), "{s}");
     // commands are queued without a running loop
     accept.notify().send(AcceptorCommand::Timer);
     assert!(format!("{:?}", AcceptorCommand::Pause).contains("Pause"));

@@ -11,7 +11,7 @@ use crate::{Affinity, LoadBalancing, NoConfig, Server, ServerAppConfig, WorkerPo
 use super::accept::AcceptLoop;
 use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
-use super::{Connection, ServerStatus, StreamServer, Token, socket::Listener};
+use super::{Connection, StreamServer, Token, socket::Listener};
 
 /// Builder for a network server.
 ///
@@ -202,21 +202,6 @@ where
     /// By default, the timeout is set to 30 seconds.
     pub fn graceful_shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.pool = self.pool.graceful_shutdown_timeout(timeout);
-        self
-    }
-
-    #[must_use]
-    /// Sets the server status handler.
-    ///
-    /// The handler runs on the accept thread. It receives
-    /// [`ServerStatus::Ready`] when the listeners resume accepting and
-    /// [`ServerStatus::NotReady`] when they pause. The same status may be
-    /// reported more than once.
-    pub fn status_handler<F>(mut self, handler: F) -> Self
-    where
-        F: FnMut(ServerStatus) + Send + 'static,
-    {
-        self.accept.set_status_handler(handler);
         self
     }
 

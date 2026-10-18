@@ -26,6 +26,7 @@ pub mod net;
 mod pool;
 mod server;
 mod state;
+mod status;
 mod wrk;
 
 pub use self::affinity::Affinity;
@@ -34,6 +35,7 @@ pub use self::metrics::{ListenerMetrics, RuntimeMetrics, ServerMetrics, WorkerMe
 pub use self::pool::WorkerPool;
 pub use self::server::Server;
 pub use self::state::{NoConfig, ServerAppConfig};
+pub use self::status::ServerStatus;
 pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
 
 /// Identifier assigned to a server worker.
@@ -58,16 +60,16 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     /// Creates the service used by one worker.
     async fn create(&self) -> std::io::Result<Self::Service>;
 
-    /// Called when the server is paused.
+    /// Called when the server status changes from
+    /// [`Ready`](ServerStatus::Ready) to paused or unavailable.
     ///
-    /// Besides explicit [`Server::pause`] calls, the server pauses itself
-    /// while no worker is available to accept items.
+    /// The server is paused by [`Server::pause`], and it is unavailable
+    /// while no worker can accept items. Not called when the server stops.
     fn pause(&self) {}
 
-    /// Called when the server is resumed.
+    /// Called when the server status becomes [`Ready`](ServerStatus::Ready).
     ///
-    /// Besides explicit [`Server::resume`] calls, the server resumes itself
-    /// once a worker becomes available again.
+    /// The server is ready while it is not paused and a worker is available.
     fn resume(&self) {}
 
     /// Called when the server's command loop exits.

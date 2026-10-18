@@ -165,11 +165,14 @@ let builder = ntex::server::build()
 lifecycle. Do not enable it when other independent work or servers must keep
 using the same `System`.
 
-`status_handler()` can connect listener readiness to a supervisor or metrics
-system. It runs on the accept thread and reports when listeners pause or
-resume. The status describes acceptance state, not whether every worker is
-healthy, and the same status may be reported more than once. Keep the handler
-quick and non-blocking.
+`Server::status()` returns the server status, and `Server::status_changed()`
+waits for the next change, e.g. to connect readiness to a supervisor or health
+check. The server is `Starting` until a worker becomes available, then `Ready`.
+It is `Unavailable` while no worker is available, `Paused` after
+`Server::pause()` until `Server::resume()`, and `Stopping` and then `Stopped`
+when it stops. Listeners accept connections only while the server is `Ready`.
+The status describes acceptance state, not whether every worker is healthy.
+Changes in quick succession may be reported once, with the latest status.
 
 ## Worker placement and load balancing
 
