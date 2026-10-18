@@ -10,8 +10,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Barrier, Mutex};
 use std::task::{Context, Poll, Waker};
+use std::thread;
 
-use super::{Arc, Future, Location, Notify, Ordering, RunnableQueue, Runtime, io, thread};
+use super::{Arc, Future, Location, Notify, Ordering, RunnableQueue, Runtime, io};
 use crate::rt::raw::{self, Remote, Runnable, Task};
 
 #[derive(Debug)]
@@ -970,6 +971,79 @@ fn shutdown_drop_wakes_and_spawns() {
     assert!(t0.is_finished() && t1.is_finished());
     drop((t0, t1));
     assert!(queue.upgrade().is_none(), "task alive");
+}
+
+#[test]
+fn shutdown_with_blocked_notification() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[derive(Debug)]
+    struct BlockingNotify {
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl Notify for BlockingNotify {
+        fn notify(&self) -> io::Result<()> {
+            self.entered.send(()).unwrap();
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(30))
+                .expect("shutdown waited for a notifier");
+            Ok(())
+        }
+    }
+
+    struct OwnerDrop {
+        owner: thread::ThreadId,
+        _local: std::rc::Rc<()>,
+    }
+
+    impl Drop for OwnerDrop {
+        fn drop(&mut self) {
+            assert_eq!(thread::current().id(), self.owner);
+        }
+    }
+
+    for remote_spawn in [false, true] {
+        let (entered, rx) = mpsc::channel();
+        let (tx, release) = mpsc::channel();
+        let rt = Runtime::new(Box::new(BlockingNotify {
+            entered,
+            release: Mutex::new(release),
+        }));
+        rt.awake();
+        let queue = Arc::downgrade(&rt.queue);
+        let p = Probe::default();
+        let fut = p.future(Res::Pending);
+        let th = if remote_spawn {
+            let handle = rt.handle();
+            thread::spawn(move || handle.spawn_detached(fut))
+        } else {
+            let owner = OwnerDrop {
+                owner: thread::current().id(),
+                _local: std::rc::Rc::new(()),
+            };
+            let task = spawn(&rt, async move {
+                let _owner = owner;
+                fut.await
+            });
+            one_local(&rt).run();
+            let w = p.waker();
+            drop(task);
+            thread::spawn(move || w.wake())
+        };
+        rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        drop(rt);
+        p.check(usize::from(!remote_spawn), 1, 0);
+        // The notifier must retain its queue after the task and runtime are gone.
+        assert!(queue.upgrade().is_some());
+        tx.send(()).unwrap();
+        th.join().unwrap();
+        assert!(queue.upgrade().is_none(), "task alive");
+    }
 }
 
 #[test]

@@ -1,9 +1,10 @@
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::future::poll_fn;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::task::Poll;
 use std::time::{Duration, Instant};
-use std::{future::Future, io, marker::PhantomData, panic::Location, ptr, thread};
+use std::{future::Future, io, marker::PhantomData, panic::Location, ptr};
 use std::{pin::Pin, rc::Rc, sync::Arc};
 
 use crate::handle::{JoinHandle, SpawnLocation};
@@ -11,10 +12,16 @@ use crate::metrics::{AtomicHistogram, Histogram};
 use crate::{busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult};
 
 #[cfg(not(ntex_loom))]
-use std::sync::atomic::AtomicBool;
+use std::{
+    sync::atomic::{AtomicBool, AtomicUsize},
+    thread::{self, yield_now},
+};
 
 #[cfg(ntex_loom)]
-use loom::sync::atomic::AtomicBool;
+use loom::{
+    sync::atomic::{AtomicBool, AtomicUsize},
+    thread::yield_now,
+};
 
 pub(crate) mod raw;
 
@@ -29,6 +36,9 @@ const MAX_SELF_WAKES: u32 = self::raw::MAX_SELF_WAKES;
 
 /// Remote tasks run per turn, besides `event_interval` overflow tasks.
 const REMOTE_BATCH: usize = 128;
+
+/// The remaining bits count remote publications admitted before shutdown.
+const CLOSED: usize = 1 << (usize::BITS - 1);
 
 /// Self-wake bookkeeping of a task, used on the runtime thread only.
 pub(crate) trait TaskStats: Copy {
@@ -536,8 +546,8 @@ pub(crate) struct RunnableQueue {
     _remote: [CacheLine; 0],
     // set by the first remote `schedule` after `run` cleared it
     notified: AtomicBool,
-    // set once the runtime is dropped, a later spawn is cancelled
-    closed: AtomicBool,
+    // closed bit and in-flight remote publications
+    admission: AtomicUsize,
     remote_queue: RemoteQueue,
     // written by the runtime thread
     _local: [CacheLine; 0],
@@ -580,7 +590,7 @@ impl RunnableQueue {
             poll_start: Cell::new(now),
             self_wake_clock: Cell::new(None),
             notified: AtomicBool::new(false),
-            closed: AtomicBool::new(false),
+            admission: AtomicUsize::new(0),
             busy: BusyClock::new(),
             polls: AtomicU64::new(0),
             polls_again: AtomicU64::new(0),
@@ -639,12 +649,34 @@ impl RunnableQueue {
         }
     }
 
-    pub(crate) fn schedule_remote(&self, runnable: RemoteTask) {
-        self.remote_queue.push(runnable);
-        // the driver is already notified, `run` drains this task after
-        // clearing the flag
-        if !self.notified.swap(true, Ordering::Release) {
-            self.handle.notify().ok();
+    /// Reserves a publication before a task acquires its remote queue reference.
+    /// `owned` keeps the queue alive if publication releases the caller's reference.
+    pub(crate) fn admit(self: &Arc<Self>, owned: bool) -> Option<RemotePermit<'_>> {
+        let mut state = self.admission.load(Ordering::Acquire);
+        loop {
+            if state & CLOSED != 0 {
+                return None;
+            }
+            if state == CLOSED - 1 {
+                std::process::abort();
+            }
+            match self.admission.compare_exchange_weak(
+                state,
+                state + 1,
+                Ordering::Acquire,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(RemotePermit {
+                        queue: Some(if owned {
+                            Cow::Owned(self.clone())
+                        } else {
+                            Cow::Borrowed(self)
+                        }),
+                    });
+                }
+                Err(v) => state = v,
+            }
         }
     }
 
@@ -793,18 +825,46 @@ impl RunnableQueue {
                 break;
             }
         }
-        self.closed.store(true, Ordering::Release);
-        // a remote spawn that missed the flag may be queued
+        self.admission.fetch_or(CLOSED, Ordering::AcqRel);
+        // A reserved task may not have entered the MPSC queue yet.
+        while self.admission.load(Ordering::Acquire) != CLOSED {
+            yield_now();
+        }
+        // All admitted publications are linked; rejected ones cannot enqueue.
         self.clear();
     }
 
     /// The runtime is dropped, its tasks never run.
     pub(crate) fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+        self.admission.load(Ordering::Acquire) & CLOSED != 0
     }
 
     fn pop_local(&self) -> Option<Task> {
         self.local_queue.pop()
+    }
+}
+
+pub(crate) struct RemotePermit<'a> {
+    queue: Option<Cow<'a, Arc<RunnableQueue>>>,
+}
+
+impl RemotePermit<'_> {
+    pub(crate) fn schedule(mut self, runnable: RemoteTask) {
+        self.queue.as_ref().unwrap().remote_queue.push(runnable);
+        // A notifier may block, panic or reenter the runtime.
+        let queue = self.queue.take().unwrap();
+        queue.admission.fetch_sub(1, Ordering::Release);
+        if !queue.notified.swap(true, Ordering::Release) {
+            queue.handle.notify().ok();
+        }
+    }
+}
+
+impl Drop for RemotePermit<'_> {
+    fn drop(&mut self) {
+        if let Some(queue) = &self.queue {
+            queue.admission.fetch_sub(1, Ordering::Release);
+        }
     }
 }
 
@@ -827,7 +887,7 @@ impl RemoteQueue {
                 Ok(Some(task)) => drop(task),
                 Ok(None) => break,
                 // a push from another thread is in progress
-                Err(_) => thread::yield_now(),
+                Err(_) => yield_now(),
             }
         }
     }
@@ -899,7 +959,7 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-    use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc};
+    use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc, thread};
 
     use super::*;
 

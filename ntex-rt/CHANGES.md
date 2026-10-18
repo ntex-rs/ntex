@@ -10,6 +10,9 @@
 * Track scheduler closure and notification flags in Loom, with parked-driver
   and concurrent-shutdown regression models
 
+* Coordinate remote task publication with shutdown so late spawns, wakes and
+  releases cannot leave tasks queued after the final drain
+
 * Skip the thread-local owner lookup when spawning through `Runtime`,
   while `Handle` spawning still selects the local or remote queue dynamically
 

@@ -394,10 +394,12 @@ fn wake_local(h: NonNull<Header>, owned: bool) {
 /// unless it is queued. `owned` passes a reference.
 fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
     let remote = &header(h).remote;
+    let mut permit = None;
     let mut cur = remote.load(Ordering::Relaxed);
     loop {
         if cur & R_FINISHED != 0 {
             // nothing to run, the owner thread may be gone
+            drop(permit);
             if owned {
                 release_shared(h);
             }
@@ -431,21 +433,27 @@ fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
         } else {
             (cur, false)
         };
+        if push && permit.is_none() {
+            permit = header(h).queue.admit(owned);
+            if permit.is_none() {
+                // Shutdown owns cleanup of unfinished tasks. Release the
+                // caller's reference without reserving an unconsumable entry.
+                if owned {
+                    let prev = remote.fetch_sub(R_REF, Ordering::AcqRel);
+                    if prev & R_FINISHED != 0 && delta(prev) == 1 {
+                        unsafe { (header(h).vtable.dealloc)(h) };
+                    }
+                }
+                return;
+            }
+        }
         match remote.compare_exchange_weak(cur, new, Ordering::AcqRel, Ordering::Relaxed) {
             Ok(_) if push => break,
             Ok(_) => return,
             Err(v) => cur = v,
         }
     }
-    if owned {
-        // the owner thread may free the task once it is queued, the queue must
-        // outlive the call
-        let queue = header(h).queue.clone();
-        queue.schedule_remote(Remote(h));
-    } else {
-        // the reference of the caller keeps the task and its queue alive
-        header(h).queue.schedule_remote(Remote(h));
-    }
+    permit.unwrap().schedule(Remote(h));
 }
 
 /// Releases a reference on the owner thread.
@@ -685,22 +693,23 @@ pub(crate) unsafe fn spawn<F: Future, const LOCAL: bool>(
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) -> Task<F::Output> {
-    if queue.is_closed() {
-        // finished without an output, the remote word counts the join handle
-        let h = alloc::<F>(
-            Stage::Consumed,
-            queue,
-            location,
-            FINISHED,
-            R_REF | R_FINISHED,
-            0,
-        );
-        let task = Task { h, _t: PhantomData };
-        cancel_closed(future, location);
-        return task;
+    match unsafe { create::<_, LOCAL>(future, queue, location, false) } {
+        Ok(h) => Task { h, _t: PhantomData },
+        Err(future) => {
+            // finished without an output, the remote word counts the join handle
+            let h = alloc::<F>(
+                Stage::Consumed,
+                queue,
+                location,
+                FINISHED,
+                R_REF | R_FINISHED,
+                0,
+            );
+            let task = Task { h, _t: PhantomData };
+            cancel_closed(future, location);
+            task
+        }
     }
-    let h = unsafe { create::<_, LOCAL>(future, queue, location, false) };
-    Task { h, _t: PhantomData }
 }
 
 /// Spawns a task without a join handle, the output is dropped on completion.
@@ -713,11 +722,9 @@ pub(crate) unsafe fn spawn_detached<F: Future, const LOCAL: bool>(
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) {
-    if queue.is_closed() {
+    if let Err(future) = unsafe { create::<_, LOCAL>(future, queue, location, true) } {
         cancel_closed(future, location);
-        return;
     }
-    unsafe { create::<_, LOCAL>(future, queue, location, true) };
 }
 
 /// Drops the future of a task spawned after its runtime is dropped, the
@@ -733,8 +740,18 @@ unsafe fn create<F: Future, const LOCAL: bool>(
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
     detached: bool,
-) -> NonNull<Header> {
+) -> Result<NonNull<Header>, F> {
     let local = LOCAL || queue.id == current_thread_id();
+    let permit = if local {
+        if queue.is_closed() {
+            return Err(future);
+        }
+        None
+    } else if let Some(permit) = queue.admit(false) {
+        Some(permit)
+    } else {
+        return Err(future);
+    };
     let h = alloc(
         Stage::Running(future),
         queue,
@@ -751,9 +768,9 @@ unsafe fn create<F: Future, const LOCAL: bool>(
         queue.tasks.push(h);
         queue.schedule_local(Runnable(h));
     } else {
-        queue.schedule_remote(Remote(h));
+        permit.unwrap().schedule(Remote(h));
     }
-    h
+    Ok(h)
 }
 
 fn alloc<F: Future>(

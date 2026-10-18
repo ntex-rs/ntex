@@ -379,7 +379,6 @@ fn remote_wake_by_ref_shutdown() {
         });
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
         drop(rt);
-        // a remote release racing the shutdown would leak the task
         drop(th.join().unwrap());
         assert!(queue.upgrade().is_none(), "task alive");
     });
@@ -627,30 +626,38 @@ fn remote_release_shutdown() {
 }
 
 fn spawn_shutdown(detached: bool) {
-    model(move || {
-        let rt = new_rt();
-        let queue = Arc::downgrade(&rt.queue);
-        let st = Arc::new(State::default());
-        let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
-        let th = thread::spawn(move || unsafe {
-            if detached {
-                raw::spawn_detached::<_, false>(fut, &q, Location::caller());
-            } else {
-                drop(raw::spawn::<_, false>(fut, &q, Location::caller()));
+    for producers in 1..=2 {
+        model(move || {
+            let rt = new_rt();
+            let queue = Arc::downgrade(&rt.queue);
+            let st = Arc::new(State::default());
+            let threads: Vec<_> = (0..producers)
+                .map(|_| {
+                    let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
+                    thread::spawn(move || unsafe {
+                        if detached {
+                            raw::spawn_detached::<_, false>(fut, &q, Location::caller());
+                        } else {
+                            drop(raw::spawn::<_, false>(fut, &q, Location::caller()));
+                        }
+                    })
+                })
+                .collect();
+            drop(rt);
+            for th in threads {
+                th.join().unwrap();
             }
+            assert_eq!(
+                st.drops.load(Ordering::Relaxed),
+                producers,
+                "late spawn retained its future"
+            );
+            assert!(
+                queue.upgrade().is_none(),
+                "task alive after concurrent spawn"
+            );
         });
-        drop(rt);
-        th.join().unwrap();
-        assert_eq!(
-            st.drops.load(Ordering::Relaxed),
-            1,
-            "late spawn retained its future"
-        );
-        assert!(
-            queue.upgrade().is_none(),
-            "task alive after concurrent spawn"
-        );
-    });
+    }
 }
 
 /// Joined spawning racing shutdown must reclaim its future and queue.
@@ -663,4 +670,104 @@ fn remote_spawn_shutdown() {
 #[test]
 fn remote_spawn_detached_shutdown() {
     spawn_shutdown(true);
+}
+
+/// A notifier can wait for shutdown without holding a publication permit.
+#[test]
+fn shutdown_with_blocked_notification() {
+    #[derive(Debug)]
+    struct BlockingNotify {
+        entered: loom::sync::mpsc::Sender<()>,
+        release: loom::sync::Mutex<loom::sync::mpsc::Receiver<()>>,
+    }
+
+    impl Notify for BlockingNotify {
+        fn notify(&self) -> io::Result<()> {
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            Ok(())
+        }
+    }
+
+    for remote_spawn in [false, true] {
+        model(move || {
+            let (entered, rx) = loom::sync::mpsc::channel();
+            let (tx, release) = loom::sync::mpsc::channel();
+            let rt = Runtime::new(Box::new(BlockingNotify {
+                entered,
+                release: loom::sync::Mutex::new(release),
+            }));
+            rt.awake();
+            let queue = Arc::downgrade(&rt.queue);
+            let st = Arc::new(State::default());
+            let th = if remote_spawn {
+                let (handle, fut) = (rt.handle(), Fut(st.clone()));
+                thread::spawn(move || handle.spawn_detached(fut))
+            } else {
+                let task = spawn(&rt, Fut(st.clone()));
+                drain(&rt);
+                let w = st.waker.lock().unwrap().take().unwrap();
+                drop(task);
+                thread::spawn(move || w.wake())
+            };
+            rx.recv().unwrap();
+            drop(rt);
+            assert_eq!(st.drops.load(Ordering::Relaxed), 1);
+            assert!(queue.upgrade().is_some());
+            tx.send(()).unwrap();
+            th.join().unwrap();
+            assert!(queue.upgrade().is_none(), "task alive");
+        });
+    }
+}
+
+/// Wake, release and join cancellation racing shutdown keep destruction local.
+#[test]
+fn remote_signal_shutdown() {
+    struct OwnerDrop {
+        owner: super::ThreadId,
+        _local: std::rc::Rc<()>,
+    }
+
+    impl Drop for OwnerDrop {
+        fn drop(&mut self) {
+            assert_eq!(super::current_thread_id(), self.owner);
+        }
+    }
+
+    for action in 0..4 {
+        model(move || {
+            let rt = new_rt();
+            let queue = Arc::downgrade(&rt.queue);
+            let st = Arc::new(State::default());
+            let fut = Fut(st.clone());
+            let owner = OwnerDrop {
+                owner: super::current_thread_id(),
+                _local: std::rc::Rc::new(()),
+            };
+            let task = spawn(&rt, async move {
+                let _owner = owner;
+                fut.await
+            });
+            drain(&rt);
+            let w = st.waker.lock().unwrap().take().unwrap();
+            let th = thread::spawn(move || {
+                match action {
+                    0 => drop(w),
+                    1 => w.wake(),
+                    _ => w.wake_by_ref(),
+                }
+                if action == 3 {
+                    task.cancel();
+                } else {
+                    drop(task);
+                }
+            });
+            drop(rt);
+            th.join().unwrap();
+            assert_eq!(st.drops.load(Ordering::Relaxed), 1);
+            drop(st.waker.lock().unwrap().take());
+            assert!(queue.upgrade().is_none(), "task alive");
+        });
+    }
 }
