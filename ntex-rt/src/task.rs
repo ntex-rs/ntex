@@ -79,10 +79,17 @@ impl Data {
     where
         F: FnOnce() -> R,
     {
-        let ptr = self.cb.enter(self.ptr);
-        let result = f();
-        self.cb.exit(ptr);
-        result
+        struct Exit(&'static dyn CallbacksApi, *const ());
+
+        impl Drop for Exit {
+            fn drop(&mut self) {
+                self.0.exit(self.1);
+            }
+        }
+
+        // `exit` also runs if `f` panics, so the context set by `enter` is restored
+        let _exit = Exit(self.cb, self.cb.enter(self.ptr));
+        f()
     }
 }
 
@@ -280,5 +287,56 @@ mod tests {
             std::hint::spin_loop();
         }
         assert!(hnd.join().unwrap());
+    }
+
+    #[test]
+    fn exit_runs_when_poll_panics() {
+        use std::{cell::Cell, panic, pin::pin, task::Context, task::Waker};
+
+        // callbacks can be set once per process, so check them in a child process
+        const CHILD: &str = "NTEX_RT_TASK_EXIT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "task::tests::exit_runs_when_poll_panics"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            return;
+        }
+
+        thread_local! {
+            static DEPTH: Cell<isize> = const { Cell::new(0) };
+            static AFTER: Cell<usize> = const { Cell::new(0) };
+        }
+        assert!(unsafe {
+            task_opt_callbacks(
+                || Some(std::ptr::null()),
+                |p| {
+                    DEPTH.set(DEPTH.get() + 1);
+                    p
+                },
+                |_| DEPTH.set(DEPTH.get() - 1),
+                |_| AFTER.set(AFTER.get() + 1),
+            )
+        });
+
+        let mut fut = Box::pin(wrap(async { panic!("poll panic") }));
+        let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _ = fut.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+        }));
+        assert!(res.is_err());
+        assert_eq!(DEPTH.get(), 0);
+        drop(fut);
+        assert_eq!(AFTER.get(), 1);
+
+        let mut fut = pin!(wrap(async { 1 }));
+        let res = fut.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+        assert_eq!(res, std::task::Poll::Ready(1));
+        assert_eq!(DEPTH.get(), 0);
     }
 }

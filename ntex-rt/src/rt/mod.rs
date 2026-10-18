@@ -10,10 +10,13 @@ use crate::handle::{JoinHandle, SpawnLocation};
 use crate::metrics::{AtomicHistogram, Histogram};
 use crate::{busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult};
 
+#[cfg(ntex_rt_task)]
+pub(crate) mod raw;
+
 #[cfg(not(ntex_rt_task))]
 use self::queues::{LocalQueue, RemoteQueue, RemoteTask, Task, TaskMeta, task_ref};
 #[cfg(ntex_rt_task)]
-use crate::raw::{
+use self::raw::{
     LocalQueue, Remote as RemoteTask, RemoteQueue, Runnable as Task, TaskList, task_ref,
 };
 
@@ -23,7 +26,7 @@ pub(crate) const REPORTED: u32 = 1 << 31;
 #[cfg(not(ntex_rt_task))]
 const MAX_SELF_WAKES: u32 = !REPORTED;
 #[cfg(ntex_rt_task)]
-const MAX_SELF_WAKES: u32 = crate::raw::MAX_SELF_WAKES;
+const MAX_SELF_WAKES: u32 = self::raw::MAX_SELF_WAKES;
 
 /// Remote tasks run per turn, besides `event_interval` overflow tasks.
 const REMOTE_BATCH: usize = 128;
@@ -605,7 +608,7 @@ impl RunnableQueue {
         future: F,
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
-        JoinHandle::new(unsafe { crate::raw::spawn(future, self, location) })
+        JoinHandle::new(unsafe { self::raw::spawn(future, self, location) })
     }
 
     /// Spawns a task on this queue without a join handle.
@@ -615,7 +618,7 @@ impl RunnableQueue {
     /// The caller should ensure the captured lifetime is long enough.
     #[cfg(ntex_rt_task)]
     unsafe fn spawn_detached<F: Future>(self: &Arc<Self>, future: F, location: SpawnLocation) {
-        unsafe { crate::raw::spawn_detached(future, self, location) }
+        unsafe { self::raw::spawn_detached(future, self, location) }
     }
 
     /// Spawns a task on this queue without a join handle.
