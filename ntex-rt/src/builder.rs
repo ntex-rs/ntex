@@ -247,7 +247,7 @@ impl SystemRunner {
         // run loop
         crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, stop) = System::start(config);
-            let _signals = SignalsGuard(system.clone());
+            let _guard = SystemGuard(system.clone());
             if signals {
                 system.enable_signals();
             }
@@ -290,7 +290,7 @@ impl SystemRunner {
 
         crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, _) = System::start(config);
-            let _signals = SignalsGuard(system.clone());
+            let _guard = SystemGuard(system.clone());
             if signals {
                 system.enable_signals();
             }
@@ -314,7 +314,7 @@ impl SystemRunner {
         let result = tok_io::task::LocalSet::new()
             .run_until(async move {
                 let (system, _) = System::start(config);
-                let _signals = SignalsGuard(system);
+                let _guard = SystemGuard(system);
 
                 let loc = current_location();
                 ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
@@ -330,13 +330,26 @@ impl SystemRunner {
     }
 }
 
-/// Releases the signals for other systems when the system's future completes,
-/// fails or panics.
-struct SignalsGuard(System);
+/// Stops the system's arbiters and releases the signals for other systems when
+/// the system's future completes, fails, panics or is dropped.
+struct SystemGuard(System);
 
-impl Drop for SignalsGuard {
+impl Drop for SystemGuard {
     fn drop(&mut self) {
         self.0.disable_signals();
+
+        if std::thread::panicking() {
+            // some executors (compio) abort the process if a task is woken
+            // while the thread unwinds, stop arbiters from another thread
+            let list = self.0.take_arbiters();
+            if !list.is_empty() {
+                let _ = std::thread::Builder::new()
+                    .spawn(move || list.into_iter().for_each(|arb| arb.stop()))
+                    .map(std::thread::JoinHandle::join);
+            }
+        } else {
+            self.0.stop_arbiters();
+        }
     }
 }
 
@@ -426,5 +439,50 @@ mod tests {
         let mut arb = arb.borrow_mut().take().unwrap();
         arb.join().unwrap();
         assert!(!arb.is_running());
+    }
+
+    #[test]
+    fn exit_stops_child_arbiters() {
+        fn assert_stopped(arb: &Rc<RefCell<Option<Arbiter>>>) {
+            let arb = arb.borrow_mut().take().unwrap();
+            let mut arb2 = arb.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(arb2.join().is_ok());
+            });
+            let stopped = rx.recv_timeout(Duration::from_secs(5));
+            arb.stop();
+            assert_eq!(stopped, Ok(true), "child arbiter is still running");
+        }
+
+        // initialization error
+        let arb = Rc::new(RefCell::new(None));
+        let arb2 = arb.clone();
+        let err = System::new("test", TestRunner)
+            .run(move || {
+                *arb2.borrow_mut() = Some(Arbiter::new());
+                Err(io::Error::other("init failed"))
+            })
+            .unwrap_err();
+        assert_eq!(err.to_string(), "init failed");
+        assert_stopped(&arb);
+
+        // root future completion
+        let arb2 = arb.clone();
+        System::new("test", TestRunner).block_on(async move {
+            *arb2.borrow_mut() = Some(Arbiter::new());
+        });
+        assert_stopped(&arb);
+
+        // root future panic
+        let arb2 = arb.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            System::new("test", TestRunner).block_on(async move {
+                *arb2.borrow_mut() = Some(Arbiter::new());
+                panic!("root future panic");
+            });
+        }));
+        assert!(result.is_err());
+        assert_stopped(&arb);
     }
 }
