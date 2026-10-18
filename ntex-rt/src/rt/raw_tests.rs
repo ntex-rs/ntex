@@ -449,6 +449,60 @@ fn finish_unshared() {
 }
 
 #[test]
+fn finish_unshared_fast_path() {
+    // the completion is not published only if the run reference is the last
+    let fast = || raw::UNSHARED_FINISHES.with(std::cell::Cell::get);
+    let rt = new_rt();
+    let n = fast();
+
+    // no join handle and no waker
+    unsafe { raw::spawn_detached(async {}, &rt.queue, Location::caller()) };
+    one_local(&rt).run();
+    assert_eq!(fast(), n + 1);
+
+    // a join handle
+    let task = spawn(&rt, async {});
+    one_local(&rt).run();
+    drop(task);
+
+    // a waker on the owner thread
+    let slot = Arc::new(Mutex::new(None::<Waker>));
+    let slot2 = slot.clone();
+    let fut = poll_fn(move |cx| {
+        *slot2.lock().unwrap() = Some(cx.waker().clone());
+        Poll::Ready(())
+    });
+    unsafe { raw::spawn_detached(fut, &rt.queue, Location::caller()) };
+    one_local(&rt).run();
+    drop(slot.lock().unwrap().take());
+
+    // a waker cloned on another thread, counted in the remote word
+    let slot2 = slot.clone();
+    let mut polled = false;
+    let fut = poll_fn(move |cx| {
+        if polled {
+            return Poll::Ready(());
+        }
+        polled = true;
+        *slot2.lock().unwrap() = Some(cx.waker().clone());
+        Poll::Pending
+    });
+    unsafe { raw::spawn_detached(fut, &rt.queue, Location::caller()) };
+    one_local(&rt).run();
+    let w = slot.lock().unwrap().take().unwrap();
+    let (w, cloned) = on_thread(move || {
+        let cloned = w.clone();
+        (w, cloned)
+    });
+    w.wake();
+    one_local(&rt).run();
+    drop(cloned);
+
+    assert_eq!(fast(), n + 1);
+    assert_freed(&rt);
+}
+
+#[test]
 fn detached_awaiter() {
     // the owner thread drops the awaiter with the join handle
     for cancel in [false, true] {

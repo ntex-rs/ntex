@@ -594,6 +594,12 @@ fn complete(h: NonNull<Header>) -> Completed {
     Completed { detached, awaiter }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Completions through `finish_unshared` on this thread.
+    pub(crate) static UNSHARED_FINISHES: Cell<usize> = const { Cell::new(0) };
+}
+
 /// Completes a task that has no references but the run reference, on the
 /// owner thread. Drops the output and frees the task.
 ///
@@ -609,6 +615,8 @@ fn finish_unshared(h: NonNull<Header>) {
         }
     }
 
+    #[cfg(test)]
+    UNSHARED_FINISHES.with(|n| n.set(n.get() + 1));
     let task = Dealloc(h);
     let hdr = header(task.0);
     debug_assert_ne!(hdr.state.get() & DETACHED, 0);
