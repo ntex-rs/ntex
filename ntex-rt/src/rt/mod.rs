@@ -10,12 +10,8 @@ use crate::handle::{JoinHandle, SpawnLocation};
 use crate::metrics::{AtomicHistogram, Histogram};
 use crate::{busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult};
 
-#[cfg(ntex_rt_task)]
 pub(crate) mod raw;
 
-#[cfg(not(ntex_rt_task))]
-use self::queues::{LocalQueue, RemoteQueue, RemoteTask, Task, TaskMeta, task_ref};
-#[cfg(ntex_rt_task)]
 use self::raw::{
     LocalQueue, Remote as RemoteTask, RemoteQueue, Runnable as Task, TaskList, task_ref,
 };
@@ -23,9 +19,6 @@ use self::raw::{
 // marks a reported self-wake streak
 pub(crate) const REPORTED: u32 = 1 << 31;
 
-#[cfg(not(ntex_rt_task))]
-const MAX_SELF_WAKES: u32 = !REPORTED;
-#[cfg(ntex_rt_task)]
 const MAX_SELF_WAKES: u32 = self::raw::MAX_SELF_WAKES;
 
 /// Remote tasks run per turn, besides `event_interval` overflow tasks.
@@ -535,7 +528,6 @@ pub(crate) struct RunnableQueue {
     // set by the first remote `schedule` after `run` cleared it
     notified: AtomicBool,
     // set once the runtime is dropped, a later spawn is cancelled
-    #[cfg(ntex_rt_task)]
     closed: AtomicBool,
     remote_queue: RemoteQueue,
     // written by the runtime thread
@@ -554,7 +546,6 @@ pub(crate) struct RunnableQueue {
     current: AtomicPtr<Location<'static>>,
     local_queue: LocalQueue,
     // unfinished tasks, dropped with the runtime
-    #[cfg(ntex_rt_task)]
     pub(crate) tasks: TaskList,
 }
 
@@ -577,7 +568,6 @@ impl RunnableQueue {
             idle: Cell::new(true),
             poll_start: Cell::new(now),
             notified: AtomicBool::new(false),
-            #[cfg(ntex_rt_task)]
             closed: AtomicBool::new(false),
             busy: BusyClock::new(),
             polls: AtomicU64::new(0),
@@ -589,7 +579,6 @@ impl RunnableQueue {
             epoch: now,
             current: AtomicPtr::new(ptr::null_mut()),
             local_queue: LocalQueue::new(),
-            #[cfg(ntex_rt_task)]
             tasks: TaskList::new(),
             remote_queue: RemoteQueue::new(),
             _remote: [],
@@ -602,7 +591,6 @@ impl RunnableQueue {
     /// # Safety
     ///
     /// The caller should ensure the captured lifetime is long enough.
-    #[cfg(ntex_rt_task)]
     unsafe fn spawn<F: Future>(
         self: &Arc<Self>,
         future: F,
@@ -616,74 +604,8 @@ impl RunnableQueue {
     /// # Safety
     ///
     /// The caller should ensure the captured lifetime is long enough.
-    #[cfg(ntex_rt_task)]
     unsafe fn spawn_detached<F: Future>(self: &Arc<Self>, future: F, location: SpawnLocation) {
         unsafe { self::raw::spawn_detached(future, self, location) }
-    }
-
-    /// Spawns a task on this queue without a join handle.
-    ///
-    /// # Safety
-    ///
-    /// The caller should ensure the captured lifetime is long enough.
-    #[cfg(not(ntex_rt_task))]
-    unsafe fn spawn_detached<F: Future>(self: &Arc<Self>, future: F, location: SpawnLocation) {
-        // the output is dropped by the task, async-task drops the output of
-        // a finished task on the detaching thread
-        unsafe {
-            self.spawn(
-                async move {
-                    future.await;
-                },
-                location,
-            )
-        }
-        .detach();
-    }
-
-    /// Spawns a task on this queue.
-    ///
-    /// # Safety
-    ///
-    /// The caller should ensure the captured lifetime is long enough.
-    #[cfg(not(ntex_rt_task))]
-    unsafe fn spawn<F: Future>(
-        self: &Arc<Self>,
-        future: F,
-        location: SpawnLocation,
-    ) -> JoinHandle<F::Output> {
-        // a zero-sized schedule function, async-task keeps a task reference
-        // around each call of a schedule function that captures state
-        fn schedule(runnable: Task) {
-            let queue = &runnable.metadata().queue;
-            if queue.id == current_thread_id() {
-                // the runtime thread cannot drop the queue during this call
-                let queue: *const RunnableQueue = Arc::as_ptr(queue);
-                unsafe { (*queue).schedule_local(runnable) };
-            } else {
-                // the runtime may run and drop the task as soon as it is
-                // queued, the queue must outlive the call
-                let queue = queue.clone();
-                queue.schedule_remote(runnable);
-            }
-        }
-
-        let (runnable, task) = unsafe {
-            async_task::Builder::new()
-                .metadata(TaskMeta::new(self.clone(), location))
-                .spawn_unchecked(move |_| future, schedule)
-        };
-        self.schedule(runnable);
-        JoinHandle::new(task)
-    }
-
-    #[cfg(not(ntex_rt_task))]
-    fn schedule(&self, runnable: Task) {
-        if self.id == current_thread_id() {
-            self.schedule_local(runnable);
-        } else {
-            self.schedule_remote(runnable);
-        }
     }
 
     pub(crate) fn schedule_local(&self, runnable: Task) {
@@ -737,12 +659,6 @@ impl RunnableQueue {
         more_tasks
     }
 
-    #[cfg(not(ntex_rt_task))]
-    fn run_remote(&self, task: RemoteTask) {
-        self.run_task(task);
-    }
-
-    #[cfg(ntex_rt_task)]
     fn run_remote(&self, task: RemoteTask) {
         if let Some(task) = task.into_runnable() {
             self.run_task(task);
@@ -839,13 +755,7 @@ impl RunnableQueue {
         }
     }
 
-    #[cfg(not(ntex_rt_task))]
-    fn shutdown(&self) {
-        self.clear();
-    }
-
     /// Drops the futures of all tasks, also of tasks waiting on a waker.
-    #[cfg(ntex_rt_task)]
     fn shutdown(&self) {
         // dropped futures may wake or spawn tasks
         loop {
@@ -860,7 +770,6 @@ impl RunnableQueue {
     }
 
     /// The runtime is dropped, its tasks never run.
-    #[cfg(ntex_rt_task)]
     pub(crate) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
@@ -870,7 +779,6 @@ impl RunnableQueue {
     }
 }
 
-#[cfg(ntex_rt_task)]
 impl RemoteQueue {
     /// Runs queued tasks, returns `true` if tasks are left.
     fn drain(&self, limit: usize, mut f: impl FnMut(RemoteTask)) -> bool {
@@ -892,154 +800,6 @@ impl RemoteQueue {
                 // a push from another thread is in progress
                 Err(_) => thread::yield_now(),
             }
-        }
-    }
-}
-
-#[cfg(not(ntex_rt_task))]
-pub(crate) mod queues {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::{cell::UnsafeCell, collections::VecDeque, sync::Arc};
-
-    use async_task::Runnable;
-    use crossbeam_queue::SegQueue;
-    use swap_buffer_queue::error::{TryDequeueError, TryEnqueueError};
-    use swap_buffer_queue::{Queue, buffer::ArrayBuffer};
-
-    use super::{REMOTE_BATCH, RunnableQueue, SpawnLocation, TaskStats};
-
-    pub(crate) type Task = Runnable<TaskMeta>;
-    pub(crate) type RemoteTask = Task;
-
-    #[derive(Debug)]
-    /// Task metadata.
-    pub(crate) struct TaskMeta {
-        /// Queue of the runtime the task belongs to, kept here instead of in
-        /// the schedule function so that async-task does not clone a waker
-        /// around each schedule.
-        pub(crate) queue: Arc<RunnableQueue>,
-        location: SpawnLocation,
-        /// Consecutive polls that woke the task itself, the high bit marks a
-        /// reported streak.
-        self_wakes: AtomicU32,
-        /// Start of the self-wake streak, milliseconds since the runtime epoch.
-        streak_start: AtomicU32,
-    }
-
-    impl TaskMeta {
-        pub(crate) fn new(queue: Arc<RunnableQueue>, location: SpawnLocation) -> Self {
-            Self {
-                queue,
-                location,
-                self_wakes: AtomicU32::new(0),
-                streak_start: AtomicU32::new(0),
-            }
-        }
-    }
-
-    /// Metadata of a task, valid while the task is alive.
-    #[derive(Clone, Copy)]
-    pub(crate) struct MetaRef(*const TaskMeta);
-
-    pub(crate) fn task_ref(task: &Task) -> MetaRef {
-        MetaRef(task.metadata())
-    }
-
-    impl MetaRef {
-        fn get(&self) -> &TaskMeta {
-            unsafe { &*self.0 }
-        }
-    }
-
-    impl TaskStats for MetaRef {
-        fn location(self) -> SpawnLocation {
-            self.get().location
-        }
-
-        fn self_wakes(self) -> u32 {
-            self.get().self_wakes.load(Ordering::Relaxed)
-        }
-
-        fn set_self_wakes(self, wakes: u32) {
-            self.get().self_wakes.store(wakes, Ordering::Relaxed);
-        }
-
-        fn streak_start(self) -> u32 {
-            self.get().streak_start.load(Ordering::Relaxed)
-        }
-
-        fn set_streak_start(self, start: u32) {
-            self.get().streak_start.store(start, Ordering::Relaxed);
-        }
-    }
-
-    #[derive(Debug)]
-    pub(crate) struct LocalQueue(UnsafeCell<VecDeque<Task>>);
-
-    impl LocalQueue {
-        pub(crate) fn new() -> Self {
-            Self(UnsafeCell::new(VecDeque::new()))
-        }
-
-        pub(crate) fn push(&self, task: Task) {
-            unsafe { (*self.0.get()).push_back(task) };
-        }
-
-        pub(crate) fn pop(&self) -> Option<Task> {
-            unsafe { (*self.0.get()).pop_front() }
-        }
-
-        pub(crate) fn is_empty(&self) -> bool {
-            unsafe { (*self.0.get()).is_empty() }
-        }
-    }
-
-    #[derive(Debug)]
-    pub(crate) struct RemoteQueue {
-        fixed: Queue<ArrayBuffer<RemoteTask, REMOTE_BATCH>>,
-        overflow: SegQueue<RemoteTask>,
-    }
-
-    impl RemoteQueue {
-        pub(crate) fn new() -> Self {
-            Self {
-                fixed: Queue::default(),
-                overflow: SegQueue::new(),
-            }
-        }
-
-        pub(crate) fn push(&self, task: RemoteTask) {
-            let result = self.fixed.try_enqueue([task]);
-            if let Err(TryEnqueueError::InsufficientCapacity([task])) = result {
-                self.overflow.push(task);
-            }
-        }
-
-        /// Runs queued tasks, returns `true` if tasks are left.
-        pub(crate) fn drain(&self, limit: usize, mut f: impl FnMut(RemoteTask)) -> bool {
-            let fixed = match self.fixed.try_dequeue() {
-                Ok(buf) => {
-                    for task in buf {
-                        f(task);
-                    }
-                    false
-                }
-                Err(TryDequeueError::Empty | TryDequeueError::Closed) => false,
-                Err(_) => true,
-            };
-            for _ in 0..limit {
-                if let Some(task) = self.overflow.pop() {
-                    f(task);
-                } else {
-                    break;
-                }
-            }
-            fixed || !self.overflow.is_empty()
-        }
-
-        pub(crate) fn clear(&self) {
-            while self.overflow.pop().is_some() {}
-            while self.fixed.try_dequeue().is_ok() {}
         }
     }
 }
@@ -1099,10 +859,10 @@ impl RuntimeBuilder {
     }
 }
 
-#[cfg(all(test, ntex_rt_task))]
+#[cfg(test)]
 mod raw_tests;
 
-#[cfg(all(test, ntex_rt_task, ntex_loom))]
+#[cfg(all(test, ntex_loom))]
 mod raw_loom;
 
 #[cfg(test)]
@@ -1909,7 +1669,6 @@ mod tests {
         assert!(res.is_err());
         assert!(dropped.load(Ordering::SeqCst));
         assert!(h.is_finished());
-        #[cfg(ntex_rt_task)]
         assert!(block_on_thread(h).is_err());
 
         // the runtime keeps running tasks
@@ -2571,7 +2330,6 @@ mod tests {
         }
     }
 
-    #[cfg(ntex_rt_task)]
     #[test]
     fn panic_in_future_drop() {
         struct PanicOnDrop(Counter);

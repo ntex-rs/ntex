@@ -1,7 +1,6 @@
 use std::{collections::HashSet, env};
 
 fn main() {
-    println!("cargo::rustc-check-cfg=cfg(ntex_rt_task)");
     println!("cargo::rustc-check-cfg=cfg(ntex_loom)");
 
     let mut features = HashSet::<&'static str>::default();

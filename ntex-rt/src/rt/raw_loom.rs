@@ -2,7 +2,7 @@
 //! threads: the remote word, the remote queue, the join handle awaiter and
 //! the output hand-off.
 //!
-//! `RUSTFLAGS="--cfg ntex_rt_task --cfg ntex_loom" cargo test --release -p ntex-rt --lib raw_loom`
+//! `RUSTFLAGS="--cfg ntex_loom" cargo test --release -p ntex-rt --lib raw_loom`
 use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 
