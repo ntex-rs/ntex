@@ -12,7 +12,7 @@ use std::sync::{Barrier, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use super::{Arc, Future, Location, Notify, Ordering, RunnableQueue, Runtime, io, thread};
-use crate::raw::{self, Remote, Runnable, Task};
+use crate::rt::raw::{self, Remote, Runnable, Task};
 
 #[derive(Debug)]
 struct NoopNotify;

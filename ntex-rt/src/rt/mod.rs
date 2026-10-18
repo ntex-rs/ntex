@@ -760,7 +760,10 @@ impl RunnableQueue {
         }
 
         let stats = task_ref(&task);
-        let prev = self.current.swap(
+        // only the owner writes `current`; no callback can reenter between
+        // saving it and publishing the new location
+        let prev = self.current.load(Ordering::Relaxed);
+        self.current.store(
             ptr::from_ref(stats.location()).cast_mut(),
             Ordering::Relaxed,
         );
