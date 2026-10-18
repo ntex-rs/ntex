@@ -7,6 +7,9 @@
 * Keep raw task stage and join-waker accesses inside Loom tracking scopes,
   with coverage for reentrant callbacks and panic cleanup
 
+* Track scheduler closure and notification flags in Loom, with parked-driver
+  and concurrent-shutdown regression models
+
 * Skip the thread-local owner lookup when spawning through `Runtime`,
   while `Handle` spawning still selects the local or remote queue dynamically
 

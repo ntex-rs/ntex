@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::future::poll_fn;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::task::Poll;
 use std::time::{Duration, Instant};
 use std::{future::Future, io, marker::PhantomData, panic::Location, ptr, thread};
@@ -9,6 +9,12 @@ use std::{pin::Pin, rc::Rc, sync::Arc};
 use crate::handle::{JoinHandle, SpawnLocation};
 use crate::metrics::{AtomicHistogram, Histogram};
 use crate::{busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult};
+
+#[cfg(not(ntex_loom))]
+use std::sync::atomic::AtomicBool;
+
+#[cfg(ntex_loom)]
+use loom::sync::atomic::AtomicBool;
 
 pub(crate) mod raw;
 
@@ -891,7 +897,7 @@ mod raw_loom;
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
     use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc};
 

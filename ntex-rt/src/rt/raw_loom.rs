@@ -1,6 +1,6 @@
 //! Loom models of the raw task protocol between the owner thread and other
 //! threads: the remote word, the remote queue, the join handle awaiter and
-//! the output hand-off.
+//! the output hand-off, scheduler shutdown and parked-driver notifications.
 //!
 //! `RUSTFLAGS="--cfg ntex_loom" cargo test --release -p ntex-rt --lib raw_loom`
 use std::sync::Mutex;
@@ -9,7 +9,7 @@ use std::task::{Context, Poll, Waker};
 use loom::sync::atomic::{AtomicBool, AtomicUsize};
 use loom::thread;
 
-use super::{Arc, Future, Location, Notify, Ordering, Runtime, io};
+use super::{Arc, Future, Location, Notify, Ordering, PollResult, Runtime, io};
 use crate::rt::raw::{self, Task};
 
 #[derive(Debug)]
@@ -18,6 +18,35 @@ struct NoopNotify;
 impl Notify for NoopNotify {
     fn notify(&self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ParkNotify(Arc<loom::sync::Notify>);
+
+impl Notify for ParkNotify {
+    fn notify(&self) -> io::Result<()> {
+        self.0.notify();
+        Ok(())
+    }
+}
+
+/// Unlike `drain`, this driver relies on notifications once it is idle.
+fn run_parked(rt: &Runtime, park: &ParkNotify, done: impl Fn() -> bool) {
+    loop {
+        let result = rt.poll();
+        if done() {
+            return;
+        }
+        match result {
+            PollResult::Pending => {
+                // A notification preceding the wait leaves a retained wake token.
+                park.0.wait();
+                rt.awake();
+            }
+            PollResult::PollAgain => thread::yield_now(),
+            PollResult::Ready => panic!("runtime stopped before completing its tasks"),
+        }
     }
 }
 
@@ -464,4 +493,174 @@ fn remote_spawn_detached() {
         assert_freed(&rt);
         assert_eq!(st.drops.load(Ordering::Relaxed), 1);
     });
+}
+
+/// A remote wake must resume the driver, including between poll and park.
+#[test]
+fn parked_remote_wake() {
+    model(|| {
+        let park = ParkNotify::default();
+        let rt = Runtime::new(Box::new(park.clone()));
+        let st = Arc::new(State::default());
+        rt.awake();
+        let task = spawn(&rt, Fut(st.clone()));
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(st.polls.load(Ordering::Relaxed), 1);
+        let (st2, w) = (st.clone(), st.waker());
+        let th = thread::spawn(move || {
+            st2.ready.store(true, Ordering::Release);
+            w.wake();
+        });
+        run_parked(&rt, &park, || task.is_finished());
+        th.join().unwrap();
+        assert_eq!(*join(task).unwrap(), 42);
+        drop(st.waker.lock().unwrap().take());
+        assert_freed(&rt);
+        assert_eq!(st.drops.load(Ordering::Relaxed), 1);
+    });
+}
+
+/// Submissions may coalesce or straddle the notification reset and drain.
+#[test]
+fn parked_remote_submissions() {
+    model(|| {
+        let park = ParkNotify::default();
+        let rt = Runtime::new(Box::new(park.clone()));
+        let st = Arc::new(State::default());
+        st.ready.store(true, Ordering::Relaxed);
+        let (handle, st2) = (rt.handle(), st.clone());
+        let th = thread::spawn(move || {
+            handle.spawn(Fut(st2.clone())).detach();
+            handle.spawn_detached(Fut(st2));
+        });
+        run_parked(&rt, &park, || st.drops.load(Ordering::Relaxed) == 2);
+        th.join().unwrap();
+        assert_eq!(st.polls.load(Ordering::Relaxed), 2);
+        assert_freed(&rt);
+    });
+}
+
+/// Independent producers race the same notification flag.
+#[test]
+fn parked_two_producers() {
+    model(|| {
+        let park = ParkNotify::default();
+        let rt = Runtime::new(Box::new(park.clone()));
+        let st = Arc::new(State::default());
+        st.ready.store(true, Ordering::Relaxed);
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let (handle, fut) = (rt.handle(), Fut(st.clone()));
+                thread::spawn(move || handle.spawn_detached(fut))
+            })
+            .collect();
+        run_parked(&rt, &park, || st.drops.load(Ordering::Relaxed) == 2);
+        for th in threads {
+            th.join().unwrap();
+        }
+        assert_eq!(st.polls.load(Ordering::Relaxed), 2);
+        assert_freed(&rt);
+    });
+}
+
+/// A failed notification must not strand subsequent coalesced submissions.
+#[test]
+fn parked_failed_notification() {
+    #[derive(Debug)]
+    struct FailOnceNotify {
+        park: ParkNotify,
+        failed: AtomicBool,
+    }
+
+    impl Notify for FailOnceNotify {
+        fn notify(&self) -> io::Result<()> {
+            if self.failed.swap(true, Ordering::Relaxed) {
+                self.park.notify()
+            } else {
+                Err(io::ErrorKind::Interrupted.into())
+            }
+        }
+    }
+
+    model(|| {
+        let park = ParkNotify::default();
+        let rt = Runtime::new(Box::new(FailOnceNotify {
+            park: park.clone(),
+            failed: AtomicBool::new(false),
+        }));
+        let st = Arc::new(State::default());
+        st.ready.store(true, Ordering::Relaxed);
+        let (handle, st2) = (rt.handle(), st.clone());
+        let th = thread::spawn(move || {
+            handle.spawn_detached(Fut(st2.clone()));
+            handle.spawn_detached(Fut(st2));
+        });
+        run_parked(&rt, &park, || st.drops.load(Ordering::Relaxed) == 2);
+        th.join().unwrap();
+        assert_freed(&rt);
+    });
+}
+
+/// The final remote release must not publish after shutdown's last drain.
+#[test]
+fn remote_release_shutdown() {
+    model(|| {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let (st, task) = pending(&rt);
+        drop(task);
+        let w = st.waker.lock().unwrap().take().unwrap();
+        let st2 = st.clone();
+        let th = thread::spawn(move || {
+            st2.ready.store(true, Ordering::Release);
+            w.wake_by_ref();
+            drop(w);
+        });
+        run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
+        drop(rt);
+        th.join().unwrap();
+        assert!(
+            queue.upgrade().is_none(),
+            "task alive after final remote release"
+        );
+    });
+}
+
+fn spawn_shutdown(detached: bool) {
+    model(move || {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let st = Arc::new(State::default());
+        let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
+        let th = thread::spawn(move || unsafe {
+            if detached {
+                raw::spawn_detached::<_, false>(fut, &q, Location::caller());
+            } else {
+                drop(raw::spawn::<_, false>(fut, &q, Location::caller()));
+            }
+        });
+        drop(rt);
+        th.join().unwrap();
+        assert_eq!(
+            st.drops.load(Ordering::Relaxed),
+            1,
+            "late spawn retained its future"
+        );
+        assert!(
+            queue.upgrade().is_none(),
+            "task alive after concurrent spawn"
+        );
+    });
+}
+
+/// Joined spawning racing shutdown must reclaim its future and queue.
+#[test]
+fn remote_spawn_shutdown() {
+    spawn_shutdown(false);
+}
+
+/// Detached spawning has no join handle to participate in cleanup.
+#[test]
+fn remote_spawn_detached_shutdown() {
+    spawn_shutdown(true);
 }
