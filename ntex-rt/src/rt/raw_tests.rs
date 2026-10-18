@@ -942,6 +942,35 @@ fn drop_last_task() {
 }
 
 #[test]
+fn remote_wake_merged_while_running() {
+    let rt = new_rt();
+    let queue = rt.queue.clone();
+    let polls = Counter::default();
+    let polls2 = polls.clone();
+    let mut task = spawn(
+        &rt,
+        poll_fn(move |cx| {
+            polls2.inc();
+            if polls2.get() > 1 {
+                return Poll::Ready(());
+            }
+            let w = cx.waker().clone();
+            on_thread(move || w.wake());
+            // a reentrant runtime poll merges the wake while the task runs
+            let remote = queue.remote_queue.pop().unwrap().unwrap();
+            assert!(remote.into_runnable().is_none());
+            Poll::Pending
+        }),
+    );
+    one_local(&rt).run();
+    one_local(&rt).run();
+    assert_eq!(polls.get(), 2);
+    assert_eq!(join(&mut task), Poll::Ready(Some(())));
+    drop(task);
+    assert_freed(&rt);
+}
+
+#[test]
 fn remote_spawn() {
     let rt = new_rt();
     let p = Probe::default();
