@@ -840,6 +840,85 @@ fn queued_then_finished() {
 }
 
 #[test]
+fn shutdown_drops_pending() {
+    // a task waiting on a waker is dropped with the runtime, the waker
+    // released after the runtime frees the task and the runtime queue
+    for remote_spawn in [false, true] {
+        for detach in [false, true] {
+            for release in 0..4 {
+                let rt = new_rt();
+                let queue = Arc::downgrade(&rt.queue);
+                let p = Probe::default();
+                let fut = p.future(Res::Pending);
+                let q = rt.queue.clone();
+                let spawn = move || unsafe { raw::spawn(fut, &q, Location::caller()) };
+                let (task, r) = if remote_spawn {
+                    let task = on_thread(spawn);
+                    (task, one_remote(&rt).unwrap())
+                } else {
+                    (spawn(), one_local(&rt))
+                };
+                assert!(!r.run());
+                let w = p.waker();
+                let mut task = (!detach).then_some(task);
+                drop(rt);
+                p.check(1, 1, 0);
+                if let Some(task) = &mut task {
+                    assert!(task.is_finished());
+                    assert!(matches!(join(task), Poll::Ready(None)));
+                }
+                drop(task);
+                assert!(queue.upgrade().is_some());
+                match release {
+                    0 => drop(w),
+                    1 => w.wake(),
+                    2 => on_thread(move || drop(w)),
+                    _ => on_thread(move || w.wake()),
+                }
+                assert!(queue.upgrade().is_none(), "task alive");
+            }
+        }
+    }
+}
+
+#[test]
+fn shutdown_drop_wakes_and_spawns() {
+    // a dropped future wakes a pending task and spawns a task, the runtime
+    // drops both
+    struct OnDrop(Option<Box<dyn FnOnce()>>);
+
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            self.0.take().unwrap()();
+        }
+    }
+
+    let rt = new_rt();
+    let queue = Arc::downgrade(&rt.queue);
+    let (p1, p2) = (Probe::default(), Probe::default());
+    let t1 = spawn(&rt, p1.future(Res::Pending));
+    one_local(&rt).run();
+    let w1 = p1.waker();
+    let q = rt.queue.clone();
+    let fut2 = p2.future(Res::Pending);
+    let hook = OnDrop(Some(Box::new(move || {
+        w1.wake();
+        unsafe { raw::spawn_detached(fut2, &q, Location::caller()) };
+    })));
+    let t0 = spawn(&rt, async move {
+        let _hook = hook;
+        std::future::pending::<()>().await;
+    });
+    one_local(&rt).run();
+    drop(rt);
+    p1.check(1, 1, 0);
+    p2.check(0, 1, 0);
+    assert!(t0.is_finished() && t1.is_finished());
+    drop((t0, t1));
+    assert!(queue.upgrade().is_none(), "task alive");
+}
+
+#[test]
 fn remote_wake_variants() {
     let rt = new_rt();
     let p = Probe::default();

@@ -13,7 +13,9 @@ use crate::{busy::BusyClock, driver::Driver, driver::Notify, driver::PollResult}
 #[cfg(not(ntex_rt_task))]
 use self::queues::{LocalQueue, RemoteQueue, RemoteTask, Task, TaskMeta, task_ref};
 #[cfg(ntex_rt_task)]
-use crate::raw::{LocalQueue, Remote as RemoteTask, RemoteQueue, Runnable as Task, task_ref};
+use crate::raw::{
+    LocalQueue, Remote as RemoteTask, RemoteQueue, Runnable as Task, TaskList, task_ref,
+};
 
 // marks a reported self-wake streak
 pub(crate) const REPORTED: u32 = 1 << 31;
@@ -391,7 +393,7 @@ impl<F> Drop for BlockOnSlot<F> {
 impl Drop for Runtime {
     fn drop(&mut self) {
         CURRENT_RUNTIME.set(self, || {
-            self.queue.clear();
+            self.queue.shutdown();
         });
     }
 }
@@ -545,6 +547,9 @@ pub(crate) struct RunnableQueue {
     // spawn location of the running task, null between tasks
     current: AtomicPtr<Location<'static>>,
     local_queue: LocalQueue,
+    // unfinished tasks, dropped with the runtime
+    #[cfg(ntex_rt_task)]
+    pub(crate) tasks: TaskList,
 }
 
 /// Aligns the next field to a cache line, 128 bytes covers the adjacent line
@@ -576,6 +581,8 @@ impl RunnableQueue {
             epoch: now,
             current: AtomicPtr::new(ptr::null_mut()),
             local_queue: LocalQueue::new(),
+            #[cfg(ntex_rt_task)]
+            tasks: TaskList::new(),
             remote_queue: RemoteQueue::new(),
             _remote: [],
             _local: [],
@@ -818,6 +825,23 @@ impl RunnableQueue {
         // dropped tasks may schedule other tasks, drop each outside of the borrow
         while let Some(task) = self.pop_local() {
             drop(task);
+        }
+    }
+
+    #[cfg(not(ntex_rt_task))]
+    fn shutdown(&self) {
+        self.clear();
+    }
+
+    /// Drops the futures of all tasks, also of tasks waiting on a waker.
+    #[cfg(ntex_rt_task)]
+    fn shutdown(&self) {
+        // dropped futures may wake or spawn tasks
+        loop {
+            self.clear();
+            if !self.tasks.close_first() {
+                break;
+            }
         }
     }
 
