@@ -12,6 +12,7 @@ use super::{
     Handler, OpBox, Overlapped, Reactor, ReactorApi, TcpStream, UnixStream, ops, stream::StreamOps,
 };
 use crate::channel::{self, Receiver, Sender};
+use crate::helpers::Queue;
 
 #[derive(Clone)]
 pub(crate) struct ConnectOps(Rc<ConnectOpsInner>);
@@ -21,7 +22,7 @@ struct ConnectOpsHandler {
 }
 
 struct ConnectOp {
-    sock: Socket,
+    sock: Option<Socket>,
     addr: SockAddr,
     sender: Sender<Io>,
     cfg: SharedCfg,
@@ -33,6 +34,7 @@ struct ConnectOpsInner {
     api: ReactorApi,
     streams: StreamOps,
     ops: Operations,
+    cancelled: Queue<usize>,
     connect: WinSock::LPFN_CONNECTEX,
 }
 
@@ -53,6 +55,7 @@ impl ConnectOps {
                     streams,
                     connect,
                     ops: RefCell::new(Slab::new()),
+                    cancelled: Queue::new(),
                 });
                 inner = Some(ops.clone());
                 Box::new(ConnectOpsHandler { inner: ops })
@@ -96,11 +99,20 @@ impl ConnectOps {
             let mut ops = self.0.ops.borrow_mut();
             let entry = ops.vacant_entry();
 
-            let (sender, rx) = channel::create();
+            let idx = entry.key();
+            let inner = Rc::downgrade(&self.0);
+            let (sender, rx) = channel::create_with_cancel(move || {
+                if let Some(inner) = inner.upgrade() {
+                    inner.cancelled.push(idx);
+                    if let Err(err) = inner.api.notify() {
+                        log::error!("Cannot notify IOCP driver of cancelled connect: {err:?}");
+                    }
+                }
+            });
             let op = OpBox::new(
-                self.0.api.overlapped(entry.key() as u32),
+                self.0.api.overlapped(idx as u32),
                 ConnectOp {
-                    sock,
+                    sock: Some(sock),
                     addr,
                     sender,
                     cfg,
@@ -109,7 +121,7 @@ impl ConnectOps {
             let mut sent = 0;
             let res = unsafe {
                 self.0.connect.as_ref().unwrap()(
-                    op.sock.as_raw_socket() as _,
+                    op.sock.as_ref().unwrap().as_raw_socket() as _,
                     op.addr.as_ptr().cast(),
                     op.addr.len(),
                     ptr::null(),
@@ -133,19 +145,27 @@ impl ConnectOps {
 
 impl ConnectOp {
     fn complete(self, res: io::Result<()>, streams: &StreamOps) {
-        match res.and_then(|()| update_connect_context(&self.sock)) {
+        let Some(sock) = self.sock else {
+            return;
+        };
+        let res = res.and_then(|()| update_connect_context(&sock));
+        if self.sender.is_closed() {
+            crate::helpers::close_socket(sock);
+            return;
+        }
+        match res {
             Ok(()) => {
                 let io = if self.addr.domain() == Domain::UNIX {
-                    Io::new(UnixStream(self.sock, streams.clone()), self.cfg)
+                    Io::new(UnixStream(sock, streams.clone()), self.cfg)
                 } else {
                     let addr = self.addr.as_socket();
-                    Io::new(TcpStream(self.sock, addr, streams.clone()), self.cfg)
+                    Io::new(TcpStream(sock, addr, streams.clone()), self.cfg)
                 };
                 let _ = self.sender.send(Ok(io));
             }
             Err(err) => {
                 let _ = self.sender.send(Err(err));
-                crate::helpers::close_socket(self.sock);
+                crate::helpers::close_socket(sock);
             }
         }
     }
@@ -174,16 +194,32 @@ fn update_connect_context(sock: &Socket) -> io::Result<()> {
 
 impl Handler for ConnectOpsHandler {
     fn completed(&mut self, idx: u32, res: io::Result<usize>, _: *mut Overlapped) {
-        if let Some(op) = self.inner.ops.borrow_mut().try_remove(idx as usize) {
+        let op = self.inner.ops.borrow_mut().try_remove(idx as usize);
+        if let Some(op) = op {
             #[cfg(feature = "trace")]
             log::trace!(
-                "{}: Connected({}) {res:?}",
+                "{}: Connected({:?}) {res:?}",
                 op.cfg.tag(),
-                op.sock.as_raw_socket(),
+                op.sock.as_ref().map(AsRawSocket::as_raw_socket),
             );
 
             op.into_inner()
                 .complete(res.map(|_| ()), &self.inner.streams);
+        }
+    }
+
+    fn tick(&mut self) {
+        while let Some(idx) = self.inner.cancelled.pop() {
+            let sock = {
+                let mut ops = self.inner.ops.borrow_mut();
+                // A completion may have freed and reused the slot before this tick.
+                ops.get_mut(idx)
+                    .filter(|op| op.sender.is_closed())
+                    .and_then(|op| op.sock.take())
+            };
+            // Closing cancels ConnectEx, but its allocation must stay alive
+            // until the terminal completion is dequeued.
+            drop(sock);
         }
     }
 
@@ -207,13 +243,14 @@ impl Handler for ConnectOpsHandler {
                 )
             };
             log::trace!(
-                "{}: Cancel pending connect ({})",
+                "{}: Cancel pending connect ({:?})",
                 cfg.tag(),
-                sock.as_raw_socket()
+                sock.as_ref().map(AsRawSocket::as_raw_socket)
             );
             drop(sock);
             drop((addr, sender, cfg));
         }
+        self.inner.cancelled.clear();
     }
 }
 
@@ -239,7 +276,10 @@ fn get_wsa_fn<F>(sock: RawSocket, fguid: GUID) -> io::Result<Option<F>> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::windows::io::AsRawHandle;
     use std::os::windows::io::FromRawSocket;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::System::IO::GetQueuedCompletionStatus;
 
     use super::*;
 
@@ -248,6 +288,119 @@ mod tests {
     fn is_ours(io: RawSocket, addr: &SockAddr) -> bool {
         let s = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(io) });
         s.local_addr().is_ok_and(|a| a == *addr)
+    }
+
+    fn pending_connect(
+        ops: &ConnectOps,
+        addr: net::SocketAddr,
+    ) -> (Receiver<Io>, RawSocket, SockAddr) {
+        let sock = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+        let raw = sock.as_raw_socket();
+        let rx = ops.connect(sock, addr.into(), SharedCfg::default());
+        assert_eq!(ops.0.ops.borrow().len(), 1, "connect did not stay pending");
+        let local = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(raw) })
+            .local_addr()
+            .unwrap();
+        (rx, raw, local)
+    }
+
+    fn drain_connects(reactor: &Reactor, ops: &ConnectOps) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ops.0.ops.borrow().is_empty() && Instant::now() < deadline {
+            reactor.dispatch(10);
+        }
+        assert!(ops.0.ops.borrow().is_empty(), "connect completion was lost");
+    }
+
+    #[ntex::test]
+    async fn dropped_connect_closes_socket_before_completion() {
+        let reactor = Reactor::new().unwrap();
+        let ops = ConnectOps::get(&reactor);
+        let addr = net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let (rx, raw, local) = pending_connect(&ops, addr);
+
+        // Receiver destruction must not borrow the slab, including reentrant drops.
+        let optr = {
+            let entries = ops.0.ops.borrow_mut();
+            let optr = entries.iter().next().unwrap().1.as_overlapped();
+            drop(rx);
+            assert!(is_ours(raw, &local));
+            optr
+        };
+
+        // The cancellation wakes an otherwise idle reactor.
+        reactor.dispatch(0);
+        assert!(
+            !is_ours(raw, &local),
+            "cancelled connect still owns its socket"
+        );
+        {
+            let entries = ops.0.ops.borrow();
+            let op = entries.iter().next().unwrap().1;
+            assert!(op.sock.is_none());
+            assert_eq!(op.as_overlapped(), optr, "live operation storage was freed");
+        }
+
+        drain_connects(&reactor, &ops);
+    }
+
+    #[ntex::test]
+    async fn abandoned_success_does_not_cancel_reused_slot() {
+        let reactor = Reactor::new().unwrap();
+        let ops = ConnectOps::get(&reactor);
+        let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (rx, raw, local) = pending_connect(&ops, listener.local_addr().unwrap());
+        let (idx, optr) = {
+            let entries = ops.0.ops.borrow();
+            let (idx, op) = entries.iter().next().unwrap();
+            (idx, op.as_overlapped())
+        };
+
+        // Dequeue the real terminal completion, but drop the receiver before
+        // delivering it, so the completion wins the race against cancellation.
+        let (mut bytes, mut key, mut completed) = (0, 0, ptr::null_mut());
+        syscall!(
+            BOOL,
+            GetQueuedCompletionStatus(
+                reactor.as_raw_handle().cast(),
+                &raw mut bytes,
+                &raw mut key,
+                &raw mut completed,
+                5000,
+            )
+        )
+        .unwrap();
+        assert_eq!(key, 0);
+        assert_eq!(completed, optr);
+        drop(rx);
+        let mut handler = ConnectOpsHandler {
+            inner: ops.0.clone(),
+        };
+        handler.completed(idx as u32, Ok(bytes as usize), completed.cast());
+        assert!(ops.0.ops.borrow().is_empty());
+        assert!(!is_ours(raw, &local), "abandoned success registered an Io");
+
+        let addr = net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let (rx, raw, local) = pending_connect(&ops, addr);
+        assert!(ops.0.ops.borrow().contains(idx), "slot was not reused");
+        assert!(!ops.0.cancelled.is_empty());
+        handler.tick();
+        assert!(
+            is_ours(raw, &local),
+            "stale cancellation closed a new connect"
+        );
+        assert!(ops.0.ops.borrow()[idx].sock.is_some());
+
+        drop(rx);
+        handler.tick();
+        assert!(!is_ours(raw, &local));
+        drain_connects(&reactor, &ops);
     }
 
     /// A connect still in flight when the runtime stops must be cancelled:

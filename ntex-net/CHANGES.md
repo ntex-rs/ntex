@@ -3,6 +3,9 @@
 
 ## [4.6.0] - Unreleased
 
+* iocp: cancel abandoned connection attempts promptly while retaining operation
+  memory until Windows delivers the completion
+
 * **Breaking:** make IOCP `Handler`, `ReactorApi`, `Overlapped` and
   `Reactor::register()` crate-private; `Reactor` remains public
 
