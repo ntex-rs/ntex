@@ -53,7 +53,6 @@
 //! # Crate features
 //!
 //! - `simd` enables SIMD-accelerated UTF-8 validation.
-//! - `overuse` enables diagnostic logging for unusually large page stacks.
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
 #![deny(clippy::pedantic)]
 #![allow(

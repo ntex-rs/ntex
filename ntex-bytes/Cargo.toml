@@ -21,17 +21,13 @@ default = []
 # simd utf8 check support
 simd = ["simdutf8"]
 
-overuse = ["backtrace", "log"]
-
 [lints]
 workspace = true
 
 [dependencies]
 bytes = { workspace = true }
 serde = { workspace = true }
-log = { workspace = true, optional = true }
 simdutf8 = { workspace = true, optional = true }
-backtrace = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand = { workspace = true }
