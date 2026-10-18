@@ -45,12 +45,20 @@ pub(crate) type ThreadId = thread::ThreadId;
 pub(crate) type ThreadId = loom::thread::ThreadId;
 
 #[cfg(not(ntex_loom))]
-thread_local!(static THREAD_ID: ThreadId = thread::current().id());
+thread_local!(static THREAD_ID: Cell<Option<ThreadId>> = const { Cell::new(None) });
 
-/// Returns the id of the current thread without cloning its `Thread` handle.
+/// Returns the cached id of the current thread.
 #[cfg(not(ntex_loom))]
+#[inline]
 pub(crate) fn current_thread_id() -> ThreadId {
-    THREAD_ID.with(|id| *id)
+    #[cold]
+    fn initialize(slot: &Cell<Option<ThreadId>>) -> ThreadId {
+        let id = thread::current().id();
+        slot.set(Some(id));
+        id
+    }
+
+    THREAD_ID.with(|slot| slot.get().unwrap_or_else(|| initialize(slot)))
 }
 
 #[cfg(ntex_loom)]
