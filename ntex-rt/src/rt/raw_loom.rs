@@ -218,6 +218,31 @@ fn remote_join() {
     });
 }
 
+/// The join handle on another thread registers and is dropped before a
+/// remote wake completes the task, the awaiter is dropped without a wake.
+#[test]
+fn remote_detached_awaiter() {
+    model(|| {
+        let rt = new_rt();
+        let (st, mut task) = pending(&rt);
+        let (st2, w) = (st.clone(), st.waker());
+        let flag = Arc::new(Flag::default());
+        let waker = Waker::from(flag.clone());
+        let th = thread::spawn(move || {
+            assert!(task.poll_join(&Context::from_waker(&waker)).is_pending());
+            drop(task);
+            st2.ready.store(true, Ordering::Release);
+            w.wake();
+        });
+        run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
+        th.join().unwrap();
+        drop(st.waker.lock().unwrap().take());
+        assert_freed(&rt);
+        assert!(!flag.0.load(Ordering::Relaxed));
+        assert_eq!(Arc::strong_count(&flag), 1);
+    });
+}
+
 /// The join handle on another thread registers while a remote wake
 /// completes the task.
 #[test]

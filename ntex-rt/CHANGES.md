@@ -10,6 +10,10 @@
 * Drop the output of a finished neon task when its `JoinHandle` is dropped or
   cancelled, instead of when the last waker is dropped
 
+* Do not wake the waiting waker of a dropped or cancelled neon `JoinHandle`,
+  the waker is dropped right away on the runtime thread, or when the task
+  completes or is freed if the handle is dropped on another thread
+
 * Require `F::Output: Send` for neon `Handle::spawn()`, a remote task could
   return a non-`Send` value to the spawning thread
 

@@ -418,24 +418,24 @@ fn finish_unshared() {
     let w = Waker::from(awaiter.clone());
     assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
     drop(task);
+    // the owner thread drops the awaiter with the handle
+    assert_eq!(Arc::strong_count(&awaiter), 2);
     // the wake passes its reference to the queue
     slot.lock().unwrap().take().unwrap().wake();
     one_local(&rt).run();
-    assert_eq!(awaiter.0.load(Ordering::SeqCst), 1);
+    assert_eq!(awaiter.0.load(Ordering::SeqCst), 0);
     assert_eq!(out.get(), 2);
     assert_freed(&rt);
     drop(w);
 
-    // a panicking awaiter still drops the output and frees the task
+    // the awaiter of a dropped join handle is not woken
     let rt = new_rt();
     let mut tok = Some(out.token());
     let mut task = spawn(&rt, poll_fn(move |_| Poll::Ready(tok.take().unwrap())));
     let w = Waker::from(Arc::new(PanicOnWake));
     assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
     drop(task);
-    let r = one_local(&rt);
-    let err = catch_unwind(AssertUnwindSafe(|| r.run())).unwrap_err();
-    assert_eq!(err.downcast_ref::<&str>(), Some(&"awaiter wake"));
+    assert!(!one_local(&rt).run());
     assert_eq!(out.get(), 3);
     assert_freed(&rt);
 
@@ -446,6 +446,80 @@ fn finish_unshared() {
     let r = one_local(&rt);
     assert!(catch_unwind(AssertUnwindSafe(|| r.run())).is_err());
     assert_freed(&rt);
+}
+
+#[test]
+fn detached_awaiter() {
+    // the owner thread drops the awaiter with the join handle
+    for cancel in [false, true] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let fut = p.future(Res::Ready);
+        let mut task = spawn(&rt, async move {
+            yield_now().await;
+            fut.await
+        });
+        assert!(one_local(&rt).run());
+        let r = one_local(&rt);
+        let awaiter = Arc::new(CountWaker::default());
+        let w = Waker::from(awaiter.clone());
+        assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+        drop(w);
+        assert_eq!(Arc::strong_count(&awaiter), 2);
+        if cancel {
+            task.cancel();
+        } else {
+            drop(task);
+        }
+        assert_eq!(Arc::strong_count(&awaiter), 1);
+        r.run();
+        let ran = usize::from(!cancel);
+        p.check(ran, 1, ran);
+        if !cancel {
+            drop(p.waker());
+        }
+        assert_freed(&rt);
+        assert_eq!(awaiter.0.load(Ordering::SeqCst), 0);
+    }
+
+    // a join handle dropped on another thread leaves the awaiter, the
+    // completion drops it without a wake
+    for merge_first in [false, true] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let fut = p.future(Res::Ready);
+        let task = spawn(&rt, async move {
+            yield_now().await;
+            fut.await
+        });
+        assert!(one_local(&rt).run());
+        let r = one_local(&rt);
+        let awaiter = Arc::new(CountWaker::default());
+        let a2 = awaiter.clone();
+        on_thread(move || {
+            let mut task = task;
+            let w = Waker::from(a2);
+            assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+        });
+        assert_eq!(Arc::strong_count(&awaiter), 2);
+        let merge = || {
+            for m in remotes(&rt) {
+                assert!(m.into_runnable().is_none());
+            }
+        };
+        if merge_first {
+            merge();
+        }
+        r.run();
+        if !merge_first {
+            merge();
+        }
+        assert_eq!(awaiter.0.load(Ordering::SeqCst), 0);
+        assert_eq!(Arc::strong_count(&awaiter), 1);
+        p.check(1, 1, 1);
+        drop(p.waker());
+        assert_freed(&rt);
+    }
 }
 
 #[test]
@@ -563,11 +637,13 @@ fn join_waker_replaced() {
     drop(wb);
     // the replaced waker is released
     assert_eq!(Arc::strong_count(&a), 1);
+    assert_eq!(Arc::strong_count(&b), 2);
+    // a cancel drops the awaiter without a wake
     task.cancel();
+    assert_eq!(Arc::strong_count(&b), 1);
     one_local(&rt).run();
     assert_eq!(a.0.load(Ordering::SeqCst), 0);
-    assert_eq!(b.0.load(Ordering::SeqCst), 1);
-    assert_eq!(Arc::strong_count(&b), 1);
+    assert_eq!(b.0.load(Ordering::SeqCst), 0);
     drop(p.waker());
     assert_freed(&rt);
 }
