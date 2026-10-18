@@ -531,6 +531,32 @@ impl IoRef {
     /// Finally enables write back-pressure and wakes the dispatcher if buffered
     /// output has reached the configured high watermark. The size is re-read
     /// first because an eager write may have drained it.
+    /// Ends the connection after the filter chain failed.
+    ///
+    /// Output the application queued can not be encoded anymore and is
+    /// discarded. The chain gets one last write pass, so that output it
+    /// produced before the failure, for example a TLS alert, moves toward
+    /// the transport; any error from that pass is the same failure. After
+    /// that the chain is not called again, output it still holds is
+    /// discarded, and the connection skips filter shutdown: the transport
+    /// shutdown phase delivers the transport-facing output, bounded by the
+    /// shutdown deadline.
+    pub(crate) fn fail_filters(&self, err: io::Error) {
+        let st = &self.0;
+        st.set_shutdown_error(err);
+        if st.flags.is_aborted() || st.flags.is_filter_failed() {
+            return;
+        }
+        log::trace!("{}: Filter chain failed, flags:{:?}", st.tag(), st.flags);
+
+        st.buffer.discard_app_output();
+        let _ = st.buffer.process_write_buf_force(self);
+        st.flags.set_filter_failed();
+        st.buffer.discard_filter_output();
+        st.sync_write_buffered();
+        st.filters_stopped();
+    }
+
     pub(crate) fn consolidate_write_state(&self, force: bool) -> io::Result<()> {
         let st = &self.0;
 
