@@ -4,6 +4,9 @@
 
 * Replace `async-task` with a custom task implementation
 
+* Skip the thread-local owner lookup when spawning through `Runtime`,
+  while `Handle` spawning still selects the local or remote queue dynamically
+
 * Add `spawn_detached()` and `Handle::spawn_detached()`, spawn a task without
   a join handle, the output is dropped on completion
 

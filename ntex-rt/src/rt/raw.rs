@@ -668,7 +668,8 @@ fn drop_output(h: NonNull<Header>) {
 ///
 /// The caller should ensure the captured lifetime is long enough, and that
 /// a future spawned on another thread is `Send`.
-pub(crate) unsafe fn spawn<F: Future>(
+/// If `LOCAL` is true, the caller must be on the runtime thread.
+pub(crate) unsafe fn spawn<F: Future, const LOCAL: bool>(
     future: F,
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
@@ -687,7 +688,7 @@ pub(crate) unsafe fn spawn<F: Future>(
         cancel_closed(future, location);
         return task;
     }
-    let h = unsafe { create(future, queue, location, false) };
+    let h = unsafe { create::<_, LOCAL>(future, queue, location, false) };
     Task { h, _t: PhantomData }
 }
 
@@ -696,7 +697,7 @@ pub(crate) unsafe fn spawn<F: Future>(
 /// # Safety
 ///
 /// Same as [`spawn`].
-pub(crate) unsafe fn spawn_detached<F: Future>(
+pub(crate) unsafe fn spawn_detached<F: Future, const LOCAL: bool>(
     future: F,
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
@@ -705,7 +706,7 @@ pub(crate) unsafe fn spawn_detached<F: Future>(
         cancel_closed(future, location);
         return;
     }
-    unsafe { create(future, queue, location, true) };
+    unsafe { create::<_, LOCAL>(future, queue, location, true) };
 }
 
 /// Drops the future of a task spawned after its runtime is dropped, the
@@ -716,13 +717,13 @@ fn cancel_closed<F>(future: F, location: SpawnLocation) {
     drop(future);
 }
 
-unsafe fn create<F: Future>(
+unsafe fn create<F: Future, const LOCAL: bool>(
     future: F,
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
     detached: bool,
 ) -> NonNull<Header> {
-    let local = queue.id == current_thread_id();
+    let local = LOCAL || queue.id == current_thread_id();
     let h = alloc(
         Stage::Running(future),
         queue,

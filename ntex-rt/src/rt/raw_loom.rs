@@ -75,7 +75,7 @@ fn new_rt() -> Runtime {
 }
 
 fn spawn<F: Future>(rt: &Runtime, f: F) -> Task<F::Output> {
-    unsafe { raw::spawn(f, &rt.queue, Location::caller()) }
+    unsafe { raw::spawn::<_, true>(f, &rt.queue, Location::caller()) }
 }
 
 /// Runs queued tasks until both queues are empty.
@@ -398,7 +398,7 @@ fn remote_spawn() {
         st.ready.store(true, Ordering::Relaxed);
         let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
         let th = thread::spawn(move || {
-            let task = unsafe { raw::spawn(fut, &q, Location::caller()) };
+            let task = unsafe { raw::spawn::<_, false>(fut, &q, Location::caller()) };
             *join(task).unwrap()
         });
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
@@ -450,7 +450,7 @@ fn remote_spawn_detached() {
         st.ready.store(true, Ordering::Relaxed);
         let (q, fut, st2) = (rt.queue.clone(), Fut(st.clone()), st.clone());
         let th = thread::spawn(move || unsafe {
-            raw::spawn_detached(
+            raw::spawn_detached::<_, false>(
                 async move {
                     let _ = fut.await;
                     Out(st2)

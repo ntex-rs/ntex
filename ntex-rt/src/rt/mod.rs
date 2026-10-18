@@ -168,7 +168,7 @@ impl Runtime {
         future: F,
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
-        unsafe { self.queue.spawn(future, location) }
+        unsafe { self.queue.spawn::<_, true>(future, location) }
     }
 
     /// Spawns a new asynchronous task without a [`JoinHandle`].
@@ -186,7 +186,7 @@ impl Runtime {
     ///
     /// The caller should ensure the captured lifetime is long enough.
     pub(crate) unsafe fn spawn_detached_at<F: Future>(&self, future: F, location: SpawnLocation) {
-        unsafe { self.queue.spawn_detached(future, location) }
+        unsafe { self.queue.spawn_detached::<_, true>(future, location) }
     }
 
     /// Marks the runtime as awake.
@@ -489,7 +489,7 @@ impl Handle {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        unsafe { self.queue.spawn(future, Location::caller()) }
+        unsafe { self.queue.spawn::<_, false>(future, Location::caller()) }
     }
 
     /// Spawns a new asynchronous task without a [`JoinHandle`].
@@ -501,7 +501,10 @@ impl Handle {
     where
         F: Future + Send + 'static,
     {
-        unsafe { self.queue.spawn_detached(future, Location::caller()) }
+        unsafe {
+            self.queue
+                .spawn_detached::<_, false>(future, Location::caller());
+        }
     }
 }
 
@@ -594,12 +597,13 @@ impl RunnableQueue {
     /// # Safety
     ///
     /// The caller should ensure the captured lifetime is long enough.
-    unsafe fn spawn<F: Future>(
+    /// If `LOCAL` is true, the caller must be on the runtime thread.
+    unsafe fn spawn<F: Future, const LOCAL: bool>(
         self: &Arc<Self>,
         future: F,
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
-        JoinHandle::new(unsafe { self::raw::spawn(future, self, location) })
+        JoinHandle::new(unsafe { self::raw::spawn::<_, LOCAL>(future, self, location) })
     }
 
     /// Spawns a task on this queue without a join handle.
@@ -607,8 +611,13 @@ impl RunnableQueue {
     /// # Safety
     ///
     /// The caller should ensure the captured lifetime is long enough.
-    unsafe fn spawn_detached<F: Future>(self: &Arc<Self>, future: F, location: SpawnLocation) {
-        unsafe { self::raw::spawn_detached(future, self, location) }
+    /// If `LOCAL` is true, the caller must be on the runtime thread.
+    unsafe fn spawn_detached<F: Future, const LOCAL: bool>(
+        self: &Arc<Self>,
+        future: F,
+        location: SpawnLocation,
+    ) {
+        unsafe { self::raw::spawn_detached::<_, LOCAL>(future, self, location) }
     }
 
     pub(crate) fn schedule_local(&self, runnable: Task) {
@@ -1063,6 +1072,31 @@ mod tests {
         assert_eq!(rt.poll(), PollResult::PollAgain);
         assert_eq!(rt.poll(), PollResult::Pending);
         assert!(done.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    #[cfg(not(ntex_loom))]
+    fn runtime_spawn_skips_owner_lookup() {
+        let borrowed = Cell::new(false);
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let output = Rc::new(42);
+        let detached = Rc::new(Cell::new(false));
+        let done = detached.clone();
+
+        // All Runtime entrypoints already know the owner, even with a cold TLS cache.
+        let id = THREAD_ID.with(Cell::take);
+        let task = rt.spawn(async move { output });
+        let unchecked = unsafe { rt.spawn_unchecked(async { borrowed.set(true) }) };
+        rt.spawn_detached(async move { done.set(true) });
+        assert!(THREAD_ID.with(Cell::get).is_none());
+        THREAD_ID.with(|slot| slot.set(id));
+
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(*block_on_thread(task).unwrap(), 42);
+        block_on_thread(unchecked).unwrap();
+        assert!(borrowed.get());
+        assert!(detached.get());
+        assert_eq!(Arc::strong_count(&rt.queue), 1, "tasks freed");
     }
 
     #[test]
