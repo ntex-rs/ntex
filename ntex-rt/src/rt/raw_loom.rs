@@ -581,23 +581,35 @@ fn parked_failed_notification() {
         }
     }
 
-    model(|| {
-        let park = ParkNotify::default();
-        let rt = Runtime::new(Box::new(FailOnceNotify {
-            park: park.clone(),
-            failed: AtomicBool::new(false),
-        }));
-        let st = Arc::new(State::default());
-        st.ready.store(true, Ordering::Relaxed);
-        let (handle, st2) = (rt.handle(), st.clone());
-        let th = thread::spawn(move || {
-            handle.spawn_detached(Fut(st2.clone()));
-            handle.spawn_detached(Fut(st2));
+    for (producers, submissions) in [(1, 1), (1, 2), (2, 1)] {
+        model(move || {
+            let park = ParkNotify::default();
+            let rt = Runtime::new(Box::new(FailOnceNotify {
+                park: park.clone(),
+                failed: AtomicBool::new(false),
+            }));
+            let st = Arc::new(State::default());
+            st.ready.store(true, Ordering::Relaxed);
+            let threads: Vec<_> = (0..producers)
+                .map(|_| {
+                    let (handle, st) = (rt.handle(), st.clone());
+                    thread::spawn(move || {
+                        for _ in 0..submissions {
+                            handle.spawn_detached(Fut(st.clone()));
+                        }
+                    })
+                })
+                .collect();
+            run_parked(&rt, &park, || {
+                st.drops.load(Ordering::Relaxed) == producers * submissions
+            });
+            for th in threads {
+                th.join().unwrap();
+            }
+            assert_eq!(st.polls.load(Ordering::Relaxed), producers * submissions);
+            assert_freed(&rt);
         });
-        run_parked(&rt, &park, || st.drops.load(Ordering::Relaxed) == 2);
-        th.join().unwrap();
-        assert_freed(&rt);
-    });
+    }
 }
 
 /// The final remote release must not publish after shutdown's last drain.
@@ -679,10 +691,14 @@ fn shutdown_with_blocked_notification() {
     struct BlockingNotify {
         entered: loom::sync::mpsc::Sender<()>,
         release: loom::sync::Mutex<loom::sync::mpsc::Receiver<()>>,
+        interrupted: AtomicBool,
     }
 
     impl Notify for BlockingNotify {
         fn notify(&self) -> io::Result<()> {
+            if !self.interrupted.swap(true, Ordering::Relaxed) {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
             self.entered.send(()).unwrap();
             self.release.lock().unwrap().recv().unwrap();
             Ok(())
@@ -696,6 +712,7 @@ fn shutdown_with_blocked_notification() {
             let rt = Runtime::new(Box::new(BlockingNotify {
                 entered,
                 release: loom::sync::Mutex::new(release),
+                interrupted: AtomicBool::new(false),
             }));
             rt.awake();
             let queue = Arc::downgrade(&rt.queue);

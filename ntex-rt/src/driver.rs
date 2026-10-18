@@ -45,6 +45,12 @@ pub enum PollResult {
     PollAgain,
 }
 
+/// Wakes a runtime driver, retaining the wakeup if it has not blocked yet.
+///
+/// Internal scheduler notifications retry [`io::ErrorKind::Interrupted`] and
+/// log and abort the process on any other error, since queued work may otherwise
+/// remain stranded. Explicit notifications through [`Runtime::handle`] return
+/// errors to their caller.
 pub trait Notify: Send + Sync + fmt::Debug + 'static {
     fn notify(&self) -> io::Result<()>;
 }
