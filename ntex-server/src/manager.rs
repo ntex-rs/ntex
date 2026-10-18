@@ -43,6 +43,8 @@ struct Inner<F: ServerConfiguration> {
     cfg: WorkerPool,
     shared: Arc<ServerShared>,
     router: Arc<Mutex<Router<F::Item>>>,
+    /// All running workers, including unavailable ones.
+    workers: RefCell<Vec<Worker<F::Item>>>,
     stopping: Cell<bool>,
     stopped: Cell<bool>,
     stop_notify: RefCell<Vec<oneshot::Sender<()>>>,
@@ -131,6 +133,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
             closed: false,
         }));
         let mgr = ServerManager(Rc::new(Inner {
+            workers: RefCell::new(Vec::with_capacity(cfg.num)),
             cfg,
             factory,
             id: Cell::new(WorkerId::default()),
@@ -210,6 +213,20 @@ impl<F: ServerConfiguration> ServerManager<F> {
             .try_send(ServerCommand::Worker(Update::Unavailable(wrk)));
     }
 
+    /// Registers a started or restarted worker.
+    fn register(&self, wrk: &Worker<F::Item>) {
+        let mut workers = self.0.workers.borrow_mut();
+        if let Some(w) = workers.iter_mut().find(|w| *w == wrk) {
+            *w = wrk.clone();
+        } else {
+            workers.push(wrk.clone());
+        }
+    }
+
+    fn unregister(&self, wrk: &Worker<F::Item>) {
+        self.0.workers.borrow_mut().retain(|w| w != wrk);
+    }
+
     fn add_stop_notify(&self, tx: oneshot::Sender<()>) {
         if self.0.stopped.get() {
             let _ = tx.send(());
@@ -224,30 +241,33 @@ impl<F: ServerConfiguration> ServerManager<F> {
 }
 
 fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, placement: Option<Placement>) {
-    ntex_rt::spawn_detached(async move {
-        let id = mgr.next_id();
-        let name = format!("{}:worker:{}", mgr.0.cfg.name, id.0);
-        let slot = mgr.0.shared.metrics.worker(id);
-        let mut wrk =
-            Worker::start_with(name.clone(), mgr.factory(), placement.clone(), slot.clone());
+    let id = mgr.next_id();
+    let name = format!("{}:worker:{}", mgr.0.cfg.name, id.0);
+    let slot = mgr.0.shared.metrics.worker(id);
+    let mut wrk = Worker::start_with(name.clone(), mgr.factory(), placement.clone(), slot.clone());
+    // registered before any command is handled, the server stops every
+    // running worker, not only the available ones
+    mgr.register(&wrk);
 
+    ntex_rt::spawn_detached(async move {
         loop {
             match wrk.status() {
-                WorkerStatus::Available => mgr.available(wrk.clone()),
-                WorkerStatus::Unavailable => mgr.unavailable(wrk.clone()),
                 WorkerStatus::Failed => {
+                    if mgr.stopping() {
+                        break;
+                    }
                     if mgr.0.cfg.stop_on_panic {
                         log::info!(
                             "Worker failed. `stop-on-panic` is enabled; shutting down the server."
                         );
                         let graceful = mgr.0.cfg.graceful_shutdown;
-                        HandleCmdState::new(mgr).stop(graceful, None).await;
-                        return;
+                        HandleCmdState::new(mgr.clone()).stop(graceful, None).await;
+                        break;
                     }
-                    mgr.unavailable(wrk);
+                    mgr.unavailable(wrk.clone());
                     sleep(RESTART_DELAY).await;
                     if mgr.stopping() {
-                        return;
+                        break;
                     }
                     if let Some(ref slot) = slot {
                         slot.restart();
@@ -258,10 +278,16 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, placement: Option
                         placement.clone(),
                         slot.clone(),
                     );
+                    mgr.register(&wrk);
                 }
+                // the server is stopping, the worker is not routed
+                _ if mgr.stopping() => (),
+                WorkerStatus::Available => mgr.available(wrk.clone()),
+                WorkerStatus::Unavailable => mgr.unavailable(wrk.clone()),
             }
             wrk.wait_for_status().await;
         }
+        mgr.unregister(&wrk);
     });
 }
 
@@ -371,11 +397,13 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         self.mgr.0.stopping.set(true);
 
         // new items are not sent to the workers
-        let workers = {
+        {
             let mut router = Router::lock(&self.mgr.0.router);
             router.closed = true;
-            std::mem::take(&mut router.workers)
-        };
+            router.workers.clear();
+        }
+        // unavailable and initializing workers are stopped as well
+        let workers = self.mgr.0.workers.borrow().clone();
 
         // stop server
         self.mgr.0.factory.stop().await;

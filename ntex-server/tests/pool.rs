@@ -47,6 +47,8 @@ struct Cfg {
     shutdown_delay: Millis,
     /// Number of initial readiness checks that fail.
     fail_ready: usize,
+    /// Readiness checks never complete.
+    pending_ready: bool,
     /// Panic when processing this item.
     panic_on: Option<usize>,
     /// Block the worker thread when processing this item.
@@ -64,6 +66,7 @@ impl Cfg {
             create_delay: Millis::ZERO,
             shutdown_delay: Millis::ZERO,
             fail_ready: 0,
+            pending_ready: false,
             panic_on: None,
             block_on: None,
             incoming_cpu: false,
@@ -81,6 +84,9 @@ impl Service<(), usize> for Srv {
     type Error = ();
 
     async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+        if self.cfg.pending_ready {
+            std::future::pending::<()>().await;
+        }
         if self.cfg.c.ready_failures.load(Relaxed) < self.cfg.fail_ready {
             self.cfg.c.ready_failures.fetch_add(1, Relaxed);
             Err(())
@@ -536,6 +542,39 @@ async fn pool_graceful_timeout_expires() {
     srv.stop(true).await;
     assert!(start.elapsed() < Duration::from_secs(3));
     assert_eq!(c.shutdown.load(Relaxed), 0);
+}
+
+/// Workers that are not ready are stopped with the server.
+#[ntex::test]
+async fn pool_stop_unavailable_worker() {
+    for graceful in [false, true] {
+        let c = Counters::default();
+        let mut cfg = Cfg::new(&c);
+        cfg.pending_ready = true;
+        let srv = pool()
+            .workers(1)
+            .graceful_shutdown_timeout(Millis(500))
+            .run(cfg);
+        wait_for(|| srv.metrics().workers[0].not_ready == 1).await;
+
+        srv.stop(graceful).await;
+        wait_for(|| c.shutdown.load(Relaxed) == 1).await;
+    }
+}
+
+/// Workers that are still creating their service are stopped with the
+/// server, the service is not created.
+#[ntex::test]
+async fn pool_stop_initializing_worker() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.create_delay = Millis(300);
+    let srv = pool().workers(1).run(cfg);
+    sleep(Millis(50)).await;
+
+    srv.stop(true).await;
+    sleep(Millis(500)).await;
+    assert_eq!(c.created.load(Relaxed), 0);
 }
 
 /// A worker that fails to start is restarted.
