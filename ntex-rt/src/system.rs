@@ -195,6 +195,20 @@ impl System {
         });
     }
 
+    /// Unregisters all arbiters of the system.
+    pub(super) fn take_arbiters(&self) -> Vec<Arbiter> {
+        let mut arbiters = self.0.arbiters.lock();
+        arbiters.all.clear();
+        std::mem::take(&mut arbiters.list)
+    }
+
+    /// Stops and unregisters all arbiters of the system.
+    pub(super) fn stop_arbiters(&self) {
+        for arb in self.take_arbiters() {
+            arb.stop();
+        }
+    }
+
     /// Returns the system identifier.
     pub fn id(&self) -> Id {
         Id(self.0.id)
@@ -434,14 +448,7 @@ impl SystemSupport {
                 Ok(SystemCommand::Exit(code)) => {
                     log::debug!("Stopping system with {code} code");
                     self.stop_watchdog();
-
-                    // stop arbiters
-                    let mut arbiters = self.sys.0.arbiters.lock();
-                    for arb in arbiters.list.drain(..) {
-                        arb.stop();
-                    }
-                    arbiters.all.clear();
-                    drop(arbiters);
+                    self.sys.stop_arbiters();
 
                     crate::arbiter::run_shutdown_callbacks();
 
