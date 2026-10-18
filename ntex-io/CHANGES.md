@@ -22,6 +22,10 @@
 * The I/O timer clock starts at `ntex_util::time::now()`, `TimerHandle::remains()`
   could report an extra second when the clock started in the middle of a runtime turn
 
+* The write task pauses while a filter holds output back, for example application data
+  during a TLS handshake, it spun with empty writes before. New output or processed input
+  resumes it, in the transport shutdown phase it waits for the shutdown deadline
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`

@@ -3952,6 +3952,127 @@ mod tests {
         assert_eq!(ctx.with_write_dst(|buf| buf.len()), 8);
     }
 
+    /// Holds application output until the peer sends "go", without producing
+    /// output of its own.
+    #[derive(Debug, Default)]
+    struct HoldOutput(Cell<bool>);
+
+    impl FilterLayer for HoldOutput {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            let data = buf.with_read_buffers(|src, _| src.as_mut().map(BytesMut::take));
+            if data.as_deref() == Some(b"go") {
+                self.0.set(true);
+            }
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            if self.0.get() {
+                buf.with_write_buffers(BytePages::move_to);
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct ManualTransport;
+
+    impl IoStream for ManualTransport {
+        fn start(self, _: IoContext) -> Box<dyn Handle> {
+            Box::new(self)
+        }
+    }
+
+    impl Handle for ManualTransport {}
+
+    #[ntex::test]
+    async fn held_back_output_pauses_write_task() {
+        let io = Io::new(ManualTransport, SharedCfg::new("SRV")).add_filter(HoldOutput::default());
+        let ctx = IoContext::new(io.get_ref());
+
+        io.encode_slice(b"1234").unwrap();
+        sleep(Millis(10)).await;
+
+        // the transport has nothing to write, the write task pauses
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 0);
+        assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Pause);
+        assert!(lazy(|cx| ctx.poll_write_ready(cx)).await.is_pending());
+
+        // input lets the filter release the output, the write task resumes
+        let _ = ctx.with_read_buf(|buf| {
+            buf.extend_from_slice(b"go");
+            Poll::Ready(Ok(2))
+        });
+        sleep(Millis(10)).await;
+        assert!(!io.st().write_task.is_set(), "write task is not woken");
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 4);
+        assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Io);
+    }
+
+    #[ntex::test]
+    async fn held_back_output_queued_during_write_is_processed() {
+        let io = Io::new(ManualTransport, SharedCfg::new("SRV")).add_filter(HoldOutput::default());
+        let ctx = IoContext::new(io.get_ref());
+        let _ = ctx.with_read_buf(|buf| {
+            buf.extend_from_slice(b"go");
+            Poll::Ready(Ok(2))
+        });
+
+        // the transport takes the output, more is queued meanwhile
+        io.encode_slice(b"1234").unwrap();
+        let page = ctx.with_write_dst(BytePages::take).unwrap();
+        io.st().flags.unset_write_paused();
+        io.st()
+            .buffer
+            .with_write_src(|buf| buf.extend_from_slice(b"5678"));
+
+        // the queued output is not mistaken for held back output
+        assert_eq!(ctx.update_write_status(Ok(page.len())), IoTaskStatus::Io);
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 4);
+    }
+
+    #[ntex::test]
+    async fn held_back_output_waits_for_shutdown_deadline() {
+        let io = Io::new(
+            ManualTransport,
+            SharedCfg::new("SRV")
+                .add(IoConfig::default().set_shutdown_timeout(ntex_util::time::Seconds(1))),
+        )
+        .add_filter(HoldOutput::default());
+        let ctx = IoContext::new(io.get_ref());
+
+        // enter the transport shutdown phase with held back output
+        io.encode_slice(b"1234").unwrap();
+        io.st().flags.enter_filters_stopping();
+        io.st().flags.enter_transport_shutdown();
+        sleep(Millis(10)).await;
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 0);
+        assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Pause);
+
+        // the transport can not drain it, the write task waits
+        assert!(lazy(|cx| ctx.poll_write_ready(cx)).await.is_pending());
+
+        // the deadline aborts the connection
+        sleep(Millis(1100)).await;
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+        assert!(io.st().flags.is_aborted());
+    }
+
     #[ntex::test]
     async fn read_more_lifts_read_output_pause() {
         #[derive(Debug)]

@@ -135,6 +135,12 @@ pub trait FilterLayer: fmt::Debug + 'static {
 
     /// Processes outgoing data from the application-facing source buffer into
     /// the transport-facing destination buffer.
+    ///
+    /// A filter may leave source data in place, for example while a TLS
+    /// handshake is in progress. The transport write task then pauses, and
+    /// this is called again once new output is queued or new input has been
+    /// processed. A filter that waits for anything else must report it from
+    /// [`Filter::poll_write_ready`] instead.
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> IoResult<()>;
 
     /// Performs graceful filter shutdown.
