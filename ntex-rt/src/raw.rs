@@ -403,7 +403,10 @@ fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
             // re-reads the delta, so this is not the last reference
             (cur.wrapping_sub(R_REF), false)
         } else if owned {
-            // the reference passes to the queue
+            // the reference passes to the queue. A plain drop may be the last
+            // reference, only the owner thread can tell. Such drops are rare,
+            // wakers sent to other threads end with a wake, so the queue push
+            // and notify of a drop are kept
             (cur | set | R_QUEUED, true)
         } else if set != 0 {
             ((cur | set | R_QUEUED).wrapping_add(R_REF), true)
@@ -774,9 +777,8 @@ impl Remote {
 
         if hdr.state.get() & FINISHED != 0 {
             // queued before completion, the remote word counts the queue
-            // reference
-            hdr.remote
-                .fetch_and(!(R_QUEUED | R_WOKEN | R_CANCEL), Ordering::Relaxed);
+            // reference. The flags are left set, nothing reads them once
+            // `R_FINISHED` is set
             release_shared(h);
             return None;
         }
