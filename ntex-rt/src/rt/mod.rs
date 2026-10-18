@@ -231,7 +231,7 @@ impl Runtime {
                 .record(now.saturating_duration_since(start));
         }
         if result == PollResult::PollAgain {
-            self.queue.poll_start.set(now);
+            self.queue.set_poll_start(now);
             self.queue.busy.next_turn(now);
         } else {
             self.queue.idle.set(true);
@@ -337,7 +337,7 @@ impl Runtime {
 
         let location = Location::caller();
         self.stop.set(false);
-        self.queue.poll_start.set(Instant::now());
+        self.queue.set_poll_start(Instant::now());
 
         CURRENT_RUNTIME.set(self, || {
             let mut result = None;
@@ -535,6 +535,8 @@ pub(crate) struct RunnableQueue {
     idle: Cell<bool>,
     // start of the current busy period, valid while not idle
     poll_start: Cell<Instant>,
+    // `poll_start` relative to the epoch, cached in milliseconds
+    self_wake_clock: Cell<Option<u32>>,
     busy: BusyClock,
     // poll counters, written by the runtime thread only
     polls: AtomicU64,
@@ -567,6 +569,7 @@ impl RunnableQueue {
             id: current_thread_id(),
             idle: Cell::new(true),
             poll_start: Cell::new(now),
+            self_wake_clock: Cell::new(None),
             notified: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             busy: BusyClock::new(),
@@ -702,13 +705,17 @@ impl RunnableQueue {
 
         let reported = wakes & REPORTED;
         let count = ((wakes & !REPORTED) + 1).min(MAX_SELF_WAKES);
-        // wraps after 49 days, longer streaks may be measured short
-        #[allow(clippy::cast_possible_truncation)]
-        let now = self
-            .poll_start
-            .get()
-            .saturating_duration_since(self.epoch)
-            .as_millis() as u32;
+        let now = self.self_wake_clock.get().unwrap_or_else(|| {
+            // wraps after 49 days, longer streaks may be measured short
+            #[allow(clippy::cast_possible_truncation)]
+            let now = self
+                .poll_start
+                .get()
+                .saturating_duration_since(self.epoch)
+                .as_millis() as u32;
+            self.self_wake_clock.set(Some(now));
+            now
+        });
         if count == 1 {
             task.set_streak_start(now);
         }
@@ -730,10 +737,15 @@ impl RunnableQueue {
         task.set_self_wakes(wakes);
     }
 
+    fn set_poll_start(&self, now: Instant) {
+        self.poll_start.set(now);
+        self.self_wake_clock.set(None);
+    }
+
     fn start_busy(&self) {
         let now = Instant::now();
         self.idle.set(false);
-        self.poll_start.set(now);
+        self.set_poll_start(now);
         self.busy.start(now);
     }
 
@@ -1422,6 +1434,39 @@ mod tests {
             stats.wakes.get()
         }
 
+        fn start(rt: &Runtime) -> u32 {
+            let stats = Stats::default();
+            rt.queue.self_wake(&stats, 0);
+            stats.start.get()
+        }
+
+        fn now(rt: &Runtime) -> u32 {
+            u32::try_from(
+                rt.queue
+                    .poll_start
+                    .get()
+                    .saturating_duration_since(rt.queue.epoch)
+                    .as_millis(),
+            )
+            .unwrap()
+        }
+
+        struct BusyDriver;
+
+        impl Driver for BusyDriver {
+            fn handle(&self) -> Box<dyn Notify> {
+                Box::new(NoopNotify)
+            }
+
+            fn run(&self, rt: &Runtime) -> io::Result<()> {
+                let start = Instant::now();
+                while rt.poll() != PollResult::Ready {
+                    assert!(start.elapsed() < WAIT, "timeout");
+                }
+                Ok(())
+            }
+        }
+
         let rt = Runtime::builder()
             .self_wake_threshold(3, Duration::ZERO)
             .build(Box::new(NoopNotify));
@@ -1441,6 +1486,36 @@ mod tests {
             .self_wake_threshold(0, Duration::ZERO)
             .build(Box::new(NoopNotify));
         assert_eq!(streak(&rt, 5), 5);
+
+        let before = start(&rt);
+        thread::sleep(Duration::from_millis(2));
+        rt.awake();
+        assert!(now(&rt) > before);
+        assert_eq!(start(&rt), now(&rt), "streak after awake");
+
+        let task = rt.spawn(poll_fn(|cx| {
+            cx.waker().wake_by_ref();
+            Poll::<()>::Pending
+        }));
+        let before = start(&rt);
+        thread::sleep(Duration::from_millis(2));
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert!(now(&rt) > before);
+        assert_eq!(start(&rt), now(&rt), "streak after the next poll");
+        task.cancel();
+        assert_eq!(rt.poll(), PollResult::Pending);
+
+        // Already awake, so the root spawn does not refresh the clock.
+        rt.awake();
+        let before = start(&rt);
+        thread::sleep(Duration::from_millis(2));
+        rt.block_on(
+            async {
+                assert!(now(&rt) > before);
+                assert_eq!(start(&rt), now(&rt), "streak in a new block_on");
+            },
+            &BusyDriver,
+        );
     }
 
     struct DropFlag(Arc<AtomicBool>);
