@@ -218,6 +218,9 @@ impl Stack {
     }
 
     pub(crate) fn process_read_buf(&self, io: &IoRef) -> io::Result<FilterUpdates> {
+        if io.0.flags.is_filter_failed() {
+            return Ok(FilterUpdates { wants_write: false });
+        }
         let layers = self.borrow();
         let mut ctx = FilterCtx {
             io,
@@ -233,6 +236,9 @@ impl Stack {
     }
 
     pub(crate) fn process_read_buf_no_cb(&self, io: &IoRef) -> io::Result<FilterUpdates> {
+        if io.0.flags.is_filter_failed() {
+            return Ok(FilterUpdates { wants_write: false });
+        }
         let layers = self.borrow();
         let mut ctx = FilterCtx {
             io,
@@ -245,7 +251,7 @@ impl Stack {
 
     pub(crate) fn process_write_buf(&self, io: &IoRef) -> io::Result<()> {
         let layers = self.borrow();
-        if layers.app.is_write_empty() {
+        if layers.app.is_write_empty() || io.0.flags.is_filter_failed() {
             Ok(())
         } else {
             let mut ctx = FilterCtx {
@@ -264,7 +270,7 @@ impl Stack {
 
     pub(crate) fn process_write_buf_no_cb(&self, io: &IoRef) -> io::Result<()> {
         let layers = self.borrow();
-        if layers.app.is_write_empty() {
+        if layers.app.is_write_empty() || io.0.flags.is_filter_failed() {
             Ok(())
         } else {
             let mut ctx = FilterCtx {
@@ -278,6 +284,9 @@ impl Stack {
     }
 
     pub(crate) fn process_write_buf_force(&self, io: &IoRef) -> io::Result<()> {
+        if io.0.flags.is_filter_failed() {
+            return Ok(());
+        }
         let layers = self.borrow();
         let mut ctx = FilterCtx {
             io,
@@ -293,6 +302,9 @@ impl Stack {
     }
 
     pub(crate) fn process_shutdown(&self, io: &IoRef) -> io::Result<Poll<()>> {
+        if io.0.flags.is_filter_failed() {
+            return Ok(Poll::Ready(()));
+        }
         self.process_write_buf(io)?;
         io.with_callbacks(|cb| cb.before_processing(io));
         let res = self.with_filter(io, |ctx| io.filter().shutdown(ctx));
@@ -309,6 +321,27 @@ impl Stack {
         for b in self.borrow().buffers() {
             drop(b.read.take());
             b.with_write_if_free(BytePages::clear);
+        }
+    }
+
+    /// Frees output the application queued for the filter chain. Without a
+    /// filter layer the application writes to the transport directly, and
+    /// nothing is freed. A write buffer that is in use is left alone.
+    pub(crate) fn discard_app_output(&self) {
+        let layers = self.borrow();
+        if layers.wire.is_some() {
+            layers.app.with_write_if_free(BytePages::clear);
+        }
+    }
+
+    /// Frees output the filter layers hold, the transport-facing write buffer
+    /// is kept. A write buffer that is in use is left alone.
+    pub(crate) fn discard_filter_output(&self) {
+        let layers = self.borrow();
+        if layers.wire.is_some() {
+            for b in iter::once(&layers.app).chain(layers.mid.iter()) {
+                b.with_write_if_free(BytePages::clear);
+            }
         }
     }
 

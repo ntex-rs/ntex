@@ -142,7 +142,7 @@ impl IoContext {
                 res
             }
             Poll::Ready(Err(err)) => {
-                st.terminate_connection(Some(err));
+                self.0.fail_filters(err);
                 read_readiness(st)
             }
             Poll::Pending => {
@@ -378,20 +378,46 @@ impl IoContext {
         // process read buf
         let result = match status {
             Poll::Pending => Ok(()),
-            Poll::Ready(status) => status.and_then(|nbytes| {
-                if nbytes == 0 {
-                    if st.flags.is_read_eof() {
-                        // A clean eof is reported to the filter chain exactly
-                        // once, no matter how often the transport reports it.
-                        return Ok(());
+            Poll::Ready(Err(err)) => return self.read_failed(err),
+            Poll::Ready(Ok(nbytes)) => {
+                if nbytes == 0 && st.flags.is_read_eof() {
+                    // A clean eof is reported to the filter chain exactly
+                    // once, no matter how often the transport reports it.
+                    Ok(())
+                } else {
+                    if nbytes == 0 {
+                        st.flags.set_read_eof();
+                        st.wake_dispatch_task();
                     }
-                    st.flags.set_read_eof();
-                    st.wake_dispatch_task();
+                    self.process_read_input(orig)
                 }
-                self.process_read_input(orig)
-            }),
+            }
         };
         self.read_task_status(result)
+    }
+
+    /// Handles a transport read failure, returns the read task status.
+    fn read_failed(&self, err: io::Error) -> IoTaskStatus {
+        let st = self.st();
+        st.sync_read_buffered();
+
+        // A read failure while the filters are shutting down does not
+        // terminate the connection: the filter handshake cannot complete,
+        // but buffered output is still drained by the transport shutdown
+        // phase.
+        if st.flags.is_stopping_filters() {
+            // Output the filters produced before the failure, for example
+            // a close notification, may sit in an intermediate buffer that
+            // the transport shutdown phase does not drain.
+            if let Err(e) = st.buffer.process_write_buf_force(&self.0) {
+                self.0.fail_filters(e);
+            }
+            stop_filters(st, Some(err));
+            IoTaskStatus::Pause
+        } else {
+            st.terminate_connection(Some(err));
+            IoTaskStatus::Stop
+        }
     }
 
     /// Runs the read filter chain over buffered transport input.
@@ -459,29 +485,19 @@ impl IoContext {
     }
 
     /// Completes read processing, returns the read task status.
+    ///
+    /// An error comes from the filter chain, see `IoRef::fail_filters`.
     fn read_task_status(&self, result: io::Result<()>) -> IoTaskStatus {
         let st = self.st();
         st.sync_read_buffered();
 
         if let Err(err) = result {
-            // A read failure while the filters are shutting down does not
-            // terminate the connection: the filter handshake cannot complete,
-            // but buffered output is still drained by the transport shutdown
-            // phase.
-            if st.flags.is_stopping_filters() {
-                // Output the filters produced before the failure, for example
-                // a close notification, may sit in an intermediate buffer that
-                // the transport shutdown phase does not drain.
-                let _ = st.buffer.process_write_buf_force(&self.0);
-                stop_filters(st, Some(err));
-                IoTaskStatus::Pause
-            } else {
-                st.terminate_connection(Some(err));
-                IoTaskStatus::Stop
-            }
-        } else if st.flags.is_aborted() {
+            self.0.fail_filters(err);
+        }
+        if st.flags.is_aborted() {
             IoTaskStatus::Stop
-        } else if st.flags.is_read_eof()
+        } else if st.flags.is_stopping()
+            || st.flags.is_read_eof()
             || st.flags.is_read_paused_or_backpressure()
             || st.flags.is_filter_paused()
             || (st.flags.is_read_wr_backpressure() && !st.flags.is_stopping_filters())
@@ -513,7 +529,7 @@ impl IoContext {
 
         // Write buffer processing may be delayed
         if let Err(e) = st.buffer.process_write_buf(&self.0) {
-            st.terminate_connection(Some(e));
+            self.0.fail_filters(e);
         }
 
         let before = st.buffer.write_buf_size();
@@ -562,7 +578,7 @@ impl IoContext {
                 if st.buffer.write_dst_size() == 0
                     && let Err(e) = st.buffer.process_write_buf(&self.0)
                 {
-                    st.terminate_connection(Some(e));
+                    self.0.fail_filters(e);
                 }
                 st.sync_write_buffered();
 
@@ -647,8 +663,9 @@ impl IoContext {
     /// also ended early when the filters cannot finish: after a clean read EOF,
     /// because no further input can arrive, which is a normal close rather than
     /// an error; when reads are paused or back-pressured, which is reported as
-    /// a blocked shutdown; and when the shutdown timeout elapses. An I/O error
-    /// terminates the connection instead.
+    /// a blocked shutdown; and when the shutdown timeout elapses. A filter
+    /// error skips the remaining filter shutdown, output that reached the
+    /// transport is still delivered.
     ///
     /// The deadline is kept once it has expired so that
     /// [`poll_shutdown_deadline`](Self::poll_shutdown_deadline) sees it
@@ -665,7 +682,7 @@ impl IoContext {
             Ok(Poll::Ready(())) => true,
             Ok(Poll::Pending) => false,
             Err(err) => {
-                st.terminate_connection(Some(err));
+                self.0.fail_filters(err);
                 return;
             }
         };
@@ -1002,17 +1019,27 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn clean_eof_filter_error_terminates_connection() {
+    async fn clean_eof_filter_error_closes_connection() {
         let (_, server) = IoTest::create();
         let state = Io::from(server).add_filter(RejectEof);
         let ctx = IoContext::new(state.get_ref());
 
         assert_eq!(
             ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
-            IoTaskStatus::Stop
+            IoTaskStatus::Pause
         );
         assert!(state.is_read_eof());
-        assert!(state.flags().is_terminating());
+        assert!(!state.is_active());
+        assert!(!state.flags().is_terminating());
+
+        // nothing to deliver, the transport closes the connection
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+        ctx.stopped(None);
+        let err = state.shutdown().await.unwrap_err();
+        assert_eq!(err.to_string(), "truncated filtered stream");
     }
 
     #[ntex::test]
@@ -1185,18 +1212,19 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn filter_shutdown_error_terminates_connection() {
+    async fn filter_shutdown_error_skips_to_transport_shutdown() {
         let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default()).add_filter(FailShutdown);
         let ctx = IoContext::new(io.get_ref());
         // neither the layer nor the transport provide values
         assert!(io.query::<u32>().get().is_none());
 
         io.close();
+        let _ = lazy(|cx| ctx.poll_read_ready(cx)).await;
+        assert!(!ctx.flags().is_terminating());
         assert_eq!(
-            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
             Poll::Ready(Readiness::Close)
         );
-        assert!(ctx.flags().is_terminating());
         ctx.stopped(None);
         let err = io.shutdown().await.unwrap_err();
         assert_eq!(err.to_string(), "shutdown failed");

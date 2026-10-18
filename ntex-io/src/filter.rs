@@ -74,7 +74,9 @@ pub trait Filter: 'static {
     /// here, that input would never be read.
     ///
     /// Graceful shutdown and its deadline do not depend on the chain being
-    /// ready. An error terminates the connection.
+    /// ready. An error ends the connection like any filter error: the chain
+    /// is not called again and its shutdown is skipped, output that reached
+    /// the transport is still delivered within the shutdown deadline.
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 }
 
@@ -83,9 +85,8 @@ pub trait Filter: 'static {
 pub(crate) fn read_readiness(st: &IoState) -> Poll<Readiness> {
     if st.flags.is_force_closing() {
         // Only an explicit `IoRef::terminate()` aborts the connection. A
-        // transport failure, a filter failure or an expired shutdown
-        // deadline end the connection too, but the transport still closes
-        // it gracefully.
+        // transport failure or an expired shutdown deadline end the
+        // connection too, but the transport still closes it gracefully.
         Poll::Ready(Readiness::Terminate)
     } else if st.flags.is_aborted() {
         // The connection ended because of a failure, so no further input

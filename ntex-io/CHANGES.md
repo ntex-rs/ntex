@@ -43,7 +43,13 @@
   `Filter::poll_write_ready()`, the transport read task polls it. A chain that is not ready
   pauses transport reads, transport writes are not paused, eager and scheduled writes could
   bypass the write readiness before. Input and output the chain holds are processed again
-  once it is ready, an error terminates the connection
+  once it is ready, an error ends the connection like any filter error
+
+* A filter error no longer terminates the connection. The chain gets one last write pass,
+  then it is not called again and filter shutdown is skipped: output that reached the
+  transport, for example a TLS alert, is delivered within the shutdown deadline, it was
+  written only as far as the current write went. Application output the chain had not
+  encoded is discarded, `Io::shutdown()` reports the filter error
 
 * Breaking: `IoRef::is_filter_paused()` replaces `IoRef::is_read_filter_paused()` and
   `IoRef::is_write_filter_paused()`

@@ -802,7 +802,7 @@ impl<F: Filter> Io<F> {
         // Write buffer processing may be delayed,
         // call the filter chain to process pending writes
         if let Err(e) = self.st().buffer.process_write_buf_no_cb(&self) {
-            self.st().terminate_connection(Some(e));
+            self.fail_filters(e);
         }
 
         let state = self.into_io_ref();
@@ -817,7 +817,7 @@ impl<F: Filter> Io<F> {
 
         // push read data into new filter
         if let Err(e) = io.st().buffer.process_read_buf_no_cb(&io) {
-            io.st().terminate_connection(Some(e));
+            io.fail_filters(e);
         }
         io.with_callbacks(|cb| cb.after_processing(&io));
 
@@ -842,7 +842,7 @@ impl<F: Filter> Io<F> {
         // Write buffer processing may be delayed,
         // call the filter chain to process pending writes
         if let Err(e) = self.st().buffer.process_write_buf(&self) {
-            self.st().terminate_connection(Some(e));
+            self.fail_filters(e);
         }
 
         // `f` owns the filter, if it unwinds the filter chain is gone and the
@@ -4836,6 +4836,81 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn filter_failure_discards_application_output() {
+        /// Holds application output until it fails, then encodes it.
+        #[derive(Debug, Default)]
+        struct FailOnInput(Cell<bool>);
+
+        impl FilterLayer for FailOnInput {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                if buf.with_read_src(|src| src.take().is_some()) {
+                    self.0.set(true);
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"err"));
+                    Err(io::Error::new(io::ErrorKind::InvalidData, "failed"))
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                if self.0.get() {
+                    buf.with_write_buffers(BytePages::move_to);
+                }
+                Ok(())
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV")).add_filter(FailOnInput::default());
+        io.encode_slice(b"data").unwrap();
+        sleep(Millis(10)).await;
+
+        client.write("input");
+        let err = io.recv(&BytesCodec).await.unwrap_err();
+        assert_eq!(err.into_inner().kind(), io::ErrorKind::InvalidData);
+        sleep(Millis(50)).await;
+
+        assert_eq!(client.read_any(), Bytes::from_static(b"err"));
+        assert!(io.is_closed());
+    }
+
+    #[ntex::test]
+    async fn filter_failure_output_delivery_is_bounded() {
+        /// Moves output to the transport, then fails.
+        #[derive(Debug)]
+        struct FailAfterWrite;
+
+        impl FilterLayer for FailAfterWrite {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Err(io::Error::other("failed"))
+            }
+        }
+
+        // the peer never reads
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV")
+                .add(IoConfig::default().set_shutdown_timeout(ntex_util::time::Seconds(1))),
+        )
+        .add_filter(FailAfterWrite);
+
+        let _ = io.encode_slice(b"undeliverable");
+        timeout(Millis(3000), io.shutdown())
+            .await
+            .expect("output delivery is not bounded")
+            .unwrap_err();
+        assert!(io.st().flags.is_closed());
+    }
+
+    #[ntex::test]
     async fn filter_shutdown_timeout_is_reported() {
         #[derive(Debug)]
         struct PendingShutdown;
@@ -5733,17 +5808,20 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn filter_readiness_error_terminates() {
+    async fn filter_readiness_error_closes() {
         let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
         let ctx = IoContext::new(io.get_ref());
 
         gate.0.fail.set(true);
-        assert!(matches!(
-            lazy(|cx| ctx.poll_read_ready(cx)).await,
-            Poll::Ready(Readiness::Close | Readiness::Terminate)
-        ));
+        let _ = lazy(|cx| ctx.poll_read_ready(cx)).await;
         assert!(!io.is_active());
-        assert_eq!(io.st().error().unwrap().to_string(), "gate");
+        assert!(!io.flags().is_terminating());
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+        ctx.stopped(None);
+        assert_eq!(io.shutdown().await.unwrap_err().to_string(), "gate");
     }
 
     #[ntex::test]

@@ -85,6 +85,8 @@ bitflags::bitflags! {
         const RD_WR_BACKPRESSURE  = 1 << 6;
         /// read paused, the filter chain is not ready for more input
         const FILTER_PAUSED       = 1 << 7;
+        /// the filter chain failed, it is not called again
+        const FILTER_FAILED       = 1 << 12;
 
         /// new data is available in read buffer
         const BUF_R_READY         = 1 << 8;
@@ -207,9 +209,9 @@ impl Flags {
     /// Checks whether the application asked for a force close.
     ///
     /// Only [`IoRef::terminate`](crate::IoRef::terminate) sets this. A
-    /// transport failure, a filter failure or an expired shutdown deadline
-    /// terminate the connection as well, but they close it gracefully rather
-    /// than aborting it.
+    /// transport failure or an expired shutdown deadline terminate the
+    /// connection as well, but they close it gracefully rather than aborting
+    /// it.
     ///
     /// This stays set once backend teardown completes.
     pub(crate) fn is_force_closing(&self) -> bool {
@@ -316,6 +318,14 @@ impl Flags {
 
     pub(crate) fn unset_filter_paused(&self) {
         self.remove(FlagsKind::FILTER_PAUSED);
+    }
+
+    pub(crate) fn is_filter_failed(&self) -> bool {
+        self.contains(FlagsKind::FILTER_FAILED)
+    }
+
+    pub(crate) fn set_filter_failed(&self) {
+        self.insert(FlagsKind::FILTER_FAILED);
     }
 
     pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {
