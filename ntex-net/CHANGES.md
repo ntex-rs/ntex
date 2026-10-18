@@ -3,6 +3,9 @@
 
 ## [4.6.0] - Unreleased
 
+* iocp: reject handler registration during construction or dispatch with an
+  explicit panic instead of losing registrations
+
 * iocp: cancel abandoned connection attempts promptly while retaining operation
   memory until Windows delivers the completion
 
