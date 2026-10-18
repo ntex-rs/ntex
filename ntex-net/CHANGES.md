@@ -3,6 +3,9 @@
 
 ## [4.6.0] - Unreleased
 
+* iocp: queued blocking closes continue when shutdown is cancelled or the
+  runtime stops, without losing their sockets
+
 * iocp: keep operation-state borrows disjoint from kernel-owned `OVERLAPPED`
   memory during submission, cancellation and completion
 
