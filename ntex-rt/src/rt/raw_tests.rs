@@ -1317,6 +1317,80 @@ fn panicking_completion_waker_drop() {
     assert_freed(&rt);
 }
 
+/// A waker whose clone panics, the clone waits twice on `GATE` first.
+fn panic_clone_waker(gate: bool) -> Waker {
+    static GATED: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
+        |_| {
+            GATE.wait();
+            GATE.wait();
+            panic!("waker clone panic")
+        },
+        |_| (),
+        |_| (),
+        |_| (),
+    );
+    static PANIC: std::task::RawWakerVTable =
+        std::task::RawWakerVTable::new(|_| panic!("waker clone panic"), |_| (), |_| (), |_| ());
+    let vtable = if gate { &GATED } else { &PANIC };
+    unsafe { Waker::from_raw(std::task::RawWaker::new(std::ptr::null(), vtable)) }
+}
+
+static GATE: Barrier = Barrier::new(2);
+
+#[test]
+fn panicking_remote_registration() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut task = spawn(&rt, p.future(Res::Ready));
+    let awaiter = Arc::new(CountWaker::default());
+    let w = Waker::from(awaiter.clone());
+    assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+    let mut task = on_thread(move || {
+        let bad = panic_clone_waker(false);
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            task.poll_join(&Context::from_waker(&bad))
+        }));
+        assert!(res.is_err());
+        task
+    });
+    assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+    one_local(&rt).run();
+    // the registration is cleared, the completion wakes the awaiter
+    assert_eq!(awaiter.0.load(Ordering::SeqCst), 1);
+    assert!(matches!(join(&mut task), Poll::Ready(Some(_))));
+    drop(task);
+    drop(p.waker());
+    assert_freed(&rt);
+}
+
+#[test]
+fn panicking_remote_registration_completed() {
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut task = spawn(&rt, p.future(Res::Ready));
+    let awaiter = Arc::new(CountWaker::default());
+    let w = Waker::from(awaiter.clone());
+    assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+    let remote = thread::spawn(move || {
+        let bad = panic_clone_waker(true);
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            task.poll_join(&Context::from_waker(&bad))
+        }));
+        assert!(res.is_err());
+        // completed while registering, the output is ready
+        assert!(matches!(join(&mut task), Poll::Ready(Some(_))));
+    });
+    GATE.wait();
+    // the completion skips the awaiter of the registering join handle
+    one_local(&rt).run();
+    GATE.wait();
+    remote.join().unwrap();
+    assert_eq!(awaiter.0.load(Ordering::SeqCst), 0);
+    p.check(1, 1, 1);
+    drop(p.waker());
+    assert_freed(&rt);
+}
+
 #[test]
 fn runtime_drop_merges_remote_refs() {
     let rt = new_rt();
