@@ -727,7 +727,7 @@ mod tests {
         b.advance_to(5);
         assert_eq!(&b, &LONG[5..10]);
 
-        let mut b = Bytes::copy_from_slice(&LONG[..15]);
+        let mut b = Bytes::copy_from_slice(&LONG[..INLINE_CAP]);
         assert!(b.is_inline());
         b.split_off(10);
         assert_eq!(&b, &LONG[..10]);
@@ -796,7 +796,7 @@ mod tests {
 
         let mut b = Bytes::copy_from_slice(b"123");
         assert!(b.is_inline());
-        assert_eq!(b.storage.capacity(), 23);
+        assert_eq!(b.storage.capacity(), INLINE_CAP);
         b.truncate(2);
         assert_eq!(b, *b"12");
         assert_eq!(bytes::buf::Buf::get_u8(&mut b), 49);

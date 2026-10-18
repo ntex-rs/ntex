@@ -69,13 +69,14 @@
 //! ## `offset: usize`
 //!
 //! The lower two bits of `offset` are used to track the storage mode of
-//! `Storage`. `0b01` indicates shared storage, `0b10` indicates inline storage,
-//! and `0b11` indicates static storage. The remaining upper bits store the
-//! offset value.
+//! `Storage`. `0b00` indicates external storage, `0b01` indicates shared
+//! storage, `0b10` indicates inline storage, and `0b11` indicates static
+//! storage.
 //!
-//! When storage is backed by a `SharedVec`, `offset` represents the offset of
-//! the pointer and is used to calculate the pointer to the `SharedVec`.
-//! `ptr - offset` always points to the beginning of the `SharedVec` structure.
+//! When storage is backed by a `SharedVec`, the upper bits of `offset` hold the
+//! address of the `SharedVec` header, which is at least 4-byte aligned. The
+//! header pointer is recovered from `ptr` with that address, and the offset of
+//! the view is `ptr - header`.
 //!
 //! When in inline mode, `offset` is used as part of the inlined buffer.
 //!
@@ -94,7 +95,7 @@
 //! not require any synchronization.
 //!
 #![allow(clippy::assert_is_empty)]
-use std::{cmp, mem, num::NonZeroUsize, ptr, slice, sync::atomic::Ordering::Relaxed};
+use std::{cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice, sync::atomic::Ordering::Relaxed};
 
 use crate::{info::Info, info::Kind, stext::StorageVTable, stvec};
 
@@ -149,9 +150,9 @@ pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
 // Static storage
 const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
-// Offset of a new vec storage, the data starts right after the `SharedVec` header
-const DEFAULT_OFFSET: NonZeroUsize =
-    NonZeroUsize::new((stvec::METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
+
+// the kind bits of vec storage are stored in the low bits of the header address
+const _: () = assert!(mem::align_of::<stvec::SharedVec>() > KIND_MASK);
 
 /*
  *
@@ -201,11 +202,28 @@ impl Storage {
     #[inline]
     fn from_slice_with_capacity(cap: usize, src: &[u8]) -> Storage {
         let shared = stvec::SharedVec::create(cap, src);
+        // SAFETY: the data follows the `SharedVec` header in the allocation,
+        // the new allocation holds one reference
+        unsafe { Storage::from_shared_vec(shared, stvec::METADATA_SIZE, src.len()) }
+    }
+
+    /// Creates a view of `len` bytes at `offset` from the start of
+    /// a `SharedVec` allocation.
+    ///
+    /// # Safety
+    ///
+    /// The caller transfers one reference of the allocation to the view,
+    /// `offset..offset + len` must be initialized data within the allocation.
+    #[inline]
+    pub(crate) unsafe fn from_shared_vec(
+        shared: NonNull<stvec::SharedVec>,
+        offset: usize,
+        len: usize,
+    ) -> Storage {
         Storage {
-            len: src.len(),
-            // SAFETY: the data follows the `SharedVec` header in the allocation
-            ptr: unsafe { shared.as_ptr().add(1).cast::<u8>() },
-            offset: DEFAULT_OFFSET,
+            len,
+            ptr: shared.as_ptr().cast::<u8>().add(offset),
+            offset: NonZeroUsize::new_unchecked(shared.as_ptr().addr() | KIND_VEC),
         }
     }
 
@@ -297,7 +315,7 @@ impl Storage {
             // capacity from the start of this view to the end of the allocation
             KIND_VEC => unsafe {
                 stvec::SharedVec::capacity(self.shared_vec()) + stvec::METADATA_SIZE
-                    - (self.offset.get() >> KIND_OFFSET_BITS)
+                    - self.vec_offset()
             },
             KIND_STEXT => unsafe { ((*self.st_vtable()).len)(self.st_addr(), self.st_len()) },
             KIND_INLINE => INLINE_CAP,
@@ -430,17 +448,9 @@ impl Storage {
 
         match self.kind() {
             KIND_VEC => {
-                let shared = self.shared_vec();
-
-                // Updating the start of the view is setting `ptr` to point to the
-                // new start and updating the `len` field to reflect the new length
-                // of the view.
-                let offset = (self.offset.get() >> KIND_OFFSET_BITS) + start;
-
-                self.ptr = (shared.cast::<u8>()).add(offset);
+                // the header address in `offset` stays the same
+                self.ptr = self.ptr.add(start);
                 self.len -= start;
-
-                self.offset = NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
             }
             KIND_INLINE => {
                 let len = self.inline_len();
@@ -548,7 +558,7 @@ impl Storage {
     /// reference to a shared vec.
     pub(crate) fn try_into_vec(self) -> Result<stvec::StorageVec, Storage> {
         if self.kind() == KIND_VEC {
-            let offset = self.offset.get() >> KIND_OFFSET_BITS;
+            let offset = self.vec_offset();
             let st =
                 unsafe { stvec::StorageVec::from_unique_view(self.shared_vec(), offset, self.len) };
             if let Some(st) = st {
@@ -561,11 +571,18 @@ impl Storage {
 
     #[inline]
     fn shared_vec(&self) -> *mut stvec::SharedVec {
-        let offset = self.offset.get() >> KIND_OFFSET_BITS;
+        // `ptr` is derived from the header pointer and keeps the provenance
+        // of the whole allocation
         #[allow(clippy::cast_ptr_alignment)]
-        unsafe {
-            self.ptr.sub(offset).cast::<stvec::SharedVec>()
-        }
+        self.ptr
+            .with_addr(self.offset.get() & !KIND_MASK)
+            .cast::<stvec::SharedVec>()
+    }
+
+    /// Offset of the view from the start of the `SharedVec` allocation.
+    #[inline]
+    fn vec_offset(&self) -> usize {
+        self.ptr.addr() - (self.offset.get() & !KIND_MASK)
     }
 
     #[inline]
@@ -663,6 +680,28 @@ mod tests {
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb";
 
     #[test]
+    #[cfg(target_pointer_width = "32")]
+    fn vec_view_offset_over_1gib() {
+        const GIB: usize = 1 << 30;
+
+        let mut buf = BytesMut::with_capacity(GIB + 256);
+        unsafe { buf.advance_mut(GIB + 128) };
+        let mut b = buf.freeze();
+        let head = b.split_to(GIB);
+        assert_eq!(head.len(), GIB);
+        assert_eq!(b.len(), 128);
+        assert_eq!(b.storage.info().id, head.storage.info().id);
+        assert_eq!(
+            b.storage.capacity(),
+            b.storage.info().capacity - stvec::METADATA_SIZE - GIB
+        );
+        drop(head);
+        let b2 = b.clone();
+        drop(b);
+        drop(b2);
+    }
+
+    #[test]
     fn trimdown() {
         let mut b = Bytes::from(LONG.to_vec());
         assert_eq!(b.storage.capacity(), 263);
@@ -674,8 +713,8 @@ mod tests {
         assert_eq!(&b[..], &LONG[..68]);
         assert_eq!(b.storage.capacity(), 68);
 
-        unsafe { b.storage.set_len(16) };
-        assert_eq!(&b[..], &LONG[..16]);
+        unsafe { b.storage.set_len(super::INLINE_CAP) };
+        assert_eq!(&b[..], &LONG[..super::INLINE_CAP]);
         b.trimdown();
         assert!(b.is_inline());
 
