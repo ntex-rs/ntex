@@ -1189,6 +1189,56 @@ fn panic_and_join() {
 }
 
 #[test]
+fn panicking_completion_waker() {
+    struct PanicWake;
+    impl std::task::Wake for PanicWake {
+        fn wake(self: Arc<Self>) {
+            panic!("completion waker panic");
+        }
+    }
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut task = spawn(&rt, p.future(Res::Ready));
+    let w = Waker::from(Arc::new(PanicWake));
+    assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+    assert!(catch_unwind(AssertUnwindSafe(|| one_local(&rt).run())).is_err());
+    // the run reference is released before the awaiter is woken
+    assert!(matches!(join(&mut task), Poll::Ready(Some(_))));
+    p.check(1, 1, 1);
+    drop(task);
+    drop(p.waker());
+    assert_freed(&rt);
+}
+
+#[test]
+fn panicking_completion_waker_drop() {
+    struct PanicDrop;
+    impl std::task::Wake for PanicDrop {
+        fn wake(self: Arc<Self>) {
+            unreachable!("the awaiter of a dropped join handle is woken");
+        }
+    }
+    impl Drop for PanicDrop {
+        fn drop(&mut self) {
+            panic!("completion waker drop panic");
+        }
+    }
+    let rt = new_rt();
+    let outputs = Counter::default();
+    let output = outputs.token();
+    let mut task = spawn(&rt, async move { output });
+    let w = Waker::from(Arc::new(PanicDrop));
+    assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+    drop(w);
+    // the owner thread drops the awaiter of a remotely dropped join handle
+    on_thread(move || drop(task));
+    assert!(catch_unwind(AssertUnwindSafe(|| one_local(&rt).run())).is_err());
+    assert_eq!(outputs.get(), 1);
+    assert!(one_remote(&rt).is_none());
+    assert_freed(&rt);
+}
+
+#[test]
 fn runtime_drop_merges_remote_refs() {
     let rt = new_rt();
     let p = Probe::default();

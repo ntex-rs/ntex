@@ -503,8 +503,9 @@ fn close(h: NonNull<Header>) {
             let state = hdr.state.get() & !(RUNNING | SCHEDULED | CLOSE);
             hdr.state.set(state | FINISHED);
             // the future is dropped, there is no output
-            complete(self.0);
+            let completed = complete(self.0);
             release_local(self.0);
+            completed.notify();
         }
     }
 
@@ -516,11 +517,27 @@ fn close(h: NonNull<Header>) {
     unsafe { (header(finish.0).vtable.drop_future)(finish.0) };
 }
 
-/// Publishes completion and wakes the awaiter, on the owner thread. The
-/// awaiter of a dropped join handle is dropped instead.
-///
-/// Returns `true` if the join handle is dropped, the output has no owner.
-fn complete(h: NonNull<Header>) -> bool {
+/// Completion of a task, the awaiter is notified once the caller releases
+/// its reference, so a panicking waker does not skip the cleanup.
+struct Completed {
+    /// The join handle is dropped, the output has no owner.
+    detached: bool,
+    awaiter: Option<Waker>,
+}
+
+impl Completed {
+    /// Wakes the awaiter, the awaiter of a dropped join handle is dropped.
+    fn notify(self) {
+        if let Some(w) = self.awaiter
+            && !self.detached
+        {
+            w.wake();
+        }
+    }
+}
+
+/// Publishes completion and takes the awaiter, on the owner thread.
+fn complete(h: NonNull<Header>) -> Completed {
     let hdr = header(h);
     // the local count moves to the remote word, before any waker callback
     let refs = hdr.refs.replace(0);
@@ -531,19 +548,15 @@ fn complete(h: NonNull<Header>) -> bool {
     let prev = hdr
         .remote
         .fetch_add((refs << R_SHIFT) | R_FINISHED, Ordering::AcqRel);
+    // a join handle dropped on another thread leaves its awaiter
     let detached = hdr.state.get() & DETACHED != 0 || prev & R_DETACHED != 0;
     // a registering join handle sees `R_FINISHED` and handles the awaiter
-    if prev & R_REGISTERING == 0
-        && let Some(w) = unsafe { hdr.awaiter.take() }
-    {
-        // a join handle dropped on another thread leaves its awaiter
-        if detached {
-            drop(w);
-        } else {
-            w.wake();
-        }
-    }
-    detached
+    let awaiter = if prev & R_REGISTERING == 0 {
+        unsafe { hdr.awaiter.take() }
+    } else {
+        None
+    };
+    Completed { detached, awaiter }
 }
 
 /// Completes a task that has no references but the run reference, on the
@@ -716,21 +729,24 @@ impl Runnable {
                 finish_unshared(h);
                 return false;
             }
-            if complete(h) {
+            let completed = complete(h);
+            if completed.detached {
                 drop_output(h);
-                return false;
+            } else {
+                release_local(h);
             }
+            completed.notify();
+            return false;
         } else if state & CLOSE != 0 {
             hdr.state.set(state & !SCHEDULED);
             close(h);
             return false;
-        } else if state & SCHEDULED != 0 {
-            hdr.state.set(state);
+        }
+        hdr.state.set(state);
+        if state & SCHEDULED != 0 {
             // the run reference passes to the queue
             hdr.queue.schedule_local(Runnable(h));
             return true;
-        } else {
-            hdr.state.set(state);
         }
         release_local(h);
         false
