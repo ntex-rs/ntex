@@ -1,5 +1,9 @@
 # Changes
 
+## [1.13.1] - Unreleased
+
+* Fix out-of-bounds write in `BytePages::put_u8()` and `put_i8()` after `advance_mut()` filled the current page
+
 ## [1.13.0] - 2026-10-17
 
 * Add `PageCacheMetrics`, per-thread page cache statistics: hits, misses, pages returned

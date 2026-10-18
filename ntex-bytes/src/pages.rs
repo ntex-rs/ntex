@@ -162,7 +162,7 @@ impl BytePages {
             } else if p.len() <= APPEND_COPY_LIMIT {
                 self.put_slice(p.as_ref());
             } else {
-                // the current page is never full, its spare capacity is kept
+                // the spare capacity of the current page is kept
                 if let Some(st) = self.current.as_mut() {
                     let head = st.split_to(st.len());
                     self.push_back(<BytePage as From<Bytes>>::from(Bytes { storage: head }));
@@ -447,14 +447,28 @@ impl BytePages {
         res
     }
 
+    // Returns the current page if it has spare capacity, or a new page.
+    //
+    // The current page can be full, for example after `advance_mut` filled
+    // it, a full page moves to the page list, an empty one is dropped.
+    fn take_writable(&mut self) -> StorageVec {
+        match self.current.take() {
+            Some(st) if !st.is_full() => st,
+            Some(st) => {
+                if st.len() != 0 {
+                    self.push_back(BytePage::from(st));
+                }
+                StorageVec::sized(self.page_size())
+            }
+            None => StorageVec::sized(self.page_size()),
+        }
+    }
+
     fn with_current<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut StorageVec) -> R,
     {
-        let mut st = self
-            .current
-            .take()
-            .unwrap_or_else(|| StorageVec::sized(self.page_size()));
+        let mut st = self.take_writable();
         let result = f(&mut st);
 
         // a full page moves to the page list
@@ -532,14 +546,8 @@ impl BufMut for BytePages {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
-        if self.spare() == 0 {
-            if let Some(st) = self.current.take() {
-                self.push_back(BytePage::from(st));
-            }
-            self.current = Some(StorageVec::sized(self.page_size()));
-        }
-        // `current` is set, a new page is allocated above if there is no spare capacity
-        self.current.as_mut().unwrap().spare_mut()
+        let st = self.take_writable();
+        self.current.insert(st).spare_mut()
     }
 
     fn put<T: Buf>(&mut self, mut src: T)
@@ -1336,6 +1344,39 @@ mod tests {
         let mut expected = vec![3; 200];
         expected.extend_from_slice(b"abcd");
         expected.extend_from_slice(&[4; 100]);
+        assert_eq!(&pages.freeze()[..], &expected[..]);
+    }
+
+    #[test]
+    fn pages_byte_write_after_full_page() {
+        // `advance_mut` leaves a full current page
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        let n = pages.chunk_mut().len();
+        unsafe {
+            std::ptr::write_bytes(pages.chunk_mut().as_mut_ptr(), 1, n);
+            pages.advance_mut(n);
+        }
+        pages.put_u8(2);
+        pages.put_i8(3);
+        assert_eq!(pages.num_pages(), 2);
+        assert_eq!(pages.pages()[0].len(), n);
+        let mut expected = vec![1; n];
+        expected.extend_from_slice(&[2, 3]);
+        assert_eq!(&pages.freeze()[..], &expected[..]);
+
+        // splitting off a full current page leaves an empty page without capacity
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        let n = pages.chunk_mut().len();
+        unsafe {
+            std::ptr::write_bytes(pages.chunk_mut().as_mut_ptr(), 1, n);
+            pages.advance_mut(n);
+        }
+        pages.append(vec![2; APPEND_COPY_LIMIT + 1]);
+        pages.put_u8(3);
+        assert!(pages.pages().iter().all(|p| !p.is_empty()));
+        let mut expected = vec![1; n];
+        expected.extend_from_slice(&[2; APPEND_COPY_LIMIT + 1]);
+        expected.push(3);
         assert_eq!(&pages.freeze()[..], &expected[..]);
     }
 
