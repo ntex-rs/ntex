@@ -583,7 +583,9 @@ impl Drop for Completed {
         };
         if thread::panicking() {
             // a second panic would abort
-            let _ = catch_unwind(AssertUnwindSafe(notify));
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(notify)) {
+                super::suppress_cleanup_panic(payload);
+            }
         } else {
             notify();
         }

@@ -51,6 +51,22 @@ impl Drop for Token {
     }
 }
 
+struct OnDrop<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        self.0.take().unwrap()();
+    }
+}
+
+fn pending_with_drop(f: impl FnOnce()) -> impl Future<Output = ()> {
+    let hook = OnDrop(Some(f));
+    async move {
+        let _hook = hook;
+        std::future::pending::<()>().await;
+    }
+}
+
 #[derive(Default)]
 struct CountWaker(AtomicUsize);
 
@@ -940,36 +956,291 @@ fn shutdown_drops_pending() {
 fn shutdown_drop_wakes_and_spawns() {
     // a dropped future wakes a pending task and spawns a task, the runtime
     // drops both
-    struct OnDrop(Option<Box<dyn FnOnce()>>);
+    for panics in [false, true] {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let (p1, p2) = (Probe::default(), Probe::default());
+        let t1 = spawn(&rt, p1.future(Res::Pending));
+        one_local(&rt).run();
+        let w1 = p1.waker();
+        let q = rt.queue.clone();
+        let fut2 = p2.future(Res::Pending);
+        let t0 = spawn(
+            &rt,
+            pending_with_drop(move || {
+                w1.wake();
+                unsafe { raw::spawn_detached::<_, false>(fut2, &q, Location::caller()) };
+                assert!(!panics, "reentrant cleanup panic");
+            }),
+        );
+        one_local(&rt).run();
+        assert_eq!(catch_unwind(AssertUnwindSafe(|| drop(rt))).is_err(), panics);
+        p1.check(1, 1, 0);
+        p2.check(0, 1, 0);
+        assert!(t0.is_finished() && t1.is_finished());
+        drop((t0, t1));
+        assert!(queue.upgrade().is_none(), "task alive");
+    }
+}
 
-    impl Drop for OnDrop {
+#[test]
+fn shutdown_continues_after_panics() {
+    // Local queue, pending task list, and remote queue cleanup.
+    for path in 0..3 {
+        let rt = new_rt();
+        let handle = rt.handle();
+        let queue = Arc::downgrade(&rt.queue);
+        let owner = thread::current().id();
+        let drops = Counter::default();
+        let panics = Counter::default();
+        let mut tasks = Vec::new();
+        for panics_on_drop in [true, false, true] {
+            let (drops, panics) = (drops.clone(), panics.clone());
+            let fut = pending_with_drop(move || {
+                assert_eq!(thread::current().id(), owner);
+                drops.inc();
+                if panics_on_drop {
+                    std::panic::panic_any(panics.0.fetch_add(1, Ordering::SeqCst));
+                }
+            });
+            let task = if path == 2 {
+                let queue = rt.queue.clone();
+                on_thread(move || unsafe {
+                    raw::spawn::<_, false>(fut, &queue, Location::caller())
+                })
+            } else {
+                let task = spawn(&rt, fut);
+                if path == 1 {
+                    one_local(&rt).run();
+                }
+                task
+            };
+            tasks.push(task);
+        }
+        let payload = catch_unwind(AssertUnwindSafe(|| drop(rt))).unwrap_err();
+        assert_eq!(*payload.downcast::<usize>().unwrap(), 0);
+        assert_eq!(drops.get(), 3);
+        assert_eq!(panics.get(), 2);
+        assert!(handle.queue.is_closed());
+        for mut task in tasks {
+            assert!(task.is_finished());
+            assert!(matches!(join(&mut task), Poll::Ready(None)));
+        }
+
+        for remote in [false, true] {
+            let p = Probe::default();
+            let (h, fut) = (handle.clone(), p.future(Res::Ready));
+            let submit = move || h.spawn(fut);
+            let task = if remote { on_thread(submit) } else { submit() };
+            assert!(task.is_finished());
+            p.check(0, 1, 0);
+        }
+        drop(handle);
+        assert!(queue.upgrade().is_none(), "task alive");
+    }
+}
+
+#[test]
+fn shutdown_completion_panics() {
+    struct PanicWake {
+        drops: bool,
+        calls: Counter,
+    }
+    impl std::task::Wake for PanicWake {
+        fn wake(self: Arc<Self>) {
+            assert!(!self.drops, "detached awaiter was woken");
+            self.calls.inc();
+            panic!("completion panic");
+        }
+    }
+    impl Drop for PanicWake {
         fn drop(&mut self) {
-            self.0.take().unwrap()();
+            if self.drops {
+                self.calls.inc();
+                panic!("completion panic");
+            }
         }
     }
 
+    for (future_panics, drop_waker) in [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let drops = Counter::default();
+        let calls = Counter::default();
+        let d = drops.clone();
+        let owner = thread::current().id();
+        let local = std::rc::Rc::new(());
+        let mut task = Some(spawn(
+            &rt,
+            pending_with_drop(move || {
+                assert_eq!(thread::current().id(), owner);
+                drop(local);
+                d.inc();
+                assert!(!future_panics, "future panic");
+            }),
+        ));
+        let d = drops.clone();
+        let mut other = spawn(&rt, pending_with_drop(move || d.inc()));
+        let w = Waker::from(Arc::new(PanicWake {
+            drops: drop_waker,
+            calls: calls.clone(),
+        }));
+        assert!(
+            task.as_mut()
+                .unwrap()
+                .poll_join(&Context::from_waker(&w))
+                .is_pending()
+        );
+        drop(w);
+        if drop_waker {
+            let task = task.take().unwrap();
+            on_thread(move || drop(task));
+        }
+        let payload = catch_unwind(AssertUnwindSafe(|| drop(rt))).unwrap_err();
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some(if future_panics {
+                "future panic"
+            } else {
+                "completion panic"
+            })
+        );
+        assert_eq!(drops.get(), 2);
+        assert_eq!(calls.get(), 1);
+        assert!(other.is_finished());
+        assert!(matches!(join(&mut other), Poll::Ready(None)));
+        if let Some(task) = task.as_mut() {
+            assert!(task.is_finished());
+            assert!(matches!(join(task), Poll::Ready(None)));
+        }
+        drop((task, other));
+        assert!(queue.upgrade().is_none(), "task alive");
+    }
+}
+
+#[test]
+fn shutdown_preserves_original_panic() {
+    struct Payload {
+        _queue: Arc<RunnableQueue>,
+        drops: Counter,
+    }
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            self.drops.inc();
+            panic!("payload drop panic");
+        }
+    }
+
+    for unwinding in [false, true] {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let drops = Counter::default();
+        let payload_drops = Counter::default();
+        let d = drops.clone();
+        let t1 = spawn(
+            &rt,
+            pending_with_drop(move || {
+                d.inc();
+                panic!("first future panic");
+            }),
+        );
+        let payload = Payload {
+            _queue: rt.queue.clone(),
+            drops: payload_drops.clone(),
+        };
+        let d = drops.clone();
+        let t2 = spawn(
+            &rt,
+            pending_with_drop(move || {
+                d.inc();
+                std::panic::panic_any(payload);
+            }),
+        );
+        let d = drops.clone();
+        let t3 = spawn(&rt, pending_with_drop(move || d.inc()));
+        let payload = catch_unwind(AssertUnwindSafe(move || {
+            if unwinding {
+                let _rt = rt;
+                panic!("outer panic");
+            }
+            drop(rt);
+        }))
+        .unwrap_err();
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some(if unwinding {
+                "outer panic"
+            } else {
+                "first future panic"
+            })
+        );
+        assert_eq!(drops.get(), 3);
+        assert_eq!(payload_drops.get(), 1);
+        for mut task in [t1, t2, t3] {
+            assert!(task.is_finished());
+            assert!(matches!(join(&mut task), Poll::Ready(None)));
+        }
+        assert!(queue.upgrade().is_none(), "task alive");
+    }
+}
+
+#[test]
+fn shutdown_panic_waits_for_admitted_publication() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
     let rt = new_rt();
     let queue = Arc::downgrade(&rt.queue);
-    let (p1, p2) = (Probe::default(), Probe::default());
-    let t1 = spawn(&rt, p1.future(Res::Pending));
-    one_local(&rt).run();
-    let w1 = p1.waker();
-    let q = rt.queue.clone();
-    let fut2 = p2.future(Res::Pending);
-    let hook = OnDrop(Some(Box::new(move || {
-        w1.wake();
-        unsafe { raw::spawn_detached::<_, false>(fut2, &q, Location::caller()) };
-    })));
-    let t0 = spawn(&rt, async move {
-        let _hook = hook;
-        std::future::pending::<()>().await;
+    let drops = Counter::default();
+    let d = drops.clone();
+    let mut local = spawn(
+        &rt,
+        pending_with_drop(move || {
+            d.inc();
+            panic!("first future panic");
+        }),
+    );
+    let (q, d) = (rt.queue.clone(), drops.clone());
+    let mut remote = on_thread(move || unsafe {
+        raw::spawn::<_, false>(
+            pending_with_drop(move || {
+                d.inc();
+                panic!("late future panic");
+            }),
+            &q,
+            Location::caller(),
+        )
     });
-    one_local(&rt).run();
-    drop(rt);
-    p1.check(1, 1, 0);
-    p2.check(0, 1, 0);
-    assert!(t0.is_finished() && t1.is_finished());
-    drop((t0, t1));
+    // Hold an admitted entry outside the MPSC queue until admission closes.
+    let entry = remotes(&rt).pop().unwrap();
+    let (q, (tx, rx)) = (rt.queue.clone(), mpsc::channel());
+    let th = thread::spawn(move || {
+        let permit = q.admit(false).unwrap();
+        tx.send(()).unwrap();
+        let start = Instant::now();
+        while !q.is_closed() {
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "admission stayed open"
+            );
+            thread::yield_now();
+        }
+        permit.schedule(entry);
+    });
+    rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    let payload = catch_unwind(AssertUnwindSafe(|| drop(rt))).unwrap_err();
+    th.join().unwrap();
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("first future panic")
+    );
+    assert_eq!(drops.get(), 2);
+    for task in [&mut local, &mut remote] {
+        assert!(task.is_finished());
+        assert!(matches!(join(task), Poll::Ready(None)));
+    }
+    drop((local, remote));
     assert!(queue.upgrade().is_none(), "task alive");
 }
 
