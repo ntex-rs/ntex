@@ -65,6 +65,9 @@
   10000 wakes over one second by default, is logged once as a possible busy
   loop. `Handle::self_wake_count()` returns `None` on tokio and compio
 
+* Avoid a use-after-free when self-wake warning logging reenters the runtime,
+  and suppress duplicate warnings from nested task polls
+
 * Add `Runtime::poll_histogram()` and `Handle::poll_histogram()`, log2
   histogram of poll durations. The `Handle` method returns `None` on tokio
 
