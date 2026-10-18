@@ -1317,6 +1317,64 @@ fn panicking_completion_waker_drop() {
     assert_freed(&rt);
 }
 
+#[test]
+fn panicking_completion_waker_unwinding() {
+    // the awaiter is notified while unwinding from the poll, its panic would
+    // abort
+    struct PanicWake;
+    impl std::task::Wake for PanicWake {
+        fn wake(self: Arc<Self>) {
+            panic!("completion waker panic");
+        }
+    }
+    let rt = new_rt();
+    let p = Probe::default();
+    let mut task = spawn(&rt, p.future(Res::Panic));
+    let w = Waker::from(Arc::new(PanicWake));
+    assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+    assert!(catch_unwind(AssertUnwindSafe(|| one_local(&rt).run())).is_err());
+    assert!(matches!(join(&mut task), Poll::Ready(None)));
+    p.check(1, 1, 0);
+    drop(task);
+    drop(p.waker());
+    assert_freed(&rt);
+}
+
+#[test]
+fn panicking_completion_waker_drop_unwinding() {
+    // the awaiter of a dropped join handle is dropped while unwinding from
+    // the output drop
+    struct PanicDrop;
+    impl std::task::Wake for PanicDrop {
+        fn wake(self: Arc<Self>) {
+            unreachable!("the awaiter of a dropped join handle is woken");
+        }
+    }
+    impl Drop for PanicDrop {
+        fn drop(&mut self) {
+            panic!("completion waker drop panic");
+        }
+    }
+    struct PanicOutput(#[allow(dead_code)] Token);
+    impl Drop for PanicOutput {
+        fn drop(&mut self) {
+            panic!("output drop panic");
+        }
+    }
+    let rt = new_rt();
+    let outputs = Counter::default();
+    let output = PanicOutput(outputs.token());
+    let mut task = spawn(&rt, async move { output });
+    let w = Waker::from(Arc::new(PanicDrop));
+    assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+    drop(w);
+    on_thread(move || drop(task));
+    assert!(catch_unwind(AssertUnwindSafe(|| one_local(&rt).run())).is_err());
+    assert_eq!(outputs.get(), 1);
+    assert!(one_remote(&rt).is_none());
+    assert_freed(&rt);
+}
+
 /// A waker whose clone panics, the clone waits twice on `GATE` first.
 fn panic_clone_waker(gate: bool) -> Waker {
     static GATED: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
