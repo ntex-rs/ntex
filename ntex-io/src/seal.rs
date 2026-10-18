@@ -45,7 +45,7 @@ impl Filter for Sealed {
 
 #[derive(Debug)]
 /// An [`Io`] object whose filter-chain type has been erased.
-pub struct IoBoxed(Io<Sealed>);
+pub struct IoBoxed(pub(crate) Io<Sealed>);
 
 impl IoBoxed {
     #[inline]
@@ -62,7 +62,7 @@ impl IoBoxed {
 
 impl<F: Filter> From<Io<F>> for IoBoxed {
     fn from(io: Io<F>) -> Self {
-        Self(io.seal())
+        io.boxed()
     }
 }
 

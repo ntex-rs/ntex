@@ -26,6 +26,9 @@
   during a TLS handshake, it spun with empty writes before. New output or processed input
   resumes it, in the transport shutdown phase it waits for the shutdown deadline
 
+* `Io::seal()`, `Io::boxed()`, `Io::add_filter()` and `Io::map_filter()` move the connection
+  state without allocating a placeholder state, `Io::boxed()` no longer seals twice
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`
