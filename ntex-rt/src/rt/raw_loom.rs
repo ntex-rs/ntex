@@ -10,7 +10,7 @@ use loom::sync::atomic::{AtomicBool, AtomicUsize};
 use loom::thread;
 
 use super::{Arc, Future, Location, Notify, Ordering, Runtime, io};
-use crate::raw::{self, Task};
+use crate::rt::raw::{self, Task};
 
 #[derive(Debug)]
 struct NoopNotify;
