@@ -15,7 +15,7 @@ use ntex_bytes::{BufMut, BytePages};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::syscall;
 
-use super::{OpBox, Overlapped};
+use super::{Op, Overlapped};
 
 pub(crate) const RD_OP: u32 = 1;
 pub(crate) const WR_OP: u32 = 2;
@@ -273,7 +273,7 @@ impl ReadOperation {
 
     pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) -> Option<usize> {
         // SAFETY: RD_OP identifies a live read op; only its payload is borrowed
-        let rd = unsafe { &mut *OpBox::<Self>::data_from_overlapped(optr) };
+        let rd = unsafe { &mut *Op::<Self>::data_from_overlapped(optr) };
 
         #[cfg(feature = "trace")]
         log::trace!(
@@ -427,7 +427,7 @@ impl WriteOperation {
 
     pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) -> Option<usize> {
         // SAFETY: WR_OP identifies a live write op; only its payload is borrowed
-        let wr = unsafe { &mut *OpBox::<Self>::data_from_overlapped(optr) };
+        let wr = unsafe { &mut *Op::<Self>::data_from_overlapped(optr) };
 
         #[cfg(feature = "trace")]
         log::trace!("{}: WrtDone({}) {res:?}", wr.ctx.tag(), wr.io);
