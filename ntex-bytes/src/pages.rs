@@ -90,17 +90,7 @@ impl BytePages {
     fn push_back(&mut self, page: BytePage) {
         let st = self.st.as_mut().unwrap();
         st.len += page.len();
-        let pages = &mut st.pages;
-        pages.push_back(page);
-
-        #[cfg(feature = "overuse")]
-        if pages.len() == 128 {
-            log::debug!(
-                "Number of pages {}\n{:?}",
-                pages.len(),
-                backtrace::Backtrace::new()
-            );
-        }
+        st.pages.push_back(page);
     }
 
     /// Returns the capacity category used for new pages.
