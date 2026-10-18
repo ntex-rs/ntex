@@ -65,6 +65,9 @@
 * Use the `ntex-polling` fork of `polling` for the accept loop, the same crate as
   `ntex-net`
 
+* Fix a data race between workers cloning a service factory that is `Send` but
+  not `Sync`, each worker gets its own copy of the factory
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);
