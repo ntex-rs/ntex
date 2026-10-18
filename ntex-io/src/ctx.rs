@@ -394,6 +394,13 @@ impl IoContext {
                             log::trace!("{}: Write buf is full, pause reading", st.tag());
                             st.flags.set_read_wr_backpressure();
                         }
+                    } else if st.flags.is_write_paused()
+                        && st.buffer.write_buf_size() != st.buffer.write_dst_size()
+                    {
+                        // A filter holds output back, the input may be what it
+                        // waits for. The write task paused on that output, so
+                        // it is scheduled to let the filter retry.
+                        self.0.consolidate_write_state(false)?;
                     }
 
                     // The input may be what a filter waits for to complete its
@@ -496,6 +503,16 @@ impl IoContext {
             Ok(written) => {
                 st.wr_inflight_written(written);
                 st.metrics().written(written);
+
+                // Output queued while the transport was writing has not been
+                // through the filter chain yet. It is processed here, so that
+                // only output a filter holds back stays out of the
+                // transport-facing buffer.
+                if st.buffer.write_dst_size() == 0
+                    && let Err(e) = st.buffer.process_write_buf(&self.0)
+                {
+                    st.terminate_connection(Some(e));
+                }
                 st.sync_write_buffered();
 
                 let len = st.buffer.write_buf_size();
@@ -550,15 +567,22 @@ impl IoContext {
                         st.wake_write_task();
                     }
                     IoTaskStatus::Pause
+                } else if st.flags.is_write_filter_paused() {
+                    // the write task waits for the filter chain, it is
+                    // not paused for lack of output
+                    st.flags.unset_write_paused();
+                    IoTaskStatus::Pause
+                } else if st.buffer.write_dst_size() == 0 {
+                    // A filter holds the output back, for example application
+                    // data during a TLS handshake, so the transport has
+                    // nothing to write. The write task pauses until new output
+                    // is queued or input lets the filter make progress, see
+                    // `process_read_status`.
+                    st.flags.set_write_paused();
+                    IoTaskStatus::Pause
                 } else {
                     st.flags.unset_write_paused();
-                    if st.flags.is_write_filter_paused() {
-                        // the write task waits for the filter chain, it is
-                        // not paused for lack of output
-                        IoTaskStatus::Pause
-                    } else {
-                        IoTaskStatus::Io
-                    }
+                    IoTaskStatus::Io
                 }
             }
             Err(err) => {

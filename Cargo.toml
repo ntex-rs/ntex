@@ -68,7 +68,7 @@ urly = "1.1.0"
 
 ntex-io-uring = "1.0.0"
 ntex-httparse = "2.2.0"
-ntex-polling = "4.0.0"
+ntex-polling = "4.1.0"
 
 async-channel = "2"
 atomic-waker = "1.1"

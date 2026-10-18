@@ -129,10 +129,13 @@ pub(crate) fn write_readiness(st: &IoState) -> Poll<Readiness> {
     } else if st.flags.is_stopping() {
         // Transport shutdown phase. Buffered output is drained into the
         // transport first; `Readiness::Close` is reported only once
-        // nothing is left to write.
-        if st.buffer.write_buf_size() != 0 {
+        // nothing is left to write. Output a filter holds back pauses the
+        // write task, it waits for the shutdown deadline then.
+        if st.buffer.write_dst_size() != 0
+            || (st.buffer.write_buf_size() != 0 && !st.flags.is_write_paused())
+        {
             Poll::Ready(Readiness::Ready)
-        } else if st.wr_inflight.get() != 0 {
+        } else if st.buffer.write_buf_size() != 0 || st.wr_inflight.get() != 0 {
             // the transport still holds output that has not reached
             // the peer, its completion wakes the write task
             Poll::Pending
