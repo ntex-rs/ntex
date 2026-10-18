@@ -591,6 +591,76 @@ mod tests {
     }
 
     #[test]
+    fn handle_spawn_cancel_before_run() {
+        System::new("cancel-before", TestRunner).block_on(async {
+            let executed = Arc::new(AtomicUsize::new(0));
+            let executed2 = executed.clone();
+            let hnd = Handle::current();
+            hnd.spawn(async move {
+                executed2.fetch_add(1, Ordering::Relaxed);
+            })
+            .cancel();
+            // commands run in order, the cancelled one was processed first
+            hnd.spawn(async {}).await.unwrap();
+            hnd.spawn(async {}).await.unwrap();
+            assert_eq!(executed.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    #[test]
+    fn handle_spawn_cancel_while_running() {
+        struct Token(Option<oneshot::Sender<()>>);
+        impl Drop for Token {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+
+        System::new("cancel-running", TestRunner).block_on(async {
+            let mut arb = Arbiter::new();
+            let resumed = Arc::new(AtomicBool::new(false));
+            let resumed2 = resumed.clone();
+            let (started_tx, started_rx) = oneshot::async_channel();
+            let (drop_tx, drop_rx) = oneshot::async_channel();
+            let hnd = arb.handle().spawn(async move {
+                let _token = Token(Some(drop_tx));
+                let _ = started_tx.send(());
+                std::future::pending::<()>().await;
+                resumed2.store(true, Ordering::Relaxed);
+            });
+            started_rx.await.unwrap();
+            hnd.cancel();
+            // the future is dropped on the arbiter thread
+            let mut drop_rx = std::pin::pin!(drop_rx);
+            let mut timeout =
+                std::pin::pin!(futures_timer::Delay::new(std::time::Duration::from_secs(5)));
+            std::future::poll_fn(|cx| {
+                if drop_rx.as_mut().poll(cx).is_ready() {
+                    std::task::Poll::Ready(())
+                } else if timeout.as_mut().poll(cx).is_ready() {
+                    panic!("cancelled task is not dropped");
+                } else {
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
+            assert!(!resumed.load(Ordering::Relaxed));
+
+            // detached tasks keep running
+            let (tx, rx) = oneshot::async_channel();
+            arb.handle()
+                .spawn(async move {
+                    let _ = tx.send(());
+                })
+                .detach();
+            rx.await.unwrap();
+
+            arb.stop();
+            arb.join().unwrap();
+        });
+    }
+
+    #[test]
     fn arbiter_values() {
         System::new("test", TestRunner).block_on(async {
             assert_eq!(Arbiter::get_value(|| Value(1)).0, 1);
