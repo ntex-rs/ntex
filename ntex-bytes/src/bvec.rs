@@ -27,7 +27,7 @@ use crate::{Buf, BufMut, BytePageSize, Bytes, buf::UninitSlice, stvec::StorageVe
 ///
 /// buf.put_u8(b'h');
 /// buf.put_u8(b'e');
-/// buf.put("llo");
+/// buf.put_slice(b"llo");
 ///
 /// assert_eq!(&buf[..], b"hello");
 ///
@@ -256,7 +256,7 @@ impl BytesMut {
     /// use std::thread;
     ///
     /// let mut b = BytesMut::with_capacity(64);
-    /// b.put("hello world");
+    /// b.put_slice(b"hello world");
     /// let b1 = b.freeze();
     /// let b2 = b1.clone();
     ///

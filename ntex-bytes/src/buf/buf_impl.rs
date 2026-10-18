@@ -785,7 +785,7 @@ pub trait Buf {
     /// ```
     /// use ntex_bytes::{Buf};
     ///
-    /// let bytes = "hello world".to_bytes();
+    /// let bytes = (&b"hello world"[..]).to_bytes();
     /// assert_eq!(&bytes[..], &b"hello world"[..]);
     /// ```
     #[inline]
@@ -850,30 +850,6 @@ impl Buf for &[u8] {
     #[inline]
     fn get_u8(&mut self) -> u8 {
         let ret = self[0];
-        self.advance(1);
-        ret
-    }
-}
-
-impl Buf for &str {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.as_bytes()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        *self = &self[cnt..];
-    }
-
-    #[inline]
-    fn get_u8(&mut self) -> u8 {
-        let ret = self.as_bytes()[0];
         self.advance(1);
         ret
     }
@@ -1037,12 +1013,8 @@ mod tests {
         let mut buf = &b"\x33\x33\x33\x33\x33\x33\xF3\x3F hello"[..];
         assert_eq!(1.2f64, buf.get_f64_le());
 
-        let bytes = "hello world".to_bytes();
+        let bytes = (&b"hello world"[..]).to_bytes();
         assert_eq!(&bytes[..], &b"hello world"[..]);
-
-        let mut s = "hello world";
-        assert_eq!(s.get_u8(), b'h');
-        assert_eq!(Buf::chunk(&s), b"ello world");
     }
 
     struct Chunks(Vec<&'static [u8]>);
