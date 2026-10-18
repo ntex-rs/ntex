@@ -1145,8 +1145,11 @@ pub(crate) struct Busy;
 /// consumer sees a swapped but unlinked tail as `Busy`. The stub keeps
 /// the queue non-empty, so the consumer never pops the last link that a
 /// producer may still write to.
+#[repr(C)]
 pub(crate) struct RemoteQueue {
     tail: AtomicPtr<Link>,
+    // Keep head updates off the producer's cache line.
+    _consumer: [super::CacheLine; 0],
     /// Consumer end.
     head: Cell<*mut Link>,
     stub: NonNull<Link>,
@@ -1159,6 +1162,7 @@ impl RemoteQueue {
         })));
         Self {
             tail: AtomicPtr::new(stub.as_ptr()),
+            _consumer: [],
             head: Cell::new(stub.as_ptr()),
             stub,
         }
