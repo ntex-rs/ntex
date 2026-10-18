@@ -48,11 +48,13 @@ impl<T> SharedCell<T> {
         return Self(loom::cell::UnsafeCell::new(v));
     }
 
-    fn get(&self) -> *mut T {
+    /// The pointer must only be accessed within the closure.
+    #[inline]
+    fn with_mut<R>(&self, f: impl FnOnce(*mut T) -> R) -> R {
         #[cfg(not(ntex_loom))]
-        return self.0.get();
+        return f(self.0.get());
         #[cfg(ntex_loom)]
-        return self.0.with_mut(|p| p);
+        return self.0.with_mut(f);
     }
 }
 
@@ -157,20 +159,23 @@ impl<F: Future> Fns<F> {
         dealloc: Self::dealloc,
     };
 
-    unsafe fn stage(h: NonNull<Header>) -> *mut Stage<F> {
-        unsafe { (*h.cast::<RawTask<F>>().as_ptr()).stage.get() }
+    #[inline]
+    unsafe fn with_stage<R>(h: NonNull<Header>, f: impl FnOnce(*mut Stage<F>) -> R) -> R {
+        unsafe { (*h.cast::<RawTask<F>>().as_ptr()).stage.with_mut(f) }
     }
 
     unsafe fn poll(h: NonNull<Header>, cx: &mut Context<'_>) -> bool {
         unsafe {
-            let stage = Self::stage(h);
-            let Stage::Running(fut) = &mut *stage else {
-                unreachable!()
-            };
-            match Pin::new_unchecked(fut).poll(cx) {
+            let polled = Self::with_stage(h, |stage| {
+                let Stage::Running(fut) = &mut *stage else {
+                    unreachable!()
+                };
+                Pin::new_unchecked(fut).poll(cx)
+            });
+            match polled {
                 Poll::Ready(out) => {
                     Self::drop_future(h);
-                    ptr::write(stage, Stage::Finished(out));
+                    Self::with_stage(h, |stage| ptr::write(stage, Stage::Finished(out)));
                     true
                 }
                 Poll::Pending => false,
@@ -189,28 +194,34 @@ impl<F: Future> Fns<F> {
         }
 
         unsafe {
-            let guard = Guard(Self::stage(h));
-            ptr::drop_in_place(guard.0);
+            Self::with_stage(h, |stage| {
+                let guard = Guard(stage);
+                ptr::drop_in_place(guard.0);
+            });
         }
     }
 
     unsafe fn take_output(h: NonNull<Header>, out: *mut ()) {
-        unsafe {
-            let stage = Self::stage(h);
-            if matches!(*stage, Stage::Finished(_))
-                && let Stage::Finished(v) = ptr::replace(stage, Stage::Consumed)
-            {
-                *out.cast::<Option<F::Output>>() = Some(v);
-            }
+        if let Some(v) = unsafe { Self::take_output_value(h) } {
+            unsafe { *out.cast::<Option<F::Output>>() = Some(v) };
         }
     }
 
     unsafe fn drop_output(h: NonNull<Header>) {
+        drop(unsafe { Self::take_output_value(h) });
+    }
+
+    unsafe fn take_output_value(h: NonNull<Header>) -> Option<F::Output> {
         unsafe {
-            let stage = Self::stage(h);
-            if matches!(*stage, Stage::Finished(_)) {
-                drop(ptr::replace(stage, Stage::Consumed));
-            }
+            Self::with_stage(h, |stage| {
+                if matches!(*stage, Stage::Finished(_))
+                    && let Stage::Finished(v) = ptr::replace(stage, Stage::Consumed)
+                {
+                    Some(v)
+                } else {
+                    None
+                }
+            })
         }
     }
 
@@ -242,7 +253,7 @@ impl Awaiter {
     ///
     /// The caller should have exclusive access to the awaiter.
     unsafe fn take(&self) -> Option<Waker> {
-        let p = unsafe { self.0.get().replace(ptr::null_mut()) };
+        let p = self.0.with_mut(|p| unsafe { p.replace(ptr::null_mut()) });
         if p.is_null() {
             None
         } else if p.addr() & BOXED != 0 {
@@ -263,7 +274,7 @@ impl Awaiter {
     ///
     /// The caller should have exclusive access to the awaiter.
     unsafe fn register(&self, waker: &Waker) -> Option<Waker> {
-        let cur = unsafe { *self.0.get() };
+        let cur = self.0.with_mut(|p| unsafe { *p });
         let new = if ptr::eq(waker.vtable(), &raw const WAKER_VTABLE) {
             if ptr::eq(cur, waker.data()) {
                 return None;
@@ -282,7 +293,7 @@ impl Awaiter {
         };
         // the clone may have completed the task and taken the awaiter
         let old = unsafe { self.take() };
-        unsafe { *self.0.get() = new };
+        self.0.with_mut(|p| unsafe { *p = new });
         old
     }
 }
@@ -1361,4 +1372,32 @@ impl<T> fmt::Debug for Task<T> {
             .field("location", &header(self.h).location)
             .finish()
     }
+}
+
+#[cfg(all(test, ntex_loom))]
+#[test]
+#[should_panic(expected = "currently writing to cell")]
+fn raw_loom_shared_cell_access() {
+    struct Shared(SharedCell<usize>);
+
+    // Deliberately allow conflicting accesses to verify the tracking scope.
+    unsafe impl Sync for Shared {}
+
+    loom::model(|| {
+        let cell = Arc::new(Shared(SharedCell::new(0)));
+        let entered = Arc::new(loom::sync::atomic::AtomicBool::new(false));
+        let (other, entered2) = (cell.clone(), entered.clone());
+        let writer = loom::thread::spawn(move || {
+            other.0.with_mut(|p| {
+                entered2.store(true, Ordering::Release);
+                loom::thread::yield_now();
+                unsafe { *p = 1 };
+            });
+        });
+        while !entered.load(Ordering::Acquire) {
+            loom::thread::yield_now();
+        }
+        cell.0.with_mut(|p| unsafe { *p = 2 });
+        writer.join().unwrap();
+    });
 }

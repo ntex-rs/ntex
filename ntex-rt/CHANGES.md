@@ -4,6 +4,9 @@
 
 * Replace `async-task` with a custom task implementation
 
+* Keep raw task stage and join-waker accesses inside Loom tracking scopes,
+  with coverage for reentrant callbacks and panic cleanup
+
 * Skip the thread-local owner lookup when spawning through `Runtime`,
   while `Handle` spawning still selects the local or remote queue dynamically
 

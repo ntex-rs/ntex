@@ -2516,6 +2516,21 @@ mod tests {
         }
     }
 
+    #[cfg(ntex_loom)]
+    #[test]
+    fn raw_loom_reentrant_lifecycle() {
+        loom::model(|| {
+            join_completes_in_waker_callback();
+            reentrant_poll_in_drop();
+        });
+    }
+
+    #[cfg(ntex_loom)]
+    #[test]
+    fn raw_loom_panicking_future_drop() {
+        loom::model(panic_in_future_drop);
+    }
+
     #[test]
     fn panic_in_future_drop() {
         struct PanicOnDrop(Counter);
