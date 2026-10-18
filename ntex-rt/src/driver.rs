@@ -116,6 +116,9 @@ where
     let result_inner = result.clone();
 
     ntex_error::set_backtrace_start_alt("ntex/ntex-rt/src/driver.rs", 0);
+    // finalizes the thread's arbiter once its event loop has exited,
+    // including when the runner returns an error or lets a panic escape
+    let _finalize = FinalizeArbiter;
     run.block_on(Box::pin(async move {
         let r = fut.await;
         *result_inner.borrow_mut() = Some(r);
@@ -126,6 +129,16 @@ where
         crate::remove_all_items();
     }
     Ok(result.borrow_mut().take().unwrap())
+}
+
+struct FinalizeArbiter;
+
+impl Drop for FinalizeArbiter {
+    fn drop(&mut self) {
+        if let Some(arb) = crate::Arbiter::try_current() {
+            arb.finalize();
+        }
+    }
 }
 
 pub(super) fn block_on_panic<F, R>(run: &dyn Runner, fut: F) -> R
