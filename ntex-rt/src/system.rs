@@ -263,13 +263,15 @@ impl System {
 
     /// Provides access to all arbiters registered with this system.
     ///
+    /// The callback receives a snapshot of the registered arbiters.
+    ///
     /// This method should be called from the thread where the system has been initialized,
     /// typically the "main" thread.
     pub fn list_arbiters<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&[Arbiter]) -> R,
     {
-        f(&self.0.arbiters.lock().list)
+        f(&self.0.arbiters())
     }
 
     /// Visits the latest ping records for each registered arbiter.
@@ -283,10 +285,16 @@ impl System {
         PINGS.with(|pings| {
             let mut p = pings.borrow_mut();
             let sys = System::current();
-            let arbiters = sys.0.arbiters.lock();
+            let arbiters: Vec<_> = {
+                let arbiters = sys.0.arbiters.lock();
+                p.keys()
+                    .filter_map(|id| arbiters.all.get(id).map(|arb| (*id, arb.clone())))
+                    .collect()
+            };
 
-            for (id, recs) in &mut *p {
-                if let Some(arb) = arbiters.all.get(id) {
+            // callbacks run without the registry lock
+            for (id, arb) in &arbiters {
+                if let Some(recs) = p.get_mut(id) {
                     f(arb, recs);
                 }
             }
@@ -705,8 +713,33 @@ mod api_tests {
                     Delay::new(Duration::from_millis(5)).await;
                 }
                 assert!(visited());
+
+                // callbacks may access the arbiter registry
+                let mut visited = false;
+                System::list_arbiter_pings(|_, _| {
+                    visited = true;
+                    assert!(System::current().0.arbiters.try_lock().is_some());
+                });
+                assert!(visited);
+
                 arb.stop();
                 arb.join().unwrap();
             });
+    }
+
+    #[test]
+    fn list_arbiters_callback_joins_worker() {
+        System::new("list-join", TestRunner).block_on(async {
+            let sys = System::current();
+            let worker = Arbiter::new();
+            sys.list_arbiters(|arbs| {
+                // the registry is not locked while the callback runs
+                assert!(sys.0.arbiters.try_lock().is_some());
+                let mut arb = arbs.iter().find(|arb| **arb == worker).unwrap().clone();
+                arb.stop();
+                arb.join().unwrap();
+                sys.list_arbiters(|arbs| assert!(!arbs.contains(&worker)));
+            });
+        });
     }
 }
