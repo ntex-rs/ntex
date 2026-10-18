@@ -28,7 +28,7 @@ pub struct Overlapped {
     pub(crate) hnd: u32,
     pub(crate) udata: u32,
     /// Pointer to `base`, handed to the kernel. Set by [`OpBox::new`] from
-    /// the pointer that owns the op, so it may write to the whole op.
+    /// the allocation pointer, preserving provenance for completion handling.
     this: *mut OVERLAPPED,
 }
 
@@ -63,78 +63,89 @@ impl fmt::Debug for Overlapped {
     }
 }
 
-/// An op that embeds an [`Overlapped`].
-///
-/// # Safety
-///
-/// `overlapped` must return a pointer to the embedded `Overlapped`, derived
-/// from `this` without creating a reference.
-pub(crate) unsafe trait OverlappedOp {
-    unsafe fn overlapped(this: *mut Self) -> *mut Overlapped;
+#[repr(C)]
+pub(crate) struct Op<T> {
+    overlapped: Overlapped,
+    pub(crate) state: T,
 }
 
 /// Owns a heap allocated IOCP op.
 ///
-/// The kernel writes to an op while it is in flight, and the completion
-/// accesses the whole op through the pointer returned by the kernel. That
-/// pointer is derived from the one owning the allocation, not from a
-/// reference, so it stays valid while the op is accessed through the box.
-/// A `Box` cannot be used, moving it asserts unique access and would
-/// invalidate the pointer held by the kernel.
-pub(crate) struct OpBox<T: OverlappedOp>(ptr::NonNull<T>);
+/// The kernel owns the header while an op is in flight. All references
+/// project only the disjoint application state, never the entire allocation
+/// or header. The kernel pointer retains the allocation's provenance so a
+/// completion can recover the state, including when it resubmits the op.
+/// A `Box` cannot be kept as the owner: moving it asserts unique access to
+/// the whole allocation, invalidating the pointer held by the kernel.
+pub(crate) struct OpBox<T>(ptr::NonNull<Op<T>>);
 
-impl<T: OverlappedOp> OpBox<T> {
-    pub(crate) fn new(op: T) -> Self {
-        let ptr = Box::into_raw(Box::new(op));
-        // SAFETY: `ptr` is a fresh allocation, `T::overlapped` points into it
+impl<T> OpBox<T> {
+    pub(crate) fn new(overlapped: Overlapped, state: T) -> Self {
+        let ptr = Box::into_raw(Box::new(Op { overlapped, state }));
+        // SAFETY: `ptr` is a fresh allocation, its header is at offset zero
         unsafe {
-            let ov = T::overlapped(ptr);
-            (*ov).this = &raw mut (*ov).base;
+            (*ptr).overlapped.this = ptr.cast();
             OpBox(ptr::NonNull::new_unchecked(ptr))
         }
     }
 
-    /// Returns the pointer owning the op.
+    /// Returns a pointer to the application state, excluding the kernel header.
     pub(crate) fn as_ptr(&self) -> *mut T {
-        self.0.as_ptr()
+        // SAFETY: the allocation is valid until `OpBox` is dropped
+        unsafe { &raw mut (*self.0.as_ptr()).state }
+    }
+
+    /// Returns the kernel header without borrowing it.
+    pub(crate) fn as_overlapped(&self) -> *mut OVERLAPPED {
+        self.0.as_ptr().cast()
+    }
+
+    /// Recovers application state from a completed operation's kernel pointer.
+    ///
+    /// # Safety
+    ///
+    /// `optr` must come from a live `OpBox<T>` with the matching `T`.
+    /// Access through the result must not alias other references to the state.
+    pub(crate) unsafe fn data_from_overlapped(optr: *mut Overlapped) -> *mut T {
+        unsafe { &raw mut (*optr.cast::<Op<T>>()).state }
     }
 
     /// Releases the allocation without freeing it.
-    pub(crate) fn into_raw(self) -> *mut T {
+    pub(crate) fn into_raw(self) -> *mut Op<T> {
         mem::ManuallyDrop::new(self).0.as_ptr()
     }
 
     /// Returns the op, the kernel must not reference it anymore.
     pub(crate) fn into_inner(self) -> T {
         // SAFETY: the allocation comes from `Box::into_raw` and is released once
-        unsafe { *Box::from_raw(self.into_raw()) }
+        unsafe { Box::from_raw(self.into_raw()).state }
     }
 }
 
-impl<T: OverlappedOp> Deref for OpBox<T> {
+impl<T> Deref for OpBox<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        // SAFETY: the allocation is valid until `OpBox` is dropped
-        unsafe { self.0.as_ref() }
+        // SAFETY: the state is valid and disjoint from the kernel-owned header
+        unsafe { &*self.as_ptr() }
     }
 }
 
-impl<T: OverlappedOp> DerefMut for OpBox<T> {
+impl<T> DerefMut for OpBox<T> {
     fn deref_mut(&mut self) -> &mut T {
-        // SAFETY: the allocation is valid until `OpBox` is dropped
-        unsafe { self.0.as_mut() }
+        // SAFETY: the state is exclusively borrowed, not the kernel-owned header
+        unsafe { &mut *self.as_ptr() }
     }
 }
 
-impl<T: OverlappedOp> Drop for OpBox<T> {
+impl<T> Drop for OpBox<T> {
     fn drop(&mut self) {
         // SAFETY: the allocation comes from `Box::into_raw` and is released once
         drop(unsafe { Box::from_raw(self.0.as_ptr()) });
     }
 }
 
-impl<T: OverlappedOp + fmt::Debug> fmt::Debug for OpBox<T> {
+impl<T: fmt::Debug> fmt::Debug for OpBox<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         (**self).fmt(f)
     }
@@ -144,51 +155,77 @@ impl<T: OverlappedOp + fmt::Debug> fmt::Debug for OpBox<T> {
 mod tests {
     use super::*;
 
-    #[repr(C)]
+    #[derive(Debug)]
     struct TestOp {
-        overlapped: Overlapped,
         value: usize,
     }
 
-    unsafe impl OverlappedOp for TestOp {
-        unsafe fn overlapped(this: *mut Self) -> *mut Overlapped {
-            unsafe { &raw mut (*this).overlapped }
+    // Model an inline kernel write while the payload's mutable borrow is
+    // protected, including a payload access after the kernel write.
+    #[inline(never)]
+    fn issue(op: &mut TestOp, optr: *mut OVERLAPPED) {
+        unsafe { (*optr).Internal = 7 };
+        op.value += 1;
+    }
+
+    #[test]
+    fn miri_opbox_inline_completion() {
+        let mut op = OpBox::new(Overlapped::new(1, 2), TestOp { value: 0 });
+        let optr = op.as_overlapped();
+        issue(&mut op, optr);
+        assert_eq!(op.value, 1);
+
+        // Completion recovers only the payload and can immediately resubmit.
+        unsafe {
+            let done = &mut *OpBox::<TestOp>::data_from_overlapped(optr.cast());
+            issue(done, optr);
+            assert_eq!(done.value, 2);
+            assert_eq!((*optr).Internal, 7);
         }
     }
 
     #[test]
     fn miri_opbox_kernel_pointer() {
-        let mut op = OpBox::new(TestOp {
-            overlapped: Overlapped::new(1, 2),
-            value: 0,
-        });
-        let optr = op.overlapped.as_overlapped();
-        assert_eq!(optr, op.as_ptr().cast());
-
-        // the op is used through the box while the "kernel" holds `optr`
-        op.value = 1;
-        assert_eq!(op.overlapped.user_data(), 2);
-
-        // the kernel writes the status, the completion takes the whole op
-        unsafe {
-            (*optr).Internal = 7;
-            let done = &mut *optr.cast::<TestOp>();
-            done.value += 1;
+        #[inline(never)]
+        fn inspect(op: &TestOp, optr: *mut OVERLAPPED) {
+            assert_eq!(op.value, 1);
+            unsafe { (*optr).Internal = 7 };
+            assert_eq!(format!("{op:?}"), "TestOp { value: 1 }");
         }
-        assert_eq!(op.overlapped.base.Internal, 7);
-        assert_eq!(op.value, 2);
 
-        let op = op.into_inner();
-        assert_eq!(op.value, 2);
+        let op = OpBox::new(Overlapped::new(1, 2), TestOp { value: 0 });
+        let optr = op.as_overlapped();
+        // Move the owner while the kernel holds its pointer.
+        let mut ops = vec![op];
+        let op = &mut ops[0];
+        op.value = 1;
+        inspect(op, optr);
+        issue(op, optr);
 
-        // a leaked op stays valid for the kernel
-        let raw = OpBox::new(TestOp {
-            overlapped: Overlapped::new(1, 3),
-            value: 5,
-        })
-        .into_raw();
         unsafe {
-            (*(*raw).overlapped.as_overlapped()).Internal = 1;
+            let done = &mut *OpBox::<TestOp>::data_from_overlapped(optr.cast());
+            done.value += 1;
+            assert_eq!((*optr).Internal, 7);
+        }
+        assert_eq!(op.value, 3);
+        assert_eq!(format!("{op:?}"), "TestOp { value: 3 }");
+        let op = ops.pop().unwrap().into_inner();
+        assert_eq!(op.value, 3);
+    }
+
+    #[test]
+    fn miri_opbox_released_allocation() {
+        let op = OpBox::new(Overlapped::new(1, 3), TestOp { value: 5 });
+        let optr = op.as_overlapped();
+        let raw = op.into_raw();
+        // Cleanup can move out the payload, leaving a live header for the kernel.
+        unsafe {
+            let state = ptr::read(&raw const (*raw).state);
+            (*optr).Internal = 1;
+            assert_eq!(state.value, 5);
+            assert_eq!((*optr.cast::<Overlapped>()).udata, 3);
+            // Restore the payload before freeing this test's allocation.
+            ptr::write(&raw mut (*raw).state, state);
             drop(Box::from_raw(raw));
         }
     }

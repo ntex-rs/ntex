@@ -3,6 +3,9 @@
 
 ## [4.6.0] - Unreleased
 
+* iocp: keep operation-state borrows disjoint from kernel-owned `OVERLAPPED`
+  memory during submission, cancellation and completion
+
 * iocp: wait for input with socket state notifications (`ProcessSocketNotifications`)
   instead of a zero-byte `WSARecv` per read, saves a recv post and its completion per
   read. Windows builds before 20348 (Windows 10, Server 2019), blocking sockets and

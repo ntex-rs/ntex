@@ -265,15 +265,23 @@ impl Reactor {
                 continue;
             }
             let overlapped_ptr: *mut Overlapped = entry.lpOverlapped.cast();
-            let overlapped = unsafe { &*overlapped_ptr };
-            if overlapped.hnd == 0 {
+            // Copy completion data without borrowing the header: the handler
+            // may resubmit the same op and let the kernel write it again.
+            let hnd = unsafe { (*overlapped_ptr).hnd };
+            if hnd == 0 {
                 continue;
             }
 
             #[allow(clippy::cast_possible_wrap)]
-            let status = overlapped.base.Internal as NTSTATUS;
+            let (udata, status, size) = unsafe {
+                (
+                    (*overlapped_ptr).udata,
+                    (*overlapped_ptr).base.Internal as NTSTATUS,
+                    (*overlapped_ptr).base.InternalHigh,
+                )
+            };
             let result = if status >= 0 {
-                Ok(overlapped.base.InternalHigh)
+                Ok(size)
             } else {
                 let error = unsafe { RtlNtStatusToDosError(status) };
                 match error {
@@ -285,11 +293,11 @@ impl Reactor {
                     | ERROR_NO_DATA => Ok(0),
                     // Partial transfer: data was delivered and more remains, so
                     // reporting 0 here would be read as a clean eof / write-zero.
-                    ERROR_MORE_DATA => Ok(overlapped.base.InternalHigh),
+                    ERROR_MORE_DATA => Ok(size),
                     _ => Err(io::Error::from_raw_os_error(wsa_error(error))),
                 }
             };
-            handlers[overlapped.hnd as usize].completed(overlapped.udata, result, overlapped_ptr);
+            handlers[hnd as usize].completed(udata, result, overlapped_ptr);
         }
         for hnd in handlers.iter_mut() {
             hnd.tick();

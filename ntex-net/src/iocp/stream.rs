@@ -241,13 +241,10 @@ impl StreamOps {
                 false
             }
         };
-        let mut rd_op = OpBox::new(ops::ReadOperation::new(
-            id,
-            sock,
-            ctx.clone(),
-            &self.0.api,
-            nonblocking,
-        ));
+        let mut rd_op = OpBox::new(
+            self.0.api.overlapped(ops::RD_OP),
+            ops::ReadOperation::new(id, sock, ctx.clone(), nonblocking),
+        );
         // edge-triggered notifications need a non-blocking socket, it is
         // read until drained
         if notify && nonblocking && self.0.api.register_notify(sock as _, id) {
@@ -255,7 +252,10 @@ impl StreamOps {
         }
 
         // write op
-        let wr_op = OpBox::new(ops::WriteOperation::new(id, sock, ctx, &self.0.api));
+        let wr_op = OpBox::new(
+            self.0.api.overlapped(ops::WR_OP),
+            ops::WriteOperation::new(id, sock, ctx),
+        );
 
         entry.insert(StreamItem {
             io,
@@ -343,11 +343,11 @@ impl Handler for StreamOpsHandler {
             st.streams
                 .get_mut(id)
                 .filter(|item| !item.is_closing())
-                .map(|item| item.rd_op.as_ptr())
+                .map(|item| (item.rd_op.as_ptr(), item.rd_op.as_overlapped()))
         });
-        if let Some(op) = op {
+        if let Some((op, overlapped)) = op {
             // SAFETY: see `StreamCtl::read()`
-            unsafe { (*op).notified() };
+            unsafe { (*op).notified(overlapped) };
         }
     }
 
@@ -500,20 +500,20 @@ impl StreamCtl {
             st.streams
                 .get_mut(self.id)
                 .filter(|item| !item.is_closing())
-                .map(|item| item.rd_op.as_ptr())
+                .map(|item| (item.rd_op.as_ptr(), item.rd_op.as_overlapped()))
         });
-        if let Some(op) = op {
+        if let Some((op, overlapped)) = op {
             // Issued outside `with()`: a recv that completes immediately runs
             // the read filters, and output they produce may be written right
             // away through `WeakStreamCtl::write`, which needs the storage.
             //
             // SAFETY: the operation is owned by an `OpBox`, so its address is
-            // stable, and it
-            // is only freed once this handle is dropped or the reactor stops. A
-            // close only starts from `shutdown()`, never from within the read.
+            // stable. It is only freed once this handle is dropped or the
+            // reactor stops. A close only starts from `shutdown()`, never from
+            // within the read.
             // A write issued from within the read borrows the item, which does
-            // not overlap the boxed operation.
-            unsafe { (*op).read() };
+            // not overlap the boxed payload. Neither borrow covers the header.
+            unsafe { (*op).read(overlapped) };
         }
     }
 
@@ -522,7 +522,8 @@ impl StreamCtl {
             if let Some(item) = st.streams.get_mut(self.id)
                 && !item.is_closing()
             {
-                item.wr_op.write();
+                let overlapped = item.wr_op.as_overlapped();
+                item.wr_op.write(overlapped);
             }
         });
     }
@@ -545,8 +546,10 @@ impl StreamItem {
     /// Both are always paused: a send left running would issue the next one
     /// once it completes.
     fn pause_ops(&mut self) -> bool {
-        let rd = self.rd_op.cancel();
-        let wr = self.wr_op.pause();
+        let overlapped = self.rd_op.as_overlapped();
+        let rd = self.rd_op.cancel(overlapped);
+        let overlapped = self.wr_op.as_overlapped();
+        let wr = self.wr_op.pause(overlapped);
         rd && wr
     }
 
@@ -608,8 +611,7 @@ impl StreamOpsStorage {
             if !item.flags.contains(Flags::CLOSED) {
                 // dropped without a shutdown, cancel so that the completions
                 // arrive; once closed, the handle value may be reused
-                item.rd_op.cancel();
-                item.wr_op.pause();
+                item.pause_ops();
             }
             return;
         }
@@ -675,7 +677,8 @@ impl WeakStreamCtl {
             if let Some(item) = st.streams.get_mut(self.id)
                 && !item.is_closing()
             {
-                item.wr_op.write();
+                let overlapped = item.wr_op.as_overlapped();
+                item.wr_op.write(overlapped);
             }
         });
     }
@@ -1042,7 +1045,7 @@ mod tests {
     fn complete_aborted_recv(ops: &StreamOps, id: usize) {
         let optr = ops
             .0
-            .with(|st| st.streams[id].rd_op.as_ptr().cast::<Overlapped>());
+            .with(|st| st.streams[id].rd_op.as_overlapped().cast::<Overlapped>());
         complete_aborted(ops, ops::RD_OP, optr);
     }
 
@@ -1050,7 +1053,7 @@ mod tests {
     fn complete_aborted_send(ops: &StreamOps, id: usize) {
         let optr = ops
             .0
-            .with(|st| st.streams[id].wr_op.as_ptr().cast::<Overlapped>());
+            .with(|st| st.streams[id].wr_op.as_overlapped().cast::<Overlapped>());
         complete_aborted(ops, ops::WR_OP, optr);
     }
 
@@ -1289,7 +1292,7 @@ mod tests {
 
     fn rd_optr(ops: &StreamOps, id: usize) -> *mut Overlapped {
         ops.0
-            .with(|st| st.streams[id].rd_op.as_ptr().cast::<Overlapped>())
+            .with(|st| st.streams[id].rd_op.as_overlapped().cast::<Overlapped>())
     }
 
     /// A pause leaves the zero-byte recv in flight, cancelling it would cost a
@@ -1421,7 +1424,7 @@ mod tests {
             ops::RD_OP,
             Ok(0),
             ops.0
-                .with(|st| st.streams[id].rd_op.as_ptr().cast::<Overlapped>()),
+                .with(|st| st.streams[id].rd_op.as_overlapped().cast::<Overlapped>()),
         );
         assert_eq!(
             io.with_read_dst(|buf| buf.split_to(buf.len())),
@@ -1635,7 +1638,7 @@ mod tests {
             ops::WR_OP,
             Ok(0),
             ops.0
-                .with(|st| st.streams[id].wr_op.as_ptr().cast::<Overlapped>()),
+                .with(|st| st.streams[id].wr_op.as_overlapped().cast::<Overlapped>()),
         );
         let err = ntex::time::timeout(ntex::time::Seconds(5), io.flush(true))
             .await
@@ -1682,7 +1685,7 @@ mod tests {
             ops::WR_OP,
             Ok(3),
             ops.0
-                .with(|st| st.streams[id].wr_op.as_ptr().cast::<Overlapped>()),
+                .with(|st| st.streams[id].wr_op.as_overlapped().cast::<Overlapped>()),
         );
         let mut buf = [0u8; 10];
         std::io::Read::read_exact(&mut peer, &mut buf).unwrap();
