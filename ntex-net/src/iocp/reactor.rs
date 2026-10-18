@@ -78,6 +78,10 @@ impl ReactorApi {
     pub(crate) fn overlapped(&self, id: u32) -> Overlapped {
         Overlapped::new(self.hnd, id)
     }
+
+    pub(crate) fn notify(&self) -> io::Result<()> {
+        self.reactor.notify()
+    }
 }
 
 /// IOCP reactor.
@@ -352,6 +356,21 @@ impl ReactorInner {
         })
     }
 
+    fn notify(&self) -> io::Result<()> {
+        syscall!(
+            BOOL,
+            PostQueuedCompletionStatus(
+                self.port.as_raw_handle().cast(),
+                0,
+                0,
+                // the kernel does not write to the `OVERLAPPED` of a posted
+                // packet, and the completion only reads the handler index
+                (&raw const self.overlapped.base).cast_mut().cast()
+            )
+        )?;
+        Ok(())
+    }
+
     #[cfg(test)]
     fn attach(&self, h: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         if skip_iocp_on_success {
@@ -520,18 +539,7 @@ unsafe impl Sync for ReactorInner {}
 impl Notify for ReactorHandle {
     /// Notify the driver.
     fn notify(&self) -> io::Result<()> {
-        syscall!(
-            BOOL,
-            PostQueuedCompletionStatus(
-                self.inner.port.as_raw_handle().cast(),
-                0,
-                0,
-                // the kernel does not write to the `OVERLAPPED` of a posted
-                // packet, and the completion only reads the handler index
-                (&raw const self.inner.overlapped.base).cast_mut().cast()
-            )
-        )?;
-        Ok(())
+        self.inner.notify()
     }
 }
 

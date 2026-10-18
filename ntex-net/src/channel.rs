@@ -9,11 +9,22 @@ pub fn create<T>() -> (Sender<T>, Receiver<T>) {
     let inner = Rc::new(Inner {
         value: Cell::new(None),
         rx_task: LocalWaker::new(),
+        #[cfg(windows)]
+        on_cancel: Cell::new(None),
     });
     let tx = Sender {
         inner: inner.clone(),
     };
     let rx = Receiver { inner };
+    (tx, rx)
+}
+
+#[cfg(windows)]
+pub(crate) fn create_with_cancel<T>(
+    on_cancel: impl FnOnce() + 'static,
+) -> (Sender<T>, Receiver<T>) {
+    let (tx, rx) = create();
+    tx.inner.on_cancel.set(Some(Box::new(on_cancel)));
     (tx, rx)
 }
 
@@ -39,9 +50,16 @@ impl<T> Unpin for Sender<T> {}
 struct Inner<T> {
     value: Cell<Option<io::Result<T>>>,
     rx_task: LocalWaker,
+    #[cfg(windows)]
+    on_cancel: Cell<Option<Box<dyn FnOnce()>>>,
 }
 
 impl<T> Sender<T> {
+    #[cfg(windows)]
+    pub(crate) fn is_closed(&self) -> bool {
+        Rc::strong_count(&self.inner) == 1
+    }
+
     /// Completes this oneshot with a successful result.
     ///
     /// This function will consume `self` and indicate to the other end, the
@@ -53,6 +71,9 @@ impl<T> Sender<T> {
     /// this function was called, however, then `Err` is returned with the value
     /// provided.
     pub fn send(self, val: io::Result<T>) -> Result<(), io::Result<T>> {
+        #[cfg(windows)]
+        drop(self.inner.on_cancel.take());
+
         if Rc::strong_count(&self.inner) == 2 {
             self.inner.value.set(Some(val));
             self.inner.rx_task.wake();
@@ -65,7 +86,18 @@ impl<T> Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        drop(self.inner.on_cancel.take());
         self.inner.rx_task.wake();
+    }
+}
+
+#[cfg(windows)]
+impl<T> Drop for Receiver<T> {
+    fn drop(&mut self) {
+        if let Some(on_cancel) = self.inner.on_cancel.take() {
+            on_cancel();
+        }
     }
 }
 
@@ -74,6 +106,8 @@ impl<T> Receiver<T> {
         let inner = Rc::new(Inner {
             value: Cell::new(Some(val)),
             rx_task: LocalWaker::new(),
+            #[cfg(windows)]
+            on_cancel: Cell::new(None),
         });
         Receiver { inner }
     }
@@ -120,6 +154,39 @@ impl<T: fmt::Debug> fmt::Debug for Inner<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn cancellation_only_while_pending() {
+        let cancelled = Rc::new(Cell::new(0));
+        let channel = || {
+            let cancelled = cancelled.clone();
+            create_with_cancel::<()>(move || cancelled.set(cancelled.get() + 1))
+        };
+
+        let (tx, rx) = channel();
+        assert!(!tx.is_closed());
+        drop(rx);
+        assert!(tx.is_closed());
+        assert_eq!(cancelled.get(), 1);
+        assert!(tx.send(Ok(())).is_err());
+        assert_eq!(cancelled.get(), 1);
+
+        let (tx, rx) = channel();
+        tx.send(Ok(())).unwrap();
+        drop(rx);
+        assert_eq!(cancelled.get(), 1);
+
+        let (tx, rx) = channel();
+        tx.send(Err(io::Error::other("connect failed"))).unwrap();
+        drop(rx);
+        assert_eq!(cancelled.get(), 1);
+
+        let (tx, rx) = channel();
+        drop(tx);
+        drop(rx);
+        assert_eq!(cancelled.get(), 1);
+    }
 
     #[ntex::test]
     async fn test_oneshot() {
