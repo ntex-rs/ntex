@@ -85,6 +85,8 @@
 * Fix `Worker::wait_for_status()` missing status changes when several clones of a
   worker wait at the same time. Each clone now observes every change
 
+* Fix the signal handling task keeping a stopped server and its factory alive
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);

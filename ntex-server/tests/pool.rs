@@ -692,6 +692,31 @@ async fn pool_status() {
     assert_eq!(c.shutdown.load(Relaxed), 1);
 }
 
+/// The signal task does not keep a stopped server alive.
+#[ntex::test]
+async fn pool_signals_release_stopped_server() {
+    let c = Counters::default();
+    let srv = WorkerPool::new()
+        .name("pool")
+        .workers(1)
+        .affinity(Affinity::Disabled)
+        .run(Cfg::new(&c));
+    wait_status(&srv, ServerStatus::Ready).await;
+    srv.stop(true).await;
+    drop(srv);
+
+    let mut released = false;
+    for _ in 0..200 {
+        if Arc::strong_count(&c.created) == 1 {
+            released = true;
+            break;
+        }
+        sleep(Millis(10)).await;
+    }
+    ntex::rt::System::current().disable_signals();
+    assert!(released, "the stopped server's factory is still alive");
+}
+
 /// A paused server stays paused when workers become available, and a server
 /// without available workers does not become ready when it is resumed.
 #[ntex::test]

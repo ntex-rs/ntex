@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, rc::Rc};
+use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, pin::pin, rc::Rc};
 
 use async_channel::{Receiver, Sender, unbounded};
 use ntex_rt::{System, signals::PanicSource, signals::Signal};
-use ntex_util::future::join_all;
+use ntex_util::future::{Either, join_all, select};
 use ntex_util::time::{Millis, sleep, timeout};
 
 use crate::affinity::{self, Placement};
@@ -171,9 +171,15 @@ impl<F: ServerConfiguration> ServerManager<F> {
         } else {
             System::current().enable_signals();
 
+            // the task ends when the server stops, so it does not keep the
+            // server's resources alive
             let srv2 = srv.clone();
             ntex_rt::spawn_detached(async move {
-                while let Ok(sigs) = ntex_rt::signals::signal().await {
+                let mut stopped =
+                    pin!(async { while srv2.status_changed().await != ServerStatus::Stopped {} });
+                while let Either::Left(Ok(sigs)) =
+                    select(ntex_rt::signals::signal(), stopped.as_mut()).await
+                {
                     for sig in sigs.as_ref() {
                         srv2.signal(sig.clone());
                     }
