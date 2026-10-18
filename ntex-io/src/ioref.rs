@@ -468,7 +468,7 @@ impl IoRef {
         let st = &self.0;
 
         if st.flags.is_active() {
-            let result = st.buffer.with_write_src(f);
+            let result = st.buffer.with_write_src(self, f);
             self.consolidate_write_state(false)?;
             Ok(result)
         } else if st.flags.is_peer_gone() {
@@ -520,7 +520,7 @@ impl IoRef {
     where
         F: FnOnce(&mut BytePages) -> R,
     {
-        self.0.buffer.with_write_dst(f)
+        self.0.buffer.with_write_dst(self, f)
     }
 
     /// Schedules buffered output for delivery and updates write state.
@@ -1195,7 +1195,7 @@ mod tests {
         // transport
         assert!(out_bytes.get() >= 16, "{}", out_bytes.get());
         assert_eq!(out_bytes.get() % 8, 0, "{}", out_bytes.get());
-        assert_eq!(state.0.buffer.with_write_dst(|b| b.len()), 0);
+        assert_eq!(state.0.buffer.with_write_dst(&state, |b| b.len()), 0);
 
         // refs
         assert_eq!(Rc::strong_count(&out_bytes), 3);

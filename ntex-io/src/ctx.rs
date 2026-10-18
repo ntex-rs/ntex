@@ -182,6 +182,9 @@ impl IoContext {
     }
 
     /// Marks backend transport teardown as complete.
+    ///
+    /// Output that did not reach the transport is discarded, buffered input
+    /// stays readable.
     pub fn stopped(&self, e: Option<io::Error>) {
         self.st().stop_connection(e);
     }
@@ -471,8 +474,13 @@ impl IoContext {
         }
 
         let before = st.buffer.write_buf_size();
-        let result = st.buffer.with_write_dst(|buffer| f(buffer));
-        st.track_wr_inflight(before, st.buffer.write_buf_size());
+        let result = st.buffer.with_write_dst(&self.0, |buffer| f(buffer));
+        if st.is_output_discarded() {
+            // `f` stopped or aborted the connection, pages it took are gone
+            st.wr_inflight.set(0);
+        } else {
+            st.track_wr_inflight(before, st.buffer.write_buf_size());
+        }
         st.sync_write_buffered();
 
         result
