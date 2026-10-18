@@ -2816,6 +2816,32 @@ mod tests {
         assert!(io.flags().is_read_ready());
     }
 
+    /// A cancelled full flush must not suppress the wake of a partial flush.
+    #[ntex::test]
+    async fn cancelled_full_flush_keeps_partial_flush_wake() {
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
+        );
+        let ctx = IoContext::new(io.get_ref());
+
+        io.with_write_src(|buf| buf.put_slice(b"12345678")).unwrap();
+        assert!(io.st().flags.is_wr_backpressure());
+        // full flush is polled and then dropped
+        assert!(lazy(|cx| io.poll_flush(cx, true)).await.is_pending());
+        assert!(io.st().flags.is_write_flush());
+
+        assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_pending());
+        assert!(io.st().dispatch_task.is_set());
+
+        // output drops below the release threshold, but is not drained
+        Iops::run();
+        assert_eq!(ctx.with_write_dst(|buf| buf.split_to(5).freeze()), b"12345");
+        assert_eq!(ctx.update_write_status(Ok(5)), IoTaskStatus::Io);
+        assert!(!io.st().dispatch_task.is_set());
+        assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_ready());
+    }
+
     #[ntex::test]
     async fn write() {
         let io = Io::new(

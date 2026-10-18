@@ -526,17 +526,14 @@ impl IoContext {
                 let len = st.buffer.write_buf_size();
                 let outstanding = st.write_outstanding();
 
-                // Full flush is active
-                if st.flags.is_write_flush() {
-                    // All output must reach the peer, including in-flight pages
-                    if outstanding == 0 {
-                        st.wake_dispatch_task();
-                    }
-                } else if st.flags.is_wr_backpressure()
-                    && st.should_disable_wr_backpressure(outstanding)
+                // A full flush completes once all output, including in-flight
+                // pages, reaches the peer. Write backpressure is released once
+                // outstanding output is below the threshold. Both are checked,
+                // the flush flag stays set if a full flush is cancelled
+                if (st.flags.is_write_flush() && outstanding == 0)
+                    || (st.flags.is_wr_backpressure()
+                        && st.should_disable_wr_backpressure(outstanding))
                 {
-                    // Write backpressure is active and outstanding output is
-                    // below the threshold
                     st.wake_dispatch_task();
                 }
 
