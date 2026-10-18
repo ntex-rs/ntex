@@ -80,6 +80,23 @@ pub(crate) struct Router<T> {
 /// See [`ServerConfiguration::incoming_cpu`].
 type IncomingCpu<T> = Box<dyn Fn(&T) -> Option<usize> + Send>;
 
+/// An item that was not sent to a worker.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Rejected<T> {
+    /// No worker is available.
+    NoWorker(T),
+    /// The server is stopping.
+    Closed(T),
+}
+
+impl<T> Rejected<T> {
+    fn into_inner(self) -> T {
+        match self {
+            Rejected::NoWorker(item) | Rejected::Closed(item) => item,
+        }
+    }
+}
+
 impl<T> Routing<T> {
     fn new(balancer: Balancer, capacity: usize, incoming_cpu: IncomingCpu<T>) -> Self {
         Routing {
@@ -96,12 +113,15 @@ impl<T> Routing<T> {
         self.router.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Sends `item` to a worker, returns it if no worker is available.
-    pub(crate) fn dispatch(&self, item: T, metrics: &Metrics) -> Result<(), T> {
+    /// Sends `item` to a worker, returns it if the server is stopping or no
+    /// worker is available.
+    pub(crate) fn dispatch(&self, item: T, metrics: &Metrics) -> Result<(), Rejected<T>> {
         let uses_cpu = {
             let mut r = self.lock();
-            if r.closed || r.workers.is_empty() {
-                return Err(item);
+            if r.closed {
+                return Err(Rejected::Closed(item));
+            } else if r.workers.is_empty() {
+                return Err(Rejected::NoWorker(item));
             }
             let r = &mut *r;
             r.balancer.uses_incoming_cpu(&r.workers)
@@ -122,9 +142,14 @@ impl<T> Routing<T> {
 }
 
 impl<T> Router<T> {
-    fn dispatch(&mut self, mut item: T, cpu: Option<usize>, metrics: &Metrics) -> Result<(), T> {
+    fn dispatch(
+        &mut self,
+        mut item: T,
+        cpu: Option<usize>,
+        metrics: &Metrics,
+    ) -> Result<(), Rejected<T>> {
         if self.closed {
-            return Err(item);
+            return Err(Rejected::Closed(item));
         }
         while !self.workers.is_empty() {
             let (idx, local) = self.balancer.select(&self.workers, cpu);
@@ -144,7 +169,7 @@ impl<T> Router<T> {
                 }
             }
         }
-        Err(item)
+        Err(Rejected::NoWorker(item))
     }
 }
 
@@ -394,8 +419,9 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 
     fn process(&mut self, item: F::Item) {
-        if let Err(item) = self.mgr.0.router.dispatch(item, &self.mgr.0.shared.metrics)
-            && !self.mgr.0.stopping.get()
+        // the item is dropped if the server is stopping
+        if let Err(Rejected::NoWorker(item)) =
+            self.mgr.0.router.dispatch(item, &self.mgr.0.shared.metrics)
         {
             log::error!("No workers");
             self.backlog.push_back(item);
@@ -436,7 +462,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         // new items do not overtake it
         while let Some(item) = self.backlog.pop_front() {
             if let Err(item) = routing.dispatch(item, &self.mgr.0.shared.metrics) {
-                self.backlog.push_front(item);
+                self.backlog.push_front(item.into_inner());
                 break;
             }
         }
@@ -681,5 +707,29 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         wrk.stop(Millis::ZERO).await;
+    }
+
+    /// An item submitted after the server passed the status check and
+    /// closed its router is returned, not queued.
+    #[test]
+    fn process_closed_router() {
+        let shared = Arc::new(ServerShared::new(Metrics::new(1)));
+        shared.set_status(ServerStatus::Ready);
+        let callback: IncomingCpu<usize> = Box::new(|_| None);
+        let r = Arc::new(Routing::new(
+            Balancer::new(LoadBalancing::IncomingCpu),
+            1,
+            callback,
+        ));
+        let (tx, rx) = unbounded();
+        let srv = Server::new(tx, shared, r.clone());
+
+        // no worker, the command loop queues the item
+        assert_eq!(srv.process(1), Ok(()));
+        assert!(matches!(rx.try_recv(), Ok(ServerCommand::Item(1))));
+
+        r.lock().closed = true;
+        assert_eq!(srv.process(2), Err(2));
+        assert!(rx.try_recv().is_err());
     }
 }
