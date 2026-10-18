@@ -596,6 +596,17 @@ fn finish_unshared(h: NonNull<Header>) {
     unsafe { (hdr.vtable.drop_output)(task.0) };
 }
 
+/// Clears `R_REGISTERING` if cloning the join waker unwinds. The stored
+/// awaiter is unchanged, a completion meanwhile skipped it and the free
+/// drops it.
+struct Registering<'a>(&'a AtomicU32);
+
+impl Drop for Registering<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_and(!R_REGISTERING, Ordering::AcqRel);
+    }
+}
+
 /// Releases a reference after completion was published, also while
 /// unwinding from an output drop.
 struct Release(NonNull<Header>);
@@ -1180,7 +1191,9 @@ impl<T> Task<T> {
                     Err(v) => cur = v,
                 }
             }
+            let guard = Registering(&hdr.remote);
             let old = unsafe { hdr.awaiter.register(cx.waker()) };
+            mem::forget(guard);
             let prev = hdr.remote.fetch_and(!R_REGISTERING, Ordering::AcqRel);
             // dropped outside of the registration, it may wait for the owner thread
             drop(old);
