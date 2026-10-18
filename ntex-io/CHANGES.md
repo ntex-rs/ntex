@@ -29,6 +29,10 @@
 * `Io::seal()`, `Io::boxed()`, `Io::add_filter()` and `Io::map_filter()` move the connection
   state without allocating a placeholder state, `Io::boxed()` no longer seals twice
 
+* Free output that can no longer be delivered when the transport reports the connection
+  stopped or the connection is force-closed, it was kept until `Io` was dropped. Buffered
+  input stays readable
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`

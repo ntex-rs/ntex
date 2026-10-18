@@ -156,18 +156,18 @@ impl Stack {
         self.borrow().write_dst_size()
     }
 
-    pub(crate) fn with_write_src<F, R>(&self, f: F) -> R
+    pub(crate) fn with_write_src<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
-        self.borrow().app.with_write(f)
+        self.borrow().app.with_write_of(io, f)
     }
 
-    pub(crate) fn with_write_dst<F, R>(&self, f: F) -> R
+    pub(crate) fn with_write_dst<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
-        self.borrow().transport().with_write(f)
+        self.borrow().transport().with_write_of(io, f)
     }
 
     pub(crate) fn read_dst_size(&self) -> usize {
@@ -311,6 +311,22 @@ impl Stack {
             b.with_write_if_free(BytePages::clear);
         }
     }
+
+    /// Frees buffered output, input is kept.
+    ///
+    /// Returns `false` if a write buffer is in use, its user clears it once
+    /// done, see `IoState::is_output_discarded`.
+    pub(crate) fn discard_write(&self) -> bool {
+        let mut cleared = true;
+        for b in self.borrow().buffers() {
+            if let Ok(mut wb) = b.write.try_borrow_mut() {
+                wb.clear();
+            } else {
+                cleared = false;
+            }
+        }
+        cleared
+    }
 }
 
 impl Buffer {
@@ -371,6 +387,20 @@ impl Buffer {
         F: FnOnce(&mut BytePages) -> R,
     {
         f(&mut self.write.borrow_mut())
+    }
+
+    /// Accesses the write buffer of `io`, output added after the connection
+    /// stopped or was aborted is dropped.
+    fn with_write_of<F, R>(&self, io: &IoRef, f: F) -> R
+    where
+        F: FnOnce(&mut BytePages) -> R,
+    {
+        let mut wb = self.write.borrow_mut();
+        let result = f(&mut wb);
+        if io.0.is_output_discarded() {
+            wb.clear();
+        }
+        result
     }
 }
 
@@ -603,6 +633,12 @@ impl FilterBuf<'_> {
             "{}: output written to the write destination of the innermost filter buffer is never sent",
             self.io.tag()
         );
+        if self.io.0.is_output_discarded() {
+            write_curr.clear();
+            if let Some(next) = next.as_deref_mut() {
+                next.clear();
+            }
+        }
         result
     }
 }
@@ -689,7 +725,7 @@ mod tests {
         assert_eq!(stack.write_buf_size(), 0);
 
         // the application and the transport share one buffer
-        stack.with_write_src(|buf| buf.put_slice(b"out"));
+        stack.with_write_src(&ioref, |buf| buf.put_slice(b"out"));
         assert_eq!(stack.write_buf_size(), 3);
         assert_eq!(stack.write_dst_size(), 3);
         stack.set_read_buf(BytesMut::from(&b"one"[..]));
@@ -718,7 +754,7 @@ mod tests {
         assert!(layers.wire.is_none());
 
         assert_eq!(
-            stack.with_write_dst(|buf| buf.split_to(3).freeze()),
+            stack.with_write_dst(&ioref, |buf| buf.split_to(3).freeze()),
             b"out".as_ref()
         );
         assert_eq!(stack.get_read_buf().as_deref(), Some(b"one-two".as_ref()));
@@ -740,7 +776,7 @@ mod tests {
 
         // data buffered before the layer is added belongs to the transport
         let stack = Stack::new(BytePageSize::Size8);
-        stack.with_write_src(|buf| buf.put_slice(b"plain"));
+        stack.with_write_src(&ioref, |buf| buf.put_slice(b"plain"));
         stack.set_read_buf(BytesMut::from(&b"hello"[..]));
         stack.add_layer(BytePageSize::Size16);
 
@@ -760,7 +796,7 @@ mod tests {
         });
 
         // output of both sides is pending, filter processing may be delayed
-        stack.with_write_src(|buf| buf.put_slice(b"app"));
+        stack.with_write_src(&ioref, |buf| buf.put_slice(b"app"));
         assert_eq!(stack.write_buf_size(), 8);
 
         stack.with_filter(&ioref, |ctx| {
@@ -787,7 +823,7 @@ mod tests {
         stack.with_read_dst(&ioref, |buf| assert_eq!(&buf[..], b"hello"));
         assert_eq!(stack.write_buf_size(), 8);
         assert_eq!(
-            stack.with_write_dst(|buf| buf.split_to(8).freeze()),
+            stack.with_write_dst(&ioref, |buf| buf.split_to(8).freeze()),
             b"plainapp".as_ref()
         );
         assert_eq!(stack.write_buf_size(), 0);
@@ -818,7 +854,7 @@ mod tests {
         // transport, the data of the first layer ends up in `wire`
         let stack = Stack::new(BytePageSize::Size8);
         for data in ["a", "bb", "cccc"] {
-            stack.with_write_src(|buf| buf.put_slice(data.as_bytes()));
+            stack.with_write_src(&ioref, |buf| buf.put_slice(data.as_bytes()));
             stack
                 .borrow()
                 .app
@@ -834,7 +870,7 @@ mod tests {
         assert!(layers.get(4).is_none());
 
         // only the outermost and the transport-facing buffers are pending
-        stack.with_write_src(|buf| buf.put_slice(b"app"));
+        stack.with_write_src(&ioref, |buf| buf.put_slice(b"app"));
         assert_eq!(stack.write_buf_size(), 4);
         assert_eq!(stack.write_dst_size(), 1);
         assert_eq!(stack.read_dst_size(), 0);
@@ -951,7 +987,7 @@ mod tests {
         let ioref = io.get_ref();
         let stack = Stack::new(BytePageSize::Size8);
 
-        stack.with_write_src(|buf| buf.put_slice(b"out"));
+        stack.with_write_src(&ioref, |buf| buf.put_slice(b"out"));
         stack.with_filter(&ioref, |ctx| {
             ctx.with_buffer(|buf| buf.with_write_buffers(BytePages::move_to));
         });
@@ -980,7 +1016,7 @@ mod tests {
         let ioref = io.get_ref();
         let stack = Stack::new(BytePageSize::Size8);
         stack.add_layer(BytePageSize::Size8);
-        stack.with_write_src(|buf| buf.put_slice(b"output"));
+        stack.with_write_src(&ioref, |buf| buf.put_slice(b"output"));
 
         let updates = stack.with_filter(&ioref, |ctx| {
             assert_eq!(ctx.write_dst_size(), 0);
@@ -997,7 +1033,7 @@ mod tests {
         assert!(updates.wants_write);
         assert_eq!(stack.write_buf_size(), 6);
         assert_eq!(
-            stack.with_write_dst(|buf| buf.split_to(6).freeze()),
+            stack.with_write_dst(&ioref, |buf| buf.split_to(6).freeze()),
             b"output".as_ref()
         );
         assert_eq!(stack.write_buf_size(), 0);

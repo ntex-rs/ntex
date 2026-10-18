@@ -216,6 +216,10 @@ impl IoState {
             self.wake_write_waiters();
             self.handle.take();
         }
+        if force {
+            // an aborted transport does not write buffered output
+            self.discard_output();
+        }
     }
 
     pub(super) fn stop_connection(&self, err: Option<io::Error>) {
@@ -223,8 +227,9 @@ impl IoState {
             log::trace!("{}: Stop io with error {:?}", self.cfg.tag(), err);
             self.set_error(err);
             self.flags.set_stopped();
-            // buffers held by the transport are gone with it
-            self.wr_inflight.set(0);
+            // nothing can deliver buffered output anymore, buffers held by
+            // the transport are gone with it
+            self.discard_output();
             self.wake_read_task();
             self.wake_write_task();
             self.wake_dispatch_task();
@@ -232,6 +237,22 @@ impl IoState {
             self.notify_disconnect();
             self.handle.take();
         }
+    }
+
+    /// Frees output that can not be delivered anymore, see
+    /// [`is_output_discarded`](Self::is_output_discarded).
+    fn discard_output(&self) {
+        self.wr_inflight.set(0);
+        // with a buffer in use, its user updates the buffered size afterwards
+        if self.buffer.discard_write() {
+            self.sync_write_buffered();
+        }
+    }
+
+    /// Whether the transport is gone or aborts the connection, so that output
+    /// can not be delivered anymore.
+    pub(super) fn is_output_discarded(&self) -> bool {
+        self.flags.is_closed() || self.flags.is_force_closing()
     }
 
     /// Gracefully shuts down the read and write I/O tasks.
@@ -4040,7 +4061,7 @@ mod tests {
         io.st().flags.unset_write_paused();
         io.st()
             .buffer
-            .with_write_src(|buf| buf.extend_from_slice(b"5678"));
+            .with_write_src(io.as_ref(), |buf| buf.extend_from_slice(b"5678"));
 
         // the queued output is not mistaken for held back output
         assert_eq!(ctx.update_write_status(Ok(page.len())), IoTaskStatus::Io);
@@ -4079,6 +4100,89 @@ mod tests {
             Poll::Ready(Readiness::Close)
         );
         assert!(io.st().flags.is_aborted());
+    }
+
+    /// Output can not be delivered once the transport is gone, it is freed
+    /// right away instead of when `Io` is dropped. Input stays readable.
+    #[ntex::test]
+    async fn stopped_discards_undeliverable_output() {
+        let io = Io::new(ManualTransport, SharedCfg::new("SRV"));
+        let ctx = IoContext::new(io.get_ref());
+        let _ = ctx.with_read_buf(|buf| {
+            buf.extend_from_slice(b"in");
+            Poll::Ready(Ok(2))
+        });
+        io.encode_slice(&vec![0; 1024 * 1024]).unwrap();
+
+        ctx.stopped(Some(io::Error::other("transport failed")));
+        assert!(io.is_closed());
+        assert_eq!(io.st().write_outstanding(), 0);
+        assert_eq!(io.st().buffer.read_dst_size(), 2);
+    }
+
+    /// An aborted transport does not write buffered output, including output
+    /// held by filters.
+    #[ntex::test]
+    async fn terminate_discards_output_of_all_layers() {
+        let io = Io::new(ManualTransport, SharedCfg::new("SRV")).add_filter(HoldOutput::default());
+        io.encode_slice(b"held").unwrap();
+        io.st()
+            .buffer
+            .with_write_dst(io.as_ref(), |buf| buf.extend_from_slice(b"wire"));
+        assert_eq!(io.st().write_outstanding(), 8);
+
+        io.terminate();
+        assert_eq!(io.st().write_outstanding(), 0);
+    }
+
+    /// A filter that aborts the connection while it holds the write buffers
+    /// does not leave output behind.
+    #[ntex::test]
+    async fn terminate_from_filter_discards_output() {
+        #[derive(Debug)]
+        struct Abort;
+
+        impl FilterLayer for Abort {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(|src, dst| {
+                    buf.io().terminate();
+                    dst.extend_from_slice(b"alert");
+                    src.extend_from_slice(b"rest");
+                });
+                Ok(())
+            }
+        }
+
+        let io = Io::new(ManualTransport, SharedCfg::new("SRV")).add_filter(Abort);
+        let ctx = IoContext::new(io.get_ref());
+        io.encode_slice(b"data").unwrap();
+
+        // the transport polls output, the filter runs and aborts
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 0);
+        assert!(io.st().flags.is_force_closing());
+        assert_eq!(io.st().write_outstanding(), 0);
+    }
+
+    /// Output returned to a write buffer that is in use when the connection
+    /// stops is freed once the buffer is released, pages the transport took
+    /// are not counted as in flight.
+    #[ntex::test]
+    async fn stop_while_write_buffer_in_use_discards_output() {
+        let io = Io::new(ManualTransport, SharedCfg::new("SRV"));
+        let ctx = IoContext::new(io.get_ref());
+        io.encode_slice(b"12345678").unwrap();
+
+        ctx.with_write_dst(|buf| {
+            let _page = buf.take();
+            ctx.stopped(None);
+            buf.extend_from_slice(b"back");
+        });
+        assert_eq!(io.st().write_outstanding(), 0);
+        assert_eq!(io.st().wr_buffered.get(), 0);
     }
 
     #[ntex::test]
@@ -4821,7 +4925,8 @@ mod tests {
         let layer = Layer::new(F, Base::new(io.get_ref()));
 
         let st = io.st();
-        st.buffer.with_write_src(|p| p.put_slice(b"123"));
+        st.buffer
+            .with_write_src(io.as_ref(), |p| p.put_slice(b"123"));
         assert_eq!(st.buffer.write_buf_size(), 3);
         let res = st.buffer.with_filter(io.as_ref(), |f| layer.shutdown(f));
         assert!(matches!(res, Ok(Poll::Ready(()))));
