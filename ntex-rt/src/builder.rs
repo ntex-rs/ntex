@@ -326,6 +326,9 @@ impl SystemRunner {
         unsafe {
             crate::remove_all_items();
         }
+        if let Some(arb) = crate::Arbiter::try_current() {
+            arb.finalize();
+        }
         result
     }
 }
@@ -368,6 +371,7 @@ impl fmt::Debug for SystemRunner {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{cell::Cell, cell::RefCell, time::Duration};
 
     use super::*;
@@ -484,5 +488,68 @@ mod tests {
         }));
         assert!(result.is_err());
         assert_stopped(&arb);
+    }
+
+    #[test]
+    fn primary_arbiter_finalized() {
+        fn with_on_stop(calls: &Arc<AtomicUsize>) -> Arbiter {
+            let calls = calls.clone();
+            Arbiter::current().on_stop(move || {
+                calls.fetch_add(1, Ordering::Relaxed);
+            })
+        }
+
+        // root future completion
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls2 = calls.clone();
+        let arb = System::new("test", TestRunner).block_on(async move { with_on_stop(&calls2) });
+        assert!(!arb.is_running());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        // root future panic
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (calls2, slot) = (calls.clone(), Rc::new(RefCell::new(None)));
+        let slot2 = slot.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            System::new("test", TestRunner).block_on(async move {
+                *slot2.borrow_mut() = Some(with_on_stop(&calls2));
+                panic!("root future panic");
+            });
+        }));
+        assert!(result.is_err());
+        assert!(!slot.borrow().as_ref().unwrap().is_running());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        // `run`
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (calls2, slot) = (calls.clone(), Rc::new(RefCell::new(None)));
+        let slot2 = slot.clone();
+        System::new("test", TestRunner)
+            .run(move || {
+                *slot2.borrow_mut() = Some(with_on_stop(&calls2));
+                System::current().stop();
+                Ok(())
+            })
+            .unwrap();
+        assert!(!slot.borrow().as_ref().unwrap().is_running());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "tokio")]
+    #[test]
+    fn run_local_finalizes_primary_arbiter() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls2 = calls.clone();
+        let rt = tok_io::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let arb = rt.block_on(System::new("test", TestRunner).run_local(async move {
+            Arbiter::current().on_stop(move || {
+                calls2.fetch_add(1, Ordering::Relaxed);
+            })
+        }));
+        assert!(!arb.is_running());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }

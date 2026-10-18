@@ -158,11 +158,9 @@ impl Arbiter {
                 let (stop, stop_rx) = oneshot::channel();
                 clear_storage();
 
-                let on_stop = Arc::new(Mutex::new(Vec::new()));
-                let on_stop2 = on_stop.clone();
-
+                // `block_on` finalizes the arbiter once its event loop exits
                 let result = crate::driver::block_on(config.runner.as_ref(), async move {
-                    let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx, on_stop);
+                    let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx, Arc::default());
                     sys.register_arbiter(arb.clone());
                     // `Arbiter::latency()` is available once the arbiter is returned
                     start_latency_sampler(&arb.0.latency, config.latency_interval);
@@ -183,15 +181,7 @@ impl Arbiter {
 
                     // run loop
                     let _ = stop_rx.await;
-
-                    // mark as not running
-                    arb.0.running.store(false, Ordering::Relaxed);
                 });
-
-                let on_stop = mem::take(&mut *on_stop2.lock());
-                for f in on_stop {
-                    f();
-                }
 
                 // unregister arbiter
                 sys2.unregister_arbiter(Id(id));
@@ -343,6 +333,26 @@ impl Arbiter {
     {
         self.0.on_stop.lock().push(Box::new(f));
         self
+    }
+
+    /// Returns the arbiter of the current thread, if any.
+    pub(crate) fn try_current() -> Option<Arbiter> {
+        ADDR.try_with(|cell| cell.borrow().clone()).ok().flatten()
+    }
+
+    /// Marks the arbiter as stopped and runs its `on_stop` callbacks,
+    /// called once its event loop has exited.
+    pub(crate) fn finalize(&self) {
+        self.0.running.store(false, Ordering::Relaxed);
+        let on_stop = mem::take(&mut *self.0.on_stop.lock());
+        for f in on_stop {
+            if thread::panicking() {
+                // a second panic while unwinding would abort the process
+                let _ = panic::catch_unwind(panic::AssertUnwindSafe(f));
+            } else {
+                f();
+            }
+        }
     }
 
     /// Waits for the arbiter's thread to stop.
