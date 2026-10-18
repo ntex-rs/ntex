@@ -794,14 +794,16 @@ impl Remote {
             state |= CLOSE;
             hdr.state.set(state);
         }
-        if cur & (R_WOKEN | R_CANCEL) != 0 && state & (SCHEDULED | RUNNING | FINISHED) == 0 {
-            // the queue reference passes to the runnable
+        if cur & (R_WOKEN | R_CANCEL) != 0 && state & (SCHEDULED | FINISHED) == 0 {
             hdr.state.set(state | SCHEDULED);
-            Some(Runnable(h))
-        } else {
-            release_local(h);
-            None
+            if state & RUNNING == 0 {
+                // the queue reference passes to the runnable
+                return Some(Runnable(h));
+            }
+            // a running task is queued by the runner after the poll
         }
+        release_local(h);
+        None
     }
 }
 
