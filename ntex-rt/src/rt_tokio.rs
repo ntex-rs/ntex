@@ -65,7 +65,7 @@ impl std::error::Error for JoinError {}
 #[derive(Debug)]
 enum Either<T> {
     Task(tok_io::task::JoinHandle<T>),
-    Spawn(oneshot::AsyncReceiver<T>),
+    Spawn(crate::task::RemoteJoin<T>),
 }
 
 #[derive(Debug)]
@@ -76,8 +76,10 @@ pub struct JoinHandle<T> {
 impl<T> JoinHandle<T> {
     /// Cancels the task.
     pub fn cancel(mut self) {
-        if let Some(Either::Task(fut)) = self.task.take() {
-            fut.abort();
+        match self.task.take() {
+            Some(Either::Task(fut)) => fut.abort(),
+            Some(Either::Spawn(fut)) => fut.cancel(),
+            None => (),
         }
     }
 
@@ -90,7 +92,7 @@ impl<T> JoinHandle<T> {
     pub fn is_finished(&self) -> bool {
         match &self.task {
             Some(Either::Task(fut)) => fut.is_finished(),
-            Some(Either::Spawn(fut)) => fut.is_closed(),
+            Some(Either::Spawn(fut)) => fut.is_finished(),
             None => true,
         }
     }
@@ -209,17 +211,11 @@ impl Handle {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let (tx, rx) = oneshot::async_channel();
-
-        let _ = self
-            .sender
-            .try_send(ArbiterCommand::Execute(Box::pin(async move {
-                let result = future.await;
-                let _ = tx.send(result);
-            })));
-
         JoinHandle {
-            task: Some(Either::Spawn(rx)),
+            task: Some(Either::Spawn(crate::task::RemoteJoin::spawn(
+                &self.sender,
+                future,
+            ))),
         }
     }
 

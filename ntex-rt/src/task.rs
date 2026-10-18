@@ -102,6 +102,82 @@ pub(crate) fn wrap<F: Future>(fut: F) -> impl Future<Output = F::Output> {
     }
 }
 
+#[cfg(any(feature = "tokio", feature = "compio"))]
+pub(crate) use remote::RemoteJoin;
+
+#[cfg(any(feature = "tokio", feature = "compio"))]
+mod remote {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll};
+    use std::{future::Future, future::poll_fn, pin::Pin, pin::pin, sync::Arc};
+
+    use async_channel::Sender;
+    use atomic_waker::AtomicWaker;
+
+    use crate::arbiter::ArbiterCommand;
+
+    #[derive(Debug, Default)]
+    struct Cancel {
+        cancelled: AtomicBool,
+        waker: AtomicWaker,
+    }
+
+    /// A task spawned on an arbiter from any thread, cancelling it drops the
+    /// future on the arbiter thread.
+    #[derive(Debug)]
+    pub(crate) struct RemoteJoin<T> {
+        rx: oneshot::AsyncReceiver<T>,
+        cancel: Arc<Cancel>,
+    }
+
+    impl<T: Send + 'static> RemoteJoin<T> {
+        pub(crate) fn spawn<F>(sender: &Sender<ArbiterCommand>, future: F) -> Self
+        where
+            F: Future<Output = T> + Send + 'static,
+        {
+            let (tx, rx) = oneshot::async_channel();
+            let cancel = Arc::new(Cancel::default());
+            let state = cancel.clone();
+            let _ = sender.try_send(ArbiterCommand::Execute(Box::pin(async move {
+                let mut fut = pin!(future);
+                let res = poll_fn(|cx| {
+                    state.waker.register(cx.waker());
+                    if state.cancelled.load(Ordering::Acquire) {
+                        Poll::Ready(None)
+                    } else {
+                        fut.as_mut().poll(cx).map(Some)
+                    }
+                })
+                .await;
+                if let Some(res) = res {
+                    let _ = tx.send(res);
+                }
+            })));
+            Self { rx, cancel }
+        }
+    }
+
+    impl<T> RemoteJoin<T> {
+        /// Cancels the task, a task that did not start never runs.
+        pub(crate) fn cancel(self) {
+            self.cancel.cancelled.store(true, Ordering::Release);
+            self.cancel.waker.wake();
+        }
+
+        pub(crate) fn is_finished(&self) -> bool {
+            self.rx.is_closed()
+        }
+    }
+
+    impl<T> Future for RemoteJoin<T> {
+        type Output = Result<T, oneshot::RecvError>;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Pin::new(&mut self.rx).poll(cx)
+        }
+    }
+}
+
 impl Drop for Data {
     fn drop(&mut self) {
         self.cb.after(self.ptr);
