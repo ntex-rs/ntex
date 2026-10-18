@@ -3,7 +3,7 @@ use std::{fmt, panic::Location, pin::Pin, task::Context, task::Poll, task::ready
 #[cfg(not(ntex_rt_task))]
 type Task<T> = async_task::Task<T, crate::rt::queues::TaskMeta>;
 #[cfg(ntex_rt_task)]
-type Task<T> = crate::raw::Task<T>;
+type Task<T> = crate::rt::raw::Task<T>;
 
 /// The location a task was spawned at.
 pub(crate) type SpawnLocation = &'static Location<'static>;
