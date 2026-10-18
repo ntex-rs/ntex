@@ -1070,6 +1070,14 @@ mod tests {
 
     use super::*;
 
+    /// Iterations of a stress test, fewer under Miri.
+    const fn iters(n: usize, miri: usize) -> usize {
+        if cfg!(miri) { miri } else { n }
+    }
+
+    /// Wall clock limit of a wait, Miri runs much slower.
+    const WAIT: Duration = Duration::from_secs(if cfg!(miri) { 600 } else { 30 });
+
     #[derive(Debug)]
     struct NoopNotify;
 
@@ -1164,7 +1172,8 @@ mod tests {
         }
 
         const THREADS: usize = 4;
-        const TASKS: usize = 10_000;
+        const TASKS: usize = iters(10_000, 50);
+        const LOST: Duration = if cfg!(miri) { WAIT } else { Duration::from_secs(5) };
 
         let ev = Arc::new(Event::default());
         let rt = Runtime::new(Box::new(EventNotify(ev.clone())));
@@ -1190,7 +1199,7 @@ mod tests {
                 let guard = ev.0.lock().unwrap();
                 // the last tasks may have run in this poll
                 let (mut guard, res) =
-                    ev.1.wait_timeout_while(guard, Duration::from_secs(5), |n| {
+                    ev.1.wait_timeout_while(guard, LOST, |n| {
                         !*n && cnt.load(Ordering::Relaxed) < THREADS * TASKS
                     })
                     .unwrap();
@@ -1644,7 +1653,7 @@ mod tests {
         let start = Instant::now();
         CURRENT_RUNTIME.set(rt, || {
             while !cond() {
-                assert!(start.elapsed() < Duration::from_secs(30), "timeout");
+                assert!(start.elapsed() < WAIT, "timeout");
                 if rt.poll() == PollResult::Pending {
                     thread::yield_now();
                 }
@@ -1730,7 +1739,7 @@ mod tests {
 
     #[test]
     fn remote_wakers_stress() {
-        const POLLS: usize = 5000;
+        const POLLS: usize = iters(5000, 50);
 
         let rt = Runtime::new(Box::new(NoopNotify));
         let slot = Slot::default();
@@ -2108,7 +2117,7 @@ mod tests {
 
     #[test]
     fn remote_join_race() {
-        const N: usize = 2000;
+        const N: usize = iters(2000, 50);
 
         let rt = Runtime::new(Box::new(NoopNotify));
         let (tx, rx) = std::sync::mpsc::channel::<JoinHandle<usize>>();
@@ -2198,7 +2207,7 @@ mod tests {
         let rt = Runtime::new(Box::new(NoopNotify));
         let created = Counter::default();
         let out = Counter::default();
-        for _ in 0..500 {
+        for _ in 0..iters(500, 10) {
             let dropped = Arc::new(AtomicBool::new(false));
             let flag = DropFlag(dropped.clone());
             let slot = Slot::default();
