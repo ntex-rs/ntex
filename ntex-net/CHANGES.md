@@ -3,6 +3,9 @@
 
 ## [4.6.0] - Unreleased
 
+* iocp: co-allocate each stream's read and write operations, removing one heap
+  allocation per connection while preserving their completion lifetimes
+
 * iocp: reject handler registration during construction or dispatch with an
   explicit panic instead of losing registrations
 

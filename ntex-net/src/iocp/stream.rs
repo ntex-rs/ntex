@@ -9,7 +9,7 @@ use slab::Slab;
 use socket2::Socket;
 use windows_sys::Win32::Networking::WinSock;
 
-use super::{Handler, OpBox, Overlapped, Reactor, ReactorApi, ops};
+use super::{Handler, OpPairBox, Overlapped, Reactor, ReactorApi, ops};
 use crate::helpers::Queue;
 
 /// Releases a socket, gracefully unless the connection was force-closed.
@@ -166,8 +166,7 @@ struct StreamItem {
     // completes immediately runs the read filters inside `ReadOperation::read()`,
     // and a write they issue borrows the item while that `&mut` is live. This
     // also keeps their addresses stable while the slab grows and moves items.
-    rd_op: OpBox<ops::ReadOperation>,
-    wr_op: OpBox<ops::WriteOperation>,
+    ops: OpPairBox<ops::ReadOperation, ops::WriteOperation>,
     close: Option<pool::Sender<io::Result<()>>>,
 }
 
@@ -254,26 +253,23 @@ impl StreamOps {
                 false
             }
         };
-        let mut rd_op = OpBox::new(
-            self.0.api.overlapped(ops::RD_OP),
-            ops::ReadOperation::new(id, sock, ctx.clone(), nonblocking),
-        );
+        let mut rd_op = ops::ReadOperation::new(id, sock, ctx.clone(), nonblocking);
         // edge-triggered notifications need a non-blocking socket, it is
         // read until drained
         if notify && nonblocking && self.0.api.register_notify(sock as _, id) {
             rd_op.use_notifications();
         }
 
-        // write op
-        let wr_op = OpBox::new(
+        let ops = OpPairBox::new(
+            self.0.api.overlapped(ops::RD_OP),
+            rd_op,
             self.0.api.overlapped(ops::WR_OP),
             ops::WriteOperation::new(id, sock, ctx),
         );
 
         entry.insert(StreamItem {
             io,
-            rd_op,
-            wr_op,
+            ops,
             addr,
             close: None,
             flags: Flags::empty(),
@@ -310,7 +306,7 @@ impl Handler for StreamOpsHandler {
                     && let Some(tx) = item.close.take()
                 {
                     item.flags.insert(Flags::CLOSED);
-                    let _tag = item.rd_op.tag();
+                    let _tag = item.ops.read().tag();
                     let io = item.io.as_raw_socket() as _;
                     #[cfg(feature = "trace")]
                     log::trace!("{_tag}: CloseWait({:?})", io);
@@ -318,7 +314,7 @@ impl Handler for StreamOpsHandler {
                     // `shutdown()` is waiting on `tx`, and reports the result
                     // through `IoContext::stopped`, so it must not resolve
                     // before the socket is actually closed
-                    match close_socket(io, terminate, !item.rd_op.is_blocking()) {
+                    match close_socket(io, terminate, !item.ops.read().is_blocking()) {
                         Close::Done(res) => {
                             let _ = tx.send(res);
                         }
@@ -356,7 +352,7 @@ impl Handler for StreamOpsHandler {
             st.streams
                 .get_mut(id)
                 .filter(|item| !item.is_closing())
-                .map(|item| (item.rd_op.as_ptr(), item.rd_op.as_overlapped()))
+                .map(|item| (item.ops.read_ptr(), item.ops.read_overlapped()))
         });
         if let Some((op, overlapped)) = op {
             // SAFETY: see `StreamCtl::read()`
@@ -377,7 +373,7 @@ impl Handler for StreamOpsHandler {
                 if item.flags.contains(Flags::CLOSED) {
                     // a close job owns the socket, a forced close may have left
                     // operations in flight, see below
-                    if item.rd_op.is_pending() || item.wr_op.is_pending() {
+                    if item.ops.read().is_pending() || item.ops.write().is_pending() {
                         mem::forget(item);
                     } else {
                         mem::forget(item.io);
@@ -385,20 +381,20 @@ impl Handler for StreamOpsHandler {
                     continue;
                 }
                 let io = item.io.as_raw_socket() as _;
-                let tag = item.rd_op.tag();
+                let tag = item.ops.read().tag();
                 log::trace!("{tag}: Unclosed socket ({io:?}) {:?}", item.addr);
                 // the reactor has stopped, waiting here blocks nothing, while
                 // the blocking pool may never run a close handed to it
                 let res = close_socket(
                     io,
                     item.flags.contains(Flags::TERMINATE),
-                    !item.rd_op.is_blocking(),
+                    !item.ops.read().is_blocking(),
                 )
                 .finish();
                 if let Err(err) = res {
                     log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
                 }
-                if item.rd_op.is_pending() || item.wr_op.is_pending() {
+                if item.ops.read().is_pending() || item.ops.write().is_pending() {
                     // Closing the socket cancels the pending operations, but
                     // the kernel still writes their completion into the
                     // `OVERLAPPED` and buffers inside the item, and nothing
@@ -456,14 +452,14 @@ impl StreamCtl {
                     // no outstanding ops
                     item.flags.insert(Flags::CLOSED);
                     Some(Either::Left((
-                        item.rd_op.tag(),
+                        item.ops.read().tag(),
                         item.io.as_raw_socket() as _,
-                        !item.rd_op.is_blocking(),
+                        !item.ops.read().is_blocking(),
                     )))
                 } else {
                     let (tx, rx) = self.inner.pool.channel();
                     item.close = Some(tx);
-                    Some(Either::Right((rx, item.rd_op.shutdown_timeout())))
+                    Some(Either::Right((rx, item.ops.read().shutdown_timeout())))
                 }
             } else {
                 None
@@ -513,14 +509,14 @@ impl StreamCtl {
             st.streams
                 .get_mut(self.id)
                 .filter(|item| !item.is_closing())
-                .map(|item| (item.rd_op.as_ptr(), item.rd_op.as_overlapped()))
+                .map(|item| (item.ops.read_ptr(), item.ops.read_overlapped()))
         });
         if let Some((op, overlapped)) = op {
             // Issued outside `with()`: a recv that completes immediately runs
             // the read filters, and output they produce may be written right
             // away through `WeakStreamCtl::write`, which needs the storage.
             //
-            // SAFETY: the operation is owned by an `OpBox`, so its address is
+            // SAFETY: the operation is owned by an `OpPairBox`, so its address is
             // stable. It is only freed once this handle is dropped or the
             // reactor stops. A close only starts from `shutdown()`, never from
             // within the read.
@@ -535,8 +531,8 @@ impl StreamCtl {
             if let Some(item) = st.streams.get_mut(self.id)
                 && !item.is_closing()
             {
-                let overlapped = item.wr_op.as_overlapped();
-                item.wr_op.write(overlapped);
+                let overlapped = item.ops.write_overlapped();
+                item.ops.write_mut().write(overlapped);
             }
         });
     }
@@ -546,7 +542,7 @@ impl StreamCtl {
             if let Some(item) = st.streams.get_mut(self.id)
                 && !item.is_closing()
             {
-                item.rd_op.pause();
+                item.ops.read_mut().pause();
             }
         });
     }
@@ -559,10 +555,10 @@ impl StreamItem {
     /// Both are always paused: a send left running would issue the next one
     /// once it completes.
     fn pause_ops(&mut self) -> bool {
-        let overlapped = self.rd_op.as_overlapped();
-        let rd = self.rd_op.cancel(overlapped);
-        let overlapped = self.wr_op.as_overlapped();
-        let wr = self.wr_op.pause(overlapped);
+        let overlapped = self.ops.read_overlapped();
+        let rd = self.ops.read_mut().cancel(overlapped);
+        let overlapped = self.ops.write_overlapped();
+        let wr = self.ops.write_mut().pause(overlapped);
         rd && wr
     }
 
@@ -583,7 +579,7 @@ impl StreamOpsStorage {
         #[cfg(feature = "trace")]
         log::trace!(
             "{}: DropStream ({:?}) f:{:?}",
-            item.rd_op.tag(),
+            item.ops.read().tag(),
             item.io.as_raw_socket(),
             item.flags,
         );
@@ -600,7 +596,7 @@ impl StreamOpsStorage {
         #[cfg(feature = "trace")]
         log::trace!(
             "{}: DropStreamSec ({:?}) f:{:?}",
-            item.rd_op.tag(),
+            item.ops.read().tag(),
             item.io.as_raw_socket(),
             item.flags,
         );
@@ -620,7 +616,7 @@ impl StreamOpsStorage {
         if !item.flags.contains(Flags::DROPPED_PRI | Flags::DROPPED_SEC) {
             return;
         }
-        if item.rd_op.is_pending() || item.wr_op.is_pending() {
+        if item.ops.read().is_pending() || item.ops.write().is_pending() {
             if !item.flags.contains(Flags::CLOSED) {
                 // dropped without a shutdown, cancel so that the completions
                 // arrive; once closed, the handle value may be reused
@@ -640,9 +636,9 @@ impl StreamOpsStorage {
         item.close.take()?;
         item.flags.insert(Flags::CLOSED | Flags::TERMINATE);
         Some((
-            item.rd_op.tag(),
+            item.ops.read().tag(),
             item.io.as_raw_socket() as _,
-            !item.rd_op.is_blocking(),
+            !item.ops.read().is_blocking(),
         ))
     }
 
@@ -654,14 +650,15 @@ impl StreamOpsStorage {
         // memory. `release_if_done()` waits for both operations, and
         // `cleanup()` takes the items that are still registered at shutdown.
         debug_assert!(
-            !item.rd_op.is_pending() && !item.wr_op.is_pending(),
+            !item.ops.read().is_pending() && !item.ops.write().is_pending(),
             "{}: stream released with an operation in flight",
-            item.rd_op.tag()
+            item.ops.read().tag()
         );
         if !item.flags.contains(Flags::CLOSED) {
             let io = item.io.as_raw_socket() as _;
             let terminate = item.flags.contains(Flags::TERMINATE);
-            close_socket(io, terminate, !item.rd_op.is_blocking()).detach(io, item.rd_op.tag());
+            close_socket(io, terminate, !item.ops.read().is_blocking())
+                .detach(io, item.ops.read().tag());
         }
         mem::forget(item.io);
     }
@@ -690,8 +687,8 @@ impl WeakStreamCtl {
             if let Some(item) = st.streams.get_mut(self.id)
                 && !item.is_closing()
             {
-                let overlapped = item.wr_op.as_overlapped();
-                item.wr_op.write(overlapped);
+                let overlapped = item.ops.write_overlapped();
+                item.ops.write_mut().write(overlapped);
             }
         });
     }
@@ -747,7 +744,7 @@ mod tests {
     #[test]
     fn stream_item_is_compact() {
         assert!(
-            mem::size_of::<StreamItem>() <= 80,
+            mem::size_of::<StreamItem>() <= 72,
             "StreamItem is {} bytes",
             mem::size_of::<StreamItem>()
         );
@@ -902,7 +899,11 @@ mod tests {
         std::net::TcpStream,
     )> {
         let res = registered_with(reactor, true);
-        if res.2.0.with(|st| st.streams[res.1.id].rd_op.is_notified()) {
+        if res
+            .2
+            .0
+            .with(|st| st.streams[res.1.id].ops.read().is_notified())
+        {
             Some(res)
         } else {
             eprintln!("socket state notifications are not available, skipped");
@@ -986,7 +987,8 @@ mod tests {
                 let release = block_worker();
                 let reactor = Reactor::new().unwrap();
                 let (io, ctl, ops, raw, mut peer) = registered(&reactor);
-                ops.0.with(|st| st.streams[ctl.id].rd_op.fake_blocking());
+                ops.0
+                    .with(|st| st.streams[ctl.id].ops.read_mut().fake_blocking());
 
                 {
                     let mut shutdown = pin!(ctl.shutdown(false));
@@ -1019,8 +1021,8 @@ mod tests {
                 let reactor = Reactor::new().unwrap();
                 let (io, ctl, ops, raw, peer) = registered(&reactor);
                 ops.0.with(|st| {
-                    st.streams[ctl.id].rd_op.fake_blocking();
-                    st.streams[ctl.id].rd_op.fake_pending();
+                    st.streams[ctl.id].ops.read_mut().fake_blocking();
+                    st.streams[ctl.id].ops.read_mut().fake_pending();
                 });
 
                 {
@@ -1104,7 +1106,7 @@ mod tests {
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         ctl.read();
         assert!(
-            ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()),
+            ops.0.with(|st| st.streams[ctl.id].ops.read().is_pending()),
             "recv completed without data"
         );
 
@@ -1128,7 +1130,7 @@ mod tests {
 
         ctl.read();
         assert!(
-            ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()),
+            ops.0.with(|st| st.streams[ctl.id].ops.read().is_pending()),
             "recv completed without data"
         );
         let buf = BytesMut::with_page_size(page);
@@ -1152,7 +1154,7 @@ mod tests {
 
         ctl.read();
         assert!(
-            ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()),
+            ops.0.with(|st| st.streams[ctl.id].ops.read().is_pending()),
             "no recv waits for more input"
         );
         assert_eq!(
@@ -1171,7 +1173,7 @@ mod tests {
     fn complete_aborted_recv(ops: &StreamOps, id: usize) {
         let optr = ops
             .0
-            .with(|st| st.streams[id].rd_op.as_overlapped().cast::<Overlapped>());
+            .with(|st| st.streams[id].ops.read_overlapped().cast::<Overlapped>());
         complete_aborted(ops, ops::RD_OP, optr);
     }
 
@@ -1179,7 +1181,7 @@ mod tests {
     fn complete_aborted_send(ops: &StreamOps, id: usize) {
         let optr = ops
             .0
-            .with(|st| st.streams[id].wr_op.as_overlapped().cast::<Overlapped>());
+            .with(|st| st.streams[id].ops.write_overlapped().cast::<Overlapped>());
         complete_aborted(ops, ops::WR_OP, optr);
     }
 
@@ -1202,9 +1204,9 @@ mod tests {
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         let id = ctl.id;
         ops.0.with(|st| {
-            st.streams[id].rd_op.fake_blocking();
-            st.streams[id].rd_op.fake_pending();
-            st.streams[id].wr_op.fake_pending_with(&[b"data"]);
+            st.streams[id].ops.read_mut().fake_blocking();
+            st.streams[id].ops.read_mut().fake_pending();
+            st.streams[id].ops.write_mut().fake_pending_with(&[b"data"]);
         });
 
         {
@@ -1218,13 +1220,13 @@ mod tests {
             })
             .await;
             assert!(
-                ops.0.with(|st| st.streams[id].wr_op.is_closing()),
+                ops.0.with(|st| st.streams[id].ops.write().is_closing()),
                 "send in flight not cancelled"
             );
 
             complete_aborted_send(&ops, id);
             assert_eq!(
-                ops.0.with(|st| st.streams[id].wr_op.unsent()),
+                ops.0.with(|st| st.streams[id].ops.write().unsent()),
                 0,
                 "cancelled send kept its pages"
             );
@@ -1247,7 +1249,8 @@ mod tests {
         let reactor = Reactor::new().unwrap();
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         let id = ctl.id;
-        ops.0.with(|st| st.streams[id].rd_op.fake_pending());
+        ops.0
+            .with(|st| st.streams[id].ops.read_mut().fake_pending());
 
         let err = ntex::time::timeout(ntex::time::Seconds(5), ctl.shutdown(false))
             .await
@@ -1285,7 +1288,8 @@ mod tests {
         let reactor = Reactor::new().unwrap();
         let (io, ctl, ops, raw, peer) = registered(&reactor);
         let id = ctl.id;
-        ops.0.with(|st| st.streams[id].rd_op.fake_pending());
+        ops.0
+            .with(|st| st.streams[id].ops.read_mut().fake_pending());
 
         drop(ctl);
         drop(io);
@@ -1359,7 +1363,7 @@ mod tests {
 
         ctl.read();
         ctl.write();
-        assert!(!ops.0.with(|st| st.streams[id].rd_op.is_pending()));
+        assert!(!ops.0.with(|st| st.streams[id].ops.read().is_pending()));
         assert_closed(raw, &mut peer);
 
         drop(ctl);
@@ -1389,8 +1393,8 @@ mod tests {
             .expect("send error not reported")
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
-        assert!(!ops.0.with(|st| st.streams[ctl.id].wr_op.is_pending()));
-        assert_eq!(ops.0.with(|st| st.streams[ctl.id].wr_op.unsent()), 0);
+        assert!(!ops.0.with(|st| st.streams[ctl.id].ops.write().is_pending()));
+        assert_eq!(ops.0.with(|st| st.streams[ctl.id].ops.write().unsent()), 0);
 
         cleanup(&ops);
         assert!(!is_ours(raw, &addr));
@@ -1419,7 +1423,7 @@ mod tests {
 
     fn rd_optr(ops: &StreamOps, id: usize) -> *mut Overlapped {
         ops.0
-            .with(|st| st.streams[id].rd_op.as_overlapped().cast::<Overlapped>())
+            .with(|st| st.streams[id].ops.read_overlapped().cast::<Overlapped>())
     }
 
     /// A pause leaves the zero-byte recv in flight, cancelling it would cost a
@@ -1430,15 +1434,15 @@ mod tests {
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         let id = ctl.id;
         ctl.read();
-        assert!(ops.0.with(|st| st.streams[id].rd_op.is_pending()));
+        assert!(ops.0.with(|st| st.streams[id].ops.read().is_pending()));
 
         ctl.pause();
-        assert!(ops.0.with(|st| st.streams[id].rd_op.is_pending()));
+        assert!(ops.0.with(|st| st.streams[id].ops.read().is_pending()));
         assert_eq!(dequeue(&reactor, 50), None, "pause cancelled recv");
 
         // resuming finds the recv still in flight and issues no other
         ctl.read();
-        assert!(ops.0.with(|st| st.streams[id].rd_op.is_pending()));
+        assert!(ops.0.with(|st| st.streams[id].ops.read().is_pending()));
         assert_eq!(dequeue(&reactor, 50), None, "resume completed recv");
 
         cleanup(&ops);
@@ -1465,7 +1469,7 @@ mod tests {
         }
         .completed(ops::RD_OP, Ok(0), optr);
         assert!(
-            !ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            !ops.0.with(|st| st.streams[id].ops.read().is_pending()),
             "recv re-armed while paused"
         );
         assert!(io.with_read_dst(|buf| buf.is_empty()), "read while paused");
@@ -1476,7 +1480,7 @@ mod tests {
             b"hello".as_ref()
         );
         assert!(
-            ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            ops.0.with(|st| st.streams[id].ops.read().is_pending()),
             "no recv waits for more input"
         );
 
@@ -1493,7 +1497,8 @@ mod tests {
         let reactor = Reactor::new().unwrap();
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         let id = ctl.id;
-        ops.0.with(|st| st.streams[id].rd_op.fake_pending());
+        ops.0
+            .with(|st| st.streams[id].ops.read_mut().fake_pending());
         std::io::Write::write_all(&mut peer, b"hello").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -1503,7 +1508,7 @@ mod tests {
             b"hello".as_ref()
         );
         assert!(
-            ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            ops.0.with(|st| st.streams[id].ops.read().is_pending()),
             "no recv waits for more input"
         );
 
@@ -1520,7 +1525,8 @@ mod tests {
         let reactor = Reactor::new().unwrap();
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         let id = ctl.id;
-        ops.0.with(|st| st.streams[id].rd_op.fake_blocking());
+        ops.0
+            .with(|st| st.streams[id].ops.read_mut().fake_blocking());
         {
             let s = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(raw as _) });
             s.set_nonblocking(false).unwrap();
@@ -1536,7 +1542,7 @@ mod tests {
             "read blocked without input"
         );
         assert!(
-            ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            ops.0.with(|st| st.streams[id].ops.read().is_pending()),
             "no recv waits for input"
         );
 
@@ -1551,14 +1557,14 @@ mod tests {
             ops::RD_OP,
             Ok(0),
             ops.0
-                .with(|st| st.streams[id].rd_op.as_overlapped().cast::<Overlapped>()),
+                .with(|st| st.streams[id].ops.read_overlapped().cast::<Overlapped>()),
         );
         assert_eq!(
             io.with_read_dst(|buf| buf.split_to(buf.len())),
             b"hello".as_ref()
         );
         assert!(
-            ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            ops.0.with(|st| st.streams[id].ops.read().is_pending()),
             "no recv waits for more input"
         );
 
@@ -1610,7 +1616,7 @@ mod tests {
         drop(buf);
 
         ctl.read();
-        assert!(!ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()));
+        assert!(!ops.0.with(|st| st.streams[ctl.id].ops.read().is_pending()));
         let buf = BytesMut::with_page_size(page);
         assert_eq!(buf.as_ptr(), ptr, "idle stream took a read buffer");
         drop(buf);
@@ -1756,7 +1762,8 @@ mod tests {
         let reactor = Reactor::new().unwrap();
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         let id = ctl.id;
-        ops.0.with(|st| st.streams[id].wr_op.fake_pending());
+        ops.0
+            .with(|st| st.streams[id].ops.write_mut().fake_pending());
 
         StreamOpsHandler {
             inner: ops.0.clone(),
@@ -1765,7 +1772,7 @@ mod tests {
             ops::WR_OP,
             Ok(0),
             ops.0
-                .with(|st| st.streams[id].wr_op.as_overlapped().cast::<Overlapped>()),
+                .with(|st| st.streams[id].ops.write_overlapped().cast::<Overlapped>()),
         );
         let err = ntex::time::timeout(ntex::time::Seconds(5), io.flush(true))
             .await
@@ -1784,7 +1791,7 @@ mod tests {
     async fn drive_sends(reactor: &Reactor, ops: &StreamOps, id: usize, done: impl Fn() -> bool) {
         for _ in 0..500 {
             reactor.dispatch(0);
-            if done() && !ops.0.with(|st| st.streams[id].wr_op.is_pending()) {
+            if done() && !ops.0.with(|st| st.streams[id].ops.write().is_pending()) {
                 return;
             }
             ntex::time::sleep(ntex::time::Millis(10)).await;
@@ -1800,7 +1807,8 @@ mod tests {
         let id = ctl.id;
         ops.0.with(|st| {
             st.streams[id]
-                .wr_op
+                .ops
+                .write_mut()
                 .fake_pending_with(&[b"hello ", b"world"]);
         });
         io.encode_slice(b"!!").unwrap();
@@ -1812,13 +1820,13 @@ mod tests {
             ops::WR_OP,
             Ok(3),
             ops.0
-                .with(|st| st.streams[id].wr_op.as_overlapped().cast::<Overlapped>()),
+                .with(|st| st.streams[id].ops.write_overlapped().cast::<Overlapped>()),
         );
         let mut buf = [0u8; 10];
         std::io::Read::read_exact(&mut peer, &mut buf).unwrap();
         assert_eq!(&buf, b"lo world!!");
         drive_sends(&reactor, &ops, id, || true).await;
-        assert_eq!(ops.0.with(|st| st.streams[id].wr_op.unsent()), 0);
+        assert_eq!(ops.0.with(|st| st.streams[id].ops.write().unsent()), 0);
 
         cleanup(&ops);
         assert_closed(raw, &mut peer);
@@ -1853,7 +1861,7 @@ mod tests {
         drive_sends(&reactor, &ops, id, || reader.is_finished()).await;
         let (mut peer, received) = reader.join().unwrap();
         assert!(received == data, "output reordered");
-        assert_eq!(ops.0.with(|st| st.streams[id].wr_op.unsent()), 0);
+        assert_eq!(ops.0.with(|st| st.streams[id].ops.write().unsent()), 0);
 
         cleanup(&ops);
         assert_closed(raw, &mut peer);
