@@ -389,13 +389,14 @@ fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
             abort();
         }
         let set = flags & !cur;
+        // a wake that finds its flags set still writes the word, a plain
+        // return would not publish the writes before the wake, and the owner
+        // may have taken the pending wake since the load
         let (new, push) = if cur & R_QUEUED != 0 {
             if owned {
                 ((cur | set).wrapping_sub(R_REF), false)
-            } else if set != 0 {
-                (cur | set, false)
             } else {
-                return;
+                (cur | set, false)
             }
         } else if owned && set == 0 && delta(cur) > 0 {
             // a live task has local references outside of `last_ref`, which
@@ -407,7 +408,7 @@ fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
         } else if set != 0 {
             ((cur | set | R_QUEUED).wrapping_add(R_REF), true)
         } else {
-            return;
+            (cur, false)
         };
         match remote.compare_exchange_weak(cur, new, Ordering::AcqRel, Ordering::Relaxed) {
             Ok(_) if push => break,
