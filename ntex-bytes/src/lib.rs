@@ -134,7 +134,7 @@ pub mod info {
 }
 
 /// Sets the maximum number of cached page allocations for every page size
-/// on the current thread.
+/// on the current thread. Cached pages above the limit are released.
 ///
 /// This setting affects only the thread on which it is called.
 #[deprecated(
@@ -142,7 +142,7 @@ pub mod info {
     note = "the cache limit depends on the page size, use `set_page_cache_size()`"
 )]
 pub fn set_pages_cache(size: usize) {
-    self::stvec::set_pages_cache(size);
+    self::cache::set_pages_cache(size);
 }
 
 /// Sets the maximum number of cached page allocations of page size `size` on
@@ -154,10 +154,10 @@ pub fn set_pages_cache(size: usize) {
 /// |-----------|-----|----|-----|-----|-----|-----|-----|------|------|
 /// | Pages     | 128 | 64 | 64  | 32  | 16  | 8   | 16  | 2    | 1    |
 ///
-/// Buffers of [`BytePageSize::Unset`] are never cached, the call does nothing
-/// for it.
+/// Cached pages above the new limit are released. Buffers of
+/// [`BytePageSize::Unset`] are never cached, the call does nothing for it.
 ///
 /// This setting affects only the thread on which it is called.
 pub fn set_page_cache_size(size: BytePageSize, count: usize) {
-    self::stvec::set_page_cache_size(size, count);
+    self::cache::set_page_cache_size(size, count);
 }
