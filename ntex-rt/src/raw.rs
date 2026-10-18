@@ -512,7 +512,8 @@ fn close(h: NonNull<Header>) {
     unsafe { (header(finish.0).vtable.drop_future)(finish.0) };
 }
 
-/// Publishes completion and wakes the awaiter, on the owner thread.
+/// Publishes completion and wakes the awaiter, on the owner thread. The
+/// awaiter of a dropped join handle is dropped instead.
 ///
 /// Returns `true` if the join handle is dropped, the output has no owner.
 fn complete(h: NonNull<Header>) -> bool {
@@ -526,17 +527,23 @@ fn complete(h: NonNull<Header>) -> bool {
     let prev = hdr
         .remote
         .fetch_add((refs << R_SHIFT) | R_FINISHED, Ordering::AcqRel);
+    let detached = hdr.state.get() & DETACHED != 0 || prev & R_DETACHED != 0;
     // a registering join handle sees `R_FINISHED` and handles the awaiter
     if prev & R_REGISTERING == 0
         && let Some(w) = unsafe { hdr.awaiter.take() }
     {
-        w.wake();
+        // a join handle dropped on another thread leaves its awaiter
+        if detached {
+            drop(w);
+        } else {
+            w.wake();
+        }
     }
-    hdr.state.get() & DETACHED != 0 || prev & R_DETACHED != 0
+    detached
 }
 
 /// Completes a task that has no references but the run reference, on the
-/// owner thread. Wakes the awaiter, drops the output and frees the task.
+/// owner thread. Drops the output and frees the task.
 ///
 /// No join handle, waker or queue refers to the task, nothing can observe
 /// or reference it, so the completion is not published.
@@ -553,10 +560,7 @@ fn finish_unshared(h: NonNull<Header>) {
     let task = Dealloc(h);
     let hdr = header(task.0);
     debug_assert_ne!(hdr.state.get() & DETACHED, 0);
-    // registered by a join handle before it was dropped
-    if let Some(w) = unsafe { hdr.awaiter.take() } {
-        w.wake();
-    }
+    // the join handle is dropped, the free drops a left awaiter
     unsafe { (hdr.vtable.drop_output)(task.0) };
 }
 
@@ -1014,15 +1018,19 @@ impl<T> Task<T> {
                 drop_output(h);
                 return;
             }
+            // nothing waits for the output, the waker is dropped once the
+            // task is consistent, its drop may run user code
+            let awaiter = unsafe { hdr.awaiter.take() };
             // a running task may still complete
             hdr.state.set(state | CLOSE | DETACHED);
             if state & (SCHEDULED | RUNNING) == 0 {
                 hdr.state.set(state | CLOSE | DETACHED | SCHEDULED);
                 // the handle reference passes to the queue
                 hdr.queue.schedule_local(Runnable(h));
-                return;
+            } else {
+                release_local(h);
             }
-            release_local(h);
+            drop(awaiter);
         } else {
             detach_remote(h, R_CANCEL);
         }
@@ -1090,9 +1098,14 @@ impl<T> Drop for Task<T> {
                 drop_output(h);
                 return;
             }
+            // nothing waits for the output, the waker is dropped once the
+            // task is consistent, its drop may run user code
+            let awaiter = unsafe { hdr.awaiter.take() };
             hdr.state.set(state | DETACHED);
             release_local(h);
+            drop(awaiter);
         } else {
+            // the owner thread drops the awaiter on completion
             detach_remote(h, 0);
         }
     }
