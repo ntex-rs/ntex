@@ -720,18 +720,20 @@ impl RunnableQueue {
             task.set_streak_start(now);
         }
 
-        let mut wakes = count | reported;
+        let wakes = count | reported;
         if reported == 0
             && self.self_wake_limit != 0
             && count >= self.self_wake_limit.min(MAX_SELF_WAKES)
         {
             let elapsed = Duration::from_millis(u64::from(now.wrapping_sub(task.streak_start())));
             if elapsed >= self.self_wake_time {
+                // Logging may reenter the runtime and free the queued task.
+                task.set_self_wakes(wakes | REPORTED);
+                let location = task.location();
                 log::warn!(
-                    "Task spawned at {} woke itself {count} times in {elapsed:?} without waiting, possible busy loop",
-                    task.location()
+                    "Task spawned at {location} woke itself {count} times in {elapsed:?} without waiting, possible busy loop"
                 );
-                wakes |= REPORTED;
+                return;
             }
         }
         task.set_self_wakes(wakes);
@@ -1162,10 +1164,16 @@ mod tests {
 
         // the driver wakes a task before blocking, the next turn starts here
         rt.spawn(async {}).detach();
+        let turn_start = rt.now();
         rt.awake();
-        assert!(rt.now() >= start + sleep);
+        assert_eq!(rt.now(), turn_start);
+        assert!(turn_start >= start + sleep);
+        let before_poll = turn_start.elapsed();
         assert_eq!(rt.poll(), PollResult::Pending);
-        assert!(rt.busy_duration() < busy + sleep);
+        let after_poll = turn_start.elapsed();
+        let total = rt.busy_duration();
+        assert!(total >= busy + before_poll);
+        assert!(total <= busy + after_poll);
     }
 
     #[test]
@@ -1192,8 +1200,11 @@ mod tests {
         // idle time is not counted
         let busy = rt.busy_duration();
         std::thread::sleep(sleep);
+        assert_eq!(rt.busy_duration(), busy);
+        let poll_start = Instant::now();
         assert_eq!(rt.poll(), PollResult::Pending);
-        assert!(rt.busy_duration() < busy + sleep);
+        let poll_elapsed = poll_start.elapsed();
+        assert!(rt.busy_duration() <= busy + poll_elapsed);
 
         // published on each poll while the runtime stays busy
         rt.spawn(async move { std::thread::sleep(sleep) }).detach();
@@ -1516,6 +1527,72 @@ mod tests {
             },
             &BusyDriver,
         );
+    }
+
+    #[test]
+    fn reentrant_self_wake_logger() {
+        scoped_tls::scoped_thread_local!(static WARNINGS: Cell<usize>);
+
+        struct Logger;
+
+        impl log::Log for Logger {
+            fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+                metadata.level() == log::Level::Warn
+                    && metadata.target() == "ntex_rt::rt"
+                    && WARNINGS.is_set()
+            }
+
+            fn log(&self, record: &log::Record<'_>) {
+                if self.enabled(record.metadata()) {
+                    WARNINGS.with(|warnings| {
+                        let count = warnings.get();
+                        warnings.set(count + 1);
+                        if count == 0 {
+                            CURRENT_RUNTIME.with(|rt| {
+                                rt.poll();
+                            });
+                        }
+                    });
+                }
+            }
+
+            fn flush(&self) {}
+        }
+
+        log::set_logger(&Logger).unwrap();
+        log::set_max_level(log::LevelFilter::Warn);
+
+        // The nested poll either wakes again or completes and frees the task.
+        for ready_at in [3, 2] {
+            let rt = Runtime::builder()
+                .event_interval(1)
+                .self_wake_threshold(1, Duration::ZERO)
+                .build(Box::new(NoopNotify));
+            let warnings = Cell::new(0);
+            let polls = Rc::new(Cell::new(0u32));
+            let count = polls.clone();
+            rt.spawn_detached(poll_fn(move |cx| {
+                let n = count.get() + 1;
+                count.set(n);
+                if n < ready_at {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                } else {
+                    Poll::Ready(())
+                }
+            }));
+
+            CURRENT_RUNTIME.set(&rt, || {
+                WARNINGS.set(&warnings, || {
+                    rt.poll();
+                    assert_eq!(warnings.get(), 1, "one warning per streak");
+                    assert_eq!(rt.poll(), PollResult::Pending);
+                });
+            });
+            assert_eq!(polls.get(), ready_at);
+            assert_eq!(rt.self_wake_count(), u64::from(ready_at - 1));
+            assert_eq!(Arc::strong_count(&rt.queue), 1, "task freed");
+        }
     }
 
     struct DropFlag(Arc<AtomicBool>);
