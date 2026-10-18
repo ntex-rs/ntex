@@ -530,6 +530,31 @@ fn complete(h: NonNull<Header>) -> bool {
     hdr.state.get() & DETACHED != 0 || prev & R_DETACHED != 0
 }
 
+/// Completes a task that has no references but the run reference, on the
+/// owner thread. Wakes the awaiter, drops the output and frees the task.
+///
+/// No join handle, waker or queue refers to the task, nothing can observe
+/// or reference it, so the completion is not published.
+fn finish_unshared(h: NonNull<Header>) {
+    // frees the task even if a waker callback or the output drop panics
+    struct Dealloc(NonNull<Header>);
+
+    impl Drop for Dealloc {
+        fn drop(&mut self) {
+            unsafe { (header(self.0).vtable.dealloc)(self.0) };
+        }
+    }
+
+    let task = Dealloc(h);
+    let hdr = header(task.0);
+    debug_assert_ne!(hdr.state.get() & DETACHED, 0);
+    // registered by a join handle before it was dropped
+    if let Some(w) = unsafe { hdr.awaiter.take() } {
+        w.wake();
+    }
+    unsafe { (hdr.vtable.drop_output)(task.0) };
+}
+
 /// Releases a reference on drop, also while unwinding from an output drop.
 struct Release(NonNull<Header>);
 
@@ -665,6 +690,11 @@ impl Runnable {
         let state = hdr.state.get() & !RUNNING;
         if ready {
             hdr.state.set((state | FINISHED) & !(SCHEDULED | CLOSE));
+            // only the run reference is left, nothing observes the completion
+            if hdr.refs.get() == 1 && hdr.remote.load(Ordering::Acquire) == 0 {
+                finish_unshared(h);
+                return false;
+            }
             if complete(h) {
                 drop_output(h);
                 return false;
