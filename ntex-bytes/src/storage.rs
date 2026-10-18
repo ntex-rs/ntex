@@ -345,6 +345,24 @@ impl Storage {
         other
     }
 
+    /// Returns a handle to the `begin..end` range of the view.
+    ///
+    /// `begin <= end <= self.len()` must hold.
+    pub(crate) fn slice(&self, begin: usize, end: usize) -> Storage {
+        debug_assert!(begin <= end && end <= self.len());
+        if end - begin <= INLINE_CAP || (self.kind() == KIND_STEXT && end - begin < self.len()) {
+            // external storage cannot share a range, only the range is copied
+            Storage::from_slice(&self.as_ref()[begin..end])
+        } else {
+            unsafe {
+                let mut other = self.shallow_clone();
+                other.set_end(end);
+                other.set_start(begin);
+                other
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn split_to(&mut self, at: usize) -> Storage {
         let other = unsafe {
@@ -493,8 +511,9 @@ impl Storage {
                 self.set_inline_len(new_len);
             }
             KIND_STEXT => {
-                let len = cmp::min(self.len(), end);
-                *self = Storage::from_slice(&self.as_ref()[..len]);
+                if end < self.len() {
+                    *self = Storage::from_slice(&self.as_ref()[..end]);
+                }
             }
             _ => {
                 // set len for static storage
@@ -810,6 +829,21 @@ mod tests {
         b.advance(0);
         assert_eq!(b.info().kind, info::Kind::StExt);
         assert_eq!(&b[..], LONG);
+
+        // a full slice shares the external storage, a partial one copies
+        // only its range
+        let full = b.slice(..);
+        assert_eq!(full.info().kind, info::Kind::StExt);
+        assert_eq!(&full[..], LONG);
+        let len = LONG.len();
+        let tail = b.slice(len - 40..);
+        assert_eq!(tail.info().kind, info::Kind::Vec);
+        assert_eq!(&tail[..], &LONG[len - 40..]);
+        assert!(tail.info().capacity < 100, "{}", tail.info().capacity);
+        let mid = b.slice(10..len - 10);
+        assert_eq!(&mid[..], &LONG[10..len - 10]);
+        assert!(mid.info().capacity < len, "{}", mid.info().capacity);
+        assert_eq!(b.info().kind, info::Kind::StExt);
 
         // truncating copies the data
         b.truncate(100);

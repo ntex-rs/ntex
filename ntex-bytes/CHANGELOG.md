@@ -8,6 +8,8 @@
 
 * Release cached pages above the new limit in `set_page_cache_size()` and `set_pages_cache()`
 
+* Copy only the requested range in `Bytes::slice()` of external storage
+
 ## [1.13.0] - 2026-10-17
 
 * Add `PageCacheMetrics`, per-thread page cache statistics: hits, misses, pages returned

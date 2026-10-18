@@ -1,6 +1,6 @@
 use std::{cmp, hash, mem, ops};
 
-use crate::{Buf, BytesMut, storage::INLINE_CAP, storage::Storage};
+use crate::{Buf, BytesMut, storage::Storage};
 
 /// A reference counted contiguous slice of memory.
 ///
@@ -251,18 +251,9 @@ impl Bytes {
         };
 
         if begin <= end && end <= len {
-            if end - begin <= INLINE_CAP {
-                Some(Bytes {
-                    storage: Storage::from_slice(&self[begin..end]),
-                })
-            } else {
-                let mut ret = self.clone();
-                unsafe {
-                    ret.storage.set_end(end);
-                    ret.storage.set_start(begin);
-                }
-                Some(ret)
-            }
+            Some(Bytes {
+                storage: self.storage.slice(begin, end),
+            })
         } else {
             None
         }
@@ -658,7 +649,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::BufMut;
+    use crate::{BufMut, storage::INLINE_CAP};
 
     const LONG: &[u8] = b"mary had a1 little la2mb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
