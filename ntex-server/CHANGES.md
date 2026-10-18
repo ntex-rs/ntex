@@ -71,6 +71,17 @@
 * Stop all workers when the server stops, including workers that are not ready
   or still creating their service
 
+* Add `Server::status()` and `Server::status_changed()`. `ServerStatus` reports
+  `Starting`, `Ready`, `Paused`, `Unavailable`, `Stopping` and `Stopped`, it replaces
+  the previous `Ready` and `NotReady` statuses and is exported from the crate root
+
+* Remove `ServerBuilder::status_handler()` and `AcceptLoop::set_status_handler()`,
+  use `Server::status_changed()`
+
+* `Server::process()` accepts items only while the server is `Ready`. A server paused
+  with `Server::pause()` stays paused when workers become available, and resuming a
+  server without available workers no longer resumes the listeners
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);

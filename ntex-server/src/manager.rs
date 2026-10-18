@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, rc::Rc};
 
@@ -8,7 +7,8 @@ use ntex_util::future::join_all;
 use ntex_util::time::{Millis, sleep, timeout};
 
 use crate::affinity::{self, Placement};
-use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
+use crate::{Server, ServerConfiguration, ServerStatus};
+use crate::{Worker, WorkerId, WorkerPool, WorkerStatus};
 use crate::{balance::Balancer, metrics::Metrics, server::ServerShared};
 
 const STOP_DELAY: Millis = Millis(250);
@@ -45,6 +45,12 @@ struct Inner<F: ServerConfiguration> {
     router: Arc<Mutex<Router<F::Item>>>,
     /// All running workers, including unavailable ones.
     workers: RefCell<Vec<Worker<F::Item>>>,
+    /// Paused with [`Server::pause`].
+    paused: Cell<bool>,
+    /// A worker can receive items and no item waits in the backlog.
+    available: Cell<bool>,
+    /// A worker has been available.
+    started: Cell<bool>,
     stopping: Cell<bool>,
     stopped: Cell<bool>,
     stop_notify: RefCell<Vec<oneshot::Sender<()>>>,
@@ -121,10 +127,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
 
         let affinity = cfg.affinity;
         let no_signals = cfg.no_signals;
-        let shared = Arc::new(ServerShared {
-            paused: AtomicBool::new(true),
-            metrics: Metrics::new(cfg.num),
-        });
+        let shared = Arc::new(ServerShared::new(Metrics::new(cfg.num)));
         let f = factory.clone();
         let router = Arc::new(Mutex::new(Router {
             workers: Vec::with_capacity(cfg.num),
@@ -139,6 +142,9 @@ impl<F: ServerConfiguration> ServerManager<F> {
             id: Cell::new(WorkerId::default()),
             shared: shared.clone(),
             router: router.clone(),
+            paused: Cell::new(false),
+            available: Cell::new(false),
+            started: Cell::new(false),
             stopping: Cell::new(false),
             stopped: Cell::new(false),
             stop_notify: RefCell::new(Vec::new()),
@@ -189,14 +195,52 @@ impl<F: ServerConfiguration> ServerManager<F> {
         next_id
     }
 
-    pub(crate) fn pause(&self) {
-        self.0.shared.paused.store(true, Ordering::Release);
-        self.0.factory.pause();
+    fn set_paused(&self, paused: bool) {
+        self.0.paused.set(paused);
+        self.update_status();
     }
 
-    pub(crate) fn resume(&self) {
-        self.0.shared.paused.store(false, Ordering::Release);
-        self.0.factory.resume();
+    fn set_available(&self, available: bool) {
+        self.0.available.set(available);
+        if available {
+            self.0.started.set(true);
+        }
+        self.update_status();
+    }
+
+    /// Updates the server status, the configuration is paused or resumed
+    /// when the server stops or becomes ready.
+    fn update_status(&self) {
+        let inner = &self.0;
+        let status = if inner.stopped.get() {
+            ServerStatus::Stopped
+        } else if inner.stopping.get() {
+            ServerStatus::Stopping
+        } else if inner.paused.get() {
+            ServerStatus::Paused
+        } else if inner.available.get() {
+            ServerStatus::Ready
+        } else if inner.started.get() {
+            ServerStatus::Unavailable
+        } else {
+            ServerStatus::Starting
+        };
+
+        let prev = inner.shared.status();
+        if prev != status {
+            log::debug!("{:?} server status: {status:?}", inner.cfg.name);
+            // the status is set first, items are accepted once the
+            // configuration resumes
+            inner.shared.set_status(status);
+            // the configuration is stopped instead of paused
+            if !inner.stopping.get() {
+                if status == ServerStatus::Ready {
+                    inner.factory.resume();
+                } else if prev == ServerStatus::Ready {
+                    inner.factory.pause();
+                }
+            }
+        }
     }
 
     fn available(&self, wrk: Worker<F::Item>) {
@@ -308,13 +352,13 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     fn process(&mut self, item: F::Item) {
         let router = self.mgr.0.router.clone();
         if self.dispatch(&mut Router::lock(&router), item) {
-            self.mgr.pause();
+            self.mgr.set_available(false);
         }
     }
 
     /// Sends `item` to a worker, or queues it if no worker is available.
     ///
-    /// Returns `true` if the item was queued, the server must be paused. The
+    /// Returns `true` if the item was queued, the server is unavailable. The
     /// configuration's callbacks are not called under the router's lock.
     fn dispatch(&mut self, router: &mut Router<F::Item>, item: F::Item) -> bool {
         if let Err(item) = router.dispatch(item, &self.mgr.0.shared.metrics)
@@ -332,7 +376,6 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         let router = self.mgr.0.router.clone();
         let mut router = Router::lock(&router);
         let r = &mut *router;
-        let was_empty = r.workers.is_empty();
         match upd {
             Update::Available(worker) => match r.workers.binary_search(&worker) {
                 Ok(idx) => {
@@ -356,8 +399,8 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 }
             }
         }
-        // handle backlog, the server is paused while it is not empty, so new
-        // items do not overtake it
+        // handle backlog, the server is unavailable while it is not empty, so
+        // new items do not overtake it
         if !self.backlog.is_empty() && !r.workers.is_empty() {
             let mut items = std::mem::take(&mut self.backlog);
             while let Some(item) = items.pop_front() {
@@ -370,14 +413,10 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             }
             self.backlog.extend(items);
         }
-        let is_empty = r.workers.is_empty();
+        let available = !r.workers.is_empty() && self.backlog.is_empty();
         drop(router);
 
-        if is_empty {
-            self.mgr.pause();
-        } else if was_empty {
-            self.mgr.resume();
-        }
+        self.mgr.set_available(available);
     }
 
     async fn stop(&mut self, graceful: bool, completion: Option<oneshot::Sender<()>>) {
@@ -395,6 +434,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         );
 
         self.mgr.0.stopping.set(true);
+        self.mgr.update_status();
 
         // new items are not sent to the workers
         {
@@ -429,6 +469,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
 
         // notify Server instance
         self.mgr.0.stopped.set(true);
+        self.mgr.update_status();
         let notify = std::mem::take(&mut *self.mgr.0.stop_notify.borrow_mut());
         for tx in notify {
             let _ = tx.send(());
@@ -462,6 +503,8 @@ struct DropHandle<F: ServerConfiguration>(ServerManager<F>);
 impl<T: ServerConfiguration> Drop for DropHandle<T> {
     fn drop(&mut self) {
         self.0.0.stopping.set(true);
+        self.0.0.stopped.set(true);
+        self.0.update_status();
         self.0.0.factory.terminate();
     }
 }
@@ -498,11 +541,11 @@ async fn handle_cmd<F: ServerConfiguration>(
             ServerCommand::Item(item) => state.process(item),
             ServerCommand::Worker(upd) => state.update_workers(upd),
             ServerCommand::Pause(tx) => {
-                state.mgr.pause();
+                state.mgr.set_paused(true);
                 let _ = tx.send(());
             }
             ServerCommand::Resume(tx) => {
-                state.mgr.resume();
+                state.mgr.set_paused(false);
                 let _ = tx.send(());
             }
             ServerCommand::NotifyStopped(tx) => state.mgr.add_stop_notify(tx),

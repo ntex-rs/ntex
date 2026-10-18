@@ -72,6 +72,7 @@ ntex-polling = "4.0.0"
 
 async-channel = "2"
 atomic-waker = "1.1"
+event-listener = "5"
 atoi_simd = "0.18.1"
 backtrace = "0.3.76"
 bytes = "1.11.0"

@@ -17,7 +17,7 @@ mod test;
 
 pub use crate::{
     Affinity, ListenerMetrics, LoadBalancing, NoConfig, RuntimeMetrics, ServerAppConfig,
-    ServerMetrics, WorkerMetrics,
+    ServerMetrics, ServerStatus, WorkerMetrics,
 };
 
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
@@ -29,16 +29,6 @@ pub use self::test::{TestServer, TestServerBuilder, build_test_server, test_serv
 
 /// Controller for a running network server.
 pub type Server = crate::Server<Connection>;
-
-#[non_exhaustive]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-/// Server readiness status.
-pub enum ServerStatus {
-    /// All workers are ready to accept work.
-    Ready,
-    /// At least one worker is temporarily unavailable.
-    NotReady,
-}
 
 /// Identifier assigned to a registered listener.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

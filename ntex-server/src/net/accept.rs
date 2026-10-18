@@ -8,7 +8,7 @@ use ntex_rt::System;
 use ntex_util::{future::Either, time::Millis, time::sleep};
 
 use super::socket::{Connection, Listener, SocketAddr};
-use super::{Server, ServerStatus, Token};
+use super::{Server, Token};
 use crate::metrics::AcceptSlot;
 
 const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
@@ -64,7 +64,6 @@ pub struct AcceptLoop {
     testing: bool,
     notify: AcceptNotify,
     inner: Option<(mpsc::Receiver<AcceptorCommand>, Poller)>,
-    status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
 impl Default for AcceptLoop {
@@ -93,7 +92,6 @@ impl AcceptLoop {
             name: "ntex:accept".to_string(),
             inner: Some((rx, poll)),
             testing: false,
-            status_handler: None,
         }
     }
 
@@ -107,16 +105,6 @@ impl AcceptLoop {
     /// Returns a handle for sending commands to the loop.
     pub fn notify(&self) -> AcceptNotify {
         self.notify.clone()
-    }
-
-    /// Sets the handler that receives accept status changes.
-    ///
-    /// See [`ServerBuilder::status_handler`](super::ServerBuilder::status_handler).
-    pub fn set_status_handler<F>(&mut self, f: F)
-    where
-        F: FnMut(ServerStatus) + Send + 'static,
-    {
-        self.status_handler = Some(Box::new(f));
     }
 
     /// Enables test mode, which skips the exit delay on stop.
@@ -143,7 +131,6 @@ impl AcceptLoop {
             self.name.clone(),
             self.notify.clone(),
             self.testing,
-            self.status_handler.take(),
         );
 
         let _ = rx_start.recv();
@@ -156,7 +143,6 @@ impl fmt::Debug for AcceptLoop {
             .field("name", &self.name)
             .field("notify", &self.notify)
             .field("inner", &self.inner)
-            .field("status_handler", &self.status_handler.is_some())
             .finish()
     }
 }
@@ -172,7 +158,6 @@ struct Accept {
     testing: bool,
     backpressure: bool,
     backlog: VecDeque<Connection>,
-    status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
 impl Accept {
@@ -186,7 +171,6 @@ impl Accept {
         name: String,
         notify: AcceptNotify,
         testing: bool,
-        status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) {
         log::info!("Starting {name:?} accept loop");
 
@@ -194,18 +178,7 @@ impl Accept {
         let sys = System::current();
         let _ = thread::Builder::new().name(name.clone()).spawn(move || {
             System::set_current(sys);
-            Accept::new(
-                name,
-                tx,
-                rx,
-                poller,
-                socks,
-                srv,
-                notify,
-                testing,
-                status_handler,
-            )
-            .poll();
+            Accept::new(name, tx, rx, poller, socks, srv, notify, testing).poll();
         });
     }
 
@@ -219,7 +192,6 @@ impl Accept {
         srv: Server,
         notify: AcceptNotify,
         testing: bool,
-        status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) -> Accept {
         let mut sockets = Vec::new();
         // the builder registers named listeners, others only have an address
@@ -246,7 +218,6 @@ impl Accept {
             notify,
             srv,
             testing,
-            status_handler,
             tx: Some(tx),
             backpressure: true,
             backlog: VecDeque::new(),
@@ -255,12 +226,6 @@ impl Accept {
 
     fn metrics(&self) -> &AcceptSlot {
         self.srv.metrics_ref().listeners([])
-    }
-
-    fn update_status(&mut self, st: ServerStatus) {
-        if let Some(ref mut hnd) = self.status_handler {
-            (*hnd)(st);
-        }
     }
 
     fn poll(mut self) {
@@ -422,12 +387,6 @@ impl Accept {
     }
 
     fn backpressure(&mut self, on: bool) {
-        self.update_status(if on {
-            ServerStatus::NotReady
-        } else {
-            ServerStatus::Ready
-        });
-
         if self.backpressure && !on {
             // handle backlog
             while let Some(msg) = self.backlog.pop_front() {
