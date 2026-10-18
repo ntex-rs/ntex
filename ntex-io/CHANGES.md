@@ -36,6 +36,9 @@
 * Wakes and waiter registrations made from filter callbacks or wakers are no longer lost,
   and filter callbacks that drop the `Io` no longer keep the connection state alive
 
+* A cancelled full flush no longer suppresses the wake of a later partial flush once
+  output drops below the write backpressure threshold
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`
