@@ -108,13 +108,21 @@ impl Reactor {
         DriverType::Iocp
     }
 
-    /// Register updates handler
+    /// Registers a reactor handler.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called during handler construction or completion dispatch,
+    /// including notification and tick callbacks.
     pub(crate) fn register<F>(&self, f: F)
     where
         F: FnOnce(ReactorApi) -> Box<dyn Handler>,
     {
+        let mut handlers = self
+            .handlers
+            .take()
+            .expect("Cannot register an IOCP handler during registration or dispatch");
         let hnd = self.hid.get() + 1;
-        let mut handlers = self.handlers.take().unwrap_or_default();
         handlers.push(f(ReactorApi {
             hnd,
             reactor: self.reactor.clone(),
@@ -570,7 +578,106 @@ impl Handler for Dummy {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::{Rc, Weak};
+
     use super::*;
+
+    fn assert_registration_rejected(reactor: &Reactor) {
+        let called = Cell::new(false);
+        let id = reactor.hid.get();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            reactor.register(|_| {
+                called.set(true);
+                Box::new(Dummy)
+            });
+        }));
+        assert!(result.is_err(), "reentrant registration was accepted");
+        assert!(!called.get(), "reentrant handler factory was called");
+        assert_eq!(reactor.hid.get(), id, "rejection changed the handler ID");
+    }
+
+    #[test]
+    fn register_rejects_nested_factory() {
+        let reactor = Reactor::new().unwrap();
+        reactor.register(|api| {
+            assert_eq!(api.hnd, 1);
+            assert_registration_rejected(&reactor);
+            Box::new(Dummy)
+        });
+        reactor.register(|api| {
+            assert_eq!(api.hnd, 2);
+            Box::new(Dummy)
+        });
+        let handlers = reactor.handlers.take().unwrap();
+        assert_eq!(handlers.len(), 3);
+        reactor.handlers.set(Some(handlers));
+    }
+
+    #[test]
+    fn register_rejects_dispatch_callbacks() {
+        struct Reentrant {
+            reactor: Weak<Reactor>,
+            calls: Rc<Cell<usize>>,
+        }
+
+        impl Reentrant {
+            fn reject(&self) {
+                assert_registration_rejected(&self.reactor.upgrade().unwrap());
+                self.calls.set(self.calls.get() + 1);
+            }
+        }
+
+        impl Handler for Reentrant {
+            fn completed(&mut self, _: u32, _: io::Result<usize>, _: *mut Overlapped) {
+                self.reject();
+            }
+
+            fn notified(&mut self, _: usize, _: u32) {
+                self.reject();
+            }
+
+            fn tick(&mut self) {
+                self.reject();
+            }
+        }
+
+        let reactor = Rc::new(Reactor::new().unwrap());
+        let calls = Rc::new(Cell::new(0));
+        reactor.register(|_| {
+            Box::new(Reentrant {
+                reactor: Rc::downgrade(&reactor),
+                calls: calls.clone(),
+            })
+        });
+        let mut ov = Overlapped::new(1, 0);
+        reactor.poll_completions(&[
+            OVERLAPPED_ENTRY {
+                lpOverlapped: &raw mut ov.base,
+                ..OVERLAPPED_ENTRY::default()
+            },
+            OVERLAPPED_ENTRY {
+                lpCompletionKey: notify_key(1, 0).unwrap(),
+                ..OVERLAPPED_ENTRY::default()
+            },
+        ]);
+        assert_eq!(calls.get(), 3);
+
+        let done = Completions::default();
+        let ticks = Rc::new(Cell::new(0));
+        reactor.register(|api| {
+            assert_eq!(api.hnd, 2);
+            Box::new(Recorder(done.clone(), ticks.clone()))
+        });
+        let mut ov = Overlapped::new(2, 7);
+        ov.base.InternalHigh = 11;
+        reactor.poll_completions(&[OVERLAPPED_ENTRY {
+            lpOverlapped: &raw mut ov.base,
+            ..OVERLAPPED_ENTRY::default()
+        }]);
+        assert_eq!(*done.borrow(), [(7, Ok(11))]);
+        assert_eq!(ticks.get(), 1);
+    }
 
     /// Socket completion errors have the same kind as synchronous socket errors.
     #[test]
