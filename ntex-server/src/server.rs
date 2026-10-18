@@ -7,7 +7,7 @@ use async_channel::Sender;
 use event_listener::Event;
 use ntex_rt::signals::Signal;
 
-use crate::manager::{Routing, ServerCommand};
+use crate::manager::{Rejected, Routing, ServerCommand};
 use crate::{ServerStatus, metrics::Metrics};
 
 #[derive(Debug)]
@@ -110,7 +110,9 @@ impl<T> Server<T> {
         }
         let item = match self.router.dispatch(item, &self.shared.metrics) {
             Ok(()) => return Ok(()),
-            Err(item) => item,
+            // the server started stopping after the status check
+            Err(Rejected::Closed(item)) => return Err(item),
+            Err(Rejected::NoWorker(item)) => item,
         };
         // no worker is available, the command loop queues the item
         if let Err(e) = self.cmd.try_send(ServerCommand::Item(item)) {

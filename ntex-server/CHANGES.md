@@ -91,6 +91,9 @@
   server. The callback no longer runs under the server's routing lock, an item submitted
   while the callback runs, by itself or by another thread, is sent without its CPU
 
+* Fix `Server::process()` returning `Ok` for an item submitted while the server starts
+  stopping. The item was dropped, now it is returned as `Err`
+
 ## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);
