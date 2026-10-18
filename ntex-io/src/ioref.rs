@@ -663,8 +663,7 @@ impl IoRef {
         }
 
         if st.flags.is_read_paused() {
-            st.wake_read_task();
-            st.flags.unset_read_paused();
+            st.resume_read_task();
         }
     }
 
@@ -687,8 +686,7 @@ impl IoRef {
         }
 
         if st.flags.is_read_paused() {
-            st.wake_read_task();
-            st.flags.unset_read_paused();
+            st.resume_read_task();
         }
     }
 

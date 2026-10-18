@@ -166,11 +166,11 @@ impl IoState {
     pub(super) fn filters_stopped(&self) {
         // the shutdown deadline carries over into the transport shutdown
         // phase, so that a single `shutdown_timeout` bounds both phases
+        self.flags.enter_transport_shutdown();
         self.wake_read_task();
         self.wake_write_task();
         self.wake_dispatch_task();
         self.wake_write_waiters();
-        self.flags.enter_transport_shutdown();
     }
 
     fn set_error(&self, err: Option<io::Error>) {
@@ -452,6 +452,15 @@ impl IoState {
 
     pub(super) fn wake_read_task(&self) {
         self.read_task.wake();
+    }
+
+    /// Clears the read pause and wakes the read task.
+    ///
+    /// The flag is cleared first: a waker may poll the read task inline, and
+    /// would otherwise see the stale pause and park without another wakeup.
+    pub(super) fn resume_read_task(&self) {
+        self.flags.unset_read_paused();
+        self.wake_read_task();
     }
 
     pub(super) fn wake_write_task(&self) {
@@ -1338,8 +1347,7 @@ impl<F> Io<F> {
             // a caller that is polled spuriously keep the runtime busy with
             // wakeups; compio then never polls for I/O completions.
             if st.flags.is_read_paused() {
-                st.flags.unset_read_paused();
-                st.wake_read_task();
+                st.resume_read_task();
             }
             st.dispatch_task.register(cx.waker());
             Poll::Pending
@@ -4624,6 +4632,68 @@ mod tests {
         assert!(io.poll_shutdown(&mut cx).is_pending());
         assert!(!io.st().flags.is_read_paused());
         assert_eq!(rd.count(), 1);
+    }
+
+    thread_local! {
+        static WAKE_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    /// A waker that runs the installed hook inline, like a waker that polls
+    /// the woken task synchronously.
+    struct InlineWake;
+
+    impl std::task::Wake for InlineWake {
+        fn wake(self: std::sync::Arc<Self>) {
+            if let Some(hook) = WAKE_HOOK.with(|slot| slot.borrow_mut().take()) {
+                hook();
+            }
+        }
+    }
+
+    /// Registers an inline waker as the read task, and returns what the
+    /// state check observed when it was woken.
+    fn wake_read_task_inline<F>(
+        io: &Io<F>,
+        check: impl FnOnce(&IoRef) -> bool + 'static,
+    ) -> Rc<Cell<Option<bool>>> {
+        let seen = Rc::new(Cell::new(None));
+        let (s, ioref) = (seen.clone(), io.get_ref());
+        WAKE_HOOK
+            .with(|slot| *slot.borrow_mut() = Some(Box::new(move || s.set(Some(check(&ioref))))));
+        io.st()
+            .read_task
+            .register(&std::task::Waker::from(std::sync::Arc::new(InlineWake)));
+        seen
+    }
+
+    #[ntex::test]
+    async fn read_task_is_woken_after_state_is_published() {
+        let not_paused = |io: &IoRef| !io.0.flags.is_read_paused();
+
+        let (_client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV"));
+        io.st().flags.set_read_paused();
+        let seen = wake_read_task_inline(&io, not_paused);
+        io.with_read_dst(|_| ());
+        assert_eq!(seen.get(), Some(true), "read_dst resume");
+
+        io.st().flags.set_read_paused();
+        let seen = wake_read_task_inline(&io, not_paused);
+        io.with_read_src(|_| ());
+        assert_eq!(seen.get(), Some(true), "read_src resume");
+
+        let (_client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV")).add_filter(StuckShutdown(Cell::new(false)));
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        assert!(io.poll_shutdown(&mut cx).is_pending());
+        io.st().flags.set_read_paused();
+        let seen = wake_read_task_inline(&io, not_paused);
+        assert!(io.poll_shutdown(&mut cx).is_pending());
+        assert_eq!(seen.get(), Some(true), "filter shutdown resume");
+
+        let seen = wake_read_task_inline(&io, |io| io.0.flags.is_stopping());
+        io.st().filters_stopped();
+        assert_eq!(seen.get(), Some(true), "transport shutdown");
     }
 
     #[ntex::test]

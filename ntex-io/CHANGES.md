@@ -54,6 +54,10 @@
 * Breaking: `IoRef::is_filter_paused()` replaces `IoRef::is_read_filter_paused()` and
   `IoRef::is_write_filter_paused()`
 
+* Resuming paused reads and entering the transport shutdown phase update the connection
+  state before waking the I/O tasks, a waker that polled the read task inline saw the stale
+  pause and the read task stalled
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`
