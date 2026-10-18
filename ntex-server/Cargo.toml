@@ -29,7 +29,6 @@ ntex-util = { workspace = true }
 ntex-polling = { workspace = true }
 
 async-channel = { workspace = true }
-atomic-waker = { workspace = true }
 event-listener = { workspace = true }
 oneshot = { workspace = true }
 libc = { workspace = true }
