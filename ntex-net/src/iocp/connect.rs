@@ -9,8 +9,7 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use windows_sys::{Win32::Networking::WinSock, core::GUID};
 
 use super::{
-    Handler, OpBox, Overlapped, OverlappedOp, Reactor, ReactorApi, TcpStream, UnixStream, ops,
-    stream::StreamOps,
+    Handler, OpBox, Overlapped, Reactor, ReactorApi, TcpStream, UnixStream, ops, stream::StreamOps,
 };
 use crate::channel::{self, Receiver, Sender};
 
@@ -22,18 +21,10 @@ struct ConnectOpsHandler {
 }
 
 struct ConnectOp {
-    overlapped: Overlapped,
     sock: Socket,
     addr: SockAddr,
     sender: Sender<Io>,
     cfg: SharedCfg,
-}
-
-// SAFETY: the pointer is derived from `this` by a place projection
-unsafe impl OverlappedOp for ConnectOp {
-    unsafe fn overlapped(this: *mut Self) -> *mut Overlapped {
-        unsafe { &raw mut (*this).overlapped }
-    }
 }
 
 type Operations = RefCell<Slab<OpBox<ConnectOp>>>;
@@ -106,13 +97,15 @@ impl ConnectOps {
             let entry = ops.vacant_entry();
 
             let (sender, rx) = channel::create();
-            let op = OpBox::new(ConnectOp {
-                overlapped: self.0.api.overlapped(entry.key() as u32),
-                sock,
-                addr,
-                sender,
-                cfg,
-            });
+            let op = OpBox::new(
+                self.0.api.overlapped(entry.key() as u32),
+                ConnectOp {
+                    sock,
+                    addr,
+                    sender,
+                    cfg,
+                },
+            );
             let mut sent = 0;
             let res = unsafe {
                 self.0.connect.as_ref().unwrap()(
@@ -122,7 +115,7 @@ impl ConnectOps {
                     ptr::null(),
                     0,
                     &raw mut sent,
-                    op.overlapped.as_overlapped(),
+                    op.as_overlapped(),
                 )
             };
 
@@ -207,10 +200,10 @@ impl Handler for ConnectOpsHandler {
             // freed or dropped, so nothing is dropped twice
             let (sock, addr, sender, cfg) = unsafe {
                 (
-                    ptr::read(&raw const (*op).sock),
-                    ptr::read(&raw const (*op).addr),
-                    ptr::read(&raw const (*op).sender),
-                    ptr::read(&raw const (*op).cfg),
+                    ptr::read(&raw const (*op).state.sock),
+                    ptr::read(&raw const (*op).state.addr),
+                    ptr::read(&raw const (*op).state.sender),
+                    ptr::read(&raw const (*op).state.cfg),
                 )
             };
             log::trace!(

@@ -8,28 +8,14 @@ use windows_sys::Win32::{
         ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError,
     },
     Networking::WinSock::{SOCKET_ERROR, WSABUF, WSAEWOULDBLOCK, WSARecv, WSASend, recv},
-    System::IO::CancelIoEx,
+    System::IO::{CancelIoEx, OVERLAPPED},
 };
 
 use ntex_bytes::{BufMut, BytePages};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::syscall;
 
-use super::{Overlapped, OverlappedOp, ReactorApi};
-
-// SAFETY: the pointer is derived from `this` by a place projection
-unsafe impl OverlappedOp for ReadOperation {
-    unsafe fn overlapped(this: *mut Self) -> *mut Overlapped {
-        unsafe { &raw mut (*this).overlapped }
-    }
-}
-
-// SAFETY: the pointer is derived from `this` by a place projection
-unsafe impl OverlappedOp for WriteOperation {
-    unsafe fn overlapped(this: *mut Self) -> *mut Overlapped {
-        unsafe { &raw mut (*this).overlapped }
-    }
-}
+use super::{OpBox, Overlapped};
 
 pub(crate) const RD_OP: u32 = 1;
 pub(crate) const WR_OP: u32 = 2;
@@ -55,10 +41,8 @@ bitflags::bitflags! {
     }
 }
 
-#[repr(C)]
 #[derive(Debug)]
 pub(crate) struct ReadOperation {
-    overlapped: Overlapped,
     id: usize, // idx for StreamItem
     io: RawSocket,
     ctx: IoContext,
@@ -70,15 +54,8 @@ impl ReadOperation {
     ///
     /// `nonblocking` tells whether the socket is in non-blocking mode, which
     /// lets it be read without waiting for the kernel to report it readable.
-    pub(crate) fn new(
-        id: usize,
-        io: RawSocket,
-        ctx: IoContext,
-        api: &ReactorApi,
-        nonblocking: bool,
-    ) -> Self {
+    pub(crate) fn new(id: usize, io: RawSocket, ctx: IoContext, nonblocking: bool) -> Self {
         Self {
-            overlapped: api.overlapped(RD_OP),
             id,
             io,
             ctx,
@@ -136,7 +113,7 @@ impl ReadOperation {
     }
 
     /// Input is available, reads it unless reading is paused or closing.
-    pub(crate) fn notified(&mut self) {
+    pub(crate) fn notified(&mut self, overlapped: *mut OVERLAPPED) {
         #[cfg(feature = "trace")]
         log::trace!(
             "{}: RcvNotify({}) {:?}",
@@ -145,7 +122,7 @@ impl ReadOperation {
             self.flags
         );
         if !self.flags.intersects(Flags::PAUSED | Flags::CLOSING) {
-            self.read();
+            self.read(overlapped);
         }
     }
 
@@ -168,7 +145,7 @@ impl ReadOperation {
 
     /// Cancels the recv in flight for a close, its completion starts the close.
     /// Returns `true` if none is in flight.
-    pub(crate) fn cancel(&mut self) -> bool {
+    pub(crate) fn cancel(&mut self, overlapped: *mut OVERLAPPED) -> bool {
         if self.flags.contains(Flags::WAITING) {
             #[cfg(feature = "trace")]
             log::trace!(
@@ -178,10 +155,7 @@ impl ReadOperation {
                 self.flags
             );
 
-            if let Err(err) = syscall!(
-                BOOL,
-                CancelIoEx(self.io as _, self.overlapped.as_overlapped())
-            ) {
+            if let Err(err) = syscall!(BOOL, CancelIoEx(self.io as _, overlapped)) {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
                     // The recv is still live and the kernel still owns the
@@ -208,7 +182,7 @@ impl ReadOperation {
     /// so no buffer is handed to the kernel while the connection is idle, and
     /// input that arrives while earlier input is still unconsumed is appended
     /// to it instead of going into a buffer of its own.
-    pub(crate) fn read(&mut self) {
+    pub(crate) fn read(&mut self, overlapped: *mut OVERLAPPED) {
         self.flags.remove(Flags::PAUSED);
         if self.flags.contains(Flags::WAITING) {
             return;
@@ -277,7 +251,7 @@ impl ReadOperation {
                     1,
                     &raw mut size,
                     &raw mut flags,
-                    self.overlapped.as_overlapped(),
+                    overlapped,
                     None,
                 )
             };
@@ -298,8 +272,8 @@ impl ReadOperation {
     }
 
     pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) -> Option<usize> {
-        let rd_optr: *mut ReadOperation = optr.cast();
-        let rd = unsafe { &mut *rd_optr };
+        // SAFETY: RD_OP identifies a live read op; only its payload is borrowed
+        let rd = unsafe { &mut *OpBox::<Self>::data_from_overlapped(optr) };
 
         #[cfg(feature = "trace")]
         log::trace!(
@@ -324,7 +298,7 @@ impl ReadOperation {
             // resumes through `read()`, which then finds no recv in flight.
             _ => {
                 if !rd.flags.contains(Flags::PAUSED) {
-                    rd.read();
+                    rd.read(optr.cast());
                 }
             }
         }
@@ -332,10 +306,8 @@ impl ReadOperation {
     }
 }
 
-#[repr(C)]
 #[derive(Debug)]
 pub(crate) struct WriteOperation {
-    overlapped: Overlapped,
     id: usize, // idx for StreamItem
     io: RawSocket,
     ctx: IoContext,
@@ -347,9 +319,8 @@ pub(crate) struct WriteOperation {
 }
 
 impl WriteOperation {
-    pub(crate) fn new(id: usize, io: RawSocket, ctx: IoContext, api: &ReactorApi) -> Self {
+    pub(crate) fn new(id: usize, io: RawSocket, ctx: IoContext) -> Self {
         Self {
-            overlapped: api.overlapped(WR_OP),
             id,
             io,
             ctx,
@@ -389,12 +360,9 @@ impl WriteOperation {
         self.flags.contains(Flags::WAITING)
     }
 
-    pub(crate) fn pause(&mut self) -> bool {
+    pub(crate) fn pause(&mut self, overlapped: *mut OVERLAPPED) -> bool {
         if self.flags.contains(Flags::WAITING) {
-            if let Err(err) = syscall!(
-                BOOL,
-                CancelIoEx(self.io as _, self.overlapped.as_overlapped())
-            ) {
+            if let Err(err) = syscall!(BOOL, CancelIoEx(self.io as _, overlapped)) {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
                     // The send is still live and the kernel still owns the queued
@@ -414,13 +382,12 @@ impl WriteOperation {
         }
     }
 
-    pub(crate) fn write(&mut self) {
+    pub(crate) fn write(&mut self, overlapped: *mut OVERLAPPED) {
         loop {
             if self.flags.contains(Flags::WAITING) {
                 return;
             }
             let Self {
-                overlapped,
                 io,
                 ctx,
                 flags,
@@ -459,8 +426,8 @@ impl WriteOperation {
     }
 
     pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) -> Option<usize> {
-        let wr_optr: *mut WriteOperation = optr.cast();
-        let wr = unsafe { &mut *wr_optr };
+        // SAFETY: WR_OP identifies a live write op; only its payload is borrowed
+        let wr = unsafe { &mut *OpBox::<Self>::data_from_overlapped(optr) };
 
         #[cfg(feature = "trace")]
         log::trace!("{}: WrtDone({}) {res:?}", wr.ctx.tag(), wr.io);
@@ -474,7 +441,7 @@ impl WriteOperation {
         let st = sent(&mut wr.pages, res);
         let status = wr.ctx.update_write_status(st);
         if wr.resume(status) {
-            wr.write();
+            wr.write(optr.cast());
         }
         None
     }
@@ -483,7 +450,7 @@ impl WriteOperation {
 /// Sends up to `MAX_WRITE_BUFS` pages and `MAX_WRITE_SIZE` bytes.
 fn send(
     io: RawSocket,
-    overlapped: &mut Overlapped,
+    overlapped: *mut OVERLAPPED,
     flags: &mut Flags,
     pages: &mut BytePages,
 ) -> io::Result<usize> {
@@ -516,7 +483,7 @@ fn send(
             num as u32,
             &raw mut written,
             0,
-            overlapped.as_overlapped(),
+            overlapped,
             None,
         )
     };
