@@ -322,9 +322,21 @@ impl Runtime {
     ///
     /// # Panics
     ///
-    /// Panics if the driver fails to run the provided future.
+    /// Panics if the driver fails to run the provided future, or if a runtime
+    /// is already active on the current thread. Nested calls would block the
+    /// running task and its runtime until the inner future completes.
     #[track_caller]
     pub fn block_on<F: Future>(&self, future: F, driver: &dyn Driver) -> F::Output {
+        #[cold]
+        #[track_caller]
+        fn nested_block_on() -> ! {
+            panic!("Cannot start a runtime from within a runtime")
+        }
+
+        if CURRENT_RUNTIME.is_set() {
+            nested_block_on()
+        }
+
         let location = Location::caller();
         self.stop.set(false);
         self.queue.poll_start.set(Instant::now());
@@ -664,7 +676,11 @@ impl RunnableQueue {
         if self.idle.get() {
             // starts a busy period, `awake` does not reset it
             self.start_busy();
-            self.handle.notify().ok();
+            // the poll running a task picks up tasks it schedules, a notify
+            // could reenter the runtime and free the running task
+            if self.current.load(Ordering::Relaxed).is_null() {
+                self.handle.notify().ok();
+            }
         }
     }
 
@@ -719,16 +735,17 @@ impl RunnableQueue {
     }
 
     fn run_task(&self, task: Task) {
-        struct Reset<'a>(&'a AtomicPtr<Location<'static>>);
+        struct Reset<'a>(&'a AtomicPtr<Location<'static>>, *mut Location<'static>);
 
         impl Drop for Reset<'_> {
             fn drop(&mut self) {
-                self.0.store(ptr::null_mut(), Ordering::Relaxed);
+                // a task that polls the runtime runs tasks inside its own run
+                self.0.store(self.1, Ordering::Relaxed);
             }
         }
 
         let stats = task_ref(&task);
-        self.current.store(
+        let prev = self.current.swap(
             ptr::from_ref(stats.location()).cast_mut(),
             Ordering::Relaxed,
         );
@@ -736,7 +753,7 @@ impl RunnableQueue {
         if wakes != 0 {
             stats.set_self_wakes(0);
         }
-        let _reset = Reset(&self.current);
+        let _reset = Reset(&self.current, prev);
 
         if task.run() {
             // woken while polled, the task is alive in `local_queue`
@@ -1891,6 +1908,98 @@ mod tests {
     impl Drop for Borrowing<'_> {
         fn drop(&mut self) {
             self.0.set(true);
+        }
+    }
+
+    /// A task that polls the runtime and wakes itself is not run by a notify
+    /// that reenters the runtime, the running poll picks it up.
+    #[test]
+    fn reentrant_notify_self_wake() {
+        #[derive(Debug, Default)]
+        struct ReenterNotify(AtomicUsize);
+
+        impl Notify for ReenterNotify {
+            fn notify(&self) -> io::Result<()> {
+                if CURRENT_RUNTIME.is_set() {
+                    CURRENT_RUNTIME.with(|rt| {
+                        if !rt.queue.current.load(Ordering::Relaxed).is_null() {
+                            self.0.fetch_add(1, Ordering::Relaxed);
+                        }
+                        rt.poll();
+                    });
+                }
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct Shared(Arc<ReenterNotify>);
+
+        impl Notify for Shared {
+            fn notify(&self) -> io::Result<()> {
+                self.0.notify()
+            }
+        }
+
+        let notify = Arc::new(ReenterNotify::default());
+        let rt = Runtime::new(Box::new(Shared(notify.clone())));
+        let polls = Rc::new(Cell::new(0));
+        let p = polls.clone();
+        rt.spawn_detached(poll_fn(move |cx| {
+            p.set(p.get() + 1);
+            if p.get() == 1 {
+                CURRENT_RUNTIME.with(|rt| {
+                    rt.poll();
+                });
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        }));
+        CURRENT_RUNTIME.set(&rt, || {
+            rt.poll();
+            rt.poll();
+        });
+        assert_eq!(polls.get(), 2);
+        assert_eq!(notify.0.load(Ordering::Relaxed), 0);
+        assert_eq!(rt.self_wake_count(), 1);
+        assert!(rt.queue.current.load(Ordering::Relaxed).is_null());
+    }
+
+    #[test]
+    fn block_on_rejects_nesting() {
+        struct BusyDriver;
+
+        impl Driver for BusyDriver {
+            fn handle(&self) -> Box<dyn Notify> {
+                Box::new(NoopNotify)
+            }
+
+            fn run(&self, rt: &Runtime) -> io::Result<()> {
+                while rt.poll() != PollResult::Ready {}
+                Ok(())
+            }
+        }
+
+        for same in [true, false] {
+            let rt = Runtime::new(Box::new(NoopNotify));
+            let nested = rt.block_on(
+                async {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if same {
+                            Runtime::with_current(|rt| rt.block_on(async {}, &BusyDriver));
+                        } else {
+                            Runtime::new(Box::new(NoopNotify)).block_on(async {}, &BusyDriver);
+                        }
+                    }))
+                    .is_err()
+                },
+                &BusyDriver,
+            );
+            assert!(nested);
+            // the runtime is usable after the rejected call
+            assert_eq!(rt.block_on(async { 1 }, &BusyDriver), 1);
         }
     }
 
