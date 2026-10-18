@@ -339,4 +339,101 @@ mod tests {
         assert_eq!(res, std::task::Poll::Ready(1));
         assert_eq!(DEPTH.get(), 0);
     }
+
+    #[test]
+    fn callbacks_set_once_and_wrap_spawned_tasks() {
+        use std::{cell::Cell, sync::atomic::AtomicUsize};
+
+        use crate::{System, testing::TestRunner};
+
+        const CHILD: &str = "NTEX_RT_TASK_CALLBACKS_CHILD";
+        static DATA: u8 = 0;
+        static CTX: u8 = 0;
+        static BEFORE: AtomicUsize = AtomicUsize::new(0);
+        static AFTER: AtomicUsize = AtomicUsize::new(0);
+        thread_local! {
+            static TRACK: Cell<bool> = const { Cell::new(false) };
+            static INSIDE: Cell<bool> = const { Cell::new(false) };
+        }
+        fn data() -> *const () {
+            (&raw const DATA).cast()
+        }
+        fn ctx() -> *const () {
+            (&raw const CTX).cast()
+        }
+
+        // callbacks can be set once per process, so check them in a child process
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "task::tests::callbacks_set_once_and_wrap_spawned_tasks",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            return;
+        }
+
+        unsafe {
+            task_callbacks(
+                || {
+                    TRACK.get().then(|| {
+                        BEFORE.fetch_add(1, Ordering::Relaxed);
+                        data()
+                    })
+                },
+                |p| {
+                    assert_eq!(p, data());
+                    INSIDE.set(true);
+                    ctx()
+                },
+                |p| {
+                    // receives the value returned by `enter`
+                    assert_eq!(p, ctx());
+                    INSIDE.set(false);
+                },
+                |p| {
+                    assert_eq!(p, data());
+                    AFTER.fetch_add(1, Ordering::Relaxed);
+                },
+            );
+        }
+        // callbacks are set once, later registrations are ignored
+        unsafe {
+            task_callbacks(
+                || unreachable!(),
+                |_| unreachable!(),
+                |_| unreachable!(),
+                |_| unreachable!(),
+            );
+            assert!(!task_opt_callbacks(
+                || unreachable!(),
+                |_| unreachable!(),
+                |_| unreachable!(),
+                |_| unreachable!(),
+            ));
+        }
+
+        System::new("callbacks", TestRunner).block_on(async {
+            TRACK.set(true);
+            let hnd = crate::spawn(async { INSIDE.get() });
+            TRACK.set(false);
+            assert_eq!(BEFORE.load(Ordering::Relaxed), 1);
+            // polled with the context set by `enter`
+            assert!(hnd.await.unwrap());
+            assert!(!INSIDE.get());
+            assert_eq!(AFTER.load(Ordering::Relaxed), 1);
+
+            // `before` returned `None`, the task runs without callbacks
+            assert!(!crate::spawn(async { INSIDE.get() }).await.unwrap());
+            assert_eq!(BEFORE.load(Ordering::Relaxed), 1);
+            assert_eq!(AFTER.load(Ordering::Relaxed), 1);
+        });
+    }
 }

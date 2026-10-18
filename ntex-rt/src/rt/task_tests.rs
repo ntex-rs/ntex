@@ -1,4 +1,4 @@
-//! Ported async-task scenarios for the raw task.
+//! Ported async-task scenarios for the runtime task.
 //!
 //! The test thread is the owner thread, it runs tasks by hand and counts
 //! the queued tasks to check each schedule.
@@ -13,7 +13,7 @@ use std::task::{Context, Poll, Waker};
 use std::thread;
 
 use super::{Arc, Future, Location, Notify, Ordering, RunnableQueue, Runtime, io};
-use crate::rt::raw::{self, Remote, Runnable, Task};
+use crate::rt::task::{self, Remote, Runnable, Task};
 
 #[derive(Debug)]
 struct NoopNotify;
@@ -161,7 +161,7 @@ fn new_rt() -> Runtime {
 }
 
 fn spawn<F: Future + 'static>(rt: &Runtime, f: F) -> Task<F::Output> {
-    unsafe { raw::spawn::<_, true>(f, &rt.queue, Location::caller()) }
+    unsafe { task::spawn::<_, true>(f, &rt.queue, Location::caller()) }
 }
 
 fn locals(rt: &Runtime) -> Vec<Runnable> {
@@ -361,7 +361,8 @@ fn spawn_detached() {
         let p = Probe::default();
         let fut = p.future(Res::Ready);
         let q = rt.queue.clone();
-        let spawn = move || unsafe { raw::spawn_detached::<_, false>(fut, &q, Location::caller()) };
+        let spawn =
+            move || unsafe { task::spawn_detached::<_, false>(fut, &q, Location::caller()) };
         let r = if remote {
             on_thread(spawn);
             one_remote(&rt).unwrap()
@@ -378,7 +379,7 @@ fn spawn_detached() {
     // dropped without a run
     let rt = new_rt();
     let p = Probe::default();
-    unsafe { raw::spawn_detached::<_, true>(p.future(Res::Ready), &rt.queue, Location::caller()) };
+    unsafe { task::spawn_detached::<_, true>(p.future(Res::Ready), &rt.queue, Location::caller()) };
     drop(one_local(&rt));
     p.check(0, 1, 0);
     assert_freed(&rt);
@@ -407,7 +408,7 @@ fn finish_unshared() {
     let tok = out.token();
     let mut tok = Some(tok);
     let fut = poll_fn(move |_| Poll::Ready(tok.take().unwrap()));
-    unsafe { raw::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
+    unsafe { task::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
     assert!(!one_local(&rt).run());
     assert_eq!(out.get(), 1);
     assert_freed(&rt);
@@ -459,7 +460,7 @@ fn finish_unshared() {
     // the task is freed if the output drop panics
     let rt = new_rt();
     let fut = poll_fn(|_| Poll::Ready(PanicOnDrop));
-    unsafe { raw::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
+    unsafe { task::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
     let r = one_local(&rt);
     assert!(catch_unwind(AssertUnwindSafe(|| r.run())).is_err());
     assert_freed(&rt);
@@ -468,12 +469,12 @@ fn finish_unshared() {
 #[test]
 fn finish_unshared_fast_path() {
     // the completion is not published only if the run reference is the last
-    let fast = || raw::UNSHARED_FINISHES.with(std::cell::Cell::get);
+    let fast = || task::UNSHARED_FINISHES.with(std::cell::Cell::get);
     let rt = new_rt();
     let n = fast();
 
     // no join handle and no waker
-    unsafe { raw::spawn_detached::<_, true>(async {}, &rt.queue, Location::caller()) };
+    unsafe { task::spawn_detached::<_, true>(async {}, &rt.queue, Location::caller()) };
     one_local(&rt).run();
     assert_eq!(fast(), n + 1);
 
@@ -489,7 +490,7 @@ fn finish_unshared_fast_path() {
         *slot2.lock().unwrap() = Some(cx.waker().clone());
         Poll::Ready(())
     });
-    unsafe { raw::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
+    unsafe { task::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
     one_local(&rt).run();
     drop(slot.lock().unwrap().take());
 
@@ -504,7 +505,7 @@ fn finish_unshared_fast_path() {
         *slot2.lock().unwrap() = Some(cx.waker().clone());
         Poll::Pending
     });
-    unsafe { raw::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
+    unsafe { task::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
     one_local(&rt).run();
     let w = slot.lock().unwrap().take().unwrap();
     let (w, cloned) = on_thread(move || {
@@ -922,7 +923,7 @@ fn shutdown_drops_pending() {
                 let p = Probe::default();
                 let fut = p.future(Res::Pending);
                 let q = rt.queue.clone();
-                let spawn = move || unsafe { raw::spawn::<_, false>(fut, &q, Location::caller()) };
+                let spawn = move || unsafe { task::spawn::<_, false>(fut, &q, Location::caller()) };
                 let (task, r) = if remote_spawn {
                     let task = on_thread(spawn);
                     (task, one_remote(&rt).unwrap())
@@ -969,7 +970,7 @@ fn shutdown_drop_wakes_and_spawns() {
             &rt,
             pending_with_drop(move || {
                 w1.wake();
-                unsafe { raw::spawn_detached::<_, false>(fut2, &q, Location::caller()) };
+                unsafe { task::spawn_detached::<_, false>(fut2, &q, Location::caller()) };
                 assert!(!panics, "reentrant cleanup panic");
             }),
         );
@@ -1006,7 +1007,7 @@ fn shutdown_continues_after_panics() {
             let task = if path == 2 {
                 let queue = rt.queue.clone();
                 on_thread(move || unsafe {
-                    raw::spawn::<_, false>(fut, &queue, Location::caller())
+                    task::spawn::<_, false>(fut, &queue, Location::caller())
                 })
             } else {
                 let task = spawn(&rt, fut);
@@ -1203,7 +1204,7 @@ fn shutdown_panic_waits_for_admitted_publication() {
     );
     let (q, d) = (rt.queue.clone(), drops.clone());
     let mut remote = on_thread(move || unsafe {
-        raw::spawn::<_, false>(
+        task::spawn::<_, false>(
             pending_with_drop(move || {
                 d.inc();
                 panic!("late future panic");
@@ -1336,10 +1337,10 @@ fn spawn_after_shutdown() {
             let fut = p.future(Res::Ready);
             let spawn = move || {
                 if detached {
-                    unsafe { raw::spawn_detached::<_, false>(fut, &q, Location::caller()) };
+                    unsafe { task::spawn_detached::<_, false>(fut, &q, Location::caller()) };
                     None
                 } else {
-                    Some(unsafe { raw::spawn::<_, false>(fut, &q, Location::caller()) })
+                    Some(unsafe { task::spawn::<_, false>(fut, &q, Location::caller()) })
                 }
             };
             let task = if remote { on_thread(spawn) } else { spawn() };
@@ -1491,7 +1492,7 @@ fn remote_spawn() {
     let q = rt.queue.clone();
     let fut = p.future(Res::Ready);
     let mut task =
-        on_thread(move || unsafe { raw::spawn::<_, false>(fut, &q, Location::caller()) });
+        on_thread(move || unsafe { task::spawn::<_, false>(fut, &q, Location::caller()) });
     assert!(rt.queue.local_queue.is_empty());
     one_remote(&rt).unwrap().run();
     p.check(1, 1, 0);
@@ -1508,7 +1509,7 @@ fn remote_spawn_cancel() {
     let p = Probe::default();
     let q = rt.queue.clone();
     let fut = p.future(Res::Ready);
-    on_thread(move || unsafe { raw::spawn::<_, false>(fut, &q, Location::caller()) }.cancel());
+    on_thread(move || unsafe { task::spawn::<_, false>(fut, &q, Location::caller()) }.cancel());
     // queued once, the runner drops the future
     one_remote(&rt).unwrap().run();
     p.check(0, 1, 0);
@@ -1964,7 +1965,7 @@ fn stress_worker(
     for f in futs {
         let idx = f.idx;
         tasks.push((idx, unsafe {
-            raw::spawn::<_, false>(f, queue, Location::caller())
+            task::spawn::<_, false>(f, queue, Location::caller())
         }));
     }
     for (idx, mut task) in tasks {

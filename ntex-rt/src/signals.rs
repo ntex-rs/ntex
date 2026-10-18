@@ -608,6 +608,53 @@ mod tests {
     }
 
     #[test]
+    fn builder_panic_handling() {
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        System::build()
+            .signals(true)
+            .panic_handling(true)
+            .build(TestRunner)
+            .run(|| {
+                crate::spawn_detached(async {
+                    deliver(
+                        || {
+                            // a `String` payload, like a formatted message
+                            let res =
+                                std::thread::spawn(|| panic::panic_any("run".to_string())).join();
+                            assert!(res.is_err());
+                        },
+                        |sig| is_app_panic(sig, "run"),
+                    )
+                    .await;
+                    System::current().stop();
+                });
+                Ok(())
+            })
+            .unwrap();
+        assert!(!is_enabled());
+
+        System::build()
+            .signals(true)
+            .panic_handling(true)
+            .build(TestRunner)
+            .block_on(async {
+                assert!(is_enabled());
+                deliver(
+                    || {
+                        let res = std::thread::spawn(|| panic!("block_on")).join();
+                        assert!(res.is_err());
+                    },
+                    |sig| is_app_panic(sig, "block_on"),
+                )
+                .await;
+            });
+        assert!(!is_enabled());
+    }
+
+    #[test]
     fn signals_registered_by_one_system() {
         let _lock = LOCK
             .lock()
