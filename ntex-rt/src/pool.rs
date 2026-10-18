@@ -134,6 +134,15 @@ impl Drop for CounterGuard {
     }
 }
 
+/// Runs a task, keeping the worker alive if result delivery or disposal panics.
+fn run_task(f: BoxedDispatchable) {
+    if let Err(payload) = panic::catch_unwind(panic::AssertUnwindSafe(|| f.run())) {
+        log::error!("Blocking pool task panicked during completion");
+        // the payload destructor may panic as well
+        std::mem::forget(payload);
+    }
+}
+
 fn worker(
     receiver_high_prio: Receiver<BoxedDispatchable>,
     receiver_low_prio: Receiver<BoxedDispatchable>,
@@ -167,12 +176,12 @@ fn worker(
                 }
             };
             if let Ok(f) = task {
-                f.run();
+                run_task(f);
             } else {
                 // the pool is dropped and the channels stay selectable,
                 // run the queued work and exit
                 while let Ok(f) = receiver_high_prio.try_recv() {
-                    f.run();
+                    run_task(f);
                 }
                 return;
             }
@@ -533,6 +542,33 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(5), "worker is alive");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[test]
+    fn result_drop_panic_keeps_worker() {
+        struct PanicOnDrop;
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                panic!("result destructor");
+            }
+        }
+
+        let pool = ThreadPool::new("test", 1, Duration::from_secs(60));
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let first = pool.execute(move || {
+            start_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            PanicOnDrop
+        });
+        start_rx.recv().unwrap();
+        let queued = pool.execute(|| 1);
+        // the unclaimed result is dropped on the worker
+        drop(first);
+        release_tx.send(()).unwrap();
+
+        assert_eq!(wait(queued, Duration::from_secs(2)), Some(Ok(1)));
+        assert_eq!(pool.metrics().threads, 1);
     }
 
     #[test]
