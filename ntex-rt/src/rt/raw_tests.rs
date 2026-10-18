@@ -919,6 +919,37 @@ fn shutdown_drop_wakes_and_spawns() {
 }
 
 #[test]
+fn spawn_after_shutdown() {
+    // a task spawned after the runtime is dropped is cancelled, its future
+    // is dropped on the spawning thread
+    for remote in [false, true] {
+        for detached in [false, true] {
+            let rt = new_rt();
+            let q = rt.queue.clone();
+            let queue = Arc::downgrade(&rt.queue);
+            drop(rt);
+            let p = Probe::default();
+            let fut = p.future(Res::Ready);
+            let spawn = move || {
+                if detached {
+                    unsafe { raw::spawn_detached(fut, &q, Location::caller()) };
+                    None
+                } else {
+                    Some(unsafe { raw::spawn(fut, &q, Location::caller()) })
+                }
+            };
+            let task = if remote { on_thread(spawn) } else { spawn() };
+            p.check(0, 1, 0);
+            if let Some(mut task) = task {
+                assert!(task.is_finished());
+                assert!(matches!(join(&mut task), Poll::Ready(None)));
+            }
+            assert!(queue.upgrade().is_none(), "task alive");
+        }
+    }
+}
+
+#[test]
 fn remote_wake_variants() {
     let rt = new_rt();
     let p = Probe::default();

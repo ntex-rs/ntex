@@ -653,14 +653,32 @@ fn drop_output(h: NonNull<Header>) {
 
 /// Spawns a task and schedules it on its runtime.
 ///
+/// A task spawned after the runtime is dropped is cancelled, its future is
+/// dropped on the calling thread.
+///
 /// # Safety
 ///
-/// The caller should ensure the captured lifetime is long enough.
+/// The caller should ensure the captured lifetime is long enough, and that
+/// a future spawned on another thread is `Send`.
 pub(crate) unsafe fn spawn<F: Future>(
     future: F,
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) -> Task<F::Output> {
+    if queue.is_closed() {
+        // finished without an output, the remote word counts the join handle
+        let h = alloc::<F>(
+            Stage::Consumed,
+            queue,
+            location,
+            FINISHED,
+            R_REF | R_FINISHED,
+            0,
+        );
+        let task = Task { h, _t: PhantomData };
+        cancel_closed(future, location);
+        return task;
+    }
     let h = unsafe { create(future, queue, location, false) };
     Task { h, _t: PhantomData }
 }
@@ -669,13 +687,25 @@ pub(crate) unsafe fn spawn<F: Future>(
 ///
 /// # Safety
 ///
-/// The caller should ensure the captured lifetime is long enough.
+/// Same as [`spawn`].
 pub(crate) unsafe fn spawn_detached<F: Future>(
     future: F,
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) {
+    if queue.is_closed() {
+        cancel_closed(future, location);
+        return;
+    }
     unsafe { create(future, queue, location, true) };
+}
+
+/// Drops the future of a task spawned after its runtime is dropped, the
+/// task would never run.
+#[cold]
+fn cancel_closed<F>(future: F, location: SpawnLocation) {
+    log::warn!("Task spawned at {location} after its runtime is dropped, the task is cancelled");
+    drop(future);
 }
 
 unsafe fn create<F: Future>(
@@ -685,6 +715,35 @@ unsafe fn create<F: Future>(
     detached: bool,
 ) -> NonNull<Header> {
     let local = queue.id == current_thread_id();
+    let h = alloc(
+        Stage::Running(future),
+        queue,
+        location,
+        // a task spawned on another thread is listed on its first merge
+        if local { SCHEDULED | LISTED } else { 0 } | if detached { DETACHED } else { 0 },
+        if local { 0 } else { R_QUEUED | R_WOKEN },
+        // the queue and the join handle
+        if detached { 1 } else { 2 },
+    );
+    // the owner thread may free the task once it is queued, the queue of the
+    // caller outlives the call
+    if local {
+        queue.tasks.push(h);
+        queue.schedule_local(Runnable(h));
+    } else {
+        queue.schedule_remote(Remote(h));
+    }
+    h
+}
+
+fn alloc<F: Future>(
+    stage: Stage<F>,
+    queue: &Arc<RunnableQueue>,
+    location: SpawnLocation,
+    flags: u32,
+    remote: u32,
+    refs: u32,
+) -> NonNull<Header> {
     let raw = Box::new(RawTask {
         header: Header {
             link: Link {
@@ -697,27 +756,14 @@ unsafe fn create<F: Future>(
             queue: queue.clone(),
             location,
             awaiter: Awaiter::new(),
-            remote: AtomicU32::new(if local { 0 } else { R_QUEUED | R_WOKEN }),
-            // a task spawned on another thread is listed on its first merge
-            state: Cell::new(
-                if local { SCHEDULED | LISTED } else { 0 } | if detached { DETACHED } else { 0 },
-            ),
-            // the queue and the join handle
-            refs: Cell::new(if detached { 1 } else { 2 }),
+            remote: AtomicU32::new(remote),
+            state: Cell::new(flags),
+            refs: Cell::new(refs),
             streak_start: Cell::new(0),
         },
-        stage: SharedCell::new(Stage::Running(future)),
+        stage: SharedCell::new(stage),
     });
-    let h = NonNull::from(Box::leak(raw)).cast::<Header>();
-    // the owner thread may free the task once it is queued, the queue of the
-    // caller outlives the call
-    if local {
-        queue.tasks.push(h);
-        queue.schedule_local(Runnable(h));
-    } else {
-        queue.schedule_remote(Remote(h));
-    }
-    h
+    NonNull::from(Box::leak(raw)).cast::<Header>()
 }
 
 /// A task in the local queue, owns a reference.
@@ -805,7 +851,6 @@ impl Runnable {
 
 impl Drop for Runnable {
     fn drop(&mut self) {
-        // a queue dropped on another thread leaks its tasks
         if is_owner(self.0) {
             let hdr = header(self.0);
             let state = hdr.state.get();
@@ -815,8 +860,19 @@ impl Drop for Runnable {
             } else {
                 release_local(self.0);
             }
+        } else {
+            leaked(self.0);
         }
     }
+}
+
+/// A task dropped off its runtime thread leaks, its future may be `!Send`.
+#[cold]
+fn leaked(h: NonNull<Header>) {
+    log::error!(
+        "Task spawned at {} is dropped off its runtime thread, the task is leaked",
+        header(h).location
+    );
 }
 
 impl fmt::Debug for Runnable {
@@ -881,9 +937,10 @@ impl Remote {
 
 impl Drop for Remote {
     fn drop(&mut self) {
-        // a queue dropped on another thread leaks its tasks
         if is_owner(self.0) {
             drop(Remote(self.0).into_runnable());
+        } else {
+            leaked(self.0);
         }
     }
 }

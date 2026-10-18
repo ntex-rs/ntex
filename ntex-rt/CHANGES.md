@@ -17,6 +17,9 @@
 * Drop the futures of pending neon tasks when the runtime is dropped, a task
   waiting on a waker kept its future and the runtime queue alive
 
+* Cancel a neon task spawned after its runtime is dropped, the future is
+  dropped right away instead of being queued on the dropped runtime
+
 * Require `F::Output: Send` for neon `Handle::spawn()`, a remote task could
   return a non-`Send` value to the spawning thread
 

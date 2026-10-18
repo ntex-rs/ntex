@@ -531,6 +531,9 @@ pub(crate) struct RunnableQueue {
     _remote: [CacheLine; 0],
     // set by the first remote `schedule` after `run` cleared it
     notified: AtomicBool,
+    // set once the runtime is dropped, a later spawn is cancelled
+    #[cfg(ntex_rt_task)]
+    closed: AtomicBool,
     remote_queue: RemoteQueue,
     // written by the runtime thread
     _local: [CacheLine; 0],
@@ -571,6 +574,8 @@ impl RunnableQueue {
             idle: Cell::new(true),
             poll_start: Cell::new(now),
             notified: AtomicBool::new(false),
+            #[cfg(ntex_rt_task)]
+            closed: AtomicBool::new(false),
             busy: BusyClock::new(),
             polls: AtomicU64::new(0),
             polls_again: AtomicU64::new(0),
@@ -843,6 +848,15 @@ impl RunnableQueue {
                 break;
             }
         }
+        self.closed.store(true, Ordering::Release);
+        // a remote spawn that missed the flag may be queued
+        self.clear();
+    }
+
+    /// The runtime is dropped, its tasks never run.
+    #[cfg(ntex_rt_task)]
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
     }
 
     fn pop_local(&self) -> Option<Task> {
