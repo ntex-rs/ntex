@@ -4,6 +4,9 @@
 
 * Replace `async-task` with a custom task implementation
 
+* Separate the remote task queue's producer tail and consumer head onto
+  different cache lines to reduce contention without growing task allocations
+
 * Keep raw task stage and join-waker accesses inside Loom tracking scopes,
   with coverage for reentrant callbacks and panic cleanup
 
