@@ -552,7 +552,7 @@ impl RunnableQueue {
         future: F,
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
-        JoinHandle::new(unsafe { crate::raw::spawn(future, self.clone(), location) })
+        JoinHandle::new(unsafe { crate::raw::spawn(future, self, location) })
     }
 
     /// Spawns a task on this queue without a join handle.
@@ -562,7 +562,7 @@ impl RunnableQueue {
     /// The caller should ensure the captured lifetime is long enough.
     #[cfg(ntex_rt_task)]
     unsafe fn spawn_detached<F: Future>(self: &Arc<Self>, future: F, location: SpawnLocation) {
-        unsafe { crate::raw::spawn_detached(future, self.clone(), location) }
+        unsafe { crate::raw::spawn_detached(future, self, location) }
     }
 
     /// Spawns a task on this queue without a join handle.

@@ -75,7 +75,7 @@ fn new_rt() -> Runtime {
 }
 
 fn spawn<F: Future>(rt: &Runtime, f: F) -> Task<F::Output> {
-    unsafe { raw::spawn(f, rt.queue.clone(), Location::caller()) }
+    unsafe { raw::spawn(f, &rt.queue, Location::caller()) }
 }
 
 /// Runs queued tasks until both queues are empty.
@@ -280,6 +280,31 @@ fn remote_release() {
     });
 }
 
+/// A remote `wake_by_ref` queues the task without a queue reference while
+/// the owner thread completes the task and drops the runtime, the waker
+/// keeps the queue alive.
+#[test]
+fn remote_wake_by_ref_shutdown() {
+    model(|| {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let (st, task) = pending(&rt);
+        drop(task);
+        let w = st.waker.lock().unwrap().take().unwrap();
+        let st2 = st.clone();
+        let th = thread::spawn(move || {
+            st2.ready.store(true, Ordering::Release);
+            w.wake_by_ref();
+            w
+        });
+        run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
+        drop(rt);
+        // a remote release racing the shutdown would leak the task
+        drop(th.join().unwrap());
+        assert!(queue.upgrade().is_none(), "task alive");
+    });
+}
+
 /// A completed output is released while another thread clones and drops
 /// the remaining waker, after the runtime is gone.
 #[test]
@@ -322,7 +347,7 @@ fn remote_spawn() {
         st.ready.store(true, Ordering::Relaxed);
         let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
         let th = thread::spawn(move || {
-            let task = unsafe { raw::spawn(fut, q, Location::caller()) };
+            let task = unsafe { raw::spawn(fut, &q, Location::caller()) };
             *join(task).unwrap()
         });
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
@@ -379,7 +404,7 @@ fn remote_spawn_detached() {
                     let _ = fut.await;
                     Out(st2)
                 },
-                q,
+                &q,
                 Location::caller(),
             );
         });

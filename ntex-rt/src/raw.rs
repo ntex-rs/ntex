@@ -415,10 +415,15 @@ fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
             Err(v) => cur = v,
         }
     }
-    // the owner thread may free the task once it is queued, the queue must
-    // outlive the call
-    let queue = header(h).queue.clone();
-    queue.schedule_remote(Remote(h));
+    if owned {
+        // the owner thread may free the task once it is queued, the queue must
+        // outlive the call
+        let queue = header(h).queue.clone();
+        queue.schedule_remote(Remote(h));
+    } else {
+        // the reference of the caller keeps the task and its queue alive
+        header(h).queue.schedule_remote(Remote(h));
+    }
 }
 
 /// Releases a reference on the owner thread.
@@ -586,7 +591,7 @@ fn drop_output(h: NonNull<Header>) {
 /// The caller should ensure the captured lifetime is long enough.
 pub(crate) unsafe fn spawn<F: Future>(
     future: F,
-    queue: Arc<RunnableQueue>,
+    queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) -> Task<F::Output> {
     let h = unsafe { create(future, queue, location, false) };
@@ -600,7 +605,7 @@ pub(crate) unsafe fn spawn<F: Future>(
 /// The caller should ensure the captured lifetime is long enough.
 pub(crate) unsafe fn spawn_detached<F: Future>(
     future: F,
-    queue: Arc<RunnableQueue>,
+    queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) {
     unsafe { create(future, queue, location, true) };
@@ -608,7 +613,7 @@ pub(crate) unsafe fn spawn_detached<F: Future>(
 
 unsafe fn create<F: Future>(
     future: F,
-    queue: Arc<RunnableQueue>,
+    queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
     detached: bool,
 ) -> NonNull<Header> {
@@ -620,7 +625,7 @@ unsafe fn create<F: Future>(
             },
             next: Cell::new(ptr::null_mut()),
             vtable: &Fns::<F>::VTABLE,
-            queue,
+            queue: queue.clone(),
             location,
             awaiter: Awaiter::new(),
             remote: AtomicU32::new(if local { 0 } else { R_QUEUED | R_WOKEN }),
@@ -634,14 +639,11 @@ unsafe fn create<F: Future>(
         stage: SharedCell::new(Stage::Running(future)),
     });
     let h = NonNull::from(Box::leak(raw)).cast::<Header>();
-    let queue = &header(h).queue;
+    // the owner thread may free the task once it is queued, the queue of the
+    // caller outlives the call
     if local {
         queue.schedule_local(Runnable(h));
-    } else if detached {
-        // the owner thread may free the task once it is queued
-        queue.clone().schedule_remote(Remote(h));
     } else {
-        // the join handle keeps the queue alive
         queue.schedule_remote(Remote(h));
     }
     h
