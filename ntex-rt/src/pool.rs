@@ -144,17 +144,9 @@ fn worker(
         sel.recv(&receiver_high_prio);
         sel.recv(&receiver_low_prio);
         loop {
-            match sel.select_timeout(timeout) {
-                Ok(op) if op.index() == 0 => {
-                    if let Ok(f) = op.recv(&receiver_high_prio) {
-                        f.run();
-                    }
-                }
-                Ok(op) => {
-                    if let Ok(f) = op.recv(&receiver_low_prio) {
-                        f.run();
-                    }
-                }
+            let task = match sel.select_timeout(timeout) {
+                Ok(op) if op.index() == 0 => op.recv(&receiver_high_prio),
+                Ok(op) => op.recv(&receiver_low_prio),
                 Err(_) => {
                     // release the slot, then pick up work queued meanwhile,
                     // pairs with the fence in `ThreadPool::execute`
@@ -168,7 +160,18 @@ fn worker(
                         Some((g, _)) => guard = g,
                         None => return,
                     }
+                    continue;
                 }
+            };
+            if let Ok(f) = task {
+                f.run();
+            } else {
+                // the pool is dropped and the channels stay selectable,
+                // run the queued work and exit
+                while let Ok(f) = receiver_high_prio.try_recv() {
+                    f.run();
+                }
+                return;
             }
         }
     }
@@ -464,6 +467,31 @@ mod tests {
         assert_eq!((m.active_tasks, m.queue_depth, m.tasks), (0, 0, 2));
         assert!(m.wait_duration >= sleep);
         assert!(m.busy_duration >= sleep);
+    }
+
+    #[test]
+    fn dropped_pool_releases_workers() {
+        // the idle timeout is never reached, workers exit on disconnection
+        let pool = ThreadPool::new("test", 1, Duration::from_secs(60));
+        let counter = pool.counter.clone();
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let first = pool.execute(move || {
+            start_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        start_rx.recv().unwrap();
+        let queued = pool.execute(|| 1);
+        drop(pool);
+        release_tx.send(()).unwrap();
+
+        assert_eq!(wait(first, Duration::from_secs(5)), Some(Ok(())));
+        assert_eq!(wait(queued, Duration::from_secs(5)), Some(Ok(1)));
+        let start = Instant::now();
+        while counter.load(Ordering::Acquire) != 0 {
+            assert!(start.elapsed() < Duration::from_secs(5), "worker is alive");
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     #[test]
