@@ -790,8 +790,8 @@ mod tests {
         assert_eq!(received.len(), sent);
     }
 
-    #[ntex::test]
-    async fn runtime_tick_closes_socket_without_new_events() {
+    #[test]
+    fn runtime_tick_closes_socket_without_new_events() {
         let reactor = Reactor::new().unwrap();
         let rt = ntex_rt::Runtime::builder()
             .event_interval(1)
