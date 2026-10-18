@@ -356,6 +356,67 @@ fn spawn_detached() {
 }
 
 #[test]
+fn finish_unshared() {
+    struct PanicOnDrop;
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("output drop");
+        }
+    }
+
+    // the run reference is the only one, no waker is kept
+    let rt = new_rt();
+    let out = Counter::default();
+    let tok = out.token();
+    let mut tok = Some(tok);
+    let fut = poll_fn(move |_| Poll::Ready(tok.take().unwrap()));
+    unsafe { raw::spawn_detached(fut, rt.queue.clone(), Location::caller()) };
+    assert!(!one_local(&rt).run());
+    assert_eq!(out.get(), 1);
+    assert_freed(&rt);
+
+    // a dropped join handle registered its awaiter
+    let rt = new_rt();
+    let slot = Arc::new(Mutex::new(None::<Waker>));
+    let slot2 = slot.clone();
+    let mut tok = Some(out.token());
+    let mut polled = false;
+    let mut task = spawn(
+        &rt,
+        poll_fn(move |cx| {
+            if polled {
+                Poll::Ready(tok.take().unwrap())
+            } else {
+                polled = true;
+                *slot2.lock().unwrap() = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }),
+    );
+    one_local(&rt).run();
+    let awaiter = Arc::new(CountWaker::default());
+    let w = Waker::from(awaiter.clone());
+    assert!(task.poll_join(&Context::from_waker(&w)).is_pending());
+    drop(task);
+    // the wake passes its reference to the queue
+    slot.lock().unwrap().take().unwrap().wake();
+    one_local(&rt).run();
+    assert_eq!(awaiter.0.load(Ordering::SeqCst), 1);
+    assert_eq!(out.get(), 2);
+    assert_freed(&rt);
+    drop(w);
+
+    // the task is freed if the output drop panics
+    let rt = new_rt();
+    let fut = poll_fn(|_| Poll::Ready(PanicOnDrop));
+    unsafe { raw::spawn_detached(fut, rt.queue.clone(), Location::caller()) };
+    let r = one_local(&rt);
+    assert!(catch_unwind(AssertUnwindSafe(|| r.run())).is_err());
+    assert_freed(&rt);
+}
+
+#[test]
 fn cancel_pending() {
     let rt = new_rt();
     let p = Probe::default();
