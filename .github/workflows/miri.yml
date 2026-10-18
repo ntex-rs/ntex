@@ -51,10 +51,11 @@ jobs:
         run: cargo miri test -p ntex-io -- --test "miri_"
 
       - name: Run Miri (ntex-rt raw task)
+        # the runtime and raw task tests, stress tests run fewer iterations
         env:
           RUSTFLAGS: --cfg ntex_rt_task
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-many-seeds=0..8
-        run: cargo miri test -p ntex-rt --lib -- raw_tests
+        run: cargo miri test -p ntex-rt --lib -- rt::
 
       - name: Run loom (ntex-rt raw task)
         env:
