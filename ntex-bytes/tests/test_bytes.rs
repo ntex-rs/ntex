@@ -2,7 +2,7 @@
 use std::{borrow::Borrow, borrow::BorrowMut};
 
 use ntex_bytes::info::Kind;
-use ntex_bytes::{Buf, BufMut, BytePage, BytePageSize, BytePages, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytePage, BytePageSize, Bytes, BytesMut};
 
 const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &[u8] = b"hello world";
@@ -22,7 +22,7 @@ fn test_size() {
     assert_eq!(24, std::mem::size_of::<Option<Bytes>>());
     assert_eq!(16, ntex_bytes::METADATA_SIZE);
     assert_eq!(8, std::mem::size_of::<BytesMut>());
-    assert_eq!(16, std::mem::size_of::<BytePages>());
+    assert_eq!(16, std::mem::size_of::<ntex_bytes::BytePages>());
     assert_eq!(32, std::mem::size_of::<BytePage>());
     assert_eq!(16, std::mem::size_of::<std::sync::Arc<str>>());
     assert_eq!(8, std::mem::size_of::<std::sync::Arc<String>>());

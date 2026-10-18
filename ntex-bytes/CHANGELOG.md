@@ -4,6 +4,8 @@
 
 * Fix out-of-bounds write in `BytePages::put_u8()` and `put_i8()` after `advance_mut()` filled the current page
 
+* Fix wrong buffer header for views 1 GiB or more into a shared buffer on 32-bit targets
+
 ## [1.13.0] - 2026-10-17
 
 * Add `PageCacheMetrics`, per-thread page cache statistics: hits, misses, pages returned

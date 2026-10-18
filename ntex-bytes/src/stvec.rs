@@ -2,7 +2,7 @@ use crate::alloc::alloc::{self, Layout, LayoutError};
 
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
-use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice, sync::Arc};
+use std::{cell::Cell, cmp, mem, ptr, ptr::NonNull, slice, sync::Arc};
 
 use crate::storage::{INLINE_CAP, MIN_CAPACITY, Storage};
 use crate::{BytePageSize, PageCacheMetrics, buf::UninitSlice};
@@ -28,10 +28,6 @@ pub(crate) struct SharedVec {
 
 #[derive(Debug)]
 pub(crate) struct StorageVec(pub(crate) NonNull<SharedVec>);
-
-// Buffer storage strategy flags.
-const KIND_VEC: usize = 0b01;
-const KIND_OFFSET_BITS: usize = 2;
 
 /// Size of the header stored in front of the data of every heap buffer.
 pub const METADATA_SIZE: usize = mem::size_of::<SharedVec>();
@@ -205,12 +201,7 @@ impl StorageVec {
                     abort();
                 }
 
-                let offset = inner.offset as usize;
-                Storage {
-                    ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
-                    len: self.len(),
-                    offset: NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC),
-                }
+                Storage::from_shared_vec(self.0, inner.offset as usize, self.len())
             }
         }
     }
@@ -220,14 +211,8 @@ impl StorageVec {
             if self.len() <= INLINE_CAP {
                 Storage::from_ptr_inline(self.as_ptr(), self.len())
             } else {
-                let inner = self.0.as_ref();
-                let offset = inner.offset as usize;
-
-                let inner = Storage {
-                    ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
-                    len: self.len(),
-                    offset: NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC),
-                };
+                let offset = self.0.as_ref().offset as usize;
+                let inner = Storage::from_shared_vec(self.0, offset, self.len());
                 mem::forget(self);
                 inner
             }
@@ -247,12 +232,7 @@ impl StorageVec {
                     abort();
                 }
 
-                let offset = (*inner).offset as usize;
-                Storage {
-                    ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
-                    len: at,
-                    offset: NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC),
-                }
+                Storage::from_shared_vec(self.0, (*inner).offset as usize, at)
             };
             self.set_start(at);
 
