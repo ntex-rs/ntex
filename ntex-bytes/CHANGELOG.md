@@ -6,6 +6,8 @@
 
 * Fix wrong buffer header for views 1 GiB or more into a shared buffer on 32-bit targets
 
+* Release cached pages above the new limit in `set_page_cache_size()` and `set_pages_cache()`
+
 ## [1.13.0] - 2026-10-17
 
 * Add `PageCacheMetrics`, per-thread page cache statistics: hits, misses, pages returned
