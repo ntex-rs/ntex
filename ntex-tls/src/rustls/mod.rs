@@ -291,6 +291,48 @@ mod tests {
         }
     }
 
+    /// Draining the input must not report a transport EOF to rustls.
+    #[ntex::test]
+    async fn read_keeps_session_open() {
+        use crate::utils::testing;
+
+        let (client, client_ctx) = testing::io("CLI");
+        let (server, server_ctx) = testing::io("SRV");
+        let (client, server) = testing::handshake(
+            join(
+                TlsClientFilter::create(
+                    client,
+                    client_config(false),
+                    ServerName::try_from("localhost").unwrap(),
+                ),
+                TlsServerFilter::create(server, server_config(false), Millis::ZERO),
+            ),
+            &client_ctx,
+            &server_ctx,
+        );
+        let (client, server) = (client.unwrap(), server.unwrap());
+
+        for size in [100, 40_000] {
+            let data = Bytes::from(vec![b'x'; size]);
+            client.encode(data.clone(), &BytesCodec).unwrap();
+            assert!(testing::transfer(&client_ctx, &server_ctx) > 0);
+            assert_eq!(server.decode(&BytesCodec).unwrap(), Some(data.clone()));
+            server.encode(data.clone(), &BytesCodec).unwrap();
+            assert!(testing::transfer(&server_ctx, &client_ctx) > 0);
+            assert_eq!(client.decode(&BytesCodec).unwrap(), Some(data));
+
+            // rustls reports a seen EOF as UnexpectedEof instead of WouldBlock
+            let srv = server
+                .filter()
+                .stream(|s| io::Read::read(&mut s.session.reader(), &mut [0]));
+            let cli = client
+                .filter()
+                .stream(|s| io::Read::read(&mut s.session.reader(), &mut [0]));
+            assert_eq!(srv.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(cli.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        }
+    }
+
     #[ntex::test]
     async fn handshake_timeout() {
         let (_client, server) = pair();

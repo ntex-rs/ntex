@@ -163,7 +163,7 @@ pub(crate) mod testing {
         (io, ctx)
     }
 
-    fn transfer(from: &IoContext, to: &IoContext) -> usize {
+    pub(crate) fn transfer(from: &IoContext, to: &IoContext) -> usize {
         let data = from.with_write_dst(|buf| {
             let mut data = Vec::new();
             while let Some(page) = buf.take() {
