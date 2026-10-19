@@ -347,14 +347,18 @@ impl IoState {
         }
     }
 
-    /// Reports the current read buffer size to the metrics.
+    /// Reports the current read buffer size and capacity to the metrics.
     ///
     /// Must not be called while a read buffer is borrowed, its size would be
     /// reported as zero.
     pub(crate) fn sync_read_buffered(&self) {
-        let size = u32::try_from(self.buffer.read_buf_size()).unwrap_or(u32::MAX);
+        let (size, cap) = self.buffer.read_buf_usage();
+        let size = u32::try_from(size).unwrap_or(u32::MAX);
+        let cap = u32::try_from(cap).unwrap_or(u32::MAX);
         let prev = self.rd_buffered.replace(size);
-        self.metrics().update_read_buffered(prev, size);
+        let prev_cap = self.rd_capacity.replace(cap);
+        self.metrics()
+            .update_read_buffered(prev, size, prev_cap, cap);
     }
 
     /// Reports the current write buffer size to the metrics.
@@ -450,7 +454,7 @@ impl Drop for IoState {
             self.metrics().wr_backpressure_off();
         }
         self.metrics()
-            .update_read_buffered(self.rd_buffered.get(), 0);
+            .update_read_buffered(self.rd_buffered.get(), 0, self.rd_capacity.get(), 0);
         self.metrics()
             .update_write_buffered(self.wr_buffered.get(), 0);
         match self.close.get() {

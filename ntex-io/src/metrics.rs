@@ -243,6 +243,8 @@ pub struct IoMetrics {
     rd: Backpressure,
     wr: Backpressure,
     read_buffered: AtomicUsize,
+    read_buffers_held: AtomicUsize,
+    read_buffer_capacity: AtomicUsize,
     write_buffered: AtomicUsize,
     bytes_read: AtomicU64,
     bytes_written: AtomicU64,
@@ -398,6 +400,24 @@ pub struct IoMetricsSnapshot {
     pub write_backpressure_time: Duration,
     /// Bytes held in read buffers.
     pub read_buffered: usize,
+    /// Connections that keep a read buffer allocated.
+    ///
+    /// Read buffers are released once their input is consumed, so a
+    /// connection is counted while it holds unconsumed input, such as the
+    /// start of a frame that has not fully arrived. A snapshot mostly counts
+    /// idle connections waiting for the rest of their input, busy ones are
+    /// only briefly counted. A buffer a transport holds for a pending read,
+    /// as with io-uring, is not counted.
+    pub read_buffers_held: usize,
+    /// Bytes allocated by the read buffers of
+    /// [`read_buffers_held`](Self::read_buffers_held), a whole page for a
+    /// pooled buffer.
+    ///
+    /// Compared with [`read_buffered`](Self::read_buffered) it shows the
+    /// memory kept for small leftover input. Frames split off a read buffer
+    /// share its allocation and can keep it alive after it is released, that
+    /// memory is not counted.
+    pub read_buffer_capacity: usize,
     /// Bytes held in write buffers or taken by the transport but not written.
     pub write_buffered: usize,
     /// Bytes read from transports.
@@ -425,6 +445,8 @@ impl IoMetrics {
             rd: Backpressure::default(),
             wr: Backpressure::default(),
             read_buffered: AtomicUsize::new(0),
+            read_buffers_held: AtomicUsize::new(0),
+            read_buffer_capacity: AtomicUsize::new(0),
             write_buffered: AtomicUsize::new(0),
             bytes_read: AtomicU64::new(0),
             bytes_written: AtomicU64::new(0),
@@ -456,6 +478,8 @@ impl IoMetrics {
             read_backpressure_time,
             write_backpressure_time,
             read_buffered: self.read_buffered.load(Relaxed),
+            read_buffers_held: self.read_buffers_held.load(Relaxed),
+            read_buffer_capacity: self.read_buffer_capacity.load(Relaxed),
             write_buffered: self.write_buffered.load(Relaxed),
             bytes_read: self.bytes_read.load(Relaxed),
             bytes_written: self.bytes_written.load(Relaxed),
@@ -516,7 +540,15 @@ impl IoMetrics {
 
     /// Moves a connection's gauges from `self` to `to`, e.g. after the
     /// connection's configuration was replaced. Counters stay.
-    pub(crate) fn move_to(&self, to: &IoMetrics, rd_bp: bool, wr_bp: bool, rd: u32, wr: u32) {
+    pub(crate) fn move_to(
+        &self,
+        to: &IoMetrics,
+        rd_bp: bool,
+        wr_bp: bool,
+        rd: u32,
+        rd_cap: u32,
+        wr: u32,
+    ) {
         if rd_bp {
             self.rd.off(self.now());
             to.rd.resume(to.now());
@@ -525,8 +557,8 @@ impl IoMetrics {
             self.wr.off(self.now());
             to.wr.resume(to.now());
         }
-        self.update_read_buffered(rd, 0);
-        to.update_read_buffered(0, rd);
+        self.update_read_buffered(rd, 0, rd_cap, 0);
+        to.update_read_buffered(0, rd, 0, rd_cap);
         self.update_write_buffered(wr, 0);
         to.update_write_buffered(0, wr);
     }
@@ -550,8 +582,20 @@ impl IoMetrics {
         inc(&self.scheduled_writes, 1);
     }
 
-    pub(crate) fn update_read_buffered(&self, prev: u32, cur: u32) {
+    /// Updates the read buffer gauges of a connection, `cap` is the retained
+    /// capacity, a connection with capacity holds a read buffer.
+    pub(crate) fn update_read_buffered(&self, prev: u32, cur: u32, prev_cap: u32, cap: u32) {
         update(&self.read_buffered, prev, cur);
+        update(&self.read_buffer_capacity, prev_cap, cap);
+        match (prev_cap > 0, cap > 0) {
+            (false, true) => {
+                self.read_buffers_held.fetch_add(1, Relaxed);
+            }
+            (true, false) => {
+                self.read_buffers_held.fetch_sub(1, Relaxed);
+            }
+            _ => (),
+        }
     }
 
     pub(crate) fn update_write_buffered(&self, prev: u32, cur: u32) {

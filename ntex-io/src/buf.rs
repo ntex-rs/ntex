@@ -178,13 +178,16 @@ impl Stack {
         self.borrow().transport().read_len()
     }
 
-    /// Returns the size of the application and transport read buffers.
-    pub(crate) fn read_buf_size(&self) -> usize {
+    /// Returns the size and the retained capacity of the application and
+    /// transport read buffers.
+    pub(crate) fn read_buf_usage(&self) -> (usize, usize) {
         let layers = self.borrow();
+        let (len, cap) = layers.app.read_usage();
         if let Some(wire) = &layers.wire {
-            layers.app.read_len() + wire.read_len()
+            let (wire_len, wire_cap) = wire.read_usage();
+            (len + wire_len, cap + wire_cap)
         } else {
-            layers.app.read_len()
+            (len, cap)
         }
     }
 
@@ -388,6 +391,22 @@ impl Buffer {
             l
         } else {
             0
+        }
+    }
+
+    /// Returns the size of the read buffer and the size of the allocation it
+    /// keeps, a whole page for a pooled buffer.
+    fn read_usage(&self) -> (usize, usize) {
+        if let Some(rb) = self.read.take() {
+            let cap = match rb.page_size() {
+                BytePageSize::Unset => rb.capacity(),
+                size => size.capacity(),
+            };
+            let usage = (rb.len(), cap);
+            self.read.set(Some(rb));
+            usage
+        } else {
+            (0, 0)
         }
     }
 
