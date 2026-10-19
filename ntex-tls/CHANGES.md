@@ -2,6 +2,9 @@
 
 ## [4.4.0] - Unreleased
 
+* openssl: join small write pages in a per-thread staging buffer instead of
+  allocating 16 KiB for every joined record, unwritten bytes are kept for retry
+
 * Defer peer-close shutdown until mutable TLS state and buffer borrows are
   released in all backends, preventing aliasing with inline read-task wakers
 
