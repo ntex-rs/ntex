@@ -58,6 +58,9 @@
   state before waking the I/O tasks, a waker that polled the read task inline saw the stale
   pause and the read task stalled
 
+* A panic in `IoStream::start()` no longer leaks the connection state, `Io::new()` owns the
+  state before the stream starts
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`

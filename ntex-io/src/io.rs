@@ -586,7 +586,7 @@ impl fmt::Debug for IoState {
 
 impl Io {
     /// Creates a new `Io` instance.
-    pub fn new<I: IoStream, T: Into<SharedCfg>>(io: I, cfg: T) -> Self {
+    pub fn new<I: IoStream, T: Into<SharedCfg>>(stream: I, cfg: T) -> Self {
         let cfg = cfg.into().get::<IoConfig>();
         let size = cfg.write_size();
         let flags = Flags::new(cfg.write_buf_threshold() > 0);
@@ -621,11 +621,14 @@ impl Io {
         let ioref = IoRef(inner);
         ioref.0.id.set(IoManager::register(&ioref));
 
-        // start io tasks
-        let hnd = io.start(IoContext::new(ioref.clone()));
-        ioref.0.handle.set(Some(hnd));
+        // `Io` owns the state before the stream starts, so that a panic in
+        // `IoStream::start` drops the filter and unregisters the connection
+        let io = Io(UnsafeCell::new(ioref), marker::PhantomData);
 
-        Io(UnsafeCell::new(ioref), marker::PhantomData)
+        // start io tasks
+        let hnd = stream.start(IoContext::new(io.io_ref().clone()));
+        io.st().handle.set(Some(hnd));
+        io
     }
 }
 
