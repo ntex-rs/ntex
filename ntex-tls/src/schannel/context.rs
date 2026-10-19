@@ -1,5 +1,5 @@
 //! Schannel security context.
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 use std::{cmp, io, mem, ptr, slice};
 
 use ntex_bytes::{BufMut, BytesMut};
@@ -694,13 +694,18 @@ fn alert_number(status: windows_sys::core::HRESULT) -> u32 {
 /// Server name indication of the `ClientHello` in the leading handshake
 /// records of `src`.
 fn client_hello_servername(src: &[u8]) -> Option<String> {
-    // the message is passed in a single record
-    let mut record = vec![CONTENT_HANDSHAKE, 3, 1, 0, 0];
-    for (_, payload) in records(src).take_while(|(ty, _)| *ty == CONTENT_HANDSHAKE) {
-        record.extend_from_slice(payload);
+    let mut records = records(src).take_while(|(ty, _)| *ty == CONTENT_HANDSHAKE);
+    let (_, payload) = records.next()?;
+    let mut record = Cow::Borrowed(&src[..5 + payload.len()]);
+    for (_, payload) in records {
+        record.to_mut().extend_from_slice(payload);
     }
-    let len = u16::try_from(record.len() - 5).ok()?;
-    record[3..5].copy_from_slice(&len.to_be_bytes());
+    if let Cow::Owned(record) = &mut record {
+        // Fragmented messages must be passed in a single record.
+        let len = u16::try_from(record.len() - 5).ok()?;
+        record[1..3].copy_from_slice(&[3, 1]);
+        record[3..5].copy_from_slice(&len.to_be_bytes());
+    }
 
     let mut name = ptr::null_mut();
     let mut len = 0u32;
@@ -759,7 +764,7 @@ fn coalesce_handshake_records(src: &mut BytesMut) -> io::Result<Option<usize>> {
     let mut rest = &src[..];
     let mut version = [3, 1];
     let mut records = 0;
-    let mut payload = Vec::new();
+    let mut payload = Cow::Borrowed(&[][..]);
     let mut complete = 0;
     while let [CONTENT_HANDSHAKE, major, minor, hi, lo, data @ ..] = rest {
         let len = usize::from(u16::from_be_bytes([*hi, *lo]));
@@ -780,8 +785,10 @@ fn coalesce_handshake_records(src: &mut BytesMut) -> io::Result<Option<usize>> {
         }
         if records == 0 {
             version = [*major, *minor];
+            payload = Cow::Borrowed(&data[..len]);
+        } else {
+            payload.to_mut().extend_from_slice(&data[..len]);
         }
-        payload.extend_from_slice(&data[..len]);
         rest = &data[len..];
         records += 1;
 
@@ -896,7 +903,41 @@ fn buffer_len(len: usize) -> io::Result<u32> {
 
 #[cfg(test)]
 mod tests {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
     use super::*;
+
+    struct Counting;
+
+    thread_local! {
+        static ALLOCS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.realloc(ptr, layout, size) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: Counting = Counting;
+
+    fn allocations<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        let before = ALLOCS.with(Cell::get);
+        let result = f();
+        (result, ALLOCS.with(Cell::get) - before)
+    }
 
     const CONTENT_APPLICATION_DATA: u8 = 23;
     const HANDSHAKE_CLIENT_HELLO: u8 = 1;
@@ -1016,6 +1057,49 @@ mod tests {
             &fragments(&message(HANDSHAKE_CLIENT_HELLO, 70_000), &[30_000, 60_000]),
         ] {
             assert!(client_hello_servername(src).is_none());
+        }
+
+        // Only leading complete handshake records contribute to SNI parsing.
+        for tail in [
+            record(CONTENT_CHANGE_CIPHER_SPEC, &[1]),
+            record(CONTENT_APPLICATION_DATA, b"data"),
+            vec![CONTENT_HANDSHAKE, 3, 3, 0],
+        ] {
+            assert_eq!(
+                client_hello_servername(&[&hello[..], &tail].concat()).as_deref(),
+                Some("example.com")
+            );
+        }
+        let extra = record(CONTENT_HANDSHAKE, &message(14, 0));
+        assert!(client_hello_servername(&[&hello[..], &extra].concat()).is_none());
+    }
+
+    #[test]
+    fn test_single_record_handshake_allocations() {
+        let msg = client_hello_message("example.com");
+        for minor in 1..=3 {
+            for data in [msg.clone(), [&msg[..], &message(14, 0)].concat()] {
+                let mut hello = record(CONTENT_HANDSHAKE, &data);
+                hello[2] = minor;
+                for tail in [Vec::new(), record(CONTENT_APPLICATION_DATA, b"data")] {
+                    let src = [&hello[..], &tail].concat();
+                    let mut buf = BytesMut::copy_from_slice(&src);
+                    let (len, count) =
+                        allocations(|| coalesce_handshake_records(&mut buf).unwrap());
+                    assert_eq!(len, Some(src.len()));
+                    assert_eq!(&buf[..], src);
+                    assert_eq!(count, 0, "single-record coalescing must borrow its input");
+
+                    let (name, count) = allocations(|| client_hello_servername(&buf));
+                    let expected = (data.len() == msg.len()).then_some("example.com");
+                    assert_eq!(name.as_deref(), expected, "record minor {minor}");
+                    assert_eq!(
+                        count,
+                        usize::from(expected.is_some()),
+                        "only the owned server name needs an allocation"
+                    );
+                }
+            }
         }
     }
 

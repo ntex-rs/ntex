@@ -2,6 +2,10 @@
 
 ## [4.4.0] - Unreleased
 
+* schannel: borrow single-record handshake input during coalescing and SNI
+  extraction, avoiding temporary payload copies while retaining fragmented
+  handshake support and input limits
+
 * schannel: support custom connectors returning filtered I/O, preserving the
   existing filter chain beneath TLS
 
