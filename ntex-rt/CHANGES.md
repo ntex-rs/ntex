@@ -33,6 +33,9 @@
 * Drop the output of a finished neon task when its `JoinHandle` is dropped or
   cancelled, instead of when the last waker is dropped
 
+* Release the reserved join reference if a notifier panics during neon task
+  spawning, instead of leaking the task output and runtime queue
+
 * Do not wake the waiting waker of a dropped or cancelled neon `JoinHandle`,
   the waker is dropped right away on the runtime thread, or when the task
   completes or is freed if the handle is dropped on another thread

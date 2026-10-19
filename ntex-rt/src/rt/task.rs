@@ -807,6 +807,8 @@ unsafe fn create<F: Future, const LOCAL: bool>(
         // the queue and the join handle
         if detached { 1 } else { 2 },
     );
+    // Own the join reference before scheduling can unwind through a notifier.
+    let join = (!detached).then(|| Task::<F::Output> { h, _t: PhantomData });
     // the owner thread may free the task once it is queued, the queue of the
     // caller outlives the call
     if local {
@@ -815,6 +817,7 @@ unsafe fn create<F: Future, const LOCAL: bool>(
     } else {
         permit.unwrap().schedule(Remote(h));
     }
+    mem::forget(join);
     Ok(h)
 }
 
