@@ -580,6 +580,10 @@ impl IoContext {
                 {
                     self.0.fail_filters(e);
                 }
+                // Filter processing, here or in `with_write_dst`, may have
+                // grown the output. It is checked once the write attempt is
+                // accounted for, an eager write may have drained it already.
+                st.enable_wr_backpressure_if_needed();
                 st.sync_write_buffered();
 
                 let len = st.buffer.write_buf_size();
