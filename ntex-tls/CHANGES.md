@@ -2,6 +2,9 @@
 
 ## [4.4.0] - Unreleased
 
+* schannel: release opened CNG key handles when deleting a temporary private
+  key fails, including certificate-setup rollback, and log cleanup failures
+
 * schannel: reject empty plaintext handshake records and limit handshake
   reassembly to 64 KiB per message and 1024 records, preventing unbounded
   ciphertext buffering and repeated parsing while waiting for a message
