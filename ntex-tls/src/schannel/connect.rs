@@ -1,5 +1,5 @@
 use ntex_error::Error;
-use ntex_io::{Io, Layer};
+use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::{Ctx, IntoService, Service, cfg::SharedCfg};
 
@@ -33,6 +33,8 @@ impl<A: Address> TlsConnector<Connector<A>> {
     }
 
     /// Use connector to open connections.
+    ///
+    /// Existing I/O filters are preserved below the Schannel layer.
     pub fn connector<F, S>(self, f: impl IntoService<S, SharedCfg, Connect<A>>) -> TlsConnector<S>
     where
         S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
@@ -44,11 +46,11 @@ impl<A: Address> TlsConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, S> Service<SharedCfg, Connect<A>> for TlsConnector<S>
+impl<F: Filter, A: Address, S> Service<SharedCfg, Connect<A>> for TlsConnector<S>
 where
-    S: Service<SharedCfg, Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
 {
-    type Res = Io<Layer<SchannelFilter>>;
+    type Res = Io<Layer<SchannelFilter, F>>;
     type Error = Error<ConnectError>;
 
     ntex_service::forward_ready!(SharedCfg, svc);
@@ -72,7 +74,9 @@ where
 mod tests {
     use std::{cell::RefCell, io, rc::Rc};
 
-    use ntex_io::{testing::IoTest, types::HttpProtocol};
+    use ntex::codec::BytesCodec;
+    use ntex_bytes::{BytePages, Bytes};
+    use ntex_io::{FilterBuf, FilterLayer, testing::IoTest, types::HttpProtocol};
     use ntex_service::{Pipeline, fn_service};
     use ntex_util::{future::join, time::Millis};
 
@@ -82,11 +86,11 @@ mod tests {
     const PFX: &[u8] = include_bytes!("../../examples/identity.pfx");
 
     /// Connector over an in-memory transport.
-    fn io_connector(
+    fn io_connector<F: Filter>(
         connector: TlsConnector<Connector<&'static str>>,
-        io: Io,
+        io: Io<F>,
     ) -> TlsConnector<
-        impl Service<SharedCfg, Connect<&'static str>, Res = Io, Error = Error<ConnectError>>,
+        impl Service<SharedCfg, Connect<&'static str>, Res = Io<F>, Error = Error<ConnectError>>,
     > {
         let io = Rc::new(RefCell::new(Some(io)));
         connector.connector(fn_service(move |_: Connect<&'static str>| {
@@ -139,6 +143,57 @@ mod tests {
             client.query::<HttpProtocol>().as_ref(),
             Some(&HttpProtocol::Http2)
         );
+    }
+
+    #[ntex::test]
+    async fn test_schannel_filtered_connector() {
+        #[derive(Debug)]
+        struct Passthrough;
+
+        impl FilterLayer for Passthrough {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_read_buffers(|src, dst| {
+                    if let Some(src) = src.take() {
+                        dst.extend_from_slice(&src);
+                    }
+                });
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+        }
+
+        let config = ServerConfig::new(Certificate::from_pkcs12(PFX, "ntex").unwrap()).unwrap();
+        let (cli, srv) = IoTest::create();
+        cli.remote_buffer_cap(1 << 20);
+        srv.remote_buffer_cap(1 << 20);
+        let connector = io_connector(
+            TlsConnector::with_config(ClientConfig::new().danger_accept_invalid_certs(true)),
+            Io::new(cli, SharedCfg::new("CLI")).add_filter(Passthrough),
+        );
+        let connector = Pipeline::new(SharedCfg::new("CLI").build(), connector);
+        assert!(connector.ready().await.is_ok());
+        let (client, server) = join(
+            connector.call(Connect::new("localhost")),
+            accept(Io::new(srv, SharedCfg::new("SRV")), &config),
+        )
+        .await;
+        let client: Io<Layer<SchannelFilter, Layer<Passthrough>>> = client.unwrap();
+        let server = server.unwrap();
+
+        client
+            .send(Bytes::from_static(b"request"), &BytesCodec)
+            .await
+            .unwrap();
+        assert_eq!(server.recv(&BytesCodec).await.unwrap().unwrap(), "request");
+        server
+            .send(Bytes::from_static(b"reply"), &BytesCodec)
+            .await
+            .unwrap();
+        assert_eq!(client.recv(&BytesCodec).await.unwrap().unwrap(), "reply");
     }
 
     /// The default configuration verifies the server certificate.

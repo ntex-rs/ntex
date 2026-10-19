@@ -2,6 +2,9 @@
 
 ## [4.4.0] - Unreleased
 
+* schannel: support custom connectors returning filtered I/O, preserving the
+  existing filter chain beneath TLS
+
 * schannel: release opened CNG key handles when deleting a temporary private
   key fails, including certificate-setup rollback, and log cleanup failures
 
