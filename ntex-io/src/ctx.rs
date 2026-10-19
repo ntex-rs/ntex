@@ -1245,4 +1245,26 @@ mod tests {
             IoTaskStatus::Stop
         );
     }
+
+    #[test]
+    fn start_panic_releases_state() {
+        use std::{cell::RefCell, rc::Rc};
+
+        struct PanicStart(Rc<RefCell<Option<std::rc::Weak<crate::io::IoState>>>>);
+
+        impl crate::IoStream for PanicStart {
+            fn start(self, ctx: IoContext) -> Box<dyn crate::Handle> {
+                *self.0.borrow_mut() = Some(Rc::downgrade(&ctx.0.0));
+                panic!("start failed");
+            }
+        }
+
+        let state = Rc::new(RefCell::new(None));
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Io::from(PanicStart(state.clone()))
+        }));
+        assert!(res.is_err());
+        let state = state.borrow_mut().take().unwrap();
+        assert!(state.upgrade().is_none(), "state leaked");
+    }
 }
