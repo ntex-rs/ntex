@@ -365,35 +365,24 @@ impl FilterLayer for SchannelFilter {
     }
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
-        let inner = self.inner_mut();
-        if inner.peer_closed {
-            // input after the peer's close_notify is ignored
-            rb.with_read_src(|src| src.as_mut().map(ntex_bytes::BytesMut::clear));
-            return Ok(());
-        }
-        loop {
-            match inner.state {
-                State::Failed => return Ok(()),
-                State::Handshaking | State::Renegotiating => {
-                    if !inner.handshake(rb)? {
-                        return Ok(());
-                    }
-                }
-                State::Streaming | State::Closed => {}
-            }
+        let (result, peer_closed) = {
+            #[cfg(test)]
+            let _borrow = crate::utils::testing::TlsBorrow::new();
 
-            match inner.decrypt(rb)? {
-                // the context is shut down, but a post-handshake message still
-                // has to be processed before the next record can be decrypted
-                Decrypted::Renegotiate if inner.state == State::Closed => {
-                    rb.with_write_buffers(|_, dst| {
-                        rb.with_read_src(|src| inner.ctx.handshake_step(src.as_mut(), dst))
-                    })?;
-                }
-                Decrypted::Renegotiate => inner.state = State::Renegotiating,
-                Decrypted::Closed | Decrypted::Progress | Decrypted::Pending => return Ok(()),
+            let inner = self.inner_mut();
+            if inner.peer_closed {
+                // input after the peer's close_notify is ignored
+                rb.with_read_src(|src| src.as_mut().map(ntex_bytes::BytesMut::clear));
+                return Ok(());
             }
+            let result = inner.process_read_buf(rb);
+            (result, inner.peer_closed)
+        };
+        // Release the state before closing: the read-task waker may reenter.
+        if peer_closed {
+            rb.io().close();
         }
+        result
     }
 
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
@@ -406,6 +395,32 @@ impl FilterLayer for SchannelFilter {
 }
 
 impl Schannel {
+    fn process_read_buf(&mut self, rb: &FilterBuf<'_>) -> io::Result<()> {
+        loop {
+            match self.state {
+                State::Failed => return Ok(()),
+                State::Handshaking | State::Renegotiating => {
+                    if !self.handshake(rb)? {
+                        return Ok(());
+                    }
+                }
+                State::Streaming | State::Closed => {}
+            }
+
+            match self.decrypt(rb)? {
+                // the context is shut down, but a post-handshake message still
+                // has to be processed before the next record can be decrypted
+                Decrypted::Renegotiate if self.state == State::Closed => {
+                    rb.with_write_buffers(|_, dst| {
+                        rb.with_read_src(|src| self.ctx.handshake_step(src.as_mut(), dst))
+                    })?;
+                }
+                Decrypted::Renegotiate => self.state = State::Renegotiating,
+                Decrypted::Closed | Decrypted::Progress | Decrypted::Pending => return Ok(()),
+            }
+        }
+    }
+
     /// Drives the handshake with buffered input, returns `true` once it is done.
     fn handshake(&mut self, rb: &FilterBuf<'_>) -> io::Result<bool> {
         let renegotiating = self.state == State::Renegotiating;
@@ -470,9 +485,7 @@ impl Schannel {
             Ok(Decrypted::Pending)
         })?;
         if res == Decrypted::Closed {
-            // peer sent close_notify, start graceful shutdown
             self.peer_closed = true;
-            rb.io().close();
         }
         Ok(res)
     }

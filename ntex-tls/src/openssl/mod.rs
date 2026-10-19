@@ -105,6 +105,9 @@ impl SslFilter {
     where
         F: FnOnce(&mut SslStream<IoInner>, &FilterBuf<'_>) -> R,
     {
+        #[cfg(test)]
+        let _borrow = crate::utils::testing::TlsBorrow::new();
+
         // SAFETY: see `ssl()`. Neither the BIO callbacks nor the buffer
         // operations below re-enter the filter.
         let stream = unsafe { &mut *self.inner.get() };
@@ -206,7 +209,8 @@ impl FilterLayer for SslFilter {
     }
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
-        self.with_read_buffers(rb, |stream, buf| {
+        let mut peer_closed = false;
+        let result = self.with_read_buffers(rb, |stream, buf| {
             buf.with_read_buffers(|_, dst| {
                 loop {
                     if dst.remaining_mut() == 0 {
@@ -220,7 +224,7 @@ impl FilterLayer for SslFilter {
                             return match e.code() {
                                 ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(()),
                                 ssl::ErrorCode::ZERO_RETURN => {
-                                    rb.io().close();
+                                    peer_closed = true;
                                     Ok(())
                                 }
                                 _ => {
@@ -232,7 +236,12 @@ impl FilterLayer for SslFilter {
                     }
                 }
             })
-        })
+        });
+        // Closing can reenter the filter through an inline read-task waker.
+        if peer_closed {
+            rb.io().close();
+        }
+        result
     }
 
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
@@ -466,6 +475,41 @@ pub(crate) mod tests {
         )
         .await;
         (client.unwrap(), server.unwrap())
+    }
+
+    #[ntex::test]
+    async fn peer_close_inline_waker() {
+        use crate::utils::testing;
+
+        for client_closes in [true, false] {
+            let (client, client_ctx) = testing::io("CLI");
+            let (server, server_ctx) = testing::io("SRV");
+            let (client, server) = testing::handshake(
+                join(
+                    connect(
+                        client,
+                        connector(false)
+                            .configure()
+                            .unwrap()
+                            .into_ssl("localhost")
+                            .unwrap(),
+                    ),
+                    handshake(
+                        server,
+                        ssl::Ssl::new(acceptor(false).context()).unwrap(),
+                        true,
+                    ),
+                ),
+                &client_ctx,
+                &server_ctx,
+            );
+            let (client, server) = (client.unwrap(), server.unwrap());
+            if client_closes {
+                testing::peer_close(&client, &client_ctx, &server, &server_ctx).await;
+            } else {
+                testing::peer_close(&server, &server_ctx, &client, &client_ctx).await;
+            }
+        }
     }
 
     /// The chain starts with the peer's certificate on both sides.

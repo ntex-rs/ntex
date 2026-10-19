@@ -18,7 +18,13 @@ impl FilterLayer for TlsClientFilter {
     }
 
     fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        self.stream(|s| s.process_read_buf(buf))
+        let mut peer_closed = false;
+        let result = self.stream(|s| s.process_read_buf(buf, &mut peer_closed));
+        // Release the session before closing: the read-task waker may reenter.
+        if peer_closed {
+            buf.io().close();
+        }
+        result
     }
 
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
@@ -54,6 +60,9 @@ impl TlsClientFilter {
     where
         F: FnOnce(&mut Stream<'_, ClientConnection>) -> R,
     {
+        #[cfg(test)]
+        let _borrow = crate::utils::testing::TlsBorrow::new();
+
         let mut s = Stream::new(unsafe { &mut *self.session.get() });
         f(&mut s)
     }

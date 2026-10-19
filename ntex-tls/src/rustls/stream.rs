@@ -45,7 +45,11 @@ where
         }
     }
 
-    pub(crate) fn process_read_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
+    pub(crate) fn process_read_buf(
+        &mut self,
+        buf: &FilterBuf<'_>,
+        peer_closed: &mut bool,
+    ) -> io::Result<()> {
         let result = buf.with_read_buffers(|r_src, r_dst| {
             let Some(src) = r_src else {
                 return Ok(());
@@ -70,8 +74,7 @@ where
                     let v = io::Read::read(&mut self.session.reader(), chunk)?;
                     unsafe { r_dst.advance_mut(v) };
                 } else if state.peer_has_closed() {
-                    // peer sent close_notify, start graceful shutdown
-                    buf.io().close();
+                    *peer_closed = true;
                     break;
                 } else if src.is_empty() {
                     break;
