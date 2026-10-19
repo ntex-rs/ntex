@@ -5,6 +5,10 @@
 * Defer peer-close shutdown until mutable TLS state and buffer borrows are
   released in all backends, preventing aliasing with inline read-task wakers
 
+* schannel: scan fragmented handshake records without copying while a message
+  is incomplete, and repack completed messages directly from the received
+  records with a single copy
+
 * schannel: borrow single-record handshake input during coalescing and SNI
   extraction, avoiding temporary payload copies while retaining fragmented
   handshake support and input limits

@@ -761,10 +761,15 @@ pub(super) fn handshake_records_len(src: &[u8]) -> usize {
 /// Windows Server 2025 (build 26100) fails with `SEC_E_UNSUPPORTED_FUNCTION`
 /// if a `ClientHello` spread over several records is passed in pieces.
 fn coalesce_handshake_records(src: &mut BytesMut) -> io::Result<Option<usize>> {
+    // The records are only scanned until a message is complete, the payload
+    // is copied once when they are repacked.
     let mut rest = &src[..];
     let mut version = [3, 1];
-    let mut records = 0;
-    let mut payload = Cow::Borrowed(&[][..]);
+    let mut count = 0;
+    // payload length of the scanned records
+    let mut total = 0;
+    // header of the first message, which may span records
+    let mut header = [0; 4];
     let mut complete = 0;
     while let [CONTENT_HANDSHAKE, major, minor, hi, lo, data @ ..] = rest {
         let len = usize::from(u16::from_be_bytes([*hi, *lo]));
@@ -774,7 +779,7 @@ fn coalesce_handshake_records(src: &mut BytesMut) -> io::Result<Option<usize>> {
                 "empty TLS handshake record",
             ));
         }
-        if records == MAX_HELD_HANDSHAKE_RECORDS {
+        if count == MAX_HELD_HANDSHAKE_RECORDS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "TLS handshake message exceeds 1024 records",
@@ -783,36 +788,47 @@ fn coalesce_handshake_records(src: &mut BytesMut) -> io::Result<Option<usize>> {
         if data.len() < len {
             break;
         }
-        if records == 0 {
+        if count == 0 {
             version = [*major, *minor];
-            payload = Cow::Borrowed(&data[..len]);
-        } else {
-            payload.to_mut().extend_from_slice(&data[..len]);
         }
+        let payload = &data[..len];
+        let start = total;
         rest = &data[len..];
-        records += 1;
+        count += 1;
+        total += len;
 
-        // handshake messages, type and 24-bit length
-        while let Some(&[_, a, b, c]) = payload.get(complete..complete + 4) {
-            let size = 4 + (usize::from(a) << 16 | usize::from(b) << 8 | usize::from(c));
-            if complete == 0 && size > MAX_HELD_HANDSHAKE {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "TLS handshake message exceeds 64 KiB",
-                ));
-            }
-            if payload.len() - complete < size {
+        if start < header.len() {
+            let n = (header.len() - start).min(len);
+            header[start..start + n].copy_from_slice(&payload[..n]);
+        }
+        if total < header.len() {
+            continue;
+        }
+        let size = message_size(header);
+        if size > MAX_HELD_HANDSHAKE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "TLS handshake message exceeds 64 KiB",
+            ));
+        }
+        if total < size {
+            continue;
+        }
+        // The first message ends in this record, add the complete messages
+        // that follow it there.
+        complete = size;
+        while let Some(&[a, b, c, d]) = payload.get(complete - start..complete - start + 4) {
+            let size = message_size([a, b, c, d]);
+            if total - complete < size {
                 break;
             }
             complete += size;
         }
         // Only bound the message being reassembled, not the rest of the flight.
-        if complete != 0 {
-            break;
-        }
+        break;
     }
 
-    if records == 0 {
+    if count == 0 {
         return Ok(Some(src.len()));
     }
     if complete == 0 {
@@ -820,26 +836,64 @@ fn coalesce_handshake_records(src: &mut BytesMut) -> io::Result<Option<usize>> {
         let waiting = rest.first().is_none_or(|&ty| ty == CONTENT_HANDSHAKE);
         return Ok(if waiting { None } else { Some(src.len()) });
     }
-    if records == 1 && complete == payload.len() {
+    if count == 1 && complete == total {
         return Ok(Some(src.len()));
     }
 
-    let mut out = Vec::with_capacity(src.len());
+    Ok(Some(repack_handshake_records(
+        src, count, version, complete, total,
+    )))
+}
+
+/// Rewrites the leading `count` handshake records of `src`, which hold
+/// `total` payload bytes, as records of the first `complete` bytes followed
+/// by records of the rest, returns the length of the first ones.
+fn repack_handshake_records(
+    src: &mut BytesMut,
+    count: usize,
+    version: [u8; 2],
+    complete: usize,
+    total: usize,
+) -> usize {
+    let partial = total - complete;
+    let rest = &src[5 * count + total..];
+    let headers = complete.div_ceil(MAX_RECORD) + partial.div_ceil(MAX_RECORD);
+    let mut out = Vec::with_capacity(5 * headers + total + rest.len());
+    let mut payloads = records(src).take(count).map(|(_, payload)| payload);
+    let mut payload: &[u8] = &[];
     let mut len = 0;
-    for part in [&payload[..complete], &payload[complete..]] {
-        for chunk in part.chunks(MAX_RECORD) {
+    for part in [complete, partial] {
+        let mut left = part;
+        while left != 0 {
+            let chunk = left.min(MAX_RECORD);
             out.extend_from_slice(&[CONTENT_HANDSHAKE, version[0], version[1]]);
-            out.extend_from_slice(&u16::try_from(chunk.len()).unwrap().to_be_bytes());
-            out.extend_from_slice(chunk);
+            out.extend_from_slice(&u16::try_from(chunk).unwrap().to_be_bytes());
+            let mut need = chunk;
+            while need != 0 {
+                if payload.is_empty() {
+                    payload = payloads.next().unwrap();
+                }
+                let n = need.min(payload.len());
+                out.extend_from_slice(&payload[..n]);
+                payload = &payload[n..];
+                need -= n;
+            }
+            left -= chunk;
         }
         if len == 0 {
             len = out.len();
         }
     }
+    drop(payloads);
     out.extend_from_slice(rest);
     src.clear();
     src.extend_from_slice(&out);
-    Ok(Some(len))
+    len
+}
+
+/// Size of a handshake message, including its type and 24-bit length.
+fn message_size([_, a, b, c]: [u8; 4]) -> usize {
+    4 + (usize::from(a) << 16 | usize::from(b) << 8 | usize::from(c))
 }
 
 /// Moves a token allocated by `InitializeSecurityContextW` or
@@ -1101,6 +1155,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_fragmented_handshake_allocations() {
+        let msg = message(HANDSHAKE_CLIENT_HELLO, 300);
+        let src = fragments(&msg, &[1, 2, 3, 64, 128, 192]);
+        let full = record(CONTENT_HANDSHAKE, &msg);
+        for end in 5 + 1..src.len() {
+            let mut buf = BytesMut::copy_from_slice(&src[..end]);
+            let (len, count) = allocations(|| coalesce_handshake_records(&mut buf).unwrap());
+            assert_eq!(len, None, "{end}");
+            assert_eq!(&buf[..], &src[..end]);
+            assert_eq!(count, 0, "an incomplete message must not be copied");
+        }
+
+        let mut buf = BytesMut::copy_from_slice(&src);
+        let (len, count) = allocations(|| coalesce_handshake_records(&mut buf).unwrap());
+        assert_eq!(len, Some(full.len()));
+        assert_eq!(&buf[..], full);
+        assert_eq!(count, 1, "a complete message is repacked with one copy");
     }
 
     #[test]
