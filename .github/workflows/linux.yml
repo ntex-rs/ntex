@@ -58,6 +58,11 @@ jobs:
         run: |
           cargo nextest run --retries=3 --workspace --exclude ntex-tls --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/rustls,ntex/ws"
 
+      - name: Run tests (ntex-bytes tracker)
+        timeout-minutes: 10
+        run: |
+          cargo test -p ntex-bytes --features tracker
+
       - name: Run tests (tokio)
         timeout-minutes: 10
         run: |

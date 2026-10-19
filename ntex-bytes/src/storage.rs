@@ -11,7 +11,7 @@
 //!
 //! ## Shared vec buffer
 //!
-//! `BytesMut` always allocates and is backed by a `SharedVec`. A `SharedVec` is
+//! `BytesMut` always allocates and is backed by a `Header`. A `Header` is
 //! similar to `Vec<u8>`, except that it stores the vector parameters on the heap
 //! and includes a reference counter for shared buffer support. `BytesMut` owns
 //! the tail of the buffer; the buffer can be modified only via `BytesMut`. The
@@ -54,13 +54,13 @@
 //! ## `ptr: *mut u8`
 //!
 //! A pointer to the start of the handle’s buffer view. When backed by a
-//! `SharedVec`, this pointer is shifted to point somewhere inside the buffer.
+//! `Header`, this pointer is shifted to point somewhere inside the buffer.
 //!
 //! When in inline mode, `ptr` is used as part of the inlined buffer.
 //!
 //! ## `len: usize`
 //!
-//! The length of the handle’s buffer view. When backed by a `SharedVec`, this is
+//! The length of the handle’s buffer view. When backed by a `Header`, this is
 //! the length of the buffer slice. The slice represented by `ptr` and `len`
 //! always points to initialized memory.
 //!
@@ -73,8 +73,8 @@
 //! storage, `0b10` indicates inline storage, and `0b11` indicates static
 //! storage.
 //!
-//! When storage is backed by a `SharedVec`, the upper bits of `offset` hold the
-//! address of the `SharedVec` header, which is at least 4-byte aligned. The
+//! When storage is backed by a `Header`, the upper bits of `offset` hold the
+//! address of the `Header` header, which is at least 4-byte aligned. The
 //! header pointer is recovered from `ptr` with that address, and the offset of
 //! the view is `ptr - header`.
 //!
@@ -152,7 +152,7 @@ const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
 const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
 
 // the kind bits of vec storage are stored in the low bits of the header address
-const _: () = assert!(mem::align_of::<stvec::SharedVec>() > KIND_MASK);
+const _: () = assert!(mem::align_of::<stvec::Header>() > KIND_MASK);
 
 /*
  *
@@ -201,14 +201,14 @@ impl Storage {
 
     #[inline]
     fn from_slice_with_capacity(cap: usize, src: &[u8]) -> Storage {
-        let shared = stvec::SharedVec::create(cap, src);
-        // SAFETY: the data follows the `SharedVec` header in the allocation,
+        let shared = stvec::Header::create(cap, src);
+        // SAFETY: the data follows the `Header` header in the allocation,
         // the new allocation holds one reference
         unsafe { Storage::from_shared_vec(shared, stvec::METADATA_SIZE, src.len()) }
     }
 
     /// Creates a view of `len` bytes at `offset` from the start of
-    /// a `SharedVec` allocation.
+    /// a `Header` allocation.
     ///
     /// # Safety
     ///
@@ -216,7 +216,7 @@ impl Storage {
     /// `offset..offset + len` must be initialized data within the allocation.
     #[inline]
     pub(crate) unsafe fn from_shared_vec(
-        shared: NonNull<stvec::SharedVec>,
+        shared: NonNull<stvec::Header>,
         offset: usize,
         len: usize,
     ) -> Storage {
@@ -314,7 +314,7 @@ impl Storage {
         match kind {
             // capacity from the start of this view to the end of the allocation
             KIND_VEC => unsafe {
-                stvec::SharedVec::capacity(self.shared_vec()) + stvec::METADATA_SIZE
+                stvec::Header::capacity(self.shared_vec()) + stvec::METADATA_SIZE
                     - self.vec_offset()
             },
             KIND_STEXT => unsafe { ((*self.st_vtable()).len)(self.st_addr(), self.st_len()) },
@@ -403,7 +403,7 @@ impl Storage {
             // a shared view retains the whole allocation, including
             // the space before the start of the view
             let capacity = if kind == KIND_VEC {
-                unsafe { stvec::SharedVec::capacity(self.shared_vec()) }
+                unsafe { stvec::Header::capacity(self.shared_vec()) }
             } else {
                 self.capacity()
             };
@@ -411,7 +411,20 @@ impl Storage {
             if self.len() <= INLINE_CAP {
                 *self = unsafe { Storage::from_ptr_inline(self.as_ptr(), self.len()) };
             } else if capacity - self.len() >= 64 {
-                *self = Storage::from_slice_with_capacity(self.len(), self.as_ref());
+                let st = Storage::from_slice_with_capacity(self.len(), self.as_ref());
+                // the copy is attributed to the tracker of the allocation
+                #[cfg(feature = "tracker")]
+                if kind == KIND_VEC {
+                    // SAFETY: both allocations are live, the new one is unique,
+                    // `self` holds a reference to its tracker
+                    unsafe {
+                        stvec::Header::attach(
+                            st.shared_vec(),
+                            stvec::Header::tracker(self.shared_vec()),
+                        );
+                    }
+                }
+                *self = st;
             }
         }
     }
@@ -545,7 +558,7 @@ impl Storage {
             // In this case, a shallow_clone still involves copying the data.
             Storage { ..*self }
         } else if kind == KIND_VEC {
-            // ptr points to SharedVec
+            // ptr points to Header
             let shared = self.shared_vec();
             let ref_cnt = (*shared).ref_count.fetch_add(1, Relaxed);
             if ref_cnt == u32::MAX {
@@ -589,16 +602,16 @@ impl Storage {
     }
 
     #[inline]
-    fn shared_vec(&self) -> *mut stvec::SharedVec {
+    fn shared_vec(&self) -> *mut stvec::Header {
         // `ptr` is derived from the header pointer and keeps the provenance
         // of the whole allocation
         #[allow(clippy::cast_ptr_alignment)]
         self.ptr
             .with_addr(self.offset.get() & !KIND_MASK)
-            .cast::<stvec::SharedVec>()
+            .cast::<stvec::Header>()
     }
 
-    /// Offset of the view from the start of the `SharedVec` allocation.
+    /// Offset of the view from the start of the `Header` allocation.
     #[inline]
     fn vec_offset(&self) -> usize {
         self.ptr.addr() - (self.offset.get() & !KIND_MASK)
@@ -637,7 +650,7 @@ impl Storage {
                 (
                     ptr as usize,
                     (*ptr).ref_count.load(Relaxed),
-                    stvec::SharedVec::capacity(ptr) + stvec::METADATA_SIZE,
+                    stvec::Header::capacity(ptr) + stvec::METADATA_SIZE,
                 )
             } else {
                 (0, 0, 0)
@@ -842,7 +855,11 @@ mod tests {
         assert!(tail.info().capacity < 100, "{}", tail.info().capacity);
         let mid = b.slice(10..len - 10);
         assert_eq!(&mid[..], &LONG[10..len - 10]);
-        assert!(mid.info().capacity < len, "{}", mid.info().capacity);
+        assert!(
+            mid.info().capacity < len + stvec::METADATA_SIZE,
+            "{}",
+            mid.info().capacity
+        );
         assert_eq!(b.info().kind, info::Kind::StExt);
 
         // truncating copies the data

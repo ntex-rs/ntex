@@ -670,11 +670,11 @@ mod tests {
         let mut buf = BytesMut::new();
         buf.put_i8(0x01);
         assert_eq!(buf, b"\x01"[..]);
-        assert_eq!((&mut buf).remaining_mut(), 111);
+        assert_eq!((&mut buf).remaining_mut(), crate::storage::MIN_CAPACITY - 1);
         let chunk = (&mut buf).chunk_mut();
         chunk.write_byte(0, b'9');
         unsafe { (&mut buf).advance_mut(1) };
-        assert_eq!((&mut buf).remaining_mut(), 110);
+        assert_eq!((&mut buf).remaining_mut(), crate::storage::MIN_CAPACITY - 2);
 
         let mut buf = vec![];
         buf.put_i16(0x0809);
