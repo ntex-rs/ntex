@@ -1,5 +1,11 @@
 # Changes
 
+## Unreleased
+
+* Release in-flight call counts on cancellation, and cancel the dispatcher-held
+  response when Stop is handed off to background shutdown, so a stale count
+  cannot retain the service after Stop completes
+
 ## [4.4.0] - 2026-10-19
 
 * Report the stop reason to `IoRef::set_close_reason()`

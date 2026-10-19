@@ -96,6 +96,11 @@ fn truncated(io: &IoBoxed) -> Option<io::Error> {
 /// when the service itself fails. Graceful and protocol stops drain service
 /// calls before shutdown; transport failures abandon pending calls after
 /// delivering the stop notification so they cannot block teardown.
+///
+/// If Stop waits for service readiness beyond the I/O shutdown timeout,
+/// Stop delivery and service shutdown continue in the background. At that
+/// handoff, the dispatcher-held response is cancelled; already detached
+/// calls continue to drain.
 pub struct Dispatcher<U, Err>
 where
     U: Encoder + Decoder + 'static,
@@ -113,8 +118,45 @@ impl<U: Encoder + Decoder, Err> fmt::Debug for Dispatcher<U, Err> {
     }
 }
 
-type Call<U, Err> = PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>;
 type Service<U, Err> = Pipeline<DispatchItem<U>, Option<Response<U>>, Err>;
+
+struct Call<U: Encoder + Decoder, Err> {
+    // Drop the service future before releasing its count and waking shutdown.
+    fut: PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>,
+    guard: CallGuard<U, Err>,
+}
+
+struct CallGuard<U: Encoder + Decoder, Err> {
+    shared: Rc<DispatcherShared<U, Err>>,
+    wake: bool,
+}
+
+impl<U: Encoder + Decoder, Err> Drop for CallGuard<U, Err> {
+    fn drop(&mut self) {
+        self.shared.inflight.set(self.shared.inflight.get() - 1);
+        if self.wake {
+            self.shared.io.notify_dispatcher();
+        }
+    }
+}
+
+impl<U: Encoder + Decoder, Err> fmt::Debug for Call<U, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fut.fmt(f)
+    }
+}
+
+impl<U: Encoder + Decoder + 'static, Err: 'static> Future for Call<U, Err> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        let result = ready!(Pin::new(&mut this.fut).poll(cx));
+        this.guard.shared.handle_result(result);
+        this.guard.wake = false;
+        Poll::Ready(())
+    }
+}
 
 struct DispatcherInner<U, Err>
 where
@@ -226,12 +268,19 @@ where
     U: Encoder + Decoder + 'static,
     Err: 'static,
 {
-    fn call(&self, item: DispatchItem<U>) -> Call<U, Err> {
+    fn call(self: &Rc<Self>, item: DispatchItem<U>) -> Call<U, Err> {
         self.inflight.set(self.inflight.get() + 1);
-        self.service.call_static(item)
+        let guard = CallGuard {
+            shared: self.clone(),
+            wake: true,
+        };
+        Call {
+            fut: self.service.call_static(item),
+            guard,
+        }
     }
 
-    fn handle_result(&self, item: Result<Option<Response<U>>, Err>, wake: bool) {
+    fn handle_result(&self, item: Result<Option<Response<U>>, Err>) {
         match item {
             Ok(Some(val)) => {
                 if let Err(err) = self.io.encode(val, &self.codec) {
@@ -240,10 +289,6 @@ where
             }
             Err(err) => self.error.set(Some(DispatcherError::Service(err))),
             Ok(None) => (),
-        }
-        self.inflight.set(self.inflight.get() - 1);
-        if wake {
-            self.io.notify_dispatcher();
         }
     }
 }
@@ -261,9 +306,8 @@ where
 
         // handle service response future
         if let Some(fut) = inner.response.as_mut()
-            && let Poll::Ready(item) = Pin::new(fut).poll(cx)
+            && Pin::new(fut).poll(cx).is_ready()
         {
-            inner.shared.handle_result(item, false);
             inner.response = None;
         }
 
@@ -388,8 +432,7 @@ where
                     // service may relay on poll_ready for response results
                     let ready = inner.shared.service.poll_ready(cx);
 
-                    if let Poll::Ready(result) = Pin::new(&mut stop.fut).poll(cx) {
-                        inner.shared.handle_result(result, false);
+                    if Pin::new(&mut stop.fut).poll(cx).is_ready() {
                         // the dispatcher returns a service error from the stop call,
                         // unless it is stopping because of an earlier one
                         if let Some(DispatcherError::Service(err)) = inner.shared.error.take()
@@ -422,6 +465,7 @@ where
                         unreachable!()
                     };
                     inner.shared.io.stop_timer();
+                    inner.response = None;
 
                     // the task owns the readiness check from now on
                     let shared = inner.shared.clone();
@@ -429,9 +473,8 @@ where
                     spawn_detached(poll_fn(move |cx| {
                         let _ = shared.service.poll_ready(cx);
                         if let Some(f) = fut.as_mut() {
-                            let result = ready!(Pin::new(f).poll(cx));
+                            ready!(Pin::new(f).poll(cx));
                             fut = None;
-                            shared.handle_result(result, false);
                         }
                         if shared.inflight.get() != 0 {
                             shared.io.register_dispatch(cx);
@@ -498,15 +541,15 @@ where
         let mut fut = self.shared.call(item);
 
         // the first poll consumes the pipeline readiness checked by `poll_service()`
-        if let Poll::Ready(result) = Pin::new(&mut fut).poll(cx) {
-            self.shared.handle_result(result, false);
+        if Pin::new(&mut fut).poll(cx).is_ready() {
+            drop(fut);
         } else if self.response.is_none() {
             self.response = Some(fut);
         } else {
             let shared = self.shared.clone();
             spawn_detached(async move {
-                let result = fut.await;
-                shared.handle_result(result, true);
+                fut.await;
+                shared.io.notify_dispatcher();
             });
         }
     }
@@ -1232,6 +1275,161 @@ mod tests {
             .await
             .expect("dispatcher did not drain pending service call")
             .unwrap();
+    }
+
+    #[ntex::test]
+    async fn cancelled_calls_release_inflight() {
+        struct Wake(AtomicBool);
+
+        impl std::task::Wake for Wake {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Relaxed);
+            }
+        }
+
+        let (_client, server) = IoTest::create();
+        let disp = Dispatcher::new(
+            Io::from(server),
+            BytesCodec,
+            Pipeline::new(
+                (),
+                ntex_service::fn_service(|_: DispatchItem<BytesCodec>| {
+                    std::future::pending::<Result<Option<Bytes>, ()>>()
+                }),
+            ),
+        );
+        let shared = &disp.inner.shared;
+        let wake = Arc::new(Wake(AtomicBool::new(false)));
+        let waker = std::task::Waker::from(wake.clone());
+        let mut cx = Context::from_waker(&waker);
+
+        for polled in [false, true] {
+            let mut call = shared.call(DispatchItem::Item(Bytes::from_static(b"request")));
+            if polled {
+                assert!(Pin::new(&mut call).poll(&mut cx).is_pending());
+            }
+            assert_eq!(shared.inflight.get(), 1);
+            shared.io.register_dispatch(&mut cx);
+            wake.0.store(false, Relaxed);
+            drop(call);
+            assert_eq!(shared.inflight.get(), 0);
+            assert!(wake.0.load(Relaxed), "cancellation must wake shutdown");
+        }
+    }
+
+    #[ntex::test]
+    async fn stop_handoff_cancels_owned_response() {
+        #[derive(Default)]
+        struct Data {
+            blocked: Cell<bool>,
+            dropped: Cell<usize>,
+            stopped: Cell<usize>,
+            shutdown: Cell<usize>,
+            ready: Condition,
+            requests: Condition,
+        }
+
+        struct Request(Rc<Data>);
+
+        impl Drop for Request {
+            fn drop(&mut self) {
+                self.0.dropped.set(self.0.dropped.get() + 1);
+            }
+        }
+
+        struct Srv {
+            data: Rc<Data>,
+            _token: Rc<()>,
+        }
+
+        impl Service<(), DispatchItem<BCodec>> for Srv {
+            type Res = Option<Bytes>;
+            type Error = ();
+
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
+                while self.data.blocked.get() {
+                    self.data.ready.wait().await;
+                }
+                Ok(())
+            }
+
+            async fn call(
+                &self,
+                item: DispatchItem<BCodec>,
+                _: Ctx<'_, Self>,
+            ) -> Result<Self::Res, ()> {
+                match item {
+                    DispatchItem::Item(_) => {
+                        let _request = Request(self.data.clone());
+                        self.data.requests.wait().await;
+                    }
+                    DispatchItem::Stop(_) => {
+                        self.data.stopped.set(self.data.stopped.get() + 1);
+                    }
+                    DispatchItem::Control(_) => (),
+                }
+                Ok(None)
+            }
+
+            async fn shutdown(&self, _: Ctx<'_, Self>) {
+                self.data.shutdown.set(self.data.shutdown.get() + 1);
+            }
+        }
+
+        for count in [1, 2] {
+            let (_client, server) = IoTest::create();
+            let io = Io::new(
+                server,
+                SharedCfg::new("TEST").add(
+                    IoConfig::new()
+                        .set_keepalive_timeout(Seconds::ZERO)
+                        .set_shutdown_timeout(Seconds(1)),
+                ),
+            );
+            io.with_read_dst(|buf| buf.extend_from_slice(&b"xx"[..count]));
+            let ioref = io.get_ref();
+            let data = Rc::new(Data::default());
+            let token = Rc::new(());
+            let weak = Rc::downgrade(&token);
+            let mut disp = Dispatcher::new(
+                io,
+                BCodec(1),
+                Pipeline::new(
+                    (),
+                    Srv {
+                        data: data.clone(),
+                        _token: token,
+                    },
+                ),
+            );
+            assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+            assert_eq!(disp.inner.shared.inflight.get(), count as u32);
+            data.blocked.set(true);
+            ioref.terminate();
+            timeout(Millis(2500), &mut disp).await.unwrap().unwrap();
+
+            // Keep the completed dispatcher alive: handoff must cancel the response.
+            assert!(disp.inner.response.is_none());
+            assert_eq!(data.dropped.get(), 1);
+            assert_eq!(disp.inner.shared.inflight.get(), count as u32);
+            data.blocked.set(false);
+            data.ready.notify(());
+            wait_until(Millis(1000), || data.stopped.get() == 1).await;
+            assert_eq!(data.stopped.get(), 1);
+
+            if count == 2 {
+                assert_eq!(data.shutdown.get(), 0);
+                // The separately detached request still drains and wakes shutdown.
+                data.requests.notify(());
+            }
+            wait_until(Millis(1000), || data.shutdown.get() == 1).await;
+            assert_eq!(data.shutdown.get(), 1);
+            assert_eq!(disp.inner.shared.inflight.get(), 0);
+            assert_eq!(data.dropped.get(), count);
+            drop(disp);
+            wait_until(Millis(1000), || weak.upgrade().is_none()).await;
+            assert!(weak.upgrade().is_none());
+        }
     }
 
     #[ntex::test]
