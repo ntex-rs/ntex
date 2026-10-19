@@ -1,4 +1,4 @@
-use std::{cell::RefCell, io, os::fd::AsRawFd, os::fd::RawFd, rc::Rc, task::Poll};
+use std::{cell::RefCell, io, mem, os::fd::AsRawFd, os::fd::RawFd, rc::Rc, task::Poll};
 
 use ntex_io::Io;
 use ntex_rt::{Arbiter, syscall};
@@ -7,7 +7,7 @@ use slab::Slab;
 use socket2::{SockAddr, Socket};
 
 use super::{Event, Handler, Reactor, ReactorApi, TcpStream, UnixStream, stream::StreamOps};
-use crate::channel::{self, Receiver, Sender};
+use crate::channel::{self, Cancel, Receiver, Sender};
 
 #[derive(Clone)]
 pub(crate) struct ConnectOps(Rc<ConnectOpsInner>);
@@ -27,6 +27,8 @@ struct ConnectOpsInner {
     api: ReactorApi,
     streams: StreamOps,
     connects: RefCell<Slab<Item>>,
+    /// Connects with dropped receivers, released by the next tick
+    canceled: RefCell<Vec<u32>>,
 }
 
 impl Item {
@@ -46,6 +48,7 @@ impl ConnectOps {
                     api,
                     streams,
                     connects: RefCell::new(Slab::new()),
+                    canceled: RefCell::new(Vec::new()),
                 });
                 inner = Some(ops.clone());
                 Box::new(ConnectOpsBatcher { inner: ops })
@@ -79,18 +82,28 @@ impl ConnectOps {
             }
         } else {
             // connect is async
-            let (sender, rx) = channel::create();
             let fd = sock.as_raw_fd();
-            let item = Item {
+            let mut connects = self.0.connects.borrow_mut();
+            let entry = connects.vacant_entry();
+            let id = entry.key() as u32;
+            let (sender, rx) = channel::with_cancel(self.0.clone(), id);
+            entry.insert(Item {
                 sock,
                 cfg,
                 sender,
                 uds,
-            };
-            let id = self.0.connects.borrow_mut().insert(item);
-            self.0.api.attach(fd, id as u32, Event::writable(0));
+            });
+            drop(connects);
+            self.0.api.attach(fd, id, Event::writable(0));
             rx
         }
+    }
+}
+
+impl Cancel for ConnectOpsInner {
+    fn cancel(&self, id: u32) {
+        // the receiver can be dropped while connects are borrowed
+        self.canceled.borrow_mut().push(id);
     }
 }
 
@@ -128,6 +141,9 @@ impl Handler for ConnectOpsBatcher {
 
                 self.inner.api.detach(item.fd(), id as u32);
                 match res {
+                    Ok(_) if item.sender.is_canceled() => {
+                        crate::helpers::close_socket(item.sock);
+                    }
                     Ok(_) => {
                         if item.uds {
                             let _ = item.sender.send(Ok(Io::new(
@@ -171,9 +187,79 @@ impl Handler for ConnectOpsBatcher {
         }
     }
 
-    fn tick(&mut self) {}
+    fn tick(&mut self) {
+        let canceled = mem::take(&mut *self.inner.canceled.borrow_mut());
+        if canceled.is_empty() {
+            return;
+        }
+
+        let mut connects = self.inner.connects.borrow_mut();
+        for id in canceled {
+            // the connect may have completed and its slot reused
+            let id = id as usize;
+            if connects
+                .get(id)
+                .is_some_and(|item| item.sender.is_canceled())
+            {
+                let item = connects.remove(id);
+                log::trace!("{}: Connect {id:?} is canceled", item.cfg.tag());
+                self.inner.api.detach(item.fd(), id as u32);
+                crate::helpers::close_socket(item.sock);
+            }
+        }
+    }
 
     fn cleanup(&mut self) {
+        self.inner.canceled.borrow_mut().clear();
         self.inner.connects.borrow_mut().clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dropping the receiver of a pending connect releases the socket
+    #[ntex::test]
+    async fn dropped_receiver_cancels_connect() {
+        let reactor = Reactor::new().unwrap();
+        let ops = ConnectOps::get(&reactor);
+        let mut handler = ConnectOpsBatcher {
+            inner: ops.0.clone(),
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = SockAddr::from(listener.local_addr().unwrap());
+        let connect = || {
+            let sock = Socket::new(addr.domain(), socket2::Type::STREAM, None).unwrap();
+            ops.connect(
+                crate::helpers::prep_socket(sock).unwrap(),
+                &addr,
+                SharedCfg::default(),
+                false,
+            )
+        };
+
+        let rx = connect();
+        if ops.0.connects.borrow().is_empty() {
+            // connected without waiting, nothing to cancel
+            return;
+        }
+        let rx2 = connect();
+        assert_eq!(ops.0.connects.borrow().len(), 2);
+
+        drop(rx);
+        handler.tick();
+        assert_eq!(ops.0.connects.borrow().len(), 1);
+
+        // a completed connect does not cancel the reused slot
+        let id = ops.0.connects.borrow().iter().next().unwrap().0;
+        ops.0.canceled.borrow_mut().push(id as u32);
+        handler.tick();
+        assert_eq!(ops.0.connects.borrow().len(), 1);
+
+        drop(rx2);
+        handler.tick();
+        assert!(ops.0.connects.borrow().is_empty());
+        handler.cleanup();
     }
 }

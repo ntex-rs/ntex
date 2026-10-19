@@ -4,13 +4,27 @@ use std::{fmt, future::Future, future::poll_fn, io, pin::Pin, task::Context, tas
 
 use ntex_util::task::LocalWaker;
 
+/// Notified when a receiver is dropped before its value is sent.
+pub(crate) trait Cancel {
+    fn cancel(&self, id: u32);
+}
+
 /// Creates a new futures-aware, one-shot channel.
 pub fn create<T>() -> (Sender<T>, Receiver<T>) {
+    create_inner(None)
+}
+
+/// Creates a channel that calls `hnd.cancel(id)` if the receiver is
+/// dropped while the sender is still pending.
+pub(crate) fn with_cancel<T>(hnd: Rc<dyn Cancel>, id: u32) -> (Sender<T>, Receiver<T>) {
+    create_inner(Some((hnd, id)))
+}
+
+fn create_inner<T>(on_cancel: Option<(Rc<dyn Cancel>, u32)>) -> (Sender<T>, Receiver<T>) {
     let inner = Rc::new(Inner {
         value: Cell::new(None),
         rx_task: LocalWaker::new(),
-        #[cfg(windows)]
-        on_cancel: Cell::new(None),
+        on_cancel: Cell::new(on_cancel),
     });
     let tx = Sender {
         inner: inner.clone(),
@@ -23,9 +37,17 @@ pub fn create<T>() -> (Sender<T>, Receiver<T>) {
 pub(crate) fn create_with_cancel<T>(
     on_cancel: impl FnOnce() + 'static,
 ) -> (Sender<T>, Receiver<T>) {
-    let (tx, rx) = create();
-    tx.inner.on_cancel.set(Some(Box::new(on_cancel)));
-    (tx, rx)
+    struct Callback<F>(Cell<Option<F>>);
+
+    impl<F: FnOnce()> Cancel for Callback<F> {
+        fn cancel(&self, _: u32) {
+            if let Some(on_cancel) = self.0.take() {
+                on_cancel();
+            }
+        }
+    }
+
+    with_cancel(Rc::new(Callback(Cell::new(Some(on_cancel)))), 0)
 }
 
 #[derive(Debug)]
@@ -50,8 +72,7 @@ impl<T> Unpin for Sender<T> {}
 struct Inner<T> {
     value: Cell<Option<io::Result<T>>>,
     rx_task: LocalWaker,
-    #[cfg(windows)]
-    on_cancel: Cell<Option<Box<dyn FnOnce()>>>,
+    on_cancel: Cell<Option<(Rc<dyn Cancel>, u32)>>,
 }
 
 impl<T> Sender<T> {
@@ -71,7 +92,6 @@ impl<T> Sender<T> {
     /// this function was called, however, then `Err` is returned with the value
     /// provided.
     pub fn send(self, val: io::Result<T>) -> Result<(), io::Result<T>> {
-        #[cfg(windows)]
         drop(self.inner.on_cancel.take());
 
         if Rc::strong_count(&self.inner) == 2 {
@@ -82,22 +102,17 @@ impl<T> Sender<T> {
             Err(val)
         }
     }
+
+    /// Returns `true` if the receiver is dropped.
+    pub fn is_canceled(&self) -> bool {
+        Rc::strong_count(&self.inner) == 1
+    }
 }
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        #[cfg(windows)]
         drop(self.inner.on_cancel.take());
         self.inner.rx_task.wake();
-    }
-}
-
-#[cfg(windows)]
-impl<T> Drop for Receiver<T> {
-    fn drop(&mut self) {
-        if let Some(on_cancel) = self.inner.on_cancel.take() {
-            on_cancel();
-        }
     }
 }
 
@@ -106,7 +121,6 @@ impl<T> Receiver<T> {
         let inner = Rc::new(Inner {
             value: Cell::new(Some(val)),
             rx_task: LocalWaker::new(),
-            #[cfg(windows)]
             on_cancel: Cell::new(None),
         });
         Receiver { inner }
@@ -130,6 +144,14 @@ impl<T> Receiver<T> {
         } else {
             self.inner.rx_task.register(cx.waker());
             Poll::Pending
+        }
+    }
+}
+
+impl<T> Drop for Receiver<T> {
+    fn drop(&mut self) {
+        if let Some((hnd, id)) = self.inner.on_cancel.take() {
+            hnd.cancel(id);
         }
     }
 }
@@ -202,9 +224,9 @@ mod tests {
         assert_eq!(rx.recv().await.unwrap(), "test");
 
         let (tx, rx) = create();
-        //assert!(!tx.is_canceled());
+        assert!(!tx.is_canceled());
         drop(rx);
-        //assert!(tx.is_canceled());
+        assert!(tx.is_canceled());
         assert!(tx.send(Ok("test")).is_err());
 
         let (tx, rx) = create::<&'static str>();
@@ -218,5 +240,29 @@ mod tests {
         let (tx, rx) = create::<&'static str>();
         drop(tx);
         assert!(rx.await.is_err());
+    }
+
+    #[ntex::test]
+    async fn cancel_hook() {
+        struct Hook(Cell<Option<u32>>);
+        impl Cancel for Hook {
+            fn cancel(&self, id: u32) {
+                assert!(self.0.replace(Some(id)).is_none());
+            }
+        }
+        let hook = Rc::new(Hook(Cell::new(None)));
+
+        let (_tx, rx) = with_cancel::<()>(hook.clone(), 7);
+        drop(rx);
+        assert_eq!(hook.0.take(), Some(7));
+
+        // a sent or abandoned value is not canceled
+        let (tx, rx) = with_cancel(hook.clone(), 8);
+        tx.send(Ok(())).unwrap();
+        drop(rx);
+        let (tx, rx) = with_cancel::<()>(hook.clone(), 9);
+        drop(tx);
+        drop(rx);
+        assert_eq!(hook.0.take(), None);
     }
 }

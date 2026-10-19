@@ -33,6 +33,9 @@
 
 * polling, tokio: write a single page without building the `writev` slice array
 
+* polling, io-uring: dropping a pending connect future cancels the connect and closes
+  its socket, instead of keeping it until the connect completes
+
 ## [4.5.0] - 2026-10-12
 
 * polling, tokio: keep writing within one write cycle until the socket stops
