@@ -386,6 +386,129 @@ fn spawn_detached() {
 }
 
 #[test]
+fn spawn_notify_panic() {
+    #[derive(Debug)]
+    struct PanicNotify {
+        calls: AtomicUsize,
+        _drop: Token,
+    }
+
+    impl Notify for PanicNotify {
+        fn notify(&self) -> io::Result<()> {
+            assert_ne!(
+                self.calls.fetch_add(1, Ordering::SeqCst),
+                0,
+                "spawn notification"
+            );
+            Ok(())
+        }
+    }
+
+    for remote in [false, true] {
+        for detached in [false, true] {
+            for res in [Res::Ready, Res::Pending] {
+                let notify_drops = Counter::default();
+                let rt = Runtime::new(Box::new(PanicNotify {
+                    calls: AtomicUsize::new(0),
+                    _drop: notify_drops.token(),
+                }));
+                let queue = Arc::downgrade(&rt.queue);
+                let p = Probe::default();
+                let fut = p.future(res);
+                let handle = rt.handle();
+                let spawn = move || {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        if detached {
+                            handle.spawn_detached(fut);
+                        } else {
+                            drop(handle.spawn(fut));
+                        }
+                    }))
+                };
+                let result = if remote { on_thread(spawn) } else { spawn() };
+                assert!(result.is_err());
+                rt.poll();
+                drop(rt);
+                drop(p.waker());
+                p.check(1, 1, usize::from(res == Res::Ready));
+                assert!(queue.upgrade().is_none(), "task alive");
+                assert_eq!(notify_drops.get(), 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn spawn_notify_panic_after_completion() {
+    #[derive(Debug)]
+    struct PanicNotify {
+        gate: Option<Arc<Barrier>>,
+        _drop: Token,
+    }
+
+    impl Notify for PanicNotify {
+        fn notify(&self) -> io::Result<()> {
+            if let Some(gate) = &self.gate {
+                gate.wait();
+                gate.wait();
+            } else {
+                Runtime::with_current(|rt| {
+                    rt.poll();
+                });
+            }
+            panic!("spawn notification");
+        }
+    }
+
+    for remote in [false, true] {
+        for detached in [false, true] {
+            let notify_drops = Counter::default();
+            let outputs = Counter::default();
+            let gate = remote.then(|| Arc::new(Barrier::new(2)));
+            let rt = Runtime::new(Box::new(PanicNotify {
+                gate: gate.clone(),
+                _drop: notify_drops.token(),
+            }));
+            let queue = Arc::downgrade(&rt.queue);
+            let output = outputs.token();
+            let fut = async move { output };
+            let result = if let Some(gate) = gate {
+                let handle = rt.handle();
+                let producer = thread::spawn(move || {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        if detached {
+                            handle.spawn_detached(fut);
+                        } else {
+                            drop(handle.spawn(fut));
+                        }
+                    }))
+                });
+                gate.wait();
+                rt.poll();
+                gate.wait();
+                producer.join().unwrap()
+            } else {
+                catch_unwind(AssertUnwindSafe(|| {
+                    super::CURRENT_RUNTIME.set(&rt, || {
+                        if detached {
+                            rt.spawn_detached(fut);
+                        } else {
+                            drop(rt.spawn(fut));
+                        }
+                    });
+                }))
+            };
+            assert!(result.is_err());
+            assert_eq!(outputs.get(), 1);
+            assert_freed(&rt);
+            drop(rt);
+            assert!(queue.upgrade().is_none(), "task alive");
+            assert_eq!(notify_drops.get(), 1);
+        }
+    }
+}
+
+#[test]
 fn finish_unshared() {
     struct PanicOnDrop;
     struct PanicOnWake;
