@@ -299,27 +299,29 @@ fn write_pages<T>(
 where
     T: Stream,
 {
-    let mut bufs = [io::IoSlice::new(&[]); MAX_WRITE_ITEMS];
-    let mut num = 0;
-    let mut size = 0;
-
     #[cfg(feature = "trace")]
     log::trace!("{}: Try write buf({})", ctx.tag(), dst.len());
 
-    for chunk in dst.iter() {
-        bufs[num] = io::IoSlice::new(chunk);
-        num += 1;
-        size += chunk.len();
-        if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
-            break;
+    let (result, size) = if dst.num_pages() <= 1 {
+        // a single page is written without building the slice array
+        let Some(chunk) = dst.iter().next() else {
+            return Ok((0, 0));
+        };
+        (write_io(ctx, io, &[io::IoSlice::new(chunk)]), chunk.len())
+    } else {
+        let mut bufs = [io::IoSlice::new(&[]); MAX_WRITE_ITEMS];
+        let mut num = 0;
+        let mut size = 0;
+        for chunk in dst.iter() {
+            bufs[num] = io::IoSlice::new(chunk);
+            num += 1;
+            size += chunk.len();
+            if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+                break;
+            }
         }
-    }
-
-    if num == 0 {
-        return Ok((0, 0));
-    }
-
-    let result = write_io(ctx, io, &bufs[..num]);
+        (write_io(ctx, io, &bufs[..num]), size)
+    };
 
     // remove written bytes
     if let Poll::Ready(Ok(written)) = result {

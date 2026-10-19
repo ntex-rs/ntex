@@ -601,29 +601,32 @@ fn lingers(_: os::fd::RawFd) -> bool {
 /// zero if `wrt` is empty. A write that would block writes zero bytes.
 #[allow(clippy::used_underscore_binding)]
 fn write_pages(fd: os::fd::RawFd, _tag: &str, wrt: &mut BytePages) -> io::Result<(usize, usize)> {
-    let mut bufs = [io::IoSlice::new(&[]); MAX_WRITE_ITEMS];
-    let mut num = 0;
-    let mut size = 0;
-    for chunk in wrt.iter() {
-        bufs[num] = io::IoSlice::new(chunk);
-        num += 1;
-        size += chunk.len();
-        if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
-            break;
-        }
-    }
-
-    if num == 0 {
-        return Ok((0, 0));
-    }
-
-    let res = if num == 1 {
-        syscall!(break libc::write(fd, bufs[0].as_ptr().cast(), size))
+    let pages = wrt.num_pages();
+    let (res, size) = if pages <= 1 {
+        // a single page is written without building the slice array
+        let Some(chunk) = wrt.iter().next() else {
+            return Ok((0, 0));
+        };
+        let size = chunk.len();
+        let res = syscall!(break libc::write(fd, chunk.as_ptr().cast(), size));
+        (res, size)
     } else {
-        syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
+        let mut bufs = [io::IoSlice::new(&[]); MAX_WRITE_ITEMS];
+        let mut num = 0;
+        let mut size = 0;
+        for chunk in wrt.iter() {
+            bufs[num] = io::IoSlice::new(chunk);
+            num += 1;
+            size += chunk.len();
+            if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+                break;
+            }
+        }
+        let res = syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32));
+        (res, size)
     };
     #[cfg(feature = "trace")]
-    log::trace!("{_tag}: {fd:?}-Wrt buf({num}:{size}) ({res:?})");
+    log::trace!("{_tag}: {fd:?}-Wrt buf({pages}:{size}) ({res:?})");
 
     // remove written bytes
     if let Poll::Ready(Ok(written)) = res {

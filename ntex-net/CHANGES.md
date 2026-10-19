@@ -31,6 +31,8 @@
 
 * compio: drive the runtime loop from ntex to track runtime busy time
 
+* polling, tokio: write a single page without building the `writev` slice array
+
 ## [4.5.0] - 2026-10-12
 
 * polling, tokio: keep writing within one write cycle until the socket stops
