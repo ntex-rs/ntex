@@ -264,6 +264,34 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn peer_close_inline_waker() {
+        use crate::utils::testing;
+
+        for client_closes in [true, false] {
+            let (client, client_ctx) = testing::io("CLI");
+            let (server, server_ctx) = testing::io("SRV");
+            let (client, server) = testing::handshake(
+                join(
+                    TlsClientFilter::create(
+                        client,
+                        client_config(false),
+                        ServerName::try_from("localhost").unwrap(),
+                    ),
+                    TlsServerFilter::create(server, server_config(false), Millis::ZERO),
+                ),
+                &client_ctx,
+                &server_ctx,
+            );
+            let (client, server) = (client.unwrap(), server.unwrap());
+            if client_closes {
+                testing::peer_close(&client, &client_ctx, &server, &server_ctx).await;
+            } else {
+                testing::peer_close(&server, &server_ctx, &client, &client_ctx).await;
+            }
+        }
+    }
+
+    #[ntex::test]
     async fn handshake_timeout() {
         let (_client, server) = pair();
         let io = Io::new(server, SharedCfg::new("SRV").add(tls_cfg(Millis(50))));

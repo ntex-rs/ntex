@@ -2,6 +2,9 @@
 
 ## [4.4.0] - Unreleased
 
+* Defer peer-close shutdown until mutable TLS state and buffer borrows are
+  released in all backends, preventing aliasing with inline read-task wakers
+
 * schannel: borrow single-record handshake input during coalescing and SNI
   extraction, avoiding temporary payload copies while retaining fragmented
   handshake support and input limits
