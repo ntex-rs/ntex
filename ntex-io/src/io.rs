@@ -3146,6 +3146,53 @@ mod tests {
         assert!(io.st().handle.take().is_none());
     }
 
+    /// A query that stops the connection must not reinstall the handle, it
+    /// holds the io context and would keep the connection state alive.
+    #[ntex::test]
+    async fn stop_during_query_releases_transport() {
+        #[derive(Debug)]
+        struct QueryStop {
+            ctx: RefCell<Option<IoContext>>,
+            dropped: Rc<Cell<bool>>,
+        }
+
+        impl Drop for QueryStop {
+            fn drop(&mut self) {
+                self.dropped.set(true);
+            }
+        }
+
+        impl IoStream for QueryStop {
+            fn start(self, ctx: IoContext) -> Box<dyn Handle> {
+                *self.ctx.borrow_mut() = Some(ctx);
+                Box::new(self)
+            }
+        }
+
+        impl Handle for QueryStop {
+            fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
+                self.ctx.borrow().as_ref().unwrap().stopped(None);
+                None
+            }
+        }
+
+        let dropped = Rc::new(Cell::new(false));
+        let io = Io::new(
+            QueryStop {
+                ctx: RefCell::new(None),
+                dropped: dropped.clone(),
+            },
+            SharedCfg::default(),
+        );
+        let st = Rc::downgrade(&io.get_ref().0);
+
+        assert!(io.query::<u8>().as_ref().is_none());
+        assert!(io.is_closed());
+        assert!(dropped.get(), "handle was reinstalled");
+        drop(io);
+        assert!(st.upgrade().is_none(), "connection state leaked");
+    }
+
     #[ntex::test]
     async fn write_backpressure() {
         let (client, server) = IoTest::create();

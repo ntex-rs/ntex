@@ -824,13 +824,13 @@ impl IoRef {
     /// Reinstalls the transport handle after a reentrant transport callback.
     ///
     /// The handle is taken for the duration of the call so that a nested
-    /// `call_write()` cannot reenter the transport. If the
+    /// `call_write()` or query cannot reenter the transport. If the
     /// callback terminated the connection, `terminate_connection()` and
     /// `stop_connection()` found the slot empty and could not release the
     /// transport, so the handle is dropped here instead of being reinstalled.
     /// A graceful shutdown keeps it: the write task still needs the transport
     /// to shut it down.
-    fn restore_handle(&self, hnd: Box<dyn Handle>) {
+    pub(crate) fn restore_handle(&self, hnd: Box<dyn Handle>) {
         if self.0.flags.is_terminating() || self.0.flags.is_closed() {
             drop(hnd);
         } else {

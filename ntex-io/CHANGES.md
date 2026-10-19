@@ -61,6 +61,9 @@
 * A panic in `IoStream::start()` no longer leaks the connection state, `Io::new()` owns the
   state before the stream starts
 
+* A transport query that stops the connection no longer reinstalls the transport handle,
+  which kept the connection state alive
+
 ## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`
