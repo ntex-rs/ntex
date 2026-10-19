@@ -1,10 +1,13 @@
 # Changes
 
-## Unreleased
+## [4.4.0] - Unreleased
 
 * schannel: reject empty plaintext handshake records and limit handshake
   reassembly to 64 KiB per message and 1024 records, preventing unbounded
   ciphertext buffering and repeated parsing while waiting for a message
+
+* rustls: batch up to 32 queued plaintext pages per write without a gathering
+  copy, reducing TLS records for many small pages while retaining partial writes
 
 ## [4.3.1] - 2026-10-07
 

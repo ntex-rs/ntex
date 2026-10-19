@@ -338,7 +338,7 @@ mod tests {
         MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(256));
     }
 
-    /// Two consecutive pages are written into one record when they fit.
+    /// Queued pages are batched into records without losing partial writes.
     #[test]
     #[allow(clippy::assert_is_empty)]
     fn write_gathers_pages_into_records() {
@@ -378,13 +378,18 @@ mod tests {
             transfer!(server, client);
         }
 
-        for (sizes, expected) in [
-            (&[300, 8192][..], 1),
-            (&[300, limit - 300][..], 1),
-            (&[300, 16384][..], 2),
-            (&[100, 5000, 6000, 7000][..], 2),
-            (&[20000, 300][..], 2),
-            (&[20000][..], 2),
+        for (sizes, tail, buffer_limit, expected) in [
+            (&[300, 8192][..], 0, limit, 1),
+            (&[300, limit - 300][..], 0, limit, 1),
+            (&[300, 16384][..], 0, limit, 2),
+            (&[100, 5000, 6000, 7000][..], 0, limit, 2),
+            (&[20000, 300][..], 0, limit, 2),
+            (&[20000][..], 0, limit, 2),
+            (&[128; 32][..], 0, limit, 1),
+            (&[128; 65][..], 0, limit, 3),
+            (&[128; 31][..], 128, limit, 1),
+            (&[3, 400, 29, 1000, 700][..], 777, limit, 1),
+            (&[128; 3][..], 91, 100, 5),
         ] {
             let parts: Vec<_> = (0u8..)
                 .zip(sizes)
@@ -395,8 +400,25 @@ mod tests {
                 src.append(p.clone());
             }
             assert_eq!(src.num_pages(), parts.len());
+            let tail = vec![255; tail];
+            src.extend_from_slice(&tail);
 
             let mut dst = BytePages::new(BytePageSize::Size16);
+            client.set_buffer_limit(Some(0));
+            stream::write_buf(&mut client, &mut src, &mut dst).unwrap();
+            let expected_plain: Vec<u8> = parts
+                .iter()
+                .flat_map(|p| p.iter().copied())
+                .chain(tail.iter().copied())
+                .collect();
+            assert!(dst.is_empty());
+            assert_eq!(
+                src.iter().flatten().copied().collect::<Vec<_>>(),
+                expected_plain,
+                "zero progress must retain the input"
+            );
+
+            client.set_buffer_limit(Some(buffer_limit));
             stream::write_buf(&mut client, &mut src, &mut dst).unwrap();
             assert!(src.is_empty() && !client.wants_write());
 
@@ -417,7 +439,6 @@ mod tests {
                 server.process_new_packets().unwrap();
                 let _ = server.reader().read_to_end(&mut plain);
             }
-            let expected_plain: Vec<u8> = parts.iter().flat_map(|p| p.iter().copied()).collect();
             assert_eq!(plain, expected_plain, "{sizes:?}");
         }
     }
