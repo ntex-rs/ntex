@@ -41,9 +41,10 @@ impl Certificate {
     /// in DER encoding.
     ///
     /// Schannel requires a persisted private key, the key is stored in the
-    /// current user's key store under a unique name and deleted when the
-    /// certificate and all configurations using it are dropped. The key is
-    /// left behind if the process does not exit normally.
+    /// current user's key store under a unique name. Deletion is attempted when
+    /// the certificate and all configurations using it are dropped. The key is
+    /// left behind if cleanup fails or the process does not exit normally.
+    /// Key deletion and handle-release failures are logged.
     ///
     /// If the archive holds multiple certificates, the first one with a
     /// private key is used, the others are available to build its chain.
@@ -323,7 +324,7 @@ fn persist_key(cert: *const CERT_CONTEXT) -> io::Result<()> {
         let err = io::Error::last_os_error();
         unsafe {
             if NCryptOpenKey(prov.0, &raw mut key, name.as_ptr(), 0, NCRYPT_SILENT_FLAG) == 0 {
-                NCryptDeleteKey(key, 0);
+                delete_owned_key(key);
             }
         }
         return Err(err);
@@ -440,8 +441,31 @@ fn delete_key(cert: *const CERT_CONTEXT) {
     let flags = info.dwFlags & NCRYPT_MACHINE_KEY_FLAG | NCRYPT_SILENT_FLAG;
     unsafe {
         if NCryptOpenKey(prov.0, &raw mut key, info.pwszContainerName, 0, flags) == 0 {
-            // frees the key handle
-            NCryptDeleteKey(key, 0);
+            delete_owned_key(key);
+        }
+    }
+}
+
+fn delete_owned_key(key: NCRYPT_KEY_HANDLE) {
+    delete_owned_key_with(
+        key,
+        |key| unsafe { NCryptDeleteKey(key, 0) },
+        |key| unsafe { NCryptFreeObject(key) },
+    );
+}
+
+fn delete_owned_key_with(
+    key: NCRYPT_KEY_HANDLE,
+    delete: impl FnOnce(NCRYPT_KEY_HANDLE) -> windows_sys::core::HRESULT,
+    free: impl FnOnce(NCRYPT_KEY_HANDLE) -> windows_sys::core::HRESULT,
+) {
+    if let Err(err) = hresult(delete(key)) {
+        // Successful deletion frees the handle; on failure release it before
+        // logging, which may unwind through application code.
+        let released = hresult(free(key));
+        log::error!("Failed to delete persisted Schannel private key: {err}");
+        if let Err(err) = released {
+            log::error!("Failed to release Schannel private key handle: {err}");
         }
     }
 }
@@ -529,6 +553,34 @@ mod tests {
     use super::*;
 
     const PFX: &[u8] = include_bytes!("../../examples/identity.pfx");
+
+    #[test]
+    fn test_delete_owned_key() {
+        use std::cell::RefCell;
+        use windows_sys::Win32::Foundation::{NTE_INVALID_HANDLE, NTE_PERM};
+
+        for (delete_status, free_status) in [(0, 0), (NTE_PERM, 0), (NTE_PERM, NTE_INVALID_HANDLE)]
+        {
+            let calls = RefCell::new(Vec::new());
+            delete_owned_key_with(
+                42,
+                |key| {
+                    calls.borrow_mut().push(("delete", key));
+                    delete_status
+                },
+                |key| {
+                    calls.borrow_mut().push(("free", key));
+                    free_status
+                },
+            );
+            let expected = if delete_status == 0 {
+                vec![("delete", 42)]
+            } else {
+                vec![("delete", 42), ("free", 42)]
+            };
+            assert_eq!(calls.into_inner(), expected);
+        }
+    }
 
     fn key_name(cert: &Certificate) -> Vec<u16> {
         let buf = key_prov_info(cert.as_ptr()).unwrap();
