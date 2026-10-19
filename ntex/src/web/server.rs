@@ -140,12 +140,13 @@ where
     }
 
     #[must_use]
-    /// Sets the maximum per-worker number of concurrent TLS handshakes.
+    /// Sets the per-worker soft limit on concurrent TLS handshakes.
     ///
-    /// This limit applies only to TLS acceptors (OpenSSL and rustls). When it is
-    /// reached, TLS acceptors stop accepting new handshakes until one completes.
-    /// Plain TCP listeners are not affected. It can be used to limit the CPU
-    /// usage of TLS handshakes.
+    /// This limit applies only to TLS acceptors (OpenSSL and rustls), which apply
+    /// readiness backpressure when it is reached. Independent listener or service
+    /// pipelines with cached readiness can still start handshakes and exceed the
+    /// limit; it is not a strict admission limit. Plain TCP listeners are not
+    /// affected.
     ///
     /// By default the limit is 256.
     pub fn max_tls_handshakes(self, num: usize) -> Self {

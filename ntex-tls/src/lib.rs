@@ -27,12 +27,14 @@ mod utils;
 pub use self::config::TlsConfig;
 pub use self::types::{PeerCertChainDer, PeerCertDer, PskIdentity, Servername};
 
-/// Sets the maximum per-worker concurrent ssl connection establish process.
+/// Sets the per-worker soft limit on concurrent TLS handshakes.
 ///
-/// All listeners will stop accepting connections when this limit is
-/// reached. It can be used to limit the global SSL CPU usage.
+/// TLS acceptors apply readiness backpressure when this limit is reached.
+/// Readiness does not reserve a slot: independent listener or service pipelines
+/// with cached readiness can still start handshakes and exceed the limit.
+/// This controls handshake load but is not a strict admission limit.
 ///
-/// By default max connections is set to a 256.
+/// By default the limit is 256.
 pub fn max_concurrent_ssl_accept(num: usize) {
     MAX_SSL_ACCEPT.store(num, Ordering::Relaxed);
     MAX_SSL_ACCEPT_COUNTER.with(|counts| counts.set_capacity(num));
