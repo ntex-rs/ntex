@@ -154,7 +154,7 @@ impl Filter for Base {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if let Some(hnd) = self.0.0.handle.take() {
             let res = hnd.query(id);
-            self.0.0.handle.set(Some(hnd));
+            self.0.restore_handle(hnd);
             res
         } else {
             None
