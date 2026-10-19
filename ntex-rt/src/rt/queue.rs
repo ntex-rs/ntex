@@ -55,7 +55,7 @@ pub(crate) struct RunnableQueue {
     // start of the current busy period, valid while not idle
     pub(super) poll_start: Cell<Instant>,
     // `poll_start` relative to the epoch, cached in milliseconds
-    self_wake_clock: Cell<Option<u32>>,
+    pub(super) self_wake_clock: Cell<Option<u32>>,
     pub(super) busy: BusyClock,
     // poll counters, written by the runtime thread only
     pub(super) polls: AtomicU64,
@@ -249,10 +249,15 @@ impl RunnableQueue {
             ptr::from_ref(stats.location()).cast_mut(),
             Ordering::Relaxed,
         );
-        let wakes = stats.self_wakes();
-        if wakes != 0 {
-            stats.set_self_wakes(0);
-        }
+        let wakes = if self.self_wake_limit == 0 {
+            0
+        } else {
+            let wakes = stats.self_wakes();
+            if wakes != 0 {
+                stats.set_self_wakes(0);
+            }
+            wakes
+        };
         let _reset = Reset(&self.current, prev);
 
         if task.run() {
@@ -265,6 +270,10 @@ impl RunnableQueue {
         let total = self.self_wakes.load(Ordering::Relaxed);
         self.self_wakes
             .store(total.wrapping_add(1), Ordering::Relaxed);
+
+        if self.self_wake_limit == 0 {
+            return;
+        }
 
         let reported = wakes & REPORTED;
         let count = ((wakes & !REPORTED) + 1).min(MAX_SELF_WAKES);
@@ -284,10 +293,7 @@ impl RunnableQueue {
         }
 
         let wakes = count | reported;
-        if reported == 0
-            && self.self_wake_limit != 0
-            && count >= self.self_wake_limit.min(MAX_SELF_WAKES)
-        {
+        if reported == 0 && count >= self.self_wake_limit.min(MAX_SELF_WAKES) {
             let elapsed = Duration::from_millis(u64::from(now.wrapping_sub(task.streak_start())));
             if elapsed >= self.self_wake_time {
                 // Logging may reenter the runtime and free the queued task.

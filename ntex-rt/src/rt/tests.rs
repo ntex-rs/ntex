@@ -699,33 +699,40 @@ fn schedule_while_clearing() {
 
 #[test]
 fn self_wake() {
-    let rt = Runtime::new(Box::new(NoopNotify));
-    let waker = Rc::new(RefCell::new(None::<Waker>));
-    let waker2 = waker.clone();
-    let mut polls = 0;
-    let h = rt.spawn(poll_fn(move |cx| {
-        polls += 1;
-        match polls {
-            1..=5 => {
-                cx.waker().wake_by_ref();
-                Poll::Pending
+    for count in [0, 10_000] {
+        let rt = Runtime::builder()
+            .self_wake_threshold(count, Duration::from_secs(1))
+            .build(Box::new(NoopNotify));
+        let waker = Rc::new(RefCell::new(None::<Waker>));
+        let waker2 = waker.clone();
+        let mut polls = 0;
+        let h = rt.spawn(poll_fn(move |cx| {
+            polls += 1;
+            match polls {
+                1..=5 => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                6 => {
+                    *waker2.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                _ => Poll::Ready(()),
             }
-            6 => {
-                *waker2.borrow_mut() = Some(cx.waker().clone());
-                Poll::Pending
-            }
-            _ => Poll::Ready(()),
+        }));
+        CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
+        assert_eq!(rt.self_wake_count(), 5);
+        assert_eq!(rt.handle().self_wake_count(), Some(5));
+        if count == 0 {
+            assert_eq!(rt.queue.self_wake_clock.get(), None);
         }
-    }));
-    CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
-    assert_eq!(rt.self_wake_count(), 5);
-    assert_eq!(rt.handle().self_wake_count(), Some(5));
 
-    // a wake from outside of the poll is not a self-wake
-    waker.borrow_mut().take().unwrap().wake();
-    CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
-    assert!(h.is_finished());
-    assert_eq!(rt.self_wake_count(), 5);
+        // a wake from outside of the poll is not a self-wake
+        waker.borrow_mut().take().unwrap().wake();
+        CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
+        assert!(h.is_finished());
+        assert_eq!(rt.self_wake_count(), 5);
+    }
 }
 
 #[test]
@@ -813,8 +820,10 @@ fn self_wake_streak() {
     let rt = Runtime::builder()
         .self_wake_threshold(0, Duration::ZERO)
         .build(Box::new(NoopNotify));
-    assert_eq!(streak(&rt, 5), 5);
+    assert_eq!(streak(&rt, 5), 0);
+    assert_eq!(rt.self_wake_count(), 5);
 
+    let rt = Runtime::new(Box::new(NoopNotify));
     let before = start(&rt);
     thread::sleep(Duration::from_millis(2));
     rt.awake();

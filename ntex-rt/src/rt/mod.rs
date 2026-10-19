@@ -563,7 +563,8 @@ impl RuntimeBuilder {
     /// `wake_by_ref()` or a yield, never waits for an event. The runtime logs
     /// a warning with the task spawn location once the task wakes itself
     /// `count` times in a row and the streak lasts at least `duration`. Each
-    /// streak is reported once. A count of 0 disables the warning.
+    /// streak is reported once. A count of 0 disables the warning and per-task
+    /// streak tracking, but preserves [`Runtime::self_wake_count`].
     ///
     /// By default, 10 000 self-wakes over at least 1 second.
     pub fn self_wake_threshold(&mut self, count: u32, duration: Duration) -> &mut Self {

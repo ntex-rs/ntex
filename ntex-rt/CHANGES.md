@@ -94,6 +94,10 @@
 * Avoid a use-after-free when self-wake warning logging reenters the runtime,
   and suppress duplicate warnings from nested task polls
 
+* Skip per-task self-wake streak and timestamp bookkeeping on neon when
+  warnings are disabled with `RuntimeBuilder::self_wake_threshold(0, ...)`,
+  while preserving the aggregate `self_wake_count()`
+
 * Add `Runtime::poll_histogram()` and `Handle::poll_histogram()`, log2
   histogram of poll durations. The `Handle` method returns `None` on tokio
 
