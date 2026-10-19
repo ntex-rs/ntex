@@ -614,13 +614,7 @@ impl IoRef {
 
         // A direct write may have changed the amount of buffered data.
         // In-flight output counts too: it has not reached the peer yet.
-        let size = st.write_outstanding();
-
-        // Enable backpressure
-        if !st.flags.is_wr_backpressure() && st.is_wr_backpressure_needed(size) {
-            st.set_wr_backpressure();
-            st.wake_dispatch_task();
-        }
+        st.enable_wr_backpressure_if_needed();
         st.sync_write_buffered();
         Ok(())
     }

@@ -2,6 +2,9 @@
 
 ## [4.5.0] - Unreleased
 
+* Enable write backpressure when deferred filter processing grows the output past the
+  high watermark, for example a filter that expands its input
+
 * Add `IoMetrics`, per-thread I/O statistics of an I/O configuration: read and write
   backpressure counts, active connections and connection-time under backpressure, bytes
   held in read and write buffers. A configuration has its own metrics in the thread's

@@ -1,6 +1,6 @@
 # Changes
 
-## [1.14.0] - 2026-10-19
+## [1.14.0] - 2026-10-20
 
 * Fix out-of-bounds write in `BytePages::put_u8()` and `put_i8()` after `advance_mut()` filled the current page
 

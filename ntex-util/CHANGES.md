@@ -1,6 +1,6 @@
 # Changes
 
-## [4.4.0] - Unreleased
+## [4.4.0] - 2026-10-20
 
 * Re-export `ntex_rt::spawn_detached()`
 

@@ -409,6 +409,21 @@ impl IoState {
         }
     }
 
+    /// Enables write back-pressure once outstanding output reaches the high
+    /// watermark.
+    ///
+    /// Besides application writes, this is checked after deferred filter
+    /// processing, which can grow the output, for example a filter that
+    /// expands its input. Only the flag is set, no write is started.
+    pub(super) fn enable_wr_backpressure_if_needed(&self) {
+        if !self.flags.is_wr_backpressure()
+            && self.is_wr_backpressure_needed(self.write_outstanding())
+        {
+            self.set_wr_backpressure();
+            self.wake_dispatch_task();
+        }
+    }
+
     pub(super) fn unset_wr_backpressure(&self) {
         if self.flags.unset_wr_backpressure() {
             self.metrics().wr_backpressure_off();
@@ -4274,6 +4289,63 @@ mod tests {
         // the queued output is not mistaken for held back output
         assert_eq!(ctx.update_write_status(Ok(page.len())), IoTaskStatus::Io);
         assert_eq!(ctx.with_write_dst(|buf| buf.len()), 4);
+    }
+
+    /// Expands every write into 600 bytes.
+    #[derive(Debug)]
+    struct Expand;
+
+    impl FilterLayer for Expand {
+        fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(|src, dst| {
+                src.clear();
+                dst.extend_from_slice(&[0; 600]);
+            });
+            Ok(())
+        }
+    }
+
+    #[ntex::test]
+    async fn filter_expansion_enables_wr_backpressure() {
+        let cfg = SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(1024));
+        let io = Io::new(ManualTransport, cfg).add_filter(Expand);
+        let ctx = IoContext::new(io.get_ref());
+
+        // the transport polls output, the filter grows it past the watermark
+        io.encode_slice(b"a").unwrap();
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 600);
+        assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Io);
+        assert!(!io.st().flags.is_wr_backpressure());
+        io.encode_slice(b"b").unwrap();
+        assert!(!io.st().flags.is_wr_backpressure());
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 1200);
+        assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Io);
+        assert!(io.st().flags.is_wr_backpressure());
+        let mut ready = std::pin::pin!(io.write_ready());
+        assert!(lazy(|cx| ready.as_mut().poll(cx)).await.is_pending());
+    }
+
+    #[ntex::test]
+    async fn filter_expansion_after_write_enables_wr_backpressure() {
+        let cfg = SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(1024));
+        let io = Io::new(ManualTransport, cfg).add_filter(Expand);
+        let ctx = IoContext::new(io.get_ref());
+
+        // the transport takes the output, more is queued meanwhile
+        io.encode_slice(b"a").unwrap();
+        let page = ctx.with_write_dst(BytePages::take).unwrap();
+        assert_eq!(page.len(), 600);
+        io.encode_slice(b"b").unwrap();
+        assert!(!io.st().flags.is_wr_backpressure());
+
+        // the write completes without progress, the queued output expands
+        assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Io);
+        assert_eq!(io.st().write_outstanding(), 1200);
+        assert!(io.st().flags.is_wr_backpressure());
     }
 
     #[ntex::test]

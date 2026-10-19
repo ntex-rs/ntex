@@ -1,6 +1,6 @@
 # Changes
 
-## [4.3.0] - Unreleased
+## [4.3.0] - 2026-10-20
 
 * Replace `async-task` with a custom task implementation
 
