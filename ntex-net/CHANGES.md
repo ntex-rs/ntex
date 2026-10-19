@@ -36,6 +36,10 @@
 * polling, io-uring: dropping a pending connect future cancels the connect and closes
   its socket, instead of keeping it until the connect completes
 
+* polling: keep read interest armed while reads are paused, it is disarmed by the next
+  readable event. A resume before new data needs neither an interest update nor a
+  speculative read
+
 ## [4.5.0] - 2026-10-12
 
 * polling, tokio: keep writing within one write cycle until the socket stops

@@ -32,6 +32,10 @@ bitflags::bitflags! {
         const RD          = 0b0000_0001;
         const WR          = 0b0000_0010;
         const DETACHED    = 0b0000_0100;
+        /// Reads are paused while read interest stays armed, it is disarmed
+        /// by the next readable event. A resume before new data arrives then
+        /// needs neither an interest update nor a speculative read.
+        const RD_PAUSED   = 0b0000_1000;
         const DROPPED_PRI = 0b0001_0000;
         const DROPPED_SEC = 0b0010_0000;
     }
@@ -155,11 +159,24 @@ impl Handler for StreamOpsHandler {
             log::trace!("{}: {:?}-Evt {ev:?} {:?}", io.tag(), io.fd(), io.flags);
 
             if ev.readable {
-                if io.read() == IoTaskStatus::Io {
-                    renew_rd = true;
-                    io.flags.insert(Flags::RD);
+                if io.flags.contains(Flags::RD_PAUSED) {
+                    // Data arrived while reads are paused
+                    io.flags.remove(Flags::RD | Flags::RD_PAUSED);
                 } else {
-                    io.flags.remove(Flags::RD);
+                    match io.read() {
+                        (IoTaskStatus::Io, _) => {
+                            renew_rd = true;
+                            io.flags.insert(Flags::RD);
+                        }
+                        // The socket is drained, no readable event is expected
+                        // before the reads resume. Leftover data would report
+                        // one right away, so interest is disarmed eagerly then.
+                        (IoTaskStatus::Pause, true) => {
+                            renew_rd = true;
+                            io.flags.insert(Flags::RD | Flags::RD_PAUSED);
+                        }
+                        _ => io.flags.remove(Flags::RD),
+                    }
                 }
             } else if io.flags.contains(Flags::RD) {
                 renew_rd = true;
@@ -364,21 +381,20 @@ impl StreamOpsInner {
                 io.flags
             );
 
-            let mut want_update_read = true;
+            let mut want_update_read = false;
             if rd {
                 if io.flags.contains(Flags::RD) {
                     event_rd = true;
-                    want_update_read = false;
-                } else if io.read() == IoTaskStatus::Io {
+                    io.flags.remove(Flags::RD_PAUSED);
+                } else if io.read().0 == IoTaskStatus::Io {
                     event_rd = true;
+                    want_update_read = true;
                     io.flags.insert(Flags::RD);
-                } else {
-                    want_update_read = false;
                 }
             } else if io.flags.contains(Flags::RD) {
-                io.flags.remove(Flags::RD);
-            } else {
-                want_update_read = false;
+                // Interest stays armed, the next readable event disarms it
+                event_rd = true;
+                io.flags.insert(Flags::RD_PAUSED);
             }
 
             let mut want_update_write = true;
@@ -515,7 +531,10 @@ impl StreamItem {
     /// A read that fills the buffer chunk likely left more input in the
     /// socket, so reads continue until a short read or `READ_BUDGET` instead
     /// of waiting for the next poll cycle.
-    fn read(&mut self) -> IoTaskStatus {
+    /// Reads until the socket would block or the budget is used up.
+    ///
+    /// Also reports whether the last read drained the socket.
+    fn read(&mut self) -> (IoTaskStatus, bool) {
         let fd = self.fd();
         #[cfg(feature = "trace")]
         let tag = self.tag();
@@ -542,7 +561,7 @@ impl StreamItem {
                 result
             });
             if status != IoTaskStatus::Io || !full || total >= READ_BUDGET {
-                return status;
+                return (status, !full);
             }
         }
     }
@@ -1134,6 +1153,28 @@ mod tests {
         assert!(dropped, "write interest was not dropped");
     }
 
+    /// Pausing reads leaves read interest armed. Resuming before a readable
+    /// event needs neither an interest update nor a speculative read.
+    #[ntex::test]
+    async fn read_pause_keeps_interest_armed() {
+        use std::io::Write;
+
+        let mut fixture = Fixture::new();
+        let id = fixture.id as u32;
+        fixture.ops.0.interest(id, false, false);
+        let paused = fixture.flags();
+        fixture.peer.write_all(b"data").unwrap();
+        fixture.ops.0.interest(id, true, false);
+        let resumed = fixture.flags();
+        let read = fixture.io.with_read_dst(|b| b.len());
+        fixture.teardown();
+
+        assert!(paused.contains(Flags::RD | Flags::RD_PAUSED), "{paused:?}");
+        assert!(resumed.contains(Flags::RD), "{resumed:?}");
+        assert!(!resumed.contains(Flags::RD_PAUSED), "{resumed:?}");
+        assert_eq!(read, 0, "speculative read on resume");
+    }
+
     /// Reads performed for a single readable event.
     mod read {
         use std::io::Write;
@@ -1224,6 +1265,37 @@ mod tests {
                 "read past backpressure: {read}"
             );
             assert!(!armed, "read interest kept under backpressure");
+        }
+
+        /// Backpressure that drains the socket keeps read interest armed,
+        /// the next readable event disarms it without reading.
+        #[ntex::test]
+        async fn drained_backpressure_keeps_interest_armed() {
+            let mut fixture = Fixture::with_cfg(
+                SharedCfg::new("READ").add(
+                    IoConfig::default()
+                        .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                        .set_read_backpressure(1024),
+                ),
+            );
+            fixture.peer.write_all(&[b'x'; 2048]).unwrap();
+            fixture.fire(Event::readable(0));
+            let paused = fixture.flags();
+            let read = received(&fixture);
+
+            fixture.peer.write_all(&[b'x'; 2048]).unwrap();
+            fixture.fire(Event::readable(0));
+            let disarmed = fixture.flags();
+            let read2 = received(&fixture);
+            fixture.teardown();
+
+            assert_eq!(read, 2048);
+            assert!(paused.contains(Flags::RD | Flags::RD_PAUSED), "{paused:?}");
+            assert!(
+                !disarmed.intersects(Flags::RD | Flags::RD_PAUSED),
+                "{disarmed:?}"
+            );
+            assert_eq!(read2, read, "read while paused");
         }
     }
 
