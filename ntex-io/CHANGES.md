@@ -19,6 +19,11 @@
   `CloseReason::Custom1` to `Custom8` are counted in `CloseStats::custom` for application
   metrics
 
+* Add `IoMetricsSnapshot::read_buffers_held` and `read_buffer_capacity`, connections that
+  keep a read buffer allocated for unconsumed input and the memory those buffers keep, a
+  whole page for a pooled buffer. Read buffer gauges are cleared once the `Io` is dropped,
+  not when the connection state is released
+
 * Add `IoMetricsSnapshot::bytes_read` and `bytes_written`, and the eager write counters
   `eager_writes`, `eager_writes_partial` and `scheduled_writes`
 

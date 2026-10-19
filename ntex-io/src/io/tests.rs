@@ -939,6 +939,59 @@ async fn read_backpressure_metrics() {
 }
 
 #[ntex::test]
+async fn read_buffer_capacity_metrics() {
+    let cfg = |tag| {
+        SharedCfg::new(tag)
+            .add(
+                IoConfig::default()
+                    .set_metrics(true)
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4),
+            )
+            .build()
+    };
+    let (cfg, cfg2) = (cfg("A"), cfg("B"));
+    let (m1, m2) = (
+        cfg.get::<IoConfig>().metrics(),
+        cfg2.get::<IoConfig>().metrics(),
+    );
+    let held = |m: &IoMetrics| {
+        let s = m.snapshot();
+        (s.read_buffers_held, s.read_buffer_capacity, s.read_buffered)
+    };
+    let page = BytePageSize::Size4.capacity();
+
+    let (client, server) = IoTest::create();
+    let io = Io::new(server, cfg);
+    assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+    assert_eq!(held(&m1), (0, 0, 0));
+
+    // unconsumed input keeps a whole page
+    client.write(b"partial");
+    sleep(Millis(50)).await;
+    assert_eq!(held(&m1), (1, page, 7));
+    client.write(b"more");
+    sleep(Millis(50)).await;
+    assert_eq!(held(&m1), (1, page, 11));
+
+    // consumed input releases the buffer
+    assert_eq!(
+        io.recv(&BytesCodec).await.unwrap().unwrap(),
+        Bytes::from_static(b"partialmore")
+    );
+    assert_eq!(held(&m1), (0, 0, 0));
+
+    // the gauges move with the configuration and clear on drop
+    client.write(b"partial");
+    sleep(Millis(50)).await;
+    // SAFETY: no reference returned by `io.cfg()` is retained.
+    unsafe { io.set_config(cfg2) };
+    assert_eq!(held(&m1), (0, 0, 0));
+    assert_eq!(held(&m2), (1, page, 7));
+    drop(io);
+    assert_eq!(held(&m2), (0, 0, 0));
+}
+
+#[ntex::test]
 async fn write_backpressure_metrics() {
     let cfg = SharedCfg::new("SRV")
         .add(

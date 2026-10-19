@@ -708,6 +708,8 @@ Each entry is an `IoMetricsSnapshot`:
 | `bytes_read` | counter | Bytes read from the transport. |
 | `bytes_written` | counter | Bytes written to the transport. |
 | `read_buffered` | gauge | Bytes held in read buffers, not yet consumed by the application. |
+| `read_buffers_held` | gauge | Connections that keep a read buffer allocated for unconsumed input, such as the start of a frame that has not fully arrived. |
+| `read_buffer_capacity` | gauge | Bytes allocated by those read buffers, a whole page for a pooled buffer. |
 | `write_buffered` | gauge | Bytes in write buffers, or held by the transport and not yet written. |
 | `read_backpressure` | counter | Number of times read backpressure was enabled: the read buffer reached `set_read_backpressure()` and reading stopped. |
 | `read_backpressure_active` | gauge | Connections with read backpressure enabled now. |
@@ -727,9 +729,19 @@ connections to get the share of time a connection spends blocked.
 * **Throughput.** Rates of `bytes_read` and `bytes_written` give the
   bandwidth per service and worker. Divided by the `items` rate they give
   the average traffic per connection.
-* **Memory.** `read_buffered` plus `write_buffered` is the memory held in
-  connection buffers. If it is high, lower `set_read_backpressure()` and
-  `set_write_backpressure()`, or lower `max_connections()`.
+* **Memory.** `read_buffer_capacity` plus `write_buffered` is the memory
+  held in connection buffers. If it is high, lower `set_read_backpressure()`
+  and `set_write_backpressure()`, or lower `max_connections()`.
+* **Partial input.** A read buffer is released once its input is consumed,
+  so busy connections are counted in `read_buffers_held` only briefly; a
+  snapshot mostly shows idle connections waiting for the rest of a frame.
+  Each keeps a whole page for a few bytes, so `read_buffer_capacity` far
+  above `read_buffered` means memory is held for small leftovers. Many such
+  connections point to slow or stalled clients; `set_frame_read_rate()`
+  bounds how long they can hold a buffer, and a smaller minimum page in
+  `set_read_size()` lowers the cost of each. Buffers held by a pending
+  io-uring read, and frames split off a buffer that keep its page alive, are
+  not counted.
 * **Slow clients.** Growing `write_backpressure_time` means clients read
   slower than the application writes. A few slow clients are normal; a
   steady high `write_backpressure_active` holds memory and connection slots.

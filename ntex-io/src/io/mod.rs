@@ -103,6 +103,9 @@ pub(crate) struct IoState {
     metrics: UnsafeCell<Arc<IoMetrics>>,
     /// Read buffer size last reported to `metrics`, saturated at `u32::MAX`.
     rd_buffered: Cell<u32>,
+    /// Read buffer capacity last reported to `metrics`, saturated at
+    /// `u32::MAX`.
+    rd_capacity: Cell<u32>,
     /// Write buffer size last reported to `metrics`, saturated at `u32::MAX`.
     wr_buffered: Cell<u32>,
     pub(super) close: Cell<Close>,
@@ -145,6 +148,7 @@ impl Io {
             extensions: Extensions::default(),
             metrics: UnsafeCell::new(metrics),
             rd_buffered: Cell::new(0),
+            rd_capacity: Cell::new(0),
             wr_buffered: Cell::new(0),
             close: Cell::new(Close::Unset),
         });
@@ -194,6 +198,7 @@ impl IoRef {
             extensions: Extensions::default(),
             metrics: UnsafeCell::new(IoMetrics::detached()),
             rd_buffered: Cell::new(0),
+            rd_capacity: Cell::new(0),
             wr_buffered: Cell::new(0),
             close: Cell::new(Close::Uncounted),
         }))
@@ -286,6 +291,7 @@ impl<F> Io<F> {
                 st.flags.is_rd_backpressure(),
                 st.flags.is_wr_backpressure(),
                 st.rd_buffered.get(),
+                st.rd_capacity.get(),
                 st.wr_buffered.get(),
             );
             // SAFETY: the caller guarantees no reference into the state is live
@@ -400,6 +406,7 @@ impl<F: Filter> Io<F> {
                 let st = &self.0.0;
                 st.force_close_connection();
                 st.buffer.release();
+                st.sync_read_buffered();
                 drop(st.extensions.take_callbacks());
             }
         }
@@ -492,6 +499,7 @@ impl<F> Drop for Io<F> {
             // anymore, but the state may outlive the `Io` for a while, held by
             // the transport while it closes or by other `IoRef` handles.
             st.buffer.release();
+            st.sync_read_buffered();
 
             // Callbacks may hold an `IoRef` to this connection, which would keep
             // the state alive through a reference cycle. They are dropped outside
