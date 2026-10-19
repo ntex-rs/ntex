@@ -56,7 +56,7 @@ impl TlsClientFilter {
         unsafe { &*self.session.get() }.is_handshaking()
     }
 
-    fn stream<F, R>(&self, f: F) -> R
+    pub(super) fn stream<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Stream<'_, ClientConnection>) -> R,
     {

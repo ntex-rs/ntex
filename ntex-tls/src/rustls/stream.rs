@@ -55,10 +55,9 @@ where
                 return Ok(());
             };
             loop {
-                match self.session.read_tls(src) {
-                    Ok(_) => {}
-                    Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(err) => return Err(err),
+                // rustls treats an empty read as transport EOF
+                if !src.is_empty() {
+                    self.session.read_tls(src)?;
                 }
                 let state = self
                     .session
@@ -73,7 +72,9 @@ where
                         unsafe { &mut *(&raw mut *r_dst.chunk_mut() as *mut [u8]) };
                     let v = io::Read::read(&mut self.session.reader(), chunk)?;
                     unsafe { r_dst.advance_mut(v) };
-                } else if state.peer_has_closed() {
+                }
+                // every complete record is processed, so plaintext is drained
+                if state.peer_has_closed() {
                     *peer_closed = true;
                     break;
                 } else if src.is_empty() {

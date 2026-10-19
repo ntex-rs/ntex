@@ -2,6 +2,10 @@
 
 ## [4.4.0] - Unreleased
 
+* rustls: stop feeding an empty ciphertext buffer to the session after the
+  input is drained, saving a read/process cycle per read and no longer
+  signalling a false transport EOF to rustls
+
 * openssl: join small write pages in a per-thread staging buffer instead of
   allocating 16 KiB for every joined record, unwritten bytes are kept for retry
 
