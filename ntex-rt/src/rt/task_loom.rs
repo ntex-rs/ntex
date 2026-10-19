@@ -687,11 +687,14 @@ fn remote_spawn_detached_shutdown() {
 /// A notifier can wait for shutdown without holding a publication permit.
 #[test]
 fn shutdown_with_blocked_notification() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
     #[derive(Debug)]
     struct BlockingNotify {
         entered: loom::sync::mpsc::Sender<()>,
         release: loom::sync::Mutex<loom::sync::mpsc::Receiver<()>>,
         interrupted: AtomicBool,
+        panics: bool,
     }
 
     impl Notify for BlockingNotify {
@@ -701,11 +704,19 @@ fn shutdown_with_blocked_notification() {
             }
             self.entered.send(()).unwrap();
             self.release.lock().unwrap().recv().unwrap();
+            assert!(!self.panics, "notification panic after shutdown");
             Ok(())
         }
     }
 
-    for remote_spawn in [false, true] {
+    for (path, panics) in [
+        (0, false),
+        (1, false),
+        (2, false),
+        (0, true),
+        (1, true),
+        (2, true),
+    ] {
         model(move || {
             let (entered, rx) = loom::sync::mpsc::channel();
             let (tx, release) = loom::sync::mpsc::channel();
@@ -713,26 +724,35 @@ fn shutdown_with_blocked_notification() {
                 entered,
                 release: loom::sync::Mutex::new(release),
                 interrupted: AtomicBool::new(false),
+                panics,
             }));
             rt.awake();
             let queue = Arc::downgrade(&rt.queue);
             let st = Arc::new(State::default());
-            let th = if remote_spawn {
+            let th = if path != 0 {
                 let (handle, fut) = (rt.handle(), Fut(st.clone()));
-                thread::spawn(move || handle.spawn_detached(fut))
+                thread::spawn(move || {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        if path == 1 {
+                            drop(handle.spawn(fut));
+                        } else {
+                            handle.spawn_detached(fut);
+                        }
+                    }))
+                })
             } else {
                 let task = spawn(&rt, Fut(st.clone()));
                 drain(&rt);
                 let w = st.waker.lock().unwrap().take().unwrap();
                 drop(task);
-                thread::spawn(move || w.wake())
+                thread::spawn(move || catch_unwind(AssertUnwindSafe(|| w.wake())))
             };
             rx.recv().unwrap();
             drop(rt);
             assert_eq!(st.drops.load(Ordering::Relaxed), 1);
             assert!(queue.upgrade().is_some());
             tx.send(()).unwrap();
-            th.join().unwrap();
+            assert_eq!(th.join().unwrap().is_err(), panics);
             assert!(queue.upgrade().is_none(), "task alive");
         });
     }
