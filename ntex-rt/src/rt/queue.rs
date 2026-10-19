@@ -156,6 +156,18 @@ impl RunnableQueue {
             std::process::abort();
         }
 
+        // Aborts if the notifier unwinds, producers coalesced behind this
+        // wakeup would never be woken.
+        struct AbortOnUnwind;
+
+        impl Drop for AbortOnUnwind {
+            fn drop(&mut self) {
+                log::error!(target: LOG_TARGET, "Runtime notifier panicked; aborting");
+                std::process::abort();
+            }
+        }
+
+        let guard = AbortOnUnwind;
         // Keep responsibility for this wakeup: other producers may already
         // have coalesced behind it, even if no later submission arrives.
         while let Err(err) = self.handle.notify() {
@@ -163,6 +175,7 @@ impl RunnableQueue {
                 failed(&err);
             }
         }
+        std::mem::forget(guard);
     }
 
     /// Reserves a publication before a task acquires its remote queue reference.

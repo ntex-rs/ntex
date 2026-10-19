@@ -20,6 +20,10 @@
   errors instead of silently leaving queued tasks stranded. Explicit
   `Handle::notify()` calls continue to return errors to the caller
 
+* Abort if a scheduler notifier panics, like a notification error, instead of
+  leaving later remote submissions without a wakeup. Explicit `Handle::notify()`
+  calls continue to propagate panics to the caller
+
 * Finish runtime shutdown even if task cleanup panics, closing remote admission
   and cancelling remaining tasks before resuming the first panic. Log and
   suppress secondary cleanup panics, preserving any already-unwinding panic

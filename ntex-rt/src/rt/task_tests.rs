@@ -386,128 +386,44 @@ fn spawn_detached() {
 }
 
 #[test]
-fn spawn_notify_panic() {
+#[cfg_attr(miri, ignore = "spawns a process")]
+fn spawn_notify_panic_aborts() {
+    const CHILD: &str = "NTEX_RT_NOTIFY_PANIC_CHILD";
+
     #[derive(Debug)]
-    struct PanicNotify {
-        calls: AtomicUsize,
-        _drop: Token,
-    }
+    struct PanicNotify;
 
     impl Notify for PanicNotify {
         fn notify(&self) -> io::Result<()> {
-            assert_ne!(
-                self.calls.fetch_add(1, Ordering::SeqCst),
-                0,
-                "spawn notification"
-            );
-            Ok(())
-        }
-    }
-
-    for remote in [false, true] {
-        for detached in [false, true] {
-            for res in [Res::Ready, Res::Pending] {
-                let notify_drops = Counter::default();
-                let rt = Runtime::new(Box::new(PanicNotify {
-                    calls: AtomicUsize::new(0),
-                    _drop: notify_drops.token(),
-                }));
-                let queue = Arc::downgrade(&rt.queue);
-                let p = Probe::default();
-                let fut = p.future(res);
-                let handle = rt.handle();
-                let spawn = move || {
-                    catch_unwind(AssertUnwindSafe(|| {
-                        if detached {
-                            handle.spawn_detached(fut);
-                        } else {
-                            drop(handle.spawn(fut));
-                        }
-                    }))
-                };
-                let result = if remote { on_thread(spawn) } else { spawn() };
-                assert!(result.is_err());
-                rt.poll();
-                drop(rt);
-                drop(p.waker());
-                p.check(1, 1, usize::from(res == Res::Ready));
-                assert!(queue.upgrade().is_none(), "task alive");
-                assert_eq!(notify_drops.get(), 1);
-            }
-        }
-    }
-}
-
-#[test]
-fn spawn_notify_panic_after_completion() {
-    #[derive(Debug)]
-    struct PanicNotify {
-        gate: Option<Arc<Barrier>>,
-        _drop: Token,
-    }
-
-    impl Notify for PanicNotify {
-        fn notify(&self) -> io::Result<()> {
-            if let Some(gate) = &self.gate {
-                gate.wait();
-                gate.wait();
-            } else {
-                Runtime::with_current(|rt| {
-                    rt.poll();
-                });
-            }
             panic!("spawn notification");
         }
     }
 
-    for remote in [false, true] {
-        for detached in [false, true] {
-            let notify_drops = Counter::default();
-            let outputs = Counter::default();
-            let gate = remote.then(|| Arc::new(Barrier::new(2)));
-            let rt = Runtime::new(Box::new(PanicNotify {
-                gate: gate.clone(),
-                _drop: notify_drops.token(),
-            }));
-            let queue = Arc::downgrade(&rt.queue);
-            let output = outputs.token();
-            let fut = async move { output };
-            let result = if let Some(gate) = gate {
-                let handle = rt.handle();
-                let producer = thread::spawn(move || {
-                    catch_unwind(AssertUnwindSafe(|| {
-                        if detached {
-                            handle.spawn_detached(fut);
-                        } else {
-                            drop(handle.spawn(fut));
-                        }
-                    }))
-                });
-                gate.wait();
-                rt.poll();
-                gate.wait();
-                producer.join().unwrap()
-            } else {
-                catch_unwind(AssertUnwindSafe(|| {
-                    super::CURRENT_RUNTIME.set(&rt, || {
-                        if detached {
-                            rt.spawn_detached(fut);
-                        } else {
-                            drop(rt.spawn(fut));
-                        }
-                    });
-                }))
-            };
-            assert!(result.is_err());
-            assert_eq!(outputs.get(), 1);
-            assert_freed(&rt);
-            drop(rt);
-            assert!(queue.upgrade().is_none(), "task alive");
-            assert_eq!(notify_drops.get(), 1);
+    if let Ok(case) = std::env::var(CHILD) {
+        let rt = Runtime::new(Box::new(PanicNotify));
+        if case == "remote" {
+            let handle = rt.handle();
+            on_thread(move || handle.spawn_detached(async {}));
+        } else {
+            super::CURRENT_RUNTIME.set(&rt, || rt.spawn_detached(async {}));
         }
+        return;
+    }
+
+    for case in ["local", "remote"] {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["rt::task_tests::spawn_notify_panic_aborts", "--exact"])
+            .args(["--nocapture", "--test-threads=1"])
+            .env(CHILD, case)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{case}: {stderr}");
+        // a normal test failure exits with 101, an abort does not
+        assert_ne!(out.status.code(), Some(101), "{case}: {stderr}");
+        assert!(stderr.contains("spawn notification"), "{case}: {stderr}");
     }
 }
-
 #[test]
 fn finish_unshared() {
     struct PanicOnDrop;
@@ -1378,7 +1294,6 @@ fn shutdown_with_blocked_notification() {
         entered: mpsc::Sender<()>,
         release: Mutex<mpsc::Receiver<()>>,
         interrupted: AtomicBool,
-        panics: bool,
     }
 
     impl Notify for BlockingNotify {
@@ -1392,7 +1307,6 @@ fn shutdown_with_blocked_notification() {
                 .unwrap()
                 .recv_timeout(Duration::from_secs(30))
                 .expect("shutdown waited for a notifier");
-            assert!(!self.panics, "notification panic after shutdown");
             Ok(())
         }
     }
@@ -1408,21 +1322,13 @@ fn shutdown_with_blocked_notification() {
         }
     }
 
-    for (path, panics) in [
-        (0, false),
-        (1, false),
-        (2, false),
-        (0, true),
-        (1, true),
-        (2, true),
-    ] {
+    for path in 0..3 {
         let (entered, rx) = mpsc::channel();
         let (tx, release) = mpsc::channel();
         let rt = Runtime::new(Box::new(BlockingNotify {
             entered,
             release: Mutex::new(release),
             interrupted: AtomicBool::new(false),
-            panics,
         }));
         rt.awake();
         let queue = Arc::downgrade(&rt.queue);
@@ -1431,13 +1337,11 @@ fn shutdown_with_blocked_notification() {
         let th = if path != 0 {
             let handle = rt.handle();
             thread::spawn(move || {
-                catch_unwind(AssertUnwindSafe(|| {
-                    if path == 1 {
-                        drop(handle.spawn(fut));
-                    } else {
-                        handle.spawn_detached(fut);
-                    }
-                }))
+                if path == 1 {
+                    drop(handle.spawn(fut));
+                } else {
+                    handle.spawn_detached(fut);
+                }
             })
         } else {
             let owner = OwnerDrop {
@@ -1451,7 +1355,7 @@ fn shutdown_with_blocked_notification() {
             one_local(&rt).run();
             let w = p.waker();
             drop(task);
-            thread::spawn(move || catch_unwind(AssertUnwindSafe(|| w.wake())))
+            thread::spawn(move || w.wake())
         };
         rx.recv_timeout(Duration::from_secs(30)).unwrap();
         drop(rt);
@@ -1459,7 +1363,7 @@ fn shutdown_with_blocked_notification() {
         // The notifier must retain its queue after the task and runtime are gone.
         assert!(queue.upgrade().is_some());
         tx.send(()).unwrap();
-        assert_eq!(th.join().unwrap().is_err(), panics);
+        th.join().unwrap();
         assert!(queue.upgrade().is_none(), "task alive");
     }
 }
