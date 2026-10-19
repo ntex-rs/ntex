@@ -236,7 +236,6 @@ mod tests {
     #[test]
     fn page_size_from_alloc_size() {
         const META: usize = stvec::METADATA_SIZE;
-        assert_eq!(META, 16);
         for size in PAGE_SIZES {
             assert_eq!(BytePageSize::from_alloc_size(size.alloc_size()), size);
             assert_eq!(BytePageSize::from_alloc_size(size.capacity() + META), size);

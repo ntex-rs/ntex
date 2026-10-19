@@ -2,6 +2,8 @@
 
 ## [1.14.0] - Unreleased
 
+* Add `tracker` feature for per-allocation memory attribution: `BytesTracker`, `BytesTrackerSnapshot`, `BytesTrackerError`, `BytesMut::with_page_size_in()`, `BytesMut::set_tracker()` and `BytesMut::tracker()`. An attributed allocation stays charged until its last `Bytes`/`BytesMut` handle is dropped, on any thread; cached pages are not charged. The feature grows the buffer header from 16 to 32 bytes (20 on 32-bit targets)
+
 * Fix out-of-bounds write in `BytePages::put_u8()` and `put_i8()` after `advance_mut()` filled the current page
 
 * Fix wrong buffer header for views 1 GiB or more into a shared buffer on 32-bit targets

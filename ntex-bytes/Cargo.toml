@@ -12,6 +12,10 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 
+[package.metadata.docs.rs]
+features = ["tracker"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 bench = false
 
@@ -44,4 +48,8 @@ harness = false
 
 [[bench]]
 name = "buf"
+harness = false
+
+[[bench]]
+name = "tracker"
 harness = false

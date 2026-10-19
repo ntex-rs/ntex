@@ -54,6 +54,7 @@
 //!
 //! - `simd` enables SIMD-accelerated UTF-8 validation.
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(clippy::pedantic)]
 #![allow(
     unsafe_op_in_unsafe_fn,
@@ -97,7 +98,7 @@ pub use crate::size::BytePageSize;
 pub use crate::stext::{StorageExt, StorageExtStr, StorageVTable};
 pub use crate::string::ByteString;
 #[cfg(feature = "tracker")]
-pub use crate::tracker::{BytesTracker, BytesTrackerSnapshot};
+pub use crate::tracker::{BytesTracker, BytesTrackerError, BytesTrackerSnapshot};
 
 #[doc(hidden)]
 pub use crate::stvec::METADATA_SIZE;

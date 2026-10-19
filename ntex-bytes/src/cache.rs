@@ -2,7 +2,7 @@
 use std::cell::Cell;
 use std::sync::{Arc, atomic::AtomicU64, atomic::Ordering::Relaxed};
 
-use crate::stvec::{SharedVec, StorageVec};
+use crate::stvec::{Header, StorageVec};
 use crate::{BytePageSize, size::PAGE_SIZES};
 
 /// Number of page sizes, `BytePageSize::Unset` excluded.
@@ -95,10 +95,10 @@ pub(crate) fn take_page(size: BytePageSize) -> Option<StorageVec> {
 ///
 /// # Safety
 ///
-/// `ptr` must point to a live `SharedVec` of page size `size` without
+/// `ptr` must point to a live `Header` of page size `size` without
 /// references.
 #[inline]
-pub(crate) unsafe fn put_page(ptr: *mut SharedVec, size: BytePageSize) -> bool {
+pub(crate) unsafe fn put_page(ptr: *mut Header, size: BytePageSize) -> bool {
     let class = size as usize;
     with_cache(|cst| {
         if cst.pages[class].len() < cst.limits[class] {

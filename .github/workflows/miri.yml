@@ -32,6 +32,9 @@ jobs:
         # Run all of your tests inside of Miri interpreter
         run: cargo miri test -p ntex-bytes
 
+      - name: Run Miri (bytes, tracker)
+        run: cargo miri test -p ntex-bytes --features tracker
+
       - name: Run Miri (bytes, big-endian)
         continue-on-error: true
         run: cargo miri test -p ntex-bytes --target s390x-unknown-linux-gnu

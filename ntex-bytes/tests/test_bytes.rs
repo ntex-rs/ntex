@@ -2,7 +2,7 @@
 use std::{borrow::Borrow, borrow::BorrowMut};
 
 use ntex_bytes::info::Kind;
-use ntex_bytes::{Buf, BufMut, BytePage, BytePageSize, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytePage, BytePageSize, Bytes, BytesMut, METADATA_SIZE};
 
 const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &[u8] = b"hello world";
@@ -20,7 +20,10 @@ fn is_send<T: Send>() {}
 fn test_size() {
     assert_eq!(24, std::mem::size_of::<Bytes>());
     assert_eq!(24, std::mem::size_of::<Option<Bytes>>());
+    #[cfg(not(feature = "tracker"))]
     assert_eq!(16, ntex_bytes::METADATA_SIZE);
+    #[cfg(feature = "tracker")]
+    assert_eq!(32, ntex_bytes::METADATA_SIZE);
     assert_eq!(8, std::mem::size_of::<BytesMut>());
     assert_eq!(16, std::mem::size_of::<ntex_bytes::BytePages>());
     assert_eq!(32, std::mem::size_of::<BytePage>());
@@ -216,6 +219,8 @@ fn split_off_oob() {
     let mut hello = Bytes::from(&b"helloworld"[..]);
     hello.split_off(inline_cap() + 1);
 }
+
+const MIN_CAPACITY: usize = 128 - METADATA_SIZE;
 
 const B: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -424,15 +429,15 @@ fn fns_defined_for_bytes() {
     let bytes = Bytes::copy_from_slice(&B[..]);
     assert_eq!(bytes.info().kind, Kind::Vec);
     assert_eq!(bytes.info().refs, 1);
-    assert_eq!(bytes.info().capacity, 68);
+    assert_eq!(bytes.info().capacity, B.len() + METADATA_SIZE);
     let b2 = bytes.clone();
     assert_eq!(b2.info().kind, Kind::Vec);
     assert_eq!(b2.info().refs, 2);
-    assert_eq!(b2.info().capacity, 68);
+    assert_eq!(b2.info().capacity, B.len() + METADATA_SIZE);
     drop(b2);
     assert_eq!(bytes.info().kind, Kind::Vec);
     assert_eq!(bytes.info().refs, 1);
-    assert_eq!(bytes.info().capacity, 68);
+    assert_eq!(bytes.info().capacity, B.len() + METADATA_SIZE);
 
     let mut bytes = Bytes::from(&b"hello world"[..]);
 
@@ -848,11 +853,11 @@ fn reserve_more_unset() {
     let mut buf = BytesMut::copy_from_slice(b"");
     assert_eq!(buf.capacity(), 0);
     buf.reserve_more();
-    assert_eq!(buf.capacity(), 112);
+    assert_eq!(buf.capacity(), MIN_CAPACITY);
 
     let mut buf = BytesMut::copy_from_slice(LONG);
     buf.reserve_more();
-    assert_eq!(buf.capacity(), LONG.len() + 112);
+    assert_eq!(buf.capacity(), LONG.len() + MIN_CAPACITY);
     assert_eq!(&buf[..], LONG);
 
     let mut buf = BytesMut::with_capacity(1000);
@@ -897,7 +902,7 @@ fn reserve_more_unset() {
     let head = buf.split_to(LONG.len());
     let cap = buf.capacity();
     buf.reserve_more();
-    assert_eq!(buf.capacity(), cap + 112.max(cap));
+    assert_eq!(buf.capacity(), cap + MIN_CAPACITY.max(cap));
     assert_eq!(&buf[..], SHORT);
     assert_eq!(&head[..], LONG);
 }

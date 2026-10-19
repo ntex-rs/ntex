@@ -120,6 +120,96 @@ impl BytesMut {
         }
     }
 
+    /// Creates a new `BytesMut` from the page cache, like
+    /// [`with_page_size`](Self::with_page_size), with the allocation charged
+    /// to `tracker`.
+    ///
+    /// The allocation stays charged while any `BytesMut` or [`Bytes`]
+    /// handle refers to it. A buffer that grows into a new allocation
+    /// charges it to the same tracker, the old allocation is uncharged when
+    /// its last handle is dropped. Copies made by [`Clone`] or conversions
+    /// are not charged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::{BytePageSize, BytesMut, BytesTracker};
+    ///
+    /// let tracker = BytesTracker::new();
+    /// let buf = BytesMut::with_page_size_in(BytePageSize::Size4, &tracker);
+    /// assert_eq!(tracker.snapshot().live_bytes, 4096);
+    /// assert_eq!(tracker.snapshot().live_allocations, 1);
+    ///
+    /// drop(buf);
+    /// assert_eq!(tracker.snapshot().live_bytes, 0);
+    /// ```
+    #[cfg(feature = "tracker")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+    #[inline]
+    #[must_use]
+    pub fn with_page_size_in(size: BytePageSize, tracker: &crate::BytesTracker) -> BytesMut {
+        let size = if size == BytePageSize::Unset {
+            BytePageSize::Size64
+        } else {
+            size
+        };
+        BytesMut {
+            storage: StorageVec::sized_in(size, tracker),
+        }
+    }
+
+    /// Charges the allocation of the buffer to `tracker`.
+    ///
+    /// The allocation stays charged as described in
+    /// [`with_page_size_in`](Self::with_page_size_in). Setting the tracker
+    /// the buffer is already charged to does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BytesTrackerError::Attributed`](crate::BytesTrackerError::Attributed)
+    /// if the buffer is charged to a different tracker, and
+    /// [`BytesTrackerError::Shared`](crate::BytesTrackerError::Shared) if
+    /// an untracked allocation is shared with [`Bytes`] handles.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::{BytesMut, BytesTracker, BytesTrackerError};
+    ///
+    /// let tracker = BytesTracker::new();
+    /// let mut buf = BytesMut::with_capacity(256);
+    /// buf.extend_from_slice(&[0; 128]);
+    ///
+    /// let head = buf.split_to(64);
+    /// assert_eq!(buf.set_tracker(&tracker), Err(BytesTrackerError::Shared));
+    ///
+    /// drop(head);
+    /// buf.set_tracker(&tracker).unwrap();
+    /// assert!(buf.tracker().unwrap().ptr_eq(&tracker));
+    /// assert_eq!(tracker.snapshot().live_allocations, 1);
+    ///
+    /// let other = BytesTracker::new();
+    /// assert_eq!(buf.set_tracker(&other), Err(BytesTrackerError::Attributed));
+    /// ```
+    #[cfg(feature = "tracker")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+    #[inline]
+    pub fn set_tracker(
+        &mut self,
+        tracker: &crate::BytesTracker,
+    ) -> Result<(), crate::BytesTrackerError> {
+        self.storage.set_tracker(tracker)
+    }
+
+    /// Returns the tracker charged with the allocation of the buffer.
+    #[cfg(feature = "tracker")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+    #[inline]
+    #[must_use]
+    pub fn tracker(&self) -> Option<&crate::BytesTracker> {
+        self.storage.tracker()
+    }
+
     /// Returns the page size of the buffer.
     ///
     /// The page size is derived from the allocation size, a buffer whose
@@ -614,8 +704,8 @@ impl BytesMut {
     /// the same size. Otherwise a buffer with a page size moves to a page of
     /// the next larger page size, the old page returns to the page cache. A
     /// buffer without a page size, or with the largest page size, grows its
-    /// capacity by its current capacity, by at least 112 bytes and by at most
-    /// 64 KiB, like [`reserve_exact`](Self::reserve_exact) does: a unique
+    /// capacity by its current capacity, by at least 112 bytes (104 with the
+    /// `tracker` feature) and by at most 64 KiB, like [`reserve_exact`](Self::reserve_exact) does: a unique
     /// buffer is reallocated, often in place, otherwise the data is copied
     /// into a new buffer.
     ///

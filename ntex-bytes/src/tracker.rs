@@ -13,12 +13,42 @@ const MAX_REFS: usize = isize::MAX as usize;
 /// page cache. The tracker state lives while any handle or attributed
 /// allocation exists, so a handle can outlive the buffers and the
 /// buffers can outlive all handles.
+// `BytesMut::tracker` borrows the allocation header field as a handle
+#[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+#[repr(transparent)]
 pub struct BytesTracker(NonNull<TrackerInner>);
+
+const _: () = assert!(size_of::<BytesTracker>() == size_of::<*const TrackerInner>());
+
+/// Error returned by [`BytesMut::set_tracker`](crate::BytesMut::set_tracker).
+#[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BytesTrackerError {
+    /// The allocation is shared with other handles.
+    Shared,
+    /// The allocation is charged to a different tracker.
+    Attributed,
+}
+
+impl fmt::Display for BytesTrackerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BytesTrackerError::Shared => f.write_str("buffer allocation is shared"),
+            BytesTrackerError::Attributed => {
+                f.write_str("buffer allocation is charged to a different tracker")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BytesTrackerError {}
 
 /// Point-in-time values of a [`BytesTracker`].
 ///
 /// The counters are read one by one, the snapshot is exact only when
 /// no allocation is attributed or released concurrently.
+#[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BytesTrackerSnapshot {
@@ -69,7 +99,6 @@ impl BytesTracker {
         self.0 == other.0
     }
 
-    #[allow(dead_code)]
     pub(crate) fn as_inner(&self) -> *const TrackerInner {
         self.0.as_ptr()
     }
@@ -115,7 +144,6 @@ impl fmt::Debug for BytesTracker {
     }
 }
 
-#[allow(dead_code)]
 impl TrackerInner {
     /// Attributes an allocation of `size` bytes, it holds a reference
     /// until [`TrackerInner::uncharge`].
