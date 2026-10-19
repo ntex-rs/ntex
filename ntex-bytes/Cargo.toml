@@ -21,6 +21,9 @@ default = []
 # simd utf8 check support
 simd = ["simdutf8"]
 
+# per-allocation memory attribution
+tracker = []
+
 [lints]
 workspace = true
 
