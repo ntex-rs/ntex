@@ -83,6 +83,8 @@ mod size;
 mod storage;
 mod string;
 mod stvec;
+#[cfg(feature = "tracker")]
+mod tracker;
 
 mod stext;
 mod stext_arc;
@@ -94,6 +96,8 @@ pub use crate::pages::{BytePage, BytePages};
 pub use crate::size::BytePageSize;
 pub use crate::stext::{StorageExt, StorageExtStr, StorageVTable};
 pub use crate::string::ByteString;
+#[cfg(feature = "tracker")]
+pub use crate::tracker::{BytesTracker, BytesTrackerSnapshot};
 
 #[doc(hidden)]
 pub use crate::stvec::METADATA_SIZE;
