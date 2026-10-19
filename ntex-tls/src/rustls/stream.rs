@@ -1,6 +1,6 @@
-use std::{any, cmp, io, io::IoSlice, io::Write, ops::Deref, ops::DerefMut, task::Poll};
+use std::{any, io, io::IoSlice, io::Write, ops::Deref, ops::DerefMut, task::Poll};
 
-use ntex_bytes::{BufMut, BytePage, BytePages};
+use ntex_bytes::{BufMut, BytePages};
 use ntex_io::{FilterBuf, types};
 use tls_rustls::{ConnectionCommon, SideData};
 
@@ -158,41 +158,38 @@ pub(super) fn write_buf<SD: SideData>(
             }
         }
 
-        let Some(page) = w_src.take() else {
-            return Ok(());
-        };
-        if write_page(session, page, w_src)? == 0 {
-            // nothing is consumed, the session buffer is full
+        if write_pages(session, w_src)? == 0 {
+            // no input remains, or the session buffer is full
             return Ok(());
         }
     }
 }
 
-/// Writes `page` together with the following page, if any.
+/// Writes up to 32 queued pages together without a plaintext gathering copy.
 ///
 /// Every write produces its own records, so a small page, e.g. response
 /// headers in front of a body, would otherwise cost a record.
 ///
 /// Returns the number of consumed bytes.
-fn write_page<SD: SideData>(
+fn write_pages<SD: SideData>(
     session: &mut ConnectionCommon<SD>,
-    mut page: BytePage,
     src: &mut BytePages,
 ) -> io::Result<usize> {
-    let Some(mut next) = src.take() else {
-        let n = session.writer().write(&page)?;
-        page.advance_to(n);
-        src.prepend(page);
-        return Ok(n);
+    let n = if src.num_pages() <= 1 {
+        let Some(page) = src.iter().next() else {
+            return Ok(0);
+        };
+        session.writer().write(page)?
+    } else {
+        let mut bufs = [IoSlice::new(&[]); 32];
+        let mut num = 0;
+        for (buf, page) in bufs.iter_mut().zip(src.iter()) {
+            *buf = IoSlice::new(page);
+            num += 1;
+        }
+        session.writer().write_vectored(&bufs[..num])?
     };
 
-    let n = session
-        .writer()
-        .write_vectored(&[IoSlice::new(&page), IoSlice::new(&next)])?;
-    let used = cmp::min(n, page.len());
-    page.advance_to(used);
-    next.advance_to(n - used);
-    src.prepend(next);
-    src.prepend(page);
+    src.advance_to(n);
     Ok(n)
 }
