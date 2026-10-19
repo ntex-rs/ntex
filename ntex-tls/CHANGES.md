@@ -1,5 +1,11 @@
 # Changes
 
+## Unreleased
+
+* schannel: reject empty plaintext handshake records and limit handshake
+  reassembly to 64 KiB per message and 1024 records, preventing unbounded
+  ciphertext buffering and repeated parsing while waiting for a message
+
 ## [4.3.1] - 2026-10-07
 
 * Use new BytesMut allocation api

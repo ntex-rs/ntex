@@ -11,6 +11,8 @@ use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig};
 /// Support `TLS` server connections via Windows Schannel
 ///
 /// `schannel` feature enables `TlsAcceptor` type
+///
+/// Plaintext handshake reassembly has the same input limits as [`accept_io`].
 pub struct TlsAcceptor {
     config: ServerConfig,
     conns: Counter,
@@ -356,6 +358,24 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[ntex::test]
+    async fn test_accept_empty_handshake_record() {
+        let config = ServerConfig::new(identity()).unwrap();
+        let (cli, srv) = IoTest::create();
+        cli.write(Bytes::from_static(b"\x16\x03\x03\0\0"));
+
+        // Raw accept has no handshake timeout, and the peer stays connected.
+        let err = timeout(
+            Millis(1_000),
+            accept_io(Io::new(srv, SharedCfg::new("SRV")), &config),
+        )
+        .await
+        .expect("empty handshake record left the server waiting for input")
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "empty TLS handshake record");
     }
 
     fn rustls_client() -> (tls_rustls::ClientConnection, Vec<u8>) {

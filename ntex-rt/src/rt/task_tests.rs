@@ -1378,6 +1378,7 @@ fn shutdown_with_blocked_notification() {
         entered: mpsc::Sender<()>,
         release: Mutex<mpsc::Receiver<()>>,
         interrupted: AtomicBool,
+        panics: bool,
     }
 
     impl Notify for BlockingNotify {
@@ -1391,6 +1392,7 @@ fn shutdown_with_blocked_notification() {
                 .unwrap()
                 .recv_timeout(Duration::from_secs(30))
                 .expect("shutdown waited for a notifier");
+            assert!(!self.panics, "notification panic after shutdown");
             Ok(())
         }
     }
@@ -1406,21 +1408,37 @@ fn shutdown_with_blocked_notification() {
         }
     }
 
-    for remote_spawn in [false, true] {
+    for (path, panics) in [
+        (0, false),
+        (1, false),
+        (2, false),
+        (0, true),
+        (1, true),
+        (2, true),
+    ] {
         let (entered, rx) = mpsc::channel();
         let (tx, release) = mpsc::channel();
         let rt = Runtime::new(Box::new(BlockingNotify {
             entered,
             release: Mutex::new(release),
             interrupted: AtomicBool::new(false),
+            panics,
         }));
         rt.awake();
         let queue = Arc::downgrade(&rt.queue);
         let p = Probe::default();
         let fut = p.future(Res::Pending);
-        let th = if remote_spawn {
+        let th = if path != 0 {
             let handle = rt.handle();
-            thread::spawn(move || handle.spawn_detached(fut))
+            thread::spawn(move || {
+                catch_unwind(AssertUnwindSafe(|| {
+                    if path == 1 {
+                        drop(handle.spawn(fut));
+                    } else {
+                        handle.spawn_detached(fut);
+                    }
+                }))
+            })
         } else {
             let owner = OwnerDrop {
                 owner: thread::current().id(),
@@ -1433,15 +1451,15 @@ fn shutdown_with_blocked_notification() {
             one_local(&rt).run();
             let w = p.waker();
             drop(task);
-            thread::spawn(move || w.wake())
+            thread::spawn(move || catch_unwind(AssertUnwindSafe(|| w.wake())))
         };
         rx.recv_timeout(Duration::from_secs(30)).unwrap();
         drop(rt);
-        p.check(usize::from(!remote_spawn), 1, 0);
+        p.check(usize::from(path == 0), 1, 0);
         // The notifier must retain its queue after the task and runtime are gone.
         assert!(queue.upgrade().is_some());
         tx.send(()).unwrap();
-        th.join().unwrap();
+        assert_eq!(th.join().unwrap().is_err(), panics);
         assert!(queue.upgrade().is_none(), "task alive");
     }
 }

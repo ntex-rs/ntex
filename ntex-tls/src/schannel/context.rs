@@ -144,7 +144,7 @@ impl Context {
             // that follows its messages
             Some(src) if self.sizes.is_some() => handshake_records_len(src),
             Some(src) if self.coalesce => {
-                let Some(len) = coalesce_handshake_records(src) else {
+                let Some(len) = coalesce_handshake_records(src)? else {
                     return Ok(HandshakeState::NeedRead);
                 };
                 if !self.have_ctxt {
@@ -678,6 +678,7 @@ const CONTENT_HANDSHAKE: u8 = 22;
 const MAX_RECORD: usize = 16 * 1024;
 /// The largest handshake data held back until a message is complete
 const MAX_HELD_HANDSHAKE: usize = 64 * 1024;
+const MAX_HELD_HANDSHAKE_RECORDS: usize = 1024;
 
 /// Alert sent for a failed handshake.
 fn alert_number(status: windows_sys::core::HRESULT) -> u32 {
@@ -754,13 +755,26 @@ pub(super) fn handshake_records_len(src: &[u8]) -> usize {
 ///
 /// Windows Server 2025 (build 26100) fails with `SEC_E_UNSUPPORTED_FUNCTION`
 /// if a `ClientHello` spread over several records is passed in pieces.
-fn coalesce_handshake_records(src: &mut BytesMut) -> Option<usize> {
+fn coalesce_handshake_records(src: &mut BytesMut) -> io::Result<Option<usize>> {
     let mut rest = &src[..];
     let mut version = [3, 1];
     let mut records = 0;
     let mut payload = Vec::new();
+    let mut complete = 0;
     while let [CONTENT_HANDSHAKE, major, minor, hi, lo, data @ ..] = rest {
         let len = usize::from(u16::from_be_bytes([*hi, *lo]));
+        if len == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "empty TLS handshake record",
+            ));
+        }
+        if records == MAX_HELD_HANDSHAKE_RECORDS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "TLS handshake message exceeds 1024 records",
+            ));
+        }
         if data.len() < len {
             break;
         }
@@ -770,28 +784,37 @@ fn coalesce_handshake_records(src: &mut BytesMut) -> Option<usize> {
         payload.extend_from_slice(&data[..len]);
         rest = &data[len..];
         records += 1;
-    }
 
-    // handshake messages, type and 24-bit length
-    let mut complete = 0;
-    while let Some(&[_, a, b, c]) = payload.get(complete..complete + 4) {
-        let size = 4 + (usize::from(a) << 16 | usize::from(b) << 8 | usize::from(c));
-        if payload.len() - complete < size {
+        // handshake messages, type and 24-bit length
+        while let Some(&[_, a, b, c]) = payload.get(complete..complete + 4) {
+            let size = 4 + (usize::from(a) << 16 | usize::from(b) << 8 | usize::from(c));
+            if complete == 0 && size > MAX_HELD_HANDSHAKE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "TLS handshake message exceeds 64 KiB",
+                ));
+            }
+            if payload.len() - complete < size {
+                break;
+            }
+            complete += size;
+        }
+        // Only bound the message being reassembled, not the rest of the flight.
+        if complete != 0 {
             break;
         }
-        complete += size;
     }
 
-    if records == 0 || payload.len() > MAX_HELD_HANDSHAKE {
-        return Some(src.len());
+    if records == 0 {
+        return Ok(Some(src.len()));
     }
     if complete == 0 {
         // anything else than the rest of the message is reported by Schannel
         let waiting = rest.first().is_none_or(|&ty| ty == CONTENT_HANDSHAKE);
-        return if waiting { None } else { Some(src.len()) };
+        return Ok(if waiting { None } else { Some(src.len()) });
     }
     if records == 1 && complete == payload.len() {
-        return Some(src.len());
+        return Ok(Some(src.len()));
     }
 
     let mut out = Vec::with_capacity(src.len());
@@ -809,7 +832,7 @@ fn coalesce_handshake_records(src: &mut BytesMut) -> Option<usize> {
     out.extend_from_slice(rest);
     src.clear();
     src.extend_from_slice(&out);
-    Some(len)
+    Ok(Some(len))
 }
 
 /// Moves a token allocated by `InitializeSecurityContextW` or
@@ -929,7 +952,7 @@ mod tests {
 
     fn coalesce(src: &[u8]) -> (Option<usize>, Vec<u8>) {
         let mut buf = BytesMut::copy_from_slice(src);
-        let len = coalesce_handshake_records(&mut buf);
+        let len = coalesce_handshake_records(&mut buf).unwrap();
         (len, buf.to_vec())
     }
 
@@ -1097,6 +1120,88 @@ mod tests {
     }
 
     #[test]
+    fn test_coalesce_empty_record() {
+        for prefix in [Vec::new(), record(CONTENT_HANDSHAKE, &[1])] {
+            let src = [&prefix[..], &record(CONTENT_HANDSHAKE, &[])].concat();
+            for end in prefix.len()..src.len() {
+                let (_, buf) = coalesce(&src[..end]);
+                assert_eq!(buf, &src[..end]);
+            }
+            let mut buf = BytesMut::copy_from_slice(&src);
+            let err = coalesce_handshake_records(&mut buf).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(err.to_string(), "empty TLS handshake record");
+            assert_eq!(&buf[..], src);
+        }
+    }
+
+    #[test]
+    fn test_coalesce_message_limit() {
+        let msg = message(11, MAX_HELD_HANDSHAKE - 3);
+        for cuts in [&[][..], &[1, 2, 3]] {
+            let src = fragments(&msg[..4], cuts);
+            let mut buf = BytesMut::copy_from_slice(&src);
+            let err = coalesce_handshake_records(&mut buf).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(err.to_string(), "TLS handshake message exceeds 64 KiB");
+            assert_eq!(&buf[..], src);
+        }
+
+        // Both limits are inclusive.
+        let msg = message(11, MAX_HELD_HANDSHAKE - 4);
+        let cuts: Vec<_> = (1..MAX_HELD_HANDSHAKE_RECORDS).map(|i| i * 64).collect();
+        let src = fragments(&msg, &cuts);
+        let expected = fragments(&msg, &[MAX_RECORD, 2 * MAX_RECORD, 3 * MAX_RECORD]);
+        assert_eq!(coalesce(&src), (Some(expected.len()), expected));
+    }
+
+    #[test]
+    fn test_coalesce_record_limit() {
+        let msg = message(11, 2048);
+        let cuts: Vec<_> = (1..MAX_HELD_HANDSHAKE_RECORDS).collect();
+        let mut src = fragments(&msg[..MAX_HELD_HANDSHAKE_RECORDS], &cuts);
+        assert_eq!(coalesce(&src), (None, src.clone()));
+
+        let next = record(CONTENT_HANDSHAKE, &msg[MAX_HELD_HANDSHAKE_RECORDS..]);
+        let prefix = src.len();
+        src.extend_from_slice(&next);
+        for end in [prefix + 5, src.len()] {
+            let mut buf = BytesMut::copy_from_slice(&src[..end]);
+            let err = coalesce_handshake_records(&mut buf).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(
+                err.to_string(),
+                "TLS handshake message exceeds 1024 records"
+            );
+            assert_eq!(&buf[..], &src[..end]);
+        }
+    }
+
+    #[test]
+    fn test_coalesce_limit_preserves_trailing_data() {
+        let msg = message(11, MAX_HELD_HANDSHAKE - 4);
+        let next = message(16, 100);
+        let mut data = msg.clone();
+        data.extend_from_slice(&next[..20]);
+        let mut src = fragments(&data, &[MAX_RECORD, 2 * MAX_RECORD, 3 * MAX_RECORD]);
+        let mut expected = fragments(&msg, &[MAX_RECORD, 2 * MAX_RECORD, 3 * MAX_RECORD]);
+        let len = expected.len();
+        expected.extend(record(CONTENT_HANDSHAKE, &next[..20]));
+
+        // The last record crosses the payload limit; subsequent records do not
+        // belong to the message being reassembled either.
+        let mut rest = record(CONTENT_HANDSHAKE, &next[20..]);
+        rest.extend(fragments(
+            &msg,
+            &[MAX_RECORD, 2 * MAX_RECORD, 3 * MAX_RECORD],
+        ));
+        rest.extend(record(CONTENT_APPLICATION_DATA, &vec![0; MAX_RECORD]));
+        src.extend_from_slice(&rest);
+        expected.extend_from_slice(&rest);
+        assert_eq!(coalesce(&src), (Some(len), expected));
+    }
+
+    #[test]
     fn test_coalesce_passes_input_unchanged() {
         let hello = record(CONTENT_HANDSHAKE, &message(HANDSHAKE_CLIENT_HELLO, 50));
         let ccs = record(CONTENT_CHANGE_CIPHER_SPEC, &[1]);
@@ -1116,13 +1221,6 @@ mod tests {
         ] {
             assert_eq!(coalesce(&src), (Some(src.len()), src.clone()));
         }
-        // too large to hold back
-        let msg = message(11, MAX_HELD_HANDSHAKE + 1);
-        let src = fragments(
-            &msg[..MAX_HELD_HANDSHAKE + 4],
-            &[MAX_RECORD, 2 * MAX_RECORD, 3 * MAX_RECORD],
-        );
-        assert_eq!(coalesce(&src), (Some(src.len()), src.clone()));
     }
 
     /// Client and server contexts after an in-memory handshake.

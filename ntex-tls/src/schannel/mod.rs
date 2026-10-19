@@ -518,6 +518,10 @@ pub async fn connect<F: Filter>(
 }
 
 /// Performs a server TLS handshake over `io`.
+///
+/// Plaintext handshake reassembly is limited to 64 KiB per message, including
+/// its four-byte header, and 1024 records. Exceeding either limit or receiving an
+/// empty plaintext handshake record fails with [`io::ErrorKind::InvalidData`].
 pub async fn accept<F: Filter>(
     io: Io<F>,
     config: &ServerConfig,
