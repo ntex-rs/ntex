@@ -255,13 +255,17 @@ impl StreamOps {
         };
         let mut rd_op = ops::ReadOperation::new(id, sock, ctx.clone(), nonblocking);
         // edge-triggered notifications need a non-blocking socket, it is
-        // read until drained
-        if notify && nonblocking && self.0.api.register_notify(sock as _, id) {
+        // read until drained. Such a read never waits with an overlapped
+        // recv, so it needs no kernel header.
+        let rd_overlapped = if notify && nonblocking && self.0.api.register_notify(sock as _, id) {
             rd_op.use_notifications();
-        }
+            None
+        } else {
+            Some(self.0.api.overlapped(ops::RD_OP))
+        };
 
         let ops = OpPairBox::new(
-            self.0.api.overlapped(ops::RD_OP),
+            rd_overlapped,
             rd_op,
             self.0.api.overlapped(ops::WR_OP),
             ops::WriteOperation::new(id, sock, ctx),

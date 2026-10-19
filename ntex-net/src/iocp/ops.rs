@@ -147,6 +147,8 @@ impl ReadOperation {
     /// Returns `true` if none is in flight.
     pub(crate) fn cancel(&mut self, overlapped: *mut OVERLAPPED) -> bool {
         if self.flags.contains(Flags::WAITING) {
+            // a null pointer would cancel every operation of the socket
+            debug_assert!(!overlapped.is_null(), "recv without a read header");
             #[cfg(feature = "trace")]
             log::trace!(
                 "{}: RcvCancel({}) flags:{:?}",
@@ -182,6 +184,9 @@ impl ReadOperation {
     /// so no buffer is handed to the kernel while the connection is idle, and
     /// input that arrives while earlier input is still unconsumed is appended
     /// to it instead of going into a buffer of its own.
+    ///
+    /// `overlapped` is the read op's kernel header, null for a socket read
+    /// through notifications, which never waits with a recv.
     pub(crate) fn read(&mut self, overlapped: *mut OVERLAPPED) {
         self.flags.remove(Flags::PAUSED);
         if self.flags.contains(Flags::WAITING) {
@@ -238,6 +243,7 @@ impl ReadOperation {
             }
 
             // wait for more input without handing a buffer to the kernel
+            debug_assert!(!overlapped.is_null(), "recv without a read header");
             let lpbufs = [WSABUF {
                 len: 0,
                 buf: ptr::null_mut(),
