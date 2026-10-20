@@ -1,11 +1,15 @@
 //! Readiness allocation counts, excluding executor and service-owned allocations.
 use std::{
     alloc::{GlobalAlloc, Layout, System},
-    cell::Cell,
+    cell::{Cell, RefCell},
     future::{Future, poll_fn},
     pin::pin,
     rc::Rc,
-    task::{Context, Poll, Waker},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context, Poll, Wake, Waker},
 };
 
 use ntex_service::{
@@ -181,6 +185,50 @@ fn single_scope_notification_does_not_allocate() {
     expect_allocs("notify", 0, || gate.changed.notify());
     assert!(!pl.is_ready());
     assert_eq!(gate.notifications.get(), 1);
+}
+
+struct Parked(Rc<RefCell<Option<Waker>>>);
+
+impl Service<(), ()> for Parked {
+    type Res = ();
+    type Error = ();
+
+    async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
+        poll_fn(|cx| {
+            *self.0.borrow_mut() = Some(cx.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+
+    async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct WakeCount(AtomicUsize);
+
+impl Wake for WakeCount {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn checker_wake_of_single_observer_does_not_allocate() {
+    let parked = Rc::new(RefCell::new(None));
+    let pl = Pipeline::new((), Parked(parked.clone()));
+    let count = Arc::new(WakeCount::default());
+    let waker = Waker::from(count.clone());
+    assert!(pl.poll_ready(&mut Context::from_waker(&waker)).is_pending());
+    let checker = parked.borrow_mut().take().unwrap();
+    // The check registers the checker waker as an observer of the same scope.
+    for wakes in 1..=2 {
+        assert!(pl.poll_ready(&mut Context::from_waker(&waker)).is_pending());
+        expect_allocs("checker wake", 0, || checker.wake_by_ref());
+        assert_eq!(count.0.load(Ordering::Relaxed), wakes);
+    }
 }
 
 #[test]
