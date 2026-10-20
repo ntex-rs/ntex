@@ -513,7 +513,13 @@ impl IoConfig {
     ///
     /// A read buffer stays charged until its last handle is dropped,
     /// including `Bytes` frames split off it, on any thread and after the
-    /// connection is closed. Buffers in the page cache are not charged.
+    /// connection is closed. The charge is the allocation size, header
+    /// included. Buffers in the page cache are not charged, io-uring
+    /// provided-buffer pages are charged once data is received into them.
+    /// Data copied out of a read buffer is not charged, such as small frames
+    /// stored inline or the result of
+    /// [`Bytes::trimdown`](ntex_bytes::Bytes::trimdown). A tracker does not
+    /// keep the connection alive.
     ///
     /// A shared tracker is an atomic counter updated by every connection on
     /// every worker thread, it is contended under load.

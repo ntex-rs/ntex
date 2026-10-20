@@ -24,7 +24,7 @@ jobs:
           toolchain: stable
           components: clippy
       - run:
-          cargo clippy --tests --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo clippy --tests --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/tracker"
 
   clippy-uring:
     name: Clippy (neon-uring)

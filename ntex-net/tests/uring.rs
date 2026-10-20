@@ -570,3 +570,96 @@ fn ring_recv_eof() {
         assert!(matches!(io.recv(&BytesCodec).await, Ok(None)));
     });
 }
+
+#[cfg(feature = "tracker")]
+mod tracker {
+    use ntex::io::ReadBufTracker;
+    use ntex_bytes::BytesTracker;
+
+    use super::*;
+
+    fn cfg_with(mode: ReadBufTracker) -> SharedCfg {
+        SharedCfg::new("URING")
+            .add(IoConfig::new().set_read_buf_tracker(mode))
+            .build()
+    }
+
+    /// Waits until the tracker has no charged allocations.
+    async fn released(t: &BytesTracker) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while t.snapshot().live_allocations != 0 {
+            assert!(Instant::now() < deadline, "{:?}", t.snapshot());
+            sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(t.snapshot().live_bytes, 0);
+    }
+
+    /// A ring page is charged to the connection's tracker once data is
+    /// received into it.
+    #[test]
+    fn ring_recv_charged() {
+        run(64, || async {
+            let shared = BytesTracker::new();
+            for mode in [
+                ReadBufTracker::Shared(shared.clone()),
+                ReadBufTracker::PerConnection,
+            ] {
+                let (sock, mut peer) = UnixStream::pair().unwrap();
+                let io = ntex_net::from_unix_stream(sock, cfg_with(mode)).unwrap();
+                let t = io.read_buf_tracker().cloned().unwrap();
+                // the receive waits for input with a ring buffer
+                sleep(Duration::from_millis(20)).await;
+                assert_eq!(t.snapshot().live_allocations, 0);
+
+                peer.write_all(&pattern(1000)).unwrap();
+                let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+                assert_eq!(item.len(), 1000);
+                assert_eq!(t.snapshot().live_allocations, 1);
+
+                // the received data keeps the charge after the connection is gone
+                drop(io);
+                drop(peer);
+                sleep(Duration::from_millis(20)).await;
+                assert_eq!(t.snapshot().live_allocations, 1);
+                drop(item);
+                released(&t).await;
+            }
+        });
+    }
+
+    /// Streaming input received into ring pages and the connection's buffers
+    /// is charged until it is released.
+    #[test]
+    fn ring_recv_stream_charged() {
+        const SIZE: usize = 1024 * 1024;
+
+        run(64, || async {
+            let t = BytesTracker::new();
+            let (sock, mut peer) = UnixStream::pair().unwrap();
+            let data = pattern(SIZE);
+            let writer = thread::spawn(move || {
+                for chunk in data.chunks(10_000) {
+                    peer.write_all(chunk).unwrap();
+                }
+                peer
+            });
+
+            let io = ntex_net::from_unix_stream(sock, cfg_with(ReadBufTracker::Shared(t.clone())))
+                .unwrap();
+            let mut chunks = Vec::new();
+            let mut len = 0;
+            while len < SIZE {
+                let chunk = io.recv(&BytesCodec).await.unwrap().unwrap();
+                len += chunk.len();
+                chunks.push(chunk);
+            }
+            assert_eq!(chunks.concat(), pattern(SIZE));
+            assert!(t.snapshot().live_bytes >= SIZE, "{:?}", t.snapshot());
+
+            drop(writer.join().unwrap());
+            drop(io);
+            drop(chunks);
+            released(&t).await;
+        });
+    }
+}

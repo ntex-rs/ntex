@@ -63,6 +63,16 @@ jobs:
         run: |
           cargo test -p ntex-bytes --features tracker
 
+      - name: Run tests (tracker, neon-polling)
+        timeout-minutes: 10
+        run: |
+          cargo nextest run --retries=3 -p ntex-io -p ntex-net --no-default-features --features="ntex-net/neon-polling,ntex-net/tracker"
+
+      - name: Run tests (tracker, neon-uring)
+        timeout-minutes: 10
+        run: |
+          cargo nextest run --retries=3 -p ntex-io -p ntex-net --no-default-features --features="ntex-net/neon-uring,ntex-net/tracker"
+
       - name: Run tests (tokio)
         timeout-minutes: 10
         run: |

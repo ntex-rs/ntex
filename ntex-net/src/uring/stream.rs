@@ -830,8 +830,14 @@ impl StreamOpsStorage {
             if let Ok(size) = res
                 && size > 0
             {
-                // the received page becomes the read buffer
-                let buf = ring.take(bid, size);
+                // the received page becomes the read buffer, it is charged
+                // to the connection's tracker once it leaves the ring
+                #[cfg_attr(not(feature = "tracker"), allow(unused_mut))]
+                let mut buf = ring.take(bid, size);
+                #[cfg(feature = "tracker")]
+                if let Some(t) = item.ctx.read_buf_tracker() {
+                    buf.set_tracker(t);
+                }
                 self.recv_complete(id, buf, flags, res, api);
                 return;
             }

@@ -3,7 +3,8 @@
 
 ## [4.6.0] - Unreleased
 
-* Add `tracker` feature, enables `ntex-io/tracker`
+* Add `tracker` feature, enables `ntex-io/tracker`. io-uring charges a received ring page to
+  the connection's read buffer tracker
 
 * iocp: co-allocate each stream's read and write operations, removing one heap
   allocation per connection while preserving their completion lifetimes

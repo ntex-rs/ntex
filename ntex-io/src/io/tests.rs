@@ -4580,7 +4580,7 @@ mod read_buf_tracker {
     async fn per_connection_is_created_once() {
         let (client, io) = io_with(ReadBufTracker::PerConnection);
         let t = io.read_buf_tracker().unwrap();
-        assert!(t.ptr_eq(&io.read_buf_tracker().unwrap()));
+        assert!(t.ptr_eq(io.read_buf_tracker().unwrap()));
         assert_eq!(t.snapshot().live_allocations, 0);
 
         client.write(TEXT);
@@ -4589,7 +4589,7 @@ mod read_buf_tracker {
 
         // another connection gets its own tracker
         let (_, io2) = io_with(ReadBufTracker::PerConnection);
-        assert!(!t.ptr_eq(&io2.read_buf_tracker().unwrap()));
+        assert!(!t.ptr_eq(io2.read_buf_tracker().unwrap()));
     }
 
     /// Allocating a read buffer creates the per-connection tracker.
@@ -4600,7 +4600,7 @@ mod read_buf_tracker {
         assert!(
             buf.tracker()
                 .unwrap()
-                .ptr_eq(&io.read_buf_tracker().unwrap())
+                .ptr_eq(io.read_buf_tracker().unwrap())
         );
     }
 
@@ -4609,7 +4609,7 @@ mod read_buf_tracker {
         let t = BytesTracker::new();
         let (client, io) = io_with(ReadBufTracker::Shared(t.clone()));
         let (client2, io2) = io_with(ReadBufTracker::Shared(t.clone()));
-        assert!(t.ptr_eq(&io.read_buf_tracker().unwrap()));
+        assert!(t.ptr_eq(io.read_buf_tracker().unwrap()));
 
         client.write(TEXT);
         client2.write(TEXT);
@@ -4631,11 +4631,11 @@ mod read_buf_tracker {
     #[ntex::test]
     async fn set_config_keeps_per_connection() {
         let (_client, io) = io_with(ReadBufTracker::PerConnection);
-        let t = io.read_buf_tracker().unwrap();
+        let t = io.read_buf_tracker().cloned().unwrap();
         unsafe {
             io.set_config(cfg_with(ReadBufTracker::PerConnection));
         }
-        assert!(t.ptr_eq(&io.read_buf_tracker().unwrap()));
+        assert!(t.ptr_eq(io.read_buf_tracker().unwrap()));
     }
 
     /// Read buffers held by the connection move to the new tracker.
@@ -4644,14 +4644,14 @@ mod read_buf_tracker {
         let (client, io) = io_with(ReadBufTracker::PerConnection);
         client.write(TEXT);
         io.read_more().await.unwrap();
-        let old = io.read_buf_tracker().unwrap();
+        let old = io.read_buf_tracker().cloned().unwrap();
         assert_eq!(old.snapshot().live_allocations, 1);
 
         let t = BytesTracker::new();
         unsafe {
             io.set_config(cfg_with(ReadBufTracker::Shared(t.clone())));
         }
-        assert!(t.ptr_eq(&io.read_buf_tracker().unwrap()));
+        assert!(t.ptr_eq(io.read_buf_tracker().unwrap()));
         assert_eq!(old.snapshot().live_allocations, 0);
         assert_eq!(t.snapshot().live_allocations, 1);
 
@@ -4659,7 +4659,7 @@ mod read_buf_tracker {
         unsafe {
             io.set_config(cfg_with(ReadBufTracker::PerConnection));
         }
-        let t2 = io.read_buf_tracker().unwrap();
+        let t2 = io.read_buf_tracker().cloned().unwrap();
         assert!(!t2.ptr_eq(&old));
         assert_eq!(t.snapshot().live_allocations, 0);
         assert_eq!(t2.snapshot().live_allocations, 1);
@@ -4685,6 +4685,138 @@ mod read_buf_tracker {
 
         drop(io.recv(&BytesCodec).await.unwrap().unwrap());
         drop(io);
+        assert_eq!(t.snapshot().live_allocations, 0);
+    }
+
+    const DATA: [u8; 1000] = [b'a'; 1000];
+
+    /// A frame keeps its charge after the connection is gone, the tracker
+    /// does not keep the connection alive.
+    #[ntex::test]
+    async fn frame_outlives_io() {
+        let (client, io) = io_with(ReadBufTracker::PerConnection);
+        let t = io.read_buf_tracker().cloned().unwrap();
+        let state = Rc::downgrade(&io.get_ref().0);
+
+        client.write(DATA);
+        let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(item.len(), DATA.len());
+
+        drop(io);
+        client.close().await;
+        sleep(Millis(50)).await;
+        assert!(state.upgrade().is_none());
+        assert_eq!(t.snapshot().live_allocations, 1);
+        assert!(t.snapshot().live_bytes >= DATA.len());
+
+        drop(item);
+        assert_eq!(t.snapshot().live_allocations, 0);
+        assert_eq!(t.snapshot().live_bytes, 0);
+    }
+
+    #[ntex::test]
+    async fn release_on_other_thread() {
+        let t = BytesTracker::new();
+        let (client, io) = io_with(ReadBufTracker::Shared(t.clone()));
+        client.write(DATA);
+        let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+        drop(io);
+        drop(client);
+        assert_eq!(t.snapshot().live_allocations, 1);
+
+        std::thread::spawn(move || drop(item)).join().unwrap();
+        assert_eq!(t.snapshot().live_allocations, 0);
+        assert_eq!(t.snapshot().live_bytes, 0);
+    }
+
+    /// A buffer taken for a read in flight is charged. Released empty, it
+    /// goes back to the page cache and the charge is released.
+    #[ntex::test]
+    async fn pending_read() {
+        let io = Io::new(ManualTransport, cfg_with(ReadBufTracker::PerConnection));
+        let ctx = IoContext::new(io.get_ref());
+        let t = io.read_buf_tracker().cloned().unwrap();
+
+        let buf = ctx.take_read_buf();
+        assert!(buf.tracker().unwrap().ptr_eq(&t));
+        assert_eq!(t.snapshot().live_allocations, 1);
+        let _ = ctx.release_read_buf(buf, Poll::Pending);
+        assert_eq!(t.snapshot().live_allocations, 0);
+
+        let mut buf = ctx.take_read_buf();
+        assert_eq!(t.snapshot().live_allocations, 1);
+        buf.extend_from_slice(&DATA);
+        let _ = ctx.release_read_buf(buf, Poll::Ready(Ok(DATA.len())));
+        let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(item.len(), DATA.len());
+
+        drop((io, ctx));
+        assert_eq!(t.snapshot().live_allocations, 1);
+        drop(item);
+        assert_eq!(t.snapshot().live_allocations, 0);
+    }
+
+    /// A read completing after the `Io` is dropped, as a cancelled read
+    /// does, releases its charge.
+    #[ntex::test]
+    async fn cancelled_read() {
+        let io = Io::new(ManualTransport, cfg_with(ReadBufTracker::PerConnection));
+        let ctx = IoContext::new(io.get_ref());
+        let t = io.read_buf_tracker().cloned().unwrap();
+
+        let mut buf = ctx.take_read_buf();
+        drop(io);
+        assert_eq!(t.snapshot().live_allocations, 1);
+
+        // the input is discarded
+        buf.extend_from_slice(&DATA);
+        let _ = ctx.release_read_buf(buf, Poll::Ready(Ok(DATA.len())));
+        assert_eq!(t.snapshot().live_allocations, 0);
+        assert_eq!(t.snapshot().live_bytes, 0);
+        drop(ctx);
+    }
+
+    #[derive(Debug)]
+    struct CopyLayer;
+
+    impl FilterLayer for CopyLayer {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src {
+                    dst.extend_from_slice(src);
+                    src.clear();
+                }
+            });
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(BytePages::move_to);
+            Ok(())
+        }
+    }
+
+    /// The buffer a filter layer writes its output to is charged, like the
+    /// plaintext of a TLS layer.
+    #[ntex::test]
+    async fn filter_layer_destination() {
+        let t = BytesTracker::new();
+        let io = Io::new(ManualTransport, cfg_with(ReadBufTracker::Shared(t.clone())))
+            .add_filter(CopyLayer);
+        let ctx = IoContext::new(io.get_ref());
+
+        let _ = ctx.with_read_buf(|buf| {
+            buf.extend_from_slice(&DATA);
+            Poll::Ready(Ok(DATA.len()))
+        });
+        let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(item.len(), DATA.len());
+
+        // the transport buffer goes with the connection, the output stays
+        drop((io, ctx));
+        assert_eq!(t.snapshot().live_allocations, 1);
+        assert!(t.snapshot().live_bytes >= DATA.len());
+        drop(item);
         assert_eq!(t.snapshot().live_allocations, 0);
     }
 }

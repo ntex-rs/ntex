@@ -77,7 +77,7 @@ impl IoContext {
     #[cfg(feature = "tracker")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
     #[must_use]
-    pub fn read_buf_tracker(&self) -> Option<ntex_bytes::BytesTracker> {
+    pub fn read_buf_tracker(&self) -> Option<&ntex_bytes::BytesTracker> {
         self.st().read_buf_tracker()
     }
 

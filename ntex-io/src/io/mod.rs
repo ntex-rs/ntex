@@ -99,10 +99,10 @@ pub(crate) struct IoState {
     rd_batch: Cell<u32>,
     /// Consecutive read batches small enough for a smaller page.
     rd_small: Cell<u8>,
-    /// Tracker charged with new read buffers, resolved from the config on
-    /// first use, see [`IoState::take_read_buf_tracker`].
+    /// Per-connection read buffer tracker, created on first use, see
+    /// [`IoState::read_buf_tracker`].
     #[cfg(feature = "tracker")]
-    rd_tracker: Cell<Option<ntex_bytes::BytesTracker>>,
+    rd_tracker: UnsafeCell<Option<ntex_bytes::BytesTracker>>,
     pub(super) extensions: Extensions,
     metrics: UnsafeCell<Arc<IoMetrics>>,
     /// Read buffer size last reported to `metrics`, saturated at `u32::MAX`.
@@ -150,7 +150,7 @@ impl Io {
             rd_batch: Cell::new(0),
             rd_small: Cell::new(0),
             #[cfg(feature = "tracker")]
-            rd_tracker: Cell::new(None),
+            rd_tracker: UnsafeCell::new(None),
             extensions: Extensions::default(),
             metrics: UnsafeCell::new(metrics),
             rd_buffered: Cell::new(0),
@@ -202,7 +202,7 @@ impl IoRef {
             rd_batch: Cell::new(0),
             rd_small: Cell::new(0),
             #[cfg(feature = "tracker")]
-            rd_tracker: Cell::new(None),
+            rd_tracker: UnsafeCell::new(None),
             extensions: Extensions::default(),
             metrics: UnsafeCell::new(IoMetrics::detached()),
             rd_buffered: Cell::new(0),
@@ -286,9 +286,10 @@ impl<F> Io<F> {
     ///
     /// # Safety
     ///
-    /// No reference obtained from [`IoRef::cfg`] for this connection may be
-    /// live when this method is called or used afterward. Replacing the
-    /// configuration may release the allocation backing those references.
+    /// No reference obtained from [`IoRef::cfg`], `IoRef::read_buf_tracker`
+    /// or `IoContext::read_buf_tracker` for this connection may be live when
+    /// this method is called or used afterward. Replacing the configuration
+    /// may release the allocation backing those references.
     pub unsafe fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
         let cfg = cfg.into().get::<IoConfig>();
         let page_size = cfg.write_size();

@@ -172,41 +172,34 @@ impl IoState {
     /// the thread-local page cache.
     pub(crate) fn get_read_buf(&self) -> BytesMut {
         #[cfg(feature = "tracker")]
-        {
-            let tracker = self.take_read_buf_tracker();
-            let buf = match &tracker {
-                Some(t) => BytesMut::with_page_size_in(self.rd_size.get(), t),
-                None => BytesMut::with_page_size(self.rd_size.get()),
-            };
-            self.rd_tracker.set(tracker);
-            buf
+        if let Some(t) = self.read_buf_tracker() {
+            return BytesMut::with_page_size_in(self.rd_size.get(), t);
         }
-        #[cfg(not(feature = "tracker"))]
         BytesMut::with_page_size(self.rd_size.get())
     }
 
     /// Returns the tracker charged with new read buffers.
-    #[cfg(feature = "tracker")]
-    pub(crate) fn read_buf_tracker(&self) -> Option<BytesTracker> {
-        let tracker = self.take_read_buf_tracker();
-        self.rd_tracker.set(tracker.clone());
-        tracker
-    }
-
-    /// Takes the read buffer tracker out of the state, the caller puts it
-    /// back.
     ///
-    /// It is resolved from the config if not set yet, a per-connection
-    /// tracker is created on first use.
+    /// A shared tracker is borrowed from the config, a per-connection
+    /// tracker is created on first use. The reference must not be used after
+    /// [`Io::set_config`](crate::Io::set_config).
     #[cfg(feature = "tracker")]
-    fn take_read_buf_tracker(&self) -> Option<BytesTracker> {
-        self.rd_tracker
-            .take()
-            .or_else(|| match self.cfg.read_buf_tracker() {
-                ReadBufTracker::Disabled => None,
-                ReadBufTracker::PerConnection => Some(BytesTracker::new()),
-                ReadBufTracker::Shared(t) => Some(t.clone()),
-            })
+    pub(crate) fn read_buf_tracker(&self) -> Option<&BytesTracker> {
+        match self.cfg.read_buf_tracker() {
+            ReadBufTracker::Disabled => None,
+            ReadBufTracker::Shared(t) => Some(t),
+            ReadBufTracker::PerConnection => {
+                let slot = self.rd_tracker.get();
+                // SAFETY: the slot is written only while it is empty or by
+                // `set_config`, so no reference to its value is live
+                unsafe {
+                    if (*slot).is_none() {
+                        *slot = Some(BytesTracker::new());
+                    }
+                    (*slot).as_ref()
+                }
+            }
+        }
     }
 
     /// Switches the read buffer tracker to the mode of `cfg`, before it
@@ -215,22 +208,22 @@ impl IoState {
     /// The read buffers held by the stack are charged to the new tracker.
     #[cfg(feature = "tracker")]
     pub(super) fn update_read_buf_tracker(&self, cfg: &IoConfig) {
-        let current = self.rd_tracker.take();
-        let tracker = match cfg.read_buf_tracker() {
-            ReadBufTracker::Disabled => None,
+        // SAFETY: `set_config` requires that no reference obtained from
+        // `read_buf_tracker` is live
+        let slot = unsafe { &mut *self.rd_tracker.get() };
+        match cfg.read_buf_tracker() {
+            ReadBufTracker::Disabled => *slot = None,
+            ReadBufTracker::Shared(t) => {
+                *slot = None;
+                self.buffer.set_read_buf_tracker(t);
+            }
             ReadBufTracker::PerConnection => {
-                if matches!(self.cfg.read_buf_tracker(), ReadBufTracker::PerConnection) {
-                    current
-                } else {
-                    Some(BytesTracker::new())
+                if !matches!(self.cfg.read_buf_tracker(), ReadBufTracker::PerConnection) {
+                    let t = slot.insert(BytesTracker::new());
+                    self.buffer.set_read_buf_tracker(t);
                 }
             }
-            ReadBufTracker::Shared(t) => Some(t.clone()),
-        };
-        if let Some(t) = &tracker {
-            self.buffer.set_read_buf_tracker(t);
         }
-        self.rd_tracker.set(tracker);
     }
 
     /// Returns the page size of new read buffers.
