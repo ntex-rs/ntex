@@ -99,7 +99,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Pipeline, ReadyNotifier, ServiceCaller, ctx::WaitersRef, pipeline::PipelineState, ready,
+        Pipeline, ReadyCallback, ReadyNotifier, ServiceCaller, ctx::WaitersRef,
+        pipeline::PipelineState, ready,
     };
 
     thread_local! {
@@ -117,6 +118,7 @@ mod tests {
         changed: ReadyNotifier,
         call_changed: ReadyNotifier,
         shutdown_changed: ReadyNotifier,
+        on_notify: Option<ReadyCallback>,
         available: Cell<bool>,
         fail: Cell<bool>,
         call_fail: Cell<bool>,
@@ -167,6 +169,9 @@ mod tests {
             ctx.subscribe(&self.0.changed);
             ctx.subscribe(&self.0.call_changed);
             ctx.subscribe(&self.0.shutdown_changed);
+            if let Some(callback) = &self.0.on_notify {
+                ctx.on_notify(callback);
+            }
         }
 
         fn ready(&self, ctx: Ctx<'_, Self, State>) -> impl Future<Output = Result<(), Error>> {
@@ -274,6 +279,60 @@ mod tests {
     }
 
     #[test]
+    fn bound_callbacks_observe_their_scope_and_propagated_notifications() {
+        for wrapped in [false, true] {
+            let calls = Rc::new(Cell::new(0));
+            let captured = calls.clone();
+            let callback = ReadyCallback::new(move || captured.set(captured.get() + 1));
+            let probe = Probe(Rc::new(ProbeState {
+                on_notify: Some(callback.clone()),
+                available: Cell::new(true),
+                ..ProbeState::default()
+            }));
+            let service = if wrapped {
+                crate::boxed::service(ready(probe.clone()))
+            } else {
+                crate::boxed::service(probe.clone())
+            };
+            let pl = Pipeline::new(State(10), service);
+            let binding = pl.bind();
+            pl.on_notify(&callback);
+            binding.on_notify(&callback.clone());
+            let per_notify = if wrapped { 2 } else { 1 };
+
+            assert_eq!(run(pl.ready()), Ok(()));
+            assert_eq!(run(binding.call(1)), Ok(11));
+            assert_eq!(calls.get(), 0);
+            probe.0.changed.notify();
+            assert_eq!(calls.get(), per_notify);
+            assert_eq!(run(pl.ready()), Ok(()));
+
+            probe.0.available.set(false);
+            probe.0.changed.notify();
+            {
+                let mut pending = pin!(binding.ready());
+                assert!(
+                    pending
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                        .is_pending()
+                );
+                let waker = probe.0.waker.borrow_mut().take().unwrap();
+                waker.wake();
+            }
+            assert_eq!(calls.get(), 2 * per_notify);
+            drop(binding);
+            probe.0.changed.notify();
+            assert_eq!(calls.get(), 3 * per_notify);
+            probe.0.available.set(true);
+            probe.0.changed.notify();
+            assert_eq!(run(pl.ready()), Ok(()));
+            run(pl.shutdown());
+            assert_eq!(calls.get(), 4 * per_notify);
+        }
+    }
+
+    #[test]
     fn pipeline_construction_binds_without_state_or_runtime_operations() {
         let probe = Probe::new();
         let pl = PipelineState::new(probe.clone());
@@ -305,6 +364,11 @@ mod tests {
             let sibling = ServiceBinding::new(Probe::new());
             parent.bind(BindCtx::new(waiters.scope()));
             sibling.bind(BindCtx::new(waiters.scope()));
+            let notifications = Rc::new(Cell::new(0));
+            let captured = notifications.clone();
+            BindCtx::new(waiters.scope()).on_notify(&ReadyCallback::new(move || {
+                captured.set(captured.get() + 1);
+            }));
             assert_eq!(run(ctx.ready(&parent)), Ok(()));
             assert_eq!(run(ctx.ready(&sibling)), Ok(()));
             assert!(waiters.scope().set_ready(waiters.scope().generation()));
@@ -330,10 +394,16 @@ mod tests {
             assert!(!parent.is_ready());
             assert!(!waiters.scope().is_ready());
             assert!(sibling.is_ready());
+            assert_eq!(
+                notifications.get(),
+                0,
+                "creation resets are not notifications"
+            );
 
             assert!(parent.scope.set_ready(parent.scope.generation()));
             assert!(waiters.scope().set_ready(waiters.scope().generation()));
             child.0.changed.notify();
+            assert_eq!(notifications.get(), 1);
             assert!(!parent.is_ready());
             assert!(!waiters.scope().is_ready());
             assert!(sibling.is_ready());

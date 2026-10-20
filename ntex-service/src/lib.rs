@@ -53,7 +53,7 @@ pub use crate::fn_service::{fn_factory, fn_service, fn_service_st};
 pub use crate::map_state::{map_state, map_state_factory};
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
-pub use crate::readiness::ReadyNotifier;
+pub use crate::readiness::{ReadyCallback, ReadyNotifier};
 pub use crate::ready::{ready, ready_factory};
 pub use crate::service_binding::ServiceBinding;
 pub use crate::state::{RequestState, State};
@@ -145,6 +145,8 @@ pub trait Service<St, Req> {
     /// readiness must subscribe to all their sources here. Lazily created
     /// children must be initialized through [`Ctx::create`], which binds them
     /// explicitly before use.
+    /// Register reusable [`ReadyCallback`] handles with [`BindCtx::on_notify`]
+    /// to observe notifications reaching the service's scope.
     ///
     /// Binding is synchronous. Shared services can be bound to multiple parents;
     /// implementations must support repeated binding.

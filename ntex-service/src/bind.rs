@@ -1,4 +1,4 @@
-use crate::{ReadyNotifier, Service, readiness::ReadyScope};
+use crate::{ReadyCallback, ReadyNotifier, Service, readiness::ReadyScope};
 
 /// Initialization-only access to a service's readiness dependencies.
 ///
@@ -14,11 +14,12 @@ use crate::{ReadyNotifier, Service, readiness::ReadyScope};
 /// [`create`](crate::Ctx::create) method initializes and binds new children.
 ///
 /// ```
-/// use ntex_service::{BindCtx, Ctx, ReadyNotifier, Service};
+/// use ntex_service::{BindCtx, Ctx, ReadyCallback, ReadyNotifier, Service};
 ///
 /// struct Forward<S> {
 ///     inner: S,
 ///     changed: ReadyNotifier,
+///     on_notify: ReadyCallback,
 /// }
 ///
 /// impl<S: Service<(), u8>> Service<(), u8> for Forward<S> {
@@ -27,6 +28,7 @@ use crate::{ReadyNotifier, Service, readiness::ReadyScope};
 ///
 ///     fn bind(&self, ctx: BindCtx<'_>) {
 ///         ctx.subscribe(&self.changed);
+///         ctx.on_notify(&self.on_notify);
 ///         ctx.bind(&self.inner);
 ///     }
 ///
@@ -84,6 +86,15 @@ impl<'a> BindCtx<'a> {
     /// source is dropped, including across completed or cancelled checks.
     pub fn subscribe(&self, source: &ReadyNotifier) {
         self.scope.subscribe(source);
+    }
+
+    /// Registers a callback for notifications reaching this readiness scope.
+    ///
+    /// Raw services share this scope; a [`crate::ServiceBinding`] owns its own.
+    /// Repeated registration of the same handle is idempotent. See
+    /// [`ReadyCallback`] for notification and lifetime semantics.
+    pub fn on_notify(&self, callback: &ReadyCallback) {
+        self.scope.on_notify(callback);
     }
 
     /// Binds a child service to this readiness scope.

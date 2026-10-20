@@ -26,6 +26,12 @@
 * Add `ReadyNotifier` sources and internal readiness scopes with persistent
   subscriptions, generation-checked caching, and dependency invalidation.
 
+* Add reusable `ReadyCallback` handles and `on_notify` registration on `BindCtx`,
+  pipelines, and their bindings. Callbacks run only when `ReadyNotifier::notify`
+  reaches the registered scope, including through children, after all affected
+  scopes are invalidated. Registrations persist for the scope's lifetime and
+  deduplicate the same callback identity.
+
 * Add synchronous `Service::bind` and a borrowed `BindCtx<'_>`.
   Register all notifier sources with `BindCtx::subscribe` and all children
   with `BindCtx::bind` during service initialization. Runtime `Ctx` cannot

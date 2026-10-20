@@ -1,7 +1,7 @@
 use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
-use crate::{BindCtx, IntoService, Service, ServiceCaller, util::BoxFuture};
+use crate::{BindCtx, IntoService, ReadyCallback, Service, ServiceCaller, util::BoxFuture};
 
 pub use crate::pl_factory::PipelineFactory;
 pub use crate::pl_state::{PipelineState, PipelineStateBinding};
@@ -119,6 +119,16 @@ where
     }
 
     #[inline]
+    /// Registers a callback for notifications reaching this pipeline's scope.
+    ///
+    /// Registration is shared with all bindings and persists until the scope
+    /// is dropped. Repeated registration of the same handle is idempotent.
+    /// See [`ReadyCallback`] for notification semantics.
+    pub fn on_notify(&self, callback: &ReadyCallback) {
+        self.api.on_notify(callback);
+    }
+
+    #[inline]
     /// Registers this pipeline as a readiness dependency of the enclosing service.
     ///
     /// Call from [`Service::bind`] so changes to this pipeline's readiness also
@@ -192,6 +202,15 @@ where
     /// and the call is dispatched, not when the future is constructed.
     pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
         PipelineCall::new(self.clone(), req)
+    }
+
+    #[inline]
+    /// Registers a callback on the shared pipeline scope.
+    ///
+    /// Dropping this binding does not remove the registration.
+    /// See [`Pipeline::on_notify`] and [`ReadyCallback`] for details.
+    pub fn on_notify(&self, callback: &ReadyCallback) {
+        self.api.on_notify(callback);
     }
 
     #[inline]

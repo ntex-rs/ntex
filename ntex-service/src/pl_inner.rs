@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::readiness::{Generation, ReadyObserver, ReadyScope};
-use crate::{BindCtx, Ctx, Service, ctx::WaitersRef, util::BoxFuture};
+use crate::{BindCtx, Ctx, ReadyCallback, Service, ctx::WaitersRef, util::BoxFuture};
 
 // Pipeline-owned checks can be driven by any waiting caller. Caller-owned
 // checks stay in their caller's future, so cancelling it releases ownership.
@@ -258,6 +258,10 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
 
     pub(crate) fn bind_to(&self, ctx: &BindCtx<'_>) {
         ctx.depend_on(self.0.scope());
+    }
+
+    pub(crate) fn on_notify(&self, callback: &ReadyCallback) {
+        self.0.scope().on_notify(callback);
     }
 
     pub(crate) async fn ready(&self, idx: u32) -> Result<(), Err> {

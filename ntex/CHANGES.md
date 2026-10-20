@@ -2,6 +2,9 @@
 
 ## [4.5.0] - Unreleased
 
+* Expose `service::ReadyCallback` and `on_notify` registration on `BindCtx`,
+  pipelines, and bindings for observing explicit readiness notifications.
+
 * Deprecate `Ctx::call_nowait` in favor of cache-aware `Ctx::call`. The legacy
   method retains its readiness bypass during compatibility.
 
