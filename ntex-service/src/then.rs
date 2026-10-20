@@ -1,18 +1,25 @@
-use super::{Ctx, Service, ServiceFactory, util};
+use super::{Ctx, Service, ServiceBinding, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
 /// Service produced by the `then` combinator.
 ///
 /// This is created by the `ServiceChain::then()` method.
+/// Each child retains independent readiness until its subscribed sources change.
+/// After the first call completes, the second child's readiness is revalidated.
+/// Calls do not consume readiness; clones and factory-created services get fresh
+/// child readiness.
 pub struct Then<A, B> {
-    svc1: A,
-    svc2: B,
+    svc1: ServiceBinding<A>,
+    svc2: ServiceBinding<B>,
 }
 
 impl<A, B> Then<A, B> {
     /// Creates a new `Then` service.
     pub(crate) fn new(svc1: A, svc2: B) -> Then<A, B> {
-        Self { svc1, svc2 }
+        Self {
+            svc1: ServiceBinding::new(svc1),
+            svc2: ServiceBinding::new(svc2),
+        }
     }
 }
 
@@ -26,8 +33,8 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
-        ctx.call(&self.svc2, ctx.call_nowait(&self.svc1, req).await)
-            .await
+        let result = self.svc1.call(req, ctx.cast()).await;
+        self.svc2.call_ready(result, ctx).await
     }
 
     #[inline]
@@ -69,10 +76,10 @@ where
     type InitError = A::InitError;
 
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
-        Ok(Then {
-            svc1: self.svc1.create(st).await?,
-            svc2: self.svc2.create(st).await?,
-        })
+        Ok(Then::new(
+            self.svc1.create(st).await?,
+            self.svc2.create(st).await?,
+        ))
     }
 }
 
@@ -173,6 +180,7 @@ mod tests {
     #[ntex::test]
     async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
+        let checks = cnt.clone();
         let cnt2 = cnt.clone();
         let blank = fn_factory(move |(): &_| {
             let cnt = cnt2.clone();
@@ -192,5 +200,28 @@ mod tests {
         let res = srv.call(Err("srv")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv2", "err"));
+        assert_eq!(checks.get(), 2);
+        let other = factory.pipeline(()).await.unwrap();
+        assert!(other.call(Ok("fresh")).await.is_ok());
+        assert_eq!(checks.get(), 4);
+    }
+
+    #[ntex::test]
+    async fn concurrent_second_stage_entry() {
+        use ntex::channel::oneshot::Receiver;
+
+        use crate::util::tests::{Req, Single, State, concurrent_entry};
+
+        let st = Rc::new(State::default());
+        let srv = service(crate::fn_service(async |(rx1, rx2): Req| {
+            let _ = rx1.await;
+            Ok::<_, ()>(rx2)
+        }))
+        .then(crate::apply_fn(
+            Single(st.clone()),
+            async |result: Result<Receiver<()>, ()>, ctx| ctx.call(result?).await,
+        ))
+        .pipeline(());
+        concurrent_entry(&srv, &st).await;
     }
 }

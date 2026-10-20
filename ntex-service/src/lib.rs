@@ -642,7 +642,7 @@ mod tests {
         );
         let pl = Pipeline::new(1, svc);
         assert_eq!(pl.call(2).await, Ok(5));
-        assert_eq!(cnt.get(), 104);
+        assert_eq!(cnt.get(), 103);
     }
 
     #[ntex::test]

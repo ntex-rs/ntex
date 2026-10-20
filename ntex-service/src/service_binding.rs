@@ -1,3 +1,5 @@
+use std::{future::Future, future::poll_fn, pin::pin, task::Poll};
+
 use crate::{Ctx, Service, readiness::ReadyScope};
 
 /// A service paired with persistent readiness.
@@ -26,6 +28,39 @@ impl<S> ServiceBinding<S> {
             service,
             scope: ReadyScope::new(),
         }
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.scope.is_ready()
+    }
+
+    /// A cached child can run while another child owns the pipeline readiness check.
+    pub(crate) async fn call_ready<T, St, Req>(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, T, St>,
+    ) -> Result<S::Res, S::Error>
+    where
+        S: Service<St, Req>,
+    {
+        ctx.scope().depend_on(&self.scope);
+        while !self.is_ready() {
+            let result = {
+                let observer = self.scope.observer();
+                let mut ready = pin!(ctx.ready(self));
+                poll_fn(|cx| {
+                    observer.register(cx.waker());
+                    if self.is_ready() {
+                        Poll::Ready(Ok(()))
+                    } else {
+                        ready.as_mut().poll(cx)
+                    }
+                })
+                .await
+            };
+            result?;
+        }
+        self.call(req, ctx.cast()).await
     }
 }
 
@@ -93,6 +128,7 @@ mod tests {
         shutdown_changed: ReadyNotifier,
         available: Cell<bool>,
         fail: Cell<bool>,
+        call_fail: Cell<bool>,
         invalidate_call: Cell<bool>,
         invalidate_ready: Cell<bool>,
         invalidate_drop: Cell<bool>,
@@ -103,6 +139,7 @@ mod tests {
         calls: Cell<usize>,
         states: RefCell<Vec<usize>>,
         waker: RefCell<Option<Waker>>,
+        ready_hook: RefCell<Option<Box<dyn FnOnce()>>>,
         shutdown_state: Cell<usize>,
     }
 
@@ -154,6 +191,10 @@ mod tests {
                         if self.0.invalidate_ready.replace(false) {
                             self.0.changed.notify();
                         }
+                        let hook = self.0.ready_hook.borrow_mut().take();
+                        if let Some(hook) = hook {
+                            hook();
+                        }
                         Poll::Ready(Ok(()))
                     }
                 })
@@ -168,7 +209,11 @@ mod tests {
                 self.0.available.set(false);
                 self.0.call_changed.notify();
             }
-            Ok(req + ctx.st().0)
+            if self.0.call_fail.get() {
+                Err(Error)
+            } else {
+                Ok(req + ctx.st().0)
+            }
         }
 
         async fn shutdown(&self, ctx: Ctx<'_, Self, State>) {
@@ -196,6 +241,337 @@ mod tests {
                 hook();
             }
         }
+    }
+
+    #[derive(Clone)]
+    struct Recover(Probe);
+
+    impl Service<State, Result<usize, Error>> for Recover {
+        type Res = usize;
+        type Error = Error;
+
+        async fn ready(&self, ctx: Ctx<'_, Self, State>) -> Result<(), Error> {
+            self.0.ready(ctx.cast()).await
+        }
+
+        async fn call(
+            &self,
+            req: Result<usize, Error>,
+            ctx: Ctx<'_, Self, State>,
+        ) -> Result<usize, Error> {
+            self.0.call(req.unwrap_or(0), ctx.cast()).await
+        }
+    }
+
+    fn compose_probes(
+        a: Probe,
+        b: Probe,
+        use_then: bool,
+    ) -> crate::boxed::BoxService<State, usize, usize, Error> {
+        if use_then {
+            crate::boxed::service(crate::then::Then::new(a, Recover(b)))
+        } else {
+            crate::boxed::service(crate::and_then::AndThen::new(a, b))
+        }
+    }
+
+    #[test]
+    fn combinators_cache_children_independently_without_consuming_readiness() {
+        for use_then in [false, true] {
+            let waiters = WaitersRef::new();
+            let st = State(10);
+            let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+            let a = Probe::new();
+            let b = Probe::new();
+            let parent = ServiceBinding::new(compose_probes(a.clone(), b.clone(), use_then));
+            assert_eq!(run(ctx.call(&parent, 1)), Ok(21));
+            assert_eq!(run(ctx.call(&parent, 2)), Ok(22));
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (1, 1));
+            a.0.changed.notify();
+            assert!(!parent.scope.is_ready());
+            assert_eq!(run(ctx.call(&parent, 3)), Ok(23));
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (2, 1));
+            b.0.changed.notify();
+            assert!(!parent.scope.is_ready());
+            assert_eq!(run(ctx.call(&parent, 4)), Ok(24));
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (2, 2));
+
+            a.0.call_fail.set(true);
+            let expected = if use_then { Ok(10) } else { Err(Error) };
+            assert_eq!(run(ctx.call(&parent, 5)), expected);
+            assert_eq!(b.0.calls.get(), if use_then { 5 } else { 4 });
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (2, 2));
+        }
+    }
+
+    #[test]
+    fn waiting_child_calls_observe_cache_success_before_an_unrelated_check_finishes() {
+        struct Both {
+            a: ServiceBinding<Probe>,
+            b: ServiceBinding<Probe>,
+        }
+
+        impl Service<State, usize> for Both {
+            type Res = usize;
+            type Error = Error;
+
+            async fn ready(&self, ctx: Ctx<'_, Self, State>) -> Result<(), Error> {
+                crate::util::ready(&self.a, &self.b, ctx).await
+            }
+
+            async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Error> {
+                Ok(req)
+            }
+        }
+
+        let waiters = WaitersRef::new();
+        let st = State(0);
+        let owner_ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        let registration = waiters.register();
+        let caller_ctx = Ctx::<(), State>::new(registration.idx, &waiters, &st);
+        let a = Probe::new();
+        let b = Probe::new();
+        a.0.available.set(false);
+        let pair = Both {
+            a: ServiceBinding::new(a.clone()),
+            b: ServiceBinding::new(b.clone()),
+        };
+        let mut owner = Box::pin(owner_ctx.ready(&pair));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(owner.as_mut().poll(&mut cx).is_pending());
+        b.0.changed.notify();
+        let mut call = Box::pin(pair.b.call_ready(1, caller_ctx));
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter.clone());
+        let mut task = Context::from_waker(&waker);
+        assert!(call.as_mut().poll(&mut task).is_pending());
+        assert!(owner.as_mut().poll(&mut cx).is_pending());
+        assert!(pair.b.is_ready());
+        assert!(counter.0.load(Ordering::Relaxed) > 0);
+        assert_eq!(call.as_mut().poll(&mut task), Poll::Ready(Ok(1)));
+        assert_eq!((a.0.starts.get(), b.0.starts.get()), (1, 2));
+        assert_eq!(a.0.drops.get(), 0);
+    }
+
+    #[test]
+    fn aggregate_rechecks_completed_children_without_restarting_pending_siblings() {
+        for use_then in [false, true] {
+            for completed_first in [false, true] {
+                let waiters = WaitersRef::new();
+                let st = State(0);
+                let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+                let a = Probe::new();
+                let b = Probe::new();
+                let (completed, pending) = if completed_first { (&a, &b) } else { (&b, &a) };
+                pending.0.available.set(false);
+                let parent = ServiceBinding::new(compose_probes(a.clone(), b.clone(), use_then));
+                let mut ready = Box::pin(ctx.ready(&parent));
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(ready.as_mut().poll(&mut cx).is_pending());
+                assert_eq!((completed.0.starts.get(), pending.0.starts.get()), (1, 1));
+                completed.0.available.set(false);
+                completed.0.changed.notify();
+                assert_eq!(pending.0.drops.get(), 0);
+                assert!(ready.as_mut().poll(&mut cx).is_pending());
+                assert_eq!((completed.0.starts.get(), pending.0.starts.get()), (2, 1));
+                assert_eq!(pending.0.drops.get(), 0);
+                assert!(!parent.scope.is_ready());
+
+                completed.0.available.set(true);
+                completed.0.changed.notify();
+                assert!(ready.as_mut().poll(&mut cx).is_pending());
+                assert_eq!((completed.0.starts.get(), pending.0.starts.get()), (3, 1));
+                assert_eq!(pending.0.drops.get(), 0);
+                pending.0.available.set(true);
+                pending.0.changed.notify();
+                assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+                assert_eq!(run(ctx.call(&parent, 1)), Ok(1));
+                assert_eq!((completed.0.starts.get(), pending.0.starts.get()), (3, 2));
+                assert_eq!((a.0.max_active.get(), b.0.max_active.get()), (1, 1));
+            }
+        }
+    }
+
+    #[test]
+    fn aggregate_success_revalidates_a_child_changed_by_a_later_poll() {
+        for use_then in [false, true] {
+            let waiters = WaitersRef::new();
+            let st = State(0);
+            let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+            let a = Probe::new();
+            let b = Probe::new();
+            let changed = a.clone();
+            *b.0.ready_hook.borrow_mut() = Some(Box::new(move || {
+                changed.0.available.set(false);
+                changed.0.changed.notify();
+            }));
+            let parent = ServiceBinding::new(compose_probes(a.clone(), b.clone(), use_then));
+            let mut ready = Box::pin(ctx.ready(&parent));
+            let counter = Arc::new(Counter::default());
+            let waker = Waker::from(counter.clone());
+            let mut cx = Context::from_waker(&waker);
+            assert!(ready.as_mut().poll(&mut cx).is_pending());
+            assert!(!parent.scope.is_ready());
+            assert!(counter.0.load(Ordering::Relaxed) > 0);
+            assert!(ready.as_mut().poll(&mut cx).is_pending());
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (2, 1));
+            a.0.available.set(true);
+            a.0.changed.notify();
+            assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (3, 1));
+        }
+    }
+
+    #[test]
+    fn aggregate_cancellation_and_errors_release_each_child_checker() {
+        for use_then in [false, true] {
+            let waiters = WaitersRef::new();
+            let other_waiters = WaitersRef::new();
+            let st = State(0);
+            let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+            let other_ctx = Ctx::<(), State>::new(0, &other_waiters, &st);
+            let a = Probe::new();
+            let b = Probe::new();
+            a.0.available.set(false);
+            b.0.available.set(false);
+            let service = compose_probes(a.clone(), b.clone(), use_then);
+            let mut first = Box::pin(ctx.ready(&service));
+            let mut second = Box::pin(other_ctx.ready(&service));
+            let counter = Arc::new(Counter::default());
+            let waker = Waker::from(counter.clone());
+            let mut cx = Context::from_waker(&waker);
+            assert!(first.as_mut().poll(&mut cx).is_pending());
+            assert!(second.as_mut().poll(&mut cx).is_pending());
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (1, 1));
+            let before = counter.0.load(Ordering::Relaxed);
+            drop(first);
+            assert!(counter.0.load(Ordering::Relaxed) > before);
+            assert_eq!((a.0.active.get(), b.0.active.get()), (0, 0));
+            assert!(second.as_mut().poll(&mut cx).is_pending());
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (2, 2));
+
+            b.0.available.set(true);
+            b.0.fail.set(true);
+            b.0.changed.notify();
+            assert_eq!(second.as_mut().poll(&mut cx), Poll::Ready(Err(Error)));
+            assert_eq!((a.0.active.get(), b.0.active.get()), (0, 0));
+            assert_eq!((a.0.calls.get(), b.0.calls.get()), (0, 0));
+            a.0.available.set(true);
+            b.0.fail.set(false);
+            a.0.changed.notify();
+            b.0.changed.notify();
+            assert_eq!(run(ctx.call(&service, 1)), Ok(1));
+            assert_eq!((a.0.max_active.get(), b.0.max_active.get()), (1, 1));
+
+            a.0.fail.set(true);
+            a.0.changed.notify();
+            b.0.changed.notify();
+            let before = b.0.starts.get();
+            assert_eq!(run(ctx.ready(&service)), Err(Error));
+            assert_eq!(b.0.starts.get(), before, "the first readiness error wins");
+        }
+    }
+
+    #[test]
+    fn combinators_recheck_second_child_errors_after_awaiting_the_first_call() {
+        use ntex::channel::oneshot::{self, Receiver};
+
+        for use_then in [false, true] {
+            let b = Probe::new();
+            let first = crate::fn_service(async |(req, rx): (usize, Receiver<()>)| {
+                let _ = rx.await;
+                Ok::<_, Error>(req)
+            });
+            let service = if use_then {
+                crate::boxed::service(crate::then::Then::new(first, Recover(b.clone())))
+            } else {
+                crate::boxed::service(crate::and_then::AndThen::new(first, b.clone()))
+            };
+            let pl = Pipeline::new(State(10), service);
+            let (tx, rx) = oneshot::channel();
+            let mut call = Box::pin(pl.call((1, rx)));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(call.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(b.0.starts.get(), 1);
+            b.0.fail.set(true);
+            b.0.changed.notify();
+            tx.send(()).unwrap();
+            assert_eq!(call.as_mut().poll(&mut cx), Poll::Ready(Err(Error)));
+            assert_eq!(b.0.calls.get(), 0);
+            assert_eq!(b.0.starts.get(), 2);
+
+            b.0.fail.set(false);
+            b.0.changed.notify();
+            let (tx, rx) = oneshot::channel();
+            tx.send(()).unwrap();
+            assert_eq!(run(pl.call((2, rx))), Ok(12));
+            assert_eq!(b.0.starts.get(), 3);
+        }
+    }
+
+    #[test]
+    fn combinator_clones_start_with_fresh_child_readiness() {
+        let waiters = WaitersRef::new();
+        let st = State(0);
+        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        for use_then in [false, true] {
+            let a = Probe::new();
+            let b = Probe::new();
+            if use_then {
+                let service = crate::then::Then::new(a.clone(), Recover(b.clone()));
+                assert_eq!(run(ctx.ready(&service)), Ok(()));
+                assert_eq!(run(ctx.ready(&service.clone())), Ok(()));
+                assert_eq!(run(ctx.ready(&service)), Ok(()));
+            } else {
+                let service = crate::and_then::AndThen::new(a.clone(), b.clone());
+                assert_eq!(run(ctx.ready(&service)), Ok(()));
+                assert_eq!(run(ctx.ready(&service.clone())), Ok(()));
+                assert_eq!(run(ctx.ready(&service)), Ok(()));
+            }
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (2, 2));
+        }
+
+        let probe = Probe::new();
+        let service = crate::apply_fn(
+            probe.clone(),
+            async |req: usize, ctx: &crate::dev::ApplyCtx<'_, Probe, State, usize>| {
+                ctx.call(req).await
+            },
+        );
+        assert_eq!(run(ctx.ready(&service)), Ok(()));
+        assert_eq!(run(ctx.ready(&service.clone())), Ok(()));
+        assert_eq!(run(ctx.ready(&service)), Ok(()));
+        assert_eq!(probe.0.starts.get(), 2);
+    }
+
+    #[test]
+    fn apply_calls_reuse_readiness_until_the_inner_service_notifies() {
+        let probe = Probe::new();
+        let applied = crate::apply_fn(
+            probe.clone(),
+            async |req: usize, ctx: &crate::dev::ApplyCtx<'_, Probe, State, usize>| {
+                assert_eq!(ctx.st().0, 10);
+                let first = ctx.call(req).await?;
+                let second = ctx.call_service(first).await?;
+                ctx.call(second).await
+            },
+        );
+        let pl = Pipeline::new(State(10), applied);
+        assert_eq!(run(pl.call(1)), Ok(31));
+        assert_eq!(probe.0.starts.get(), 1);
+        assert_eq!(probe.0.calls.get(), 3);
+        probe.0.invalidate_call.set(true);
+        let mut next = Box::pin(pl.call(2));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(next.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.calls.get(), 4);
+        assert_eq!(probe.0.starts.get(), 2);
+        probe.0.available.set(true);
+        probe.0.changed.notify();
+        assert_eq!(next.as_mut().poll(&mut cx), Poll::Ready(Ok(32)));
+        assert_eq!(probe.0.calls.get(), 6);
+        assert_eq!(probe.0.starts.get(), 3);
+        assert!(probe.0.states.borrow().iter().all(|st| *st == 10));
     }
 
     #[test]

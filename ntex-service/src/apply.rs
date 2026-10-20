@@ -1,7 +1,7 @@
-use std::{cell::Cell, fmt, marker};
+use std::{fmt, marker};
 
 use crate::Ctx;
-use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::{IntoService, IntoServiceFactory, Service, ServiceBinding, ServiceFactory};
 use crate::{ServiceCaller, ServiceChain, ServiceChainFactory};
 
 /// Applies an asynchronous middleware function to a service.
@@ -35,11 +35,12 @@ where
 
 #[derive(Debug)]
 /// Context passed to middleware functions created by [`apply_fn`].
+///
+/// Calls reuse the wrapped service's persistent readiness until a subscribed
+/// source invalidates it, including when the middleware awaits before calling.
 pub struct ApplyCtx<'a, S, St, Req> {
     ctx: Ctx<'a, S, St>,
-    service: &'a S,
-    ready: &'a Cell<bool>,
-    entered: &'a Cell<u32>,
+    service: &'a ServiceBinding<S>,
     r: marker::PhantomData<Req>,
 }
 
@@ -53,18 +54,7 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     /// Waits for the wrapped service to become ready, then calls it.
     #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
-        self.enter(req, self.ready.get()).await
-    }
-
-    async fn enter(&self, req: Req, skip_ready: bool) -> Result<S::Res, S::Error> {
-        let ctx = self.ctx;
-        if !skip_ready {
-            ctx.ready(self.service).await?;
-        }
-        // entering the service invalidates all readiness observed so far
-        self.ready.set(false);
-        self.entered.set(self.entered.get().wrapping_add(1));
-        ctx.call_nowait(self.service, req).await
+        self.service.call_ready(req, self.ctx).await
     }
 }
 
@@ -73,16 +63,17 @@ impl<S: Service<St, Req>, St, Req> ServiceCaller<Req, S::Res, S::Error>
 {
     #[inline]
     async fn call_service(&self, req: Req) -> Result<S::Res, S::Error> {
-        self.enter(req, false).await
+        self.call(req).await
     }
 }
 
 /// Service produced by [`apply_fn`].
+///
+/// Owns persistent readiness for its child. Calls do not consume readiness;
+/// clones and factory-created services get fresh child readiness.
 pub struct Apply<S, St, Req, F, In, Out, Err> {
-    svc: S,
+    svc: ServiceBinding<S>,
     f: F,
-    ready: Cell<bool>,
-    entered: Cell<u32>,
     r: marker::PhantomData<fn(St, Req) -> (In, Out, Err)>,
 }
 
@@ -93,9 +84,7 @@ where
     pub(crate) fn new(svc: S, f: F) -> Self {
         Apply {
             f,
-            svc,
-            ready: Cell::new(false),
-            entered: Cell::new(0),
+            svc: ServiceBinding::new(svc),
             r: marker::PhantomData,
         }
     }
@@ -110,8 +99,6 @@ where
         Apply {
             svc: self.svc.clone(),
             f: self.f.clone(),
-            ready: Cell::new(false),
-            entered: Cell::new(0),
             r: marker::PhantomData,
         }
     }
@@ -140,23 +127,13 @@ where
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Err> {
-        let entered = self.entered.get();
-        let result = ctx.ready(&self.svc).await.map_err(From::from);
-        if result.is_err() {
-            self.ready.set(false);
-        } else if self.entered.get() == entered {
-            // readiness is valid only if no call entered the service during the check
-            self.ready.set(true);
-        }
-        result
+        ctx.ready(&self.svc).await.map_err(From::from)
     }
 
     #[inline]
     async fn call(&self, req: In, ctx: Ctx<'_, Self, St>) -> Result<Out, Err> {
         let ctx = ApplyCtx {
             ctx: ctx.cast(),
-            ready: &self.ready,
-            entered: &self.entered,
             service: &self.svc,
             r: marker::PhantomData,
         };
@@ -238,13 +215,10 @@ where
 
     #[inline]
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
-        self.sf.create(st).await.map(|svc| Apply {
-            svc,
-            f: self.f.clone(),
-            r: marker::PhantomData,
-            ready: Cell::new(false),
-            entered: Cell::new(0),
-        })
+        self.sf
+            .create(st)
+            .await
+            .map(|svc| Apply::new(svc, self.f.clone()))
     }
 }
 
@@ -354,12 +328,17 @@ mod tests {
 
     #[ntex::test]
     async fn test_create_chain() {
-        let new_srv = factory(fn_factory(|(): &()| async { Ok::<_, ()>(Srv::default()) }))
-            .apply_fn(async move |req: &'static str, srv| {
-                srv.call(()).await.unwrap();
-                Ok((req, ()))
-            })
-            .clone();
+        let checks = Rc::new(Cell::new(0));
+        let created = checks.clone();
+        let new_srv = factory(fn_factory(move |(): &()| {
+            let created = created.clone();
+            async move { Ok::<_, ()>(Srv(created)) }
+        }))
+        .apply_fn(async move |req: &'static str, srv| {
+            srv.call(()).await.unwrap();
+            Ok((req, ()))
+        })
+        .clone();
 
         let srv = new_srv.pipeline(()).await.unwrap();
 
@@ -368,10 +347,14 @@ mod tests {
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
+        assert_eq!(checks.get(), 1);
+        let other = new_srv.pipeline(()).await.unwrap();
+        assert!(other.call("fresh").await.is_ok());
+        assert_eq!(checks.get(), 2);
         let _ = format!("{new_srv:?}");
     }
 
-    mod ready_flag {
+    mod readiness {
         use std::rc::Rc;
 
         use crate::util::tests::{Req, Single, State, concurrent_entry};
