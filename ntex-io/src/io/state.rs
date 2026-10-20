@@ -6,7 +6,7 @@ use ntex_bytes::BytesTracker;
 use ntex_bytes::{BytePageSize, BytesMut};
 
 #[cfg(feature = "tracker")]
-use crate::cfg::{IoConfig, ReadBufTracker};
+use crate::cfg::{BufTracker, IoConfig};
 use crate::filter::Filter;
 use crate::metrics::IoMetrics;
 use crate::ops::Id;
@@ -172,7 +172,7 @@ impl IoState {
     /// the thread-local page cache.
     pub(crate) fn get_read_buf(&self) -> BytesMut {
         #[cfg(feature = "tracker")]
-        if let Some(t) = self.read_buf_tracker() {
+        if let Some(t) = self.buf_tracker() {
             return BytesMut::with_page_size_in(self.rd_size.get(), t);
         }
         BytesMut::with_page_size(self.rd_size.get())
@@ -184,11 +184,11 @@ impl IoState {
     /// tracker is created on first use. The reference must not be used after
     /// [`Io::set_config`](crate::Io::set_config).
     #[cfg(feature = "tracker")]
-    pub(crate) fn read_buf_tracker(&self) -> Option<&BytesTracker> {
-        match self.cfg.read_buf_tracker() {
-            ReadBufTracker::Disabled => None,
-            ReadBufTracker::Shared(t) => Some(t),
-            ReadBufTracker::PerConnection => {
+    pub(crate) fn buf_tracker(&self) -> Option<&BytesTracker> {
+        match self.cfg.buf_tracker() {
+            BufTracker::Disabled => None,
+            BufTracker::Shared(t) => Some(t),
+            BufTracker::PerConnection => {
                 let slot = self.rd_tracker.get();
                 // SAFETY: the slot is written only while it is empty or by
                 // `set_config`, so no reference to its value is live
@@ -207,20 +207,20 @@ impl IoState {
     ///
     /// The read buffers held by the stack are charged to the new tracker.
     #[cfg(feature = "tracker")]
-    pub(super) fn update_read_buf_tracker(&self, cfg: &IoConfig) {
+    pub(super) fn update_buf_tracker(&self, cfg: &IoConfig) {
         // SAFETY: `set_config` requires that no reference obtained from
-        // `read_buf_tracker` is live
+        // `buf_tracker` is live
         let slot = unsafe { &mut *self.rd_tracker.get() };
-        match cfg.read_buf_tracker() {
-            ReadBufTracker::Disabled => *slot = None,
-            ReadBufTracker::Shared(t) => {
+        match cfg.buf_tracker() {
+            BufTracker::Disabled => *slot = None,
+            BufTracker::Shared(t) => {
                 *slot = None;
-                self.buffer.set_read_buf_tracker(t);
+                self.buffer.set_buf_tracker(t);
             }
-            ReadBufTracker::PerConnection => {
-                if !matches!(self.cfg.read_buf_tracker(), ReadBufTracker::PerConnection) {
+            BufTracker::PerConnection => {
+                if !matches!(self.cfg.buf_tracker(), BufTracker::PerConnection) {
                     let t = slot.insert(BytesTracker::new());
-                    self.buffer.set_read_buf_tracker(t);
+                    self.buffer.set_buf_tracker(t);
                 }
             }
         }

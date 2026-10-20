@@ -51,16 +51,21 @@ impl IoRef {
 
     /// Returns the tracker charged with the read buffers of the connection.
     ///
-    /// Returns `None` if [`ReadBufTracker::Disabled`](crate::ReadBufTracker)
+    /// Returns `None` if [`BufTracker::Disabled`](crate::BufTracker)
     /// is configured. A per-connection tracker is created on first use.
+    ///
+    /// Other buffers can be attributed to the connection by charging them
+    /// to the tracker, see
+    /// [`BytesMut::with_page_size_in`](ntex_bytes::BytesMut::with_page_size_in)
+    /// and [`BytesMut::set_tracker`](ntex_bytes::BytesMut::set_tracker).
     ///
     /// The reference must not be used after
     /// [`Io::set_config`](crate::Io::set_config).
     #[cfg(feature = "tracker")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
     #[must_use]
-    pub fn read_buf_tracker(&self) -> Option<&ntex_bytes::BytesTracker> {
-        self.0.read_buf_tracker()
+    pub fn buf_tracker(&self) -> Option<&ntex_bytes::BytesTracker> {
+        self.0.buf_tracker()
     }
 
     #[inline]

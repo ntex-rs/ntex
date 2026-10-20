@@ -100,7 +100,7 @@ pub(crate) struct IoState {
     /// Consecutive read batches small enough for a smaller page.
     rd_small: Cell<u8>,
     /// Per-connection read buffer tracker, created on first use, see
-    /// [`IoState::read_buf_tracker`].
+    /// [`IoState::buf_tracker`].
     #[cfg(feature = "tracker")]
     rd_tracker: UnsafeCell<Option<ntex_bytes::BytesTracker>>,
     pub(super) extensions: Extensions,
@@ -279,15 +279,15 @@ impl<F> Io<F> {
     ///
     /// With the `tracker` feature, the read buffers held by the connection
     /// are charged to the tracker of the new
-    /// [`ReadBufTracker`](crate::ReadBufTracker) mode, a per-connection
+    /// [`BufTracker`](crate::BufTracker) mode, a per-connection
     /// tracker is kept if both configs use one. A read buffer taken by the
     /// transport for an in-flight read keeps its charge, buffers stay
     /// charged to the old tracker if the new mode is disabled.
     ///
     /// # Safety
     ///
-    /// No reference obtained from [`IoRef::cfg`], `IoRef::read_buf_tracker`
-    /// or `IoContext::read_buf_tracker` for this connection may be live when
+    /// No reference obtained from [`IoRef::cfg`], `IoRef::buf_tracker`
+    /// or `IoContext::buf_tracker` for this connection may be live when
     /// this method is called or used afterward. Replacing the configuration
     /// may release the allocation backing those references.
     pub unsafe fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
@@ -316,7 +316,7 @@ impl<F> Io<F> {
             }
         }
         #[cfg(feature = "tracker")]
-        st.update_read_buf_tracker(&cfg);
+        st.update_buf_tracker(&cfg);
         unsafe {
             st.cfg.replace(cfg);
         }

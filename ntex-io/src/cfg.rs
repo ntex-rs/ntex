@@ -24,7 +24,7 @@ pub struct IoConfig {
     read_size_max: BytePageSize,
     read_backpressure: usize,
     #[cfg(feature = "tracker")]
-    read_buf_tracker: ReadBufTracker,
+    buf_tracker: BufTracker,
 
     // write side configuration
     write_size: BytePageSize,
@@ -70,12 +70,12 @@ pub struct FrameReadRate {
 }
 
 /// Memory attribution of read buffers, see
-/// [`IoConfig::set_read_buf_tracker`].
+/// [`IoConfig::set_buf_tracker`].
 #[cfg(feature = "tracker")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
-pub enum ReadBufTracker {
+pub enum BufTracker {
     /// Read buffers are not attributed.
     #[default]
     Disabled,
@@ -137,7 +137,7 @@ impl IoConfig {
             read_size_max: BytePageSize::Size64,
             read_backpressure: BytePageSize::Size32.capacity(),
             #[cfg(feature = "tracker")]
-            read_buf_tracker: ReadBufTracker::Disabled,
+            buf_tracker: BufTracker::Disabled,
 
             write_timeout: Seconds(0),
             write_size: BytePageSize::Size16,
@@ -209,9 +209,9 @@ impl IoConfig {
     #[cfg(feature = "tracker")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
     /// Returns the read buffer attribution, see
-    /// [`set_read_buf_tracker`](Self::set_read_buf_tracker).
-    pub fn read_buf_tracker(&self) -> &ReadBufTracker {
-        &self.read_buf_tracker
+    /// [`set_buf_tracker`](Self::set_buf_tracker).
+    pub fn buf_tracker(&self) -> &BufTracker {
+        &self.buf_tracker
     }
 
     #[inline]
@@ -507,8 +507,8 @@ impl IoConfig {
     ///
     /// Read buffers of connections are charged to a
     /// [`BytesTracker`], which reports the live allocations and bytes.
-    /// [`ReadBufTracker::PerConnection`] gives each connection its own
-    /// tracker, [`ReadBufTracker::Shared`] charges all connections of the
+    /// [`BufTracker::PerConnection`] gives each connection its own
+    /// tracker, [`BufTracker::Shared`] charges all connections of the
     /// configuration to one tracker. Write buffers are not attributed.
     ///
     /// A read buffer stays charged until its last handle is dropped,
@@ -524,12 +524,12 @@ impl IoConfig {
     /// A shared tracker is an atomic counter updated by every connection on
     /// every worker thread, it is contended under load.
     ///
-    /// The default is [`ReadBufTracker::Disabled`].
+    /// The default is [`BufTracker::Disabled`].
     #[must_use]
     #[cfg(feature = "tracker")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
-    pub fn set_read_buf_tracker(mut self, tracker: ReadBufTracker) -> Self {
-        self.read_buf_tracker = tracker;
+    pub fn set_buf_tracker(mut self, tracker: BufTracker) -> Self {
+        self.buf_tracker = tracker;
         self
     }
 
@@ -778,19 +778,16 @@ mod tests {
 
     #[cfg(feature = "tracker")]
     #[test]
-    fn read_buf_tracker() {
+    fn buf_tracker() {
         let cfg = IoConfig::new();
-        assert!(matches!(cfg.read_buf_tracker(), ReadBufTracker::Disabled));
+        assert!(matches!(cfg.buf_tracker(), BufTracker::Disabled));
 
-        let cfg = cfg.set_read_buf_tracker(ReadBufTracker::PerConnection);
-        assert!(matches!(
-            cfg.read_buf_tracker(),
-            ReadBufTracker::PerConnection
-        ));
+        let cfg = cfg.set_buf_tracker(BufTracker::PerConnection);
+        assert!(matches!(cfg.buf_tracker(), BufTracker::PerConnection));
 
         let tracker = BytesTracker::new();
-        let cfg = cfg.set_read_buf_tracker(ReadBufTracker::Shared(tracker.clone()));
-        let ReadBufTracker::Shared(t) = cfg.read_buf_tracker() else {
+        let cfg = cfg.set_buf_tracker(BufTracker::Shared(tracker.clone()));
+        let BufTracker::Shared(t) = cfg.buf_tracker() else {
             panic!("expected a shared tracker");
         };
         assert!(t.ptr_eq(&tracker));
