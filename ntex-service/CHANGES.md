@@ -2,6 +2,8 @@
 
 ## [5.3.0] - Unreleased
 
+* Remove `Ctx::poll_fn()` and `Ctx::poll_once()`
+
 * Release readiness-check ownership when a service readiness check panics, so other bindings do not wait forever
 
 * Add `Pipeline::is_ready()` and `PipelineState::is_ready()`, report valid shared readiness without running a check

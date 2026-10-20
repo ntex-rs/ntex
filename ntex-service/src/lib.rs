@@ -500,18 +500,12 @@ mod tests {
         type Res = usize;
         type Error = &'static str;
 
-        async fn ready(&self, ctx: Ctx<'_, Self, usize>) -> Result<(), Self::Error> {
-            // waker of the current readiness owner is available
-            assert!(ctx.poll_once(|_| true));
+        async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
 
         async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
-            let one = ctx.poll_once(|_| 1);
-            let two = ctx.poll_fn(|_| Poll::Ready(2)).await;
-            assert_eq!(one + two, 3);
-
             if req == 0 { Err("zero") } else { Ok(req + *ctx) }
         }
 

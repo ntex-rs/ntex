@@ -102,7 +102,7 @@ impl WaitersRef {
     where
         F: FnOnce(&mut Context<'_>) -> Poll<R>,
     {
-        // Ctx::poll_xxx() methods requires current waker always available,
+        // store the caller's waker for queued wake-ups,
         // nested readiness checks poll with the same waker
         let slot = &mut self.get()[idx as usize];
         if !slot.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
@@ -415,65 +415,6 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Polls a closure until completion using the dispatcher's task [`Context`].
-    ///
-    /// The [`Context`] uses the waker of the task that currently owns the readiness
-    /// check. Outside of a readiness check a no-op waker is used, so a `Pending`
-    /// result is not woken. If the current owner is not the main runner, the main
-    /// runner is also scheduled for wake-up.
-    pub async fn poll_fn<F, R>(&'a self, f: F) -> R
-    where
-        F: Fn(&mut Context<'a>) -> Poll<R>,
-    {
-        std::future::poll_fn(move |_| {
-            let wakers = self.waiters.get();
-            let idx = self.waiters.cur.get() as usize;
-            let mut ctx = if let Some(w) = wakers.get(idx).and_then(|w| w.as_ref()) {
-                Context::from_waker(w)
-            } else {
-                Context::from_waker(Waker::noop())
-            };
-
-            // if the current runner is not the main one, wake up the main task
-            // so it re-registers all required wakers
-            if idx != 0 {
-                self.waiters.queue_wake(0);
-            }
-
-            f(&mut ctx)
-        })
-        .await
-    }
-
-    #[inline]
-    /// Calls a closure once with the dispatcher's task [`Context`].
-    ///
-    /// The [`Context`] uses the waker of the task that currently owns the readiness
-    /// check. Outside of a readiness check a no-op waker is used, so a `Pending`
-    /// result is not woken. If the current owner is not the main runner, the main
-    /// runner is also scheduled for wake-up.
-    pub fn poll_once<F, R>(&'a self, f: F) -> R
-    where
-        F: FnOnce(&mut Context<'a>) -> R,
-    {
-        let wakers = self.waiters.get();
-        let idx = self.waiters.cur.get() as usize;
-        let mut ctx = if let Some(w) = wakers.get(idx).and_then(|w| w.as_ref()) {
-            Context::from_waker(w)
-        } else {
-            Context::from_waker(Waker::noop())
-        };
-
-        // if the current runner is not the main one, wake up the main task
-        // so it re-registers all required wakers
-        if idx != 0 {
-            self.waiters.queue_wake(0);
-        }
-
-        f(&mut ctx)
-    }
-
-    #[inline]
     /// Shuts down `svc`.
     pub async fn shutdown<S, Req>(&self, svc: &'a S)
     where
@@ -685,9 +626,12 @@ mod tests {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
-            ctx.poll_once(|cx| cx.waker().wake_by_ref());
-            Ok(())
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+            std::future::poll_fn(|cx| {
+                cx.waker().wake_by_ref();
+                Poll::Ready(Ok(()))
+            })
+            .await
         }
 
         async fn call(&self, req: &'static str, _: Ctx<'_, Self>) -> Result<&'static str, ()> {
