@@ -2,6 +2,13 @@
 
 ## [4.5.0] - Unreleased
 
+* `KeepAliveService` invalidates cached readiness when its idle timer expires.
+  Its local timer task is canceled on shutdown or drop; calls extend the deadline
+  and an explicit readiness bypass can restart an expired service.
+
+* `BufferService` preserves queue/token cleanup when readiness callbacks panic
+  and invalidates capacity before waking requests canceled during shutdown.
+
 * `InFlightService` and `OneRequestService` notify readiness changes when capacity
   fills or is released, including on cancellation and errors. Notifications reach
   every pipeline sharing the service.

@@ -6,7 +6,7 @@ use std::{collections::VecDeque, fmt, future, future::Future, marker, mem, pin, 
 
 use ntex_service::{BindCtx, Ctx, Middleware, ReadyNotifier, Service, pipeline::PipelineState};
 
-use crate::{channel::oneshot, task::LocalWaker};
+use crate::{channel::oneshot, future::OnDropFn, task::LocalWaker};
 
 #[derive(Copy, Clone, Debug)]
 /// Middleware that buffers requests while the wrapped service is not ready.
@@ -108,6 +108,8 @@ impl<E: fmt::Display + fmt::Debug> std::error::Error for BufferServiceError<E> {
 ///
 /// The buffer size is a soft limit: callers that call without a readiness
 /// check, or after an outdated one, are still buffered.
+/// Queue capacity changes invalidate cached readiness for every pipeline sharing
+/// this service, including when a queued request is canceled.
 ///
 /// Errors of the wrapped service's readiness are returned to the waiting
 /// request. Shutdown waits until all buffered requests have completed their
@@ -152,15 +154,16 @@ impl Shared {
                 let sender = buf.pop_front();
                 (sender, full && buf.len() < self.size)
             };
-            if freed {
-                self.notifier.notify();
-            }
             let Some(sender) = sender else {
                 self.has_token.set(false);
                 self.drained.wake();
                 return;
             };
-            match sender.send(Token(Some(self.clone()))) {
+            let token = Token(Some(self.clone()));
+            if freed {
+                self.notifier.notify();
+            }
+            match sender.send(token) {
                 Ok(()) => return,
                 // the request is gone
                 Err(token) => token.disarm(),
@@ -299,11 +302,13 @@ where
         let shared = &self.shared;
         if self.cancel_on_shutdown {
             shared.canceled.set(true);
-            shared.token_waker.wake();
             let buf = mem::take(&mut *shared.buf.borrow_mut());
             let freed = buf.len() >= shared.size;
-            // buffered requests get `RequestCanceled`
-            drop(buf);
+            let _cancel = OnDropFn::new(|| {
+                shared.token_waker.wake();
+                // buffered requests get `RequestCanceled`
+                drop(buf);
+            });
             if freed {
                 shared.notifier.notify();
             }
@@ -342,14 +347,13 @@ where
                 buf.push_back(tx);
                 buf.len() == shared.size
             };
-            if full {
-                shared.notifier.notify();
-            }
-
             let mut waiter = Waiter {
                 shared,
                 rx: Some(rx),
             };
+            if full {
+                shared.notifier.notify();
+            }
             let result = future::poll_fn(|cx| waiter.rx.as_ref().unwrap().poll_recv(cx)).await;
             waiter.rx = None;
             let token = result.map_err(|_| {
@@ -388,8 +392,9 @@ where
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
-    use ntex_service::{Pipeline, apply, fn_factory};
+    use ntex_service::{Pipeline, ReadyCallback, apply, fn_factory};
     use std::{cell::RefCell, pin::Pin, time::Duration};
+    use std::{panic::AssertUnwindSafe, panic::catch_unwind, task::Context};
 
     use super::*;
     use crate::future::lazy;
@@ -862,5 +867,96 @@ mod tests {
             *r2.borrow(),
             Some(Err(BufferServiceError::Service(())))
         ));
+    }
+
+    #[ntex::test]
+    async fn shared_buffer_capacity_notifies_all_roots() {
+        let inner = Inner::new(false);
+        let buffer = Rc::new(BufferService::new(
+            1,
+            PipelineState::new(TestService(inner.clone())),
+        ));
+        let first = Pipeline::new((), buffer.clone());
+        let second = Pipeline::new((), buffer);
+        first.ready().await.unwrap();
+        second.ready().await.unwrap();
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+
+        let mut active = Box::pin(first.call(()));
+        assert!(active.as_mut().poll(&mut cx).is_pending());
+        let mut queued = Box::pin(second.call(()));
+        assert!(queued.as_mut().poll(&mut cx).is_pending());
+        assert!(first.poll_ready(&mut cx).is_pending());
+        assert!(second.poll_ready(&mut cx).is_pending());
+
+        drop(queued);
+        assert_eq!(first.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(second.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        inner.set_ready();
+        assert_eq!(active.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    }
+
+    #[ntex::test]
+    async fn notification_panics_do_not_strand_buffered_requests() {
+        let inner = Inner::new(false);
+        let buffer = Rc::new(BufferService::new(
+            1,
+            PipelineState::new(TestService(inner.clone())),
+        ));
+        let srv = Pipeline::new((), buffer.clone());
+        let panic_once = Rc::new(Cell::new(false));
+        let flag = panic_once.clone();
+        srv.on_notify(&ReadyCallback::new(move || {
+            assert!(!flag.replace(false), "notification panic");
+        }));
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut active = Box::pin(srv.call(()));
+        assert!(active.as_mut().poll(&mut cx).is_pending());
+
+        panic_once.set(true);
+        let mut queued = Box::pin(srv.call(()));
+        assert!(catch_unwind(AssertUnwindSafe(|| queued.as_mut().poll(&mut cx))).is_err());
+        drop(queued);
+        assert!(buffer.shared.buf.borrow().is_empty());
+        assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
+
+        let mut queued = Box::pin(srv.call(()));
+        assert!(queued.as_mut().poll(&mut cx).is_pending());
+        panic_once.set(true);
+        assert!(catch_unwind(AssertUnwindSafe(|| drop(active))).is_err());
+        assert_eq!(
+            queued.as_mut().poll(&mut cx),
+            Poll::Ready(Err(BufferServiceError::RequestCanceled))
+        );
+        assert!(buffer.shared.is_drained());
+
+        inner.set_ready();
+        assert_eq!(srv.call(()).await, Ok(()));
+    }
+
+    #[ntex::test]
+    async fn shutdown_notification_panic_still_cancels_waiters() {
+        let inner = Inner::new(false);
+        let buffer = Rc::new(
+            BufferService::new(1, PipelineState::new(TestService(inner))).cancel_on_shutdown(),
+        );
+        let srv = Pipeline::new((), buffer.clone());
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut active = Box::pin(srv.call(()));
+        assert!(active.as_mut().poll(&mut cx).is_pending());
+        let mut queued = Box::pin(srv.call(()));
+        assert!(queued.as_mut().poll(&mut cx).is_pending());
+        srv.on_notify(&ReadyCallback::new(|| panic!("shutdown notification")));
+
+        assert!(catch_unwind(AssertUnwindSafe(|| srv.poll_shutdown(&mut cx))).is_err());
+        assert_eq!(
+            active.as_mut().poll(&mut cx),
+            Poll::Ready(Err(BufferServiceError::RequestCanceled))
+        );
+        assert_eq!(
+            queued.as_mut().poll(&mut cx),
+            Poll::Ready(Err(BufferServiceError::RequestCanceled))
+        );
+        assert!(buffer.shared.is_drained());
     }
 }
