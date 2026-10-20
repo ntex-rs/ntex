@@ -10,7 +10,12 @@
 * Add `ServiceBinding`. `Ctx::call` consults its nearest
   upstream cache; a miss checks only the target service without marking that
   scope ready. Direct binding calls check their own cache, including through
-  transparent adapters. `Ctx::call_nowait` retains its explicit bypass.
+  transparent adapters.
+
+* Deprecate `Ctx::call_nowait` in favor of cache-aware `Ctx::call`, including
+  after an explicit readiness check. The deprecated method retains its
+  signature and readiness-bypass semantics during compatibility; it is not
+  silently changed to wait. Primitive `Service::call` is not deprecated.
 
 * Add `ready(svc)` and `ready_factory(fac)` for explicit per-service readiness
   caching and call-time checks. `AndThen`, `Then`, and `Apply` store raw children

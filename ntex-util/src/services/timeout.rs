@@ -128,6 +128,10 @@ where
     type Res = S::Res;
     type Error = TimeoutError<S::Error>;
 
+    #[allow(
+        deprecated,
+        reason = "preserve validated dispatch and timeout boundaries during compatibility"
+    )]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, Self::Error> {
         if self.timeout.is_zero() {
             ctx.call_nowait(&self.service, req)

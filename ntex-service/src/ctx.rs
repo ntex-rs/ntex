@@ -293,6 +293,33 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     /// marking the enclosing scope ready. A [`crate::ServiceBinding`] also
     /// checks its own cache when called directly, independently of this scope.
     /// Calls do not consume cached readiness.
+    ///
+    /// Prefer this method to [`Self::call_nowait`], including after an explicit
+    /// readiness check. A valid cache avoids another readiness check or readiness
+    /// allocation, while invalidation before dispatch is still observed.
+    /// Raw [`Self::ready`] calls do not populate the upstream cache; use
+    /// [`crate::ready()`] for independent child caching.
+    ///
+    /// ```
+    /// use ntex_service::{Ctx, Service};
+    ///
+    /// struct Forward<S> {
+    ///     inner: S,
+    /// }
+    ///
+    /// impl<S: Service<(), usize>> Service<(), usize> for Forward<S> {
+    ///     type Res = S::Res;
+    ///     type Error = S::Error;
+    ///
+    ///     ntex_service::forward_bind!((), inner);
+    ///     ntex_service::forward_ready!((), inner);
+    ///     ntex_service::forward_shutdown!((), inner);
+    ///
+    ///     async fn call(&self, req: usize, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+    ///         ctx.call(&self.inner, req).await
+    ///     }
+    /// }
+    /// ```
     pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
         S: Service<St, Req>,
@@ -339,6 +366,32 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     /// The caller must ensure that `svc` is ready. This also bypasses bindings
     /// behind transparent adapters, but nested calls through [`Ctx::call`]
     /// still perform their normal cache-aware readiness checks.
+    ///
+    /// Deprecated in favor of [`Self::call`], whose valid-cache path adds no
+    /// readiness check or readiness allocation. This method retains its legacy
+    /// bypass during the compatibility period: it does not wait for readiness
+    /// or report readiness errors. Audit intentional bypasses before migrating;
+    /// `call` can wait or fail if readiness was invalidated after a prior check.
+    /// Services whose readiness changes must subscribe in [`Service::bind`] and
+    /// notify through [`crate::ReadyNotifier`].
+    ///
+    /// The legacy spelling is rejected when deprecation warnings are denied:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use ntex_service::{Ctx, Service};
+    ///
+    /// async fn dispatch<'a, S: Service<(), usize>>(
+    ///     ctx: Ctx<'a, S>,
+    ///     service: &'a S,
+    /// ) -> Result<S::Res, S::Error> {
+    ///     ctx.call_nowait(service, 1).await
+    /// }
+    /// ```
+    #[deprecated(
+        since = "5.3.0",
+        note = "use Ctx::call; valid cached readiness skips the readiness check"
+    )]
     pub async fn call_nowait<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
         S: Service<St, Req>,

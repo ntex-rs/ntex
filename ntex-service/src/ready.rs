@@ -52,7 +52,8 @@ where
 ///
 /// Uses its own readiness cache, independently of the calling scope's cache.
 /// Enclosing services must forward [`Service::bind`] to this wrapper.
-/// Only the explicit [`Ctx::call_nowait`] bypass skips its readiness check.
+/// Only the deprecated [`Ctx::call_nowait`] compatibility bypass skips its
+/// readiness check.
 #[derive(Debug, Clone)]
 pub struct Ready<S> {
     service: ServiceBinding<S>,

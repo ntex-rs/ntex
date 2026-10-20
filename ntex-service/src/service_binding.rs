@@ -7,7 +7,7 @@ use crate::{BindCtx, Ctx, Service, readiness::ReadyScope};
 /// consume readiness. Services whose readiness can change must subscribe through
 /// [`BindCtx::subscribe`] in [`Service::bind`] and notify when it changes.
 /// Direct [`Service::call`] also checks this binding's cache through `Ctx`;
-/// only the explicit [`Ctx::call_nowait`] bypass skips readiness.
+/// only the deprecated [`Ctx::call_nowait`] compatibility bypass skips readiness.
 /// Direct calls do not wait for the enclosing scope's cache to become valid.
 ///
 /// A binding owns its service, not pipeline state. Its readiness describes one
@@ -409,6 +409,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "verify the legacy bypass still rejects unbound scopes"
+    )]
     fn runtime_operations_reject_missing_parent_binding_without_repair() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -679,6 +683,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated, reason = "verify nested calls clear the legacy bypass")]
     fn built_in_calls_use_child_caches_while_an_unrelated_check_is_pending() {
         for path in 0..3 {
             let waiters = WaitersRef::new();
@@ -1345,6 +1350,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "verify legacy bypass compatibility with cached calls"
+    )]
     fn cached_and_raw_calls_keep_their_target_and_state() {
         let waiters = WaitersRef::new();
         let st = State(10);
@@ -1453,6 +1462,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "verify legacy bypass forwarding, errors and cancellation"
+    )]
     fn nowait_bypasses_transparent_bindings_but_not_nested_context_calls() {
         let waiters = WaitersRef::new();
         let st = State(0);
@@ -1471,18 +1484,30 @@ mod tests {
         assert_eq!(probe.0.starts.get(), 0);
         assert!(!bound.is_ready());
 
+        probe.0.call_fail.set(true);
+        assert_eq!(run(ctx.call_nowait(&&erased, 2)), Err(Error));
+        assert_eq!(probe.0.starts.get(), 0, "only the call error is returned");
+        probe.0.call_fail.set(false);
+
         let parent = ServiceBinding::new(Forward(bound));
         parent.bind(BindCtx::new(waiters.scope()));
         let mut call = Box::pin(ctx.call_nowait(&parent, 2));
         let mut cx = Context::from_waker(Waker::noop());
         assert!(call.as_mut().poll(&mut cx).is_pending());
         assert_eq!(probe.0.starts.get(), 1);
-        assert_eq!(probe.0.calls.get(), 1);
+        assert_eq!(probe.0.calls.get(), 2);
+        drop(call);
+        assert_eq!(probe.0.active.get(), 0);
+        assert_eq!(probe.0.drops.get(), 1);
+
+        let mut call = Box::pin(ctx.call_nowait(&parent, 3));
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.starts.get(), 2);
         probe.0.available.set(true);
         probe.0.fail.set(true);
         probe.0.changed.notify();
         assert_eq!(call.as_mut().poll(&mut cx), Poll::Ready(Err(Error)));
-        assert_eq!(probe.0.calls.get(), 1);
+        assert_eq!(probe.0.calls.get(), 2);
     }
 
     struct Forward<S>(S);

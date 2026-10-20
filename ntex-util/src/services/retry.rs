@@ -59,6 +59,10 @@ where
     type Res = S::Res;
     type Error = S::Error;
 
+    #[allow(
+        deprecated,
+        reason = "preserve the validated first-attempt bypass; retries use Ctx::call"
+    )]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         let mut policy = self.policy.clone();
         let mut cloned = policy.clone_request(&req);
