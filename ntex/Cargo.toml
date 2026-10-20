@@ -19,7 +19,7 @@ rust-version = "1.97"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs_dep"]
-features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/rustls-ring"]
+features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "tracker", "ntex-tls/rustls-ring"]
 
 [lib]
 name = "ntex"
@@ -54,6 +54,9 @@ neon-polling = ["ntex-net/neon-polling"]
 
 # neon io-uring runtime
 neon-uring = ["ntex-net/neon-uring"]
+
+# read buffer memory attribution
+tracker = ["ntex-io/tracker", "ntex-net/tracker"]
 
 # websocket support
 ws = []

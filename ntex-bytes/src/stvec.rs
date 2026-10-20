@@ -6,7 +6,7 @@ use std::{cmp, mem, ptr, ptr::NonNull, slice};
 
 use crate::storage::{INLINE_CAP, MIN_CAPACITY, Storage};
 #[cfg(feature = "tracker")]
-use crate::tracker::{BytesTracker, BytesTrackerError, TrackerInner};
+use crate::tracker::{BytesTracker, TrackerInner};
 use crate::{BytePageSize, buf::UninitSlice, cache};
 
 #[derive(Debug)]
@@ -79,10 +79,10 @@ impl StorageVec {
     #[cfg(feature = "tracker")]
     pub(crate) fn tracker(&self) -> Option<&BytesTracker> {
         let ptr = self.0.as_ptr();
-        // SAFETY: `self` holds a reference. The field changes only while the
-        // allocation is unique, which needs `&mut self` or the release of
-        // `self`. `BytesTracker` is a transparent non-null pointer and the
-        // charge keeps the tracker alive.
+        // SAFETY: `self` holds a reference and is the only handle that writes
+        // the field while the allocation is shared, which needs `&mut self`.
+        // `BytesTracker` is a transparent non-null pointer and the charge
+        // keeps the tracker alive.
         unsafe {
             if Header::tracker(ptr).is_null() {
                 None
@@ -92,24 +92,26 @@ impl StorageVec {
         }
     }
 
-    /// Charges the allocation to `tracker`.
+    /// Charges the allocation to `tracker`, moving the charge from the
+    /// current tracker if any.
     #[cfg(feature = "tracker")]
-    pub(crate) fn set_tracker(&mut self, tracker: &BytesTracker) -> Result<(), BytesTrackerError> {
+    pub(crate) fn set_tracker(&mut self, tracker: &BytesTracker) {
         let ptr = self.0.as_ptr();
-        // SAFETY: `self` holds a reference, the field is written only while
-        // the allocation is unique
-        let current = unsafe { Header::tracker(ptr) };
-        if current == tracker.as_inner() {
-            Ok(())
-        } else if !current.is_null() {
-            Err(BytesTrackerError::Attributed)
-        } else if !self.is_unique() {
-            Err(BytesTrackerError::Shared)
-        } else {
-            // SAFETY: the allocation is untracked and unique, the handle
-            // keeps the tracker alive
-            unsafe { Header::attach(ptr, tracker.as_inner()) };
-            Ok(())
+        let new = tracker.as_inner();
+        // SAFETY: `self` holds a reference and is the only handle that writes
+        // the field while the allocation is shared, see `Header::tracker`.
+        // The new tracker is charged before the old one is released, the
+        // handle keeps `tracker` alive.
+        unsafe {
+            let current = Header::tracker(ptr);
+            if current != new {
+                let size = Header::capacity(ptr) + METADATA_SIZE;
+                (*new).charge(size);
+                ptr::addr_of_mut!((*ptr).tracker).write(new);
+                if !current.is_null() {
+                    TrackerInner::uncharge(current, size);
+                }
+            }
         }
     }
 
@@ -228,7 +230,7 @@ impl StorageVec {
     }
 
     pub(crate) fn is_unique(&self) -> bool {
-        unsafe { (*self.0.as_ptr()).is_unique() }
+        unsafe { Header::is_unique(self.0.as_ptr()) }
     }
 
     /// Takes ownership of the allocation of a frozen view, if the view holds
@@ -250,7 +252,7 @@ impl StorageVec {
         // `Acquire` synchronizes with the `Release` decrement of the handles
         // dropped by other threads, their accesses happen before the header
         // is updated below.
-        if !(*ptr).is_unique() {
+        if !Header::is_unique(ptr) {
             return None;
         }
         (*ptr).offset = offset as u32;
@@ -318,7 +320,7 @@ impl StorageVec {
             // handle is the only outstanding handle pointing to the buffer.
             if len == 0 {
                 let inner = self.as_inner();
-                if (*inner).is_unique() && (*inner).offset != METADATA_SIZE_U32 {
+                if Header::is_unique(inner) && (*inner).offset != METADATA_SIZE_U32 {
                     (*inner).len = 0;
                     (*inner).offset = METADATA_SIZE_U32;
                     return;
@@ -428,7 +430,7 @@ impl StorageVec {
             };
             let size = self.page_size();
 
-            if (*inner).is_unique() {
+            if Header::is_unique(inner) {
                 let capacity = (*inner).capacity as usize;
 
                 // try to reclaim the buffer. This is possible if the current
@@ -634,9 +636,16 @@ impl Header {
         }
     }
 
-    fn is_unique(&self) -> bool {
+    /// Returns `true` if the caller holds the only reference.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live `Header` referenced by the caller. Only
+    /// `ref_count` is borrowed, the `BytesMut` handle may write other
+    /// fields concurrently.
+    unsafe fn is_unique(ptr: *const Header) -> bool {
         // Acquire synchronizes with the Release decrement of other handles
-        self.ref_count.load(Acquire) == 1
+        unsafe { (*ptr).ref_count.load(Acquire) == 1 }
     }
 
     /// Returns the tracker charged with the allocation, null if none.
@@ -644,8 +653,9 @@ impl Header {
     /// # Safety
     ///
     /// `ptr` must point to a live `Header` referenced by the caller. The
-    /// field is written only while the allocation has a single reference,
-    /// so any handle can read it.
+    /// `BytesMut` handle writes the field even while the allocation is
+    /// shared, so the caller must be the `BytesMut` handle, hold the only
+    /// reference, or be the final release.
     #[cfg(feature = "tracker")]
     pub(crate) unsafe fn tracker(ptr: *const Header) -> *const TrackerInner {
         unsafe { ptr::addr_of!((*ptr).tracker).read() }
@@ -1296,20 +1306,28 @@ mod tracker_tests {
     }
 
     #[test]
-    fn trimdown_keeps_tracker() {
+    fn trimdown_drops_tracker() {
         cache::reset();
         let tracker = BytesTracker::new();
 
         let mut b = BytesMut::with_page_size_in(BytePageSize::Size4, &tracker);
-        b.extend_from_slice(&[1; 200]);
-        let mut bytes = b.freeze();
-        bytes.trimdown();
-        assert_eq!(snap(&tracker), (200 + METADATA_SIZE, 1));
+        b.extend_from_slice(&[1; 400]);
+        let mut head = b.split_to(128);
+        let mut tail = b.freeze();
+
+        // the copies are untracked, shared or not
+        head.trimdown();
+        assert_eq!(snap(&tracker), (4096, 1));
+        tail.trimdown();
+        assert_eq!(snap(&tracker), (0, 0));
 
         // inline data is not attributed
-        bytes.truncate(10);
+        let mut b = BytesMut::with_page_size_in(BytePageSize::Size4, &tracker);
+        b.extend_from_slice(&[1; 10]);
+        let mut bytes = b.freeze();
         bytes.trimdown();
         assert_eq!(snap(&tracker), (0, 0));
+        drop((head, tail, bytes));
         cache::reset();
     }
 
@@ -1360,7 +1378,7 @@ mod tracker_tests {
         b.extend_from_slice(&[1; 50]);
         assert!(b.tracker().is_none());
 
-        b.set_tracker(&tracker).unwrap();
+        b.set_tracker(&tracker);
         assert!(b.tracker().unwrap().ptr_eq(&tracker));
         assert_eq!(snap(&tracker), (alloc_size(&b), 1));
 
@@ -1374,36 +1392,74 @@ mod tracker_tests {
     }
 
     #[test]
-    fn set_tracker_errors() {
+    fn set_tracker_reattributes() {
         let tracker = BytesTracker::new();
         let other = BytesTracker::new();
         let mut b = BytesMut::with_capacity(200);
         b.extend_from_slice(&[1; 150]);
+        let size = alloc_size(&b);
 
+        // a shared untracked allocation is adopted
         let head = b.split_to(64);
-        assert_eq!(b.set_tracker(&tracker), Err(BytesTrackerError::Shared));
+        b.set_tracker(&tracker);
+        assert_eq!(snap(&tracker), (size, 1));
+
+        // the same tracker is a no-op
+        b.set_tracker(&tracker);
+        b.set_tracker(&tracker.clone());
+        assert_eq!(snap(&tracker), (size, 1));
+
+        // the charge moves while shared and while unique
+        b.set_tracker(&other);
+        assert!(b.tracker().unwrap().ptr_eq(&other));
         assert_eq!(snap(&tracker), (0, 0));
+        assert_eq!(snap(&other), (size, 1));
         drop(head);
-        b.set_tracker(&tracker).unwrap();
-
-        // the same tracker is accepted even while shared
-        let head = b.split_to(64);
-        assert_eq!(b.set_tracker(&tracker), Ok(()));
-        assert_eq!(b.set_tracker(&tracker.clone()), Ok(()));
-        assert_eq!(b.set_tracker(&other), Err(BytesTrackerError::Attributed));
-        drop(head);
-        assert_eq!(b.set_tracker(&other), Err(BytesTrackerError::Attributed));
-        assert_eq!(snap(&tracker), (alloc_size(&b), 1));
+        b.set_tracker(&tracker);
+        assert_eq!(snap(&tracker), (size, 1));
         assert_eq!(snap(&other), (0, 0));
 
-        assert_eq!(
-            BytesTrackerError::Shared.to_string(),
-            "buffer allocation is shared"
-        );
-        assert_eq!(
-            BytesTrackerError::Attributed.to_string(),
-            "buffer allocation is charged to a different tracker"
-        );
+        drop(b);
+        assert_eq!(snap(&tracker), (0, 0));
+    }
+
+    #[test]
+    fn set_tracker_releases_last_tracker_handle() {
+        let mut b = BytesMut::with_capacity(200);
+        b.set_tracker(&BytesTracker::new());
+
+        // the old tracker is freed by the move, the new one stays alive
+        let other = BytesTracker::new();
+        b.set_tracker(&other);
+        drop(other);
+        let tracker = b.tracker().unwrap().clone();
+        assert_eq!(snap(&tracker), (alloc_size(&b), 1));
+        drop(b);
+        assert_eq!(snap(&tracker), (0, 0));
+    }
+
+    #[test]
+    fn set_tracker_while_shared_across_threads() {
+        let tracker = BytesTracker::new();
+        let other = BytesTracker::new();
+        let mut b = BytesMut::with_capacity(512);
+        b.extend_from_slice(&[1; 400]);
+        b.set_tracker(&tracker);
+        let size = alloc_size(&b);
+
+        let mut head = b.split_to(128);
+        let handle = std::thread::spawn(move || {
+            // shared, the copy is not attributed
+            head.trimdown();
+            head
+        });
+        b.set_tracker(&other);
+        let head = handle.join().unwrap();
+        assert_eq!(head.len(), 128);
+        assert_eq!(snap(&tracker).1, 0);
+        assert_eq!(snap(&other), (size, 1));
+        drop(b);
+        assert_eq!(snap(&other), (0, 0));
     }
 
     #[test]
@@ -1411,7 +1467,7 @@ mod tracker_tests {
         cache::reset();
         let tracker = BytesTracker::new();
         let mut b = BytesMut::with_page_size(BytePageSize::Size4);
-        b.set_tracker(&tracker).unwrap();
+        b.set_tracker(&tracker);
         assert_eq!(snap(&tracker), (PAGE4, 1));
 
         // uncharged when returned to the cache
@@ -1514,7 +1570,7 @@ mod tracker_tests {
     #[test]
     fn borrowed_tracker_without_handles() {
         let mut b = BytesMut::with_capacity(100);
-        b.set_tracker(&BytesTracker::new()).unwrap();
+        b.set_tracker(&BytesTracker::new());
 
         // the charge keeps the tracker alive
         let tracker = b.tracker().unwrap().clone();

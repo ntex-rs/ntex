@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use ntex_bytes::BytePageSize;
+#[cfg(feature = "tracker")]
+use ntex_bytes::BytesTracker;
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
 
@@ -21,6 +23,8 @@ pub struct IoConfig {
     read_size_min: BytePageSize,
     read_size_max: BytePageSize,
     read_backpressure: usize,
+    #[cfg(feature = "tracker")]
+    read_buf_tracker: ReadBufTracker,
 
     // write side configuration
     write_size: BytePageSize,
@@ -63,6 +67,23 @@ pub struct FrameReadRate {
     /// Progress must be strictly greater than this value for another `timeout`
     /// period to be granted.
     pub rate: u32,
+}
+
+/// Memory attribution of read buffers, see
+/// [`IoConfig::set_read_buf_tracker`].
+#[cfg(feature = "tracker")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub enum ReadBufTracker {
+    /// Read buffers are not attributed.
+    #[default]
+    Disabled,
+    /// Each connection charges its read buffers to its own tracker.
+    PerConnection,
+    /// All connections of the configuration charge their read buffers to
+    /// the same tracker.
+    Shared(BytesTracker),
 }
 
 impl IoConfig {
@@ -115,6 +136,8 @@ impl IoConfig {
             read_size_min: BytePageSize::Size4,
             read_size_max: BytePageSize::Size64,
             read_backpressure: BytePageSize::Size32.capacity(),
+            #[cfg(feature = "tracker")]
+            read_buf_tracker: ReadBufTracker::Disabled,
 
             write_timeout: Seconds(0),
             write_size: BytePageSize::Size16,
@@ -180,6 +203,15 @@ impl IoConfig {
     /// [`set_read_backpressure`](Self::set_read_backpressure).
     pub fn read_backpressure(&self) -> usize {
         self.read_backpressure
+    }
+
+    #[inline]
+    #[cfg(feature = "tracker")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+    /// Returns the read buffer attribution, see
+    /// [`set_read_buf_tracker`](Self::set_read_buf_tracker).
+    pub fn read_buf_tracker(&self) -> &ReadBufTracker {
+        &self.read_buf_tracker
     }
 
     #[inline]
@@ -471,6 +503,30 @@ impl IoConfig {
         self
     }
 
+    /// Sets the memory attribution of read buffers.
+    ///
+    /// Read buffers of connections are charged to a
+    /// [`BytesTracker`], which reports the live allocations and bytes.
+    /// [`ReadBufTracker::PerConnection`] gives each connection its own
+    /// tracker, [`ReadBufTracker::Shared`] charges all connections of the
+    /// configuration to one tracker. Write buffers are not attributed.
+    ///
+    /// A read buffer stays charged until its last handle is dropped,
+    /// including `Bytes` frames split off it, on any thread and after the
+    /// connection is closed. Buffers in the page cache are not charged.
+    ///
+    /// A shared tracker is an atomic counter updated by every connection on
+    /// every worker thread, it is contended under load.
+    ///
+    /// The default is [`ReadBufTracker::Disabled`].
+    #[must_use]
+    #[cfg(feature = "tracker")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+    pub fn set_read_buf_tracker(mut self, tracker: ReadBufTracker) -> Self {
+        self.read_buf_tracker = tracker;
+        self
+    }
+
     /// Sets the write-buffer page size.
     ///
     /// Write buffers are represented as a sequence of reusable byte pages.
@@ -712,5 +768,25 @@ mod tests {
     #[should_panic(expected = "shutdown timeout must be greater than zero")]
     fn zero_shutdown_timeout_is_rejected() {
         let _ = IoConfig::new().set_shutdown_timeout(Seconds::ZERO);
+    }
+
+    #[cfg(feature = "tracker")]
+    #[test]
+    fn read_buf_tracker() {
+        let cfg = IoConfig::new();
+        assert!(matches!(cfg.read_buf_tracker(), ReadBufTracker::Disabled));
+
+        let cfg = cfg.set_read_buf_tracker(ReadBufTracker::PerConnection);
+        assert!(matches!(
+            cfg.read_buf_tracker(),
+            ReadBufTracker::PerConnection
+        ));
+
+        let tracker = BytesTracker::new();
+        let cfg = cfg.set_read_buf_tracker(ReadBufTracker::Shared(tracker.clone()));
+        let ReadBufTracker::Shared(t) = cfg.read_buf_tracker() else {
+            panic!("expected a shared tracker");
+        };
+        assert!(t.ptr_eq(&tracker));
     }
 }

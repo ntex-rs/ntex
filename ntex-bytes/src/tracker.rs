@@ -20,30 +20,6 @@ pub struct BytesTracker(NonNull<TrackerInner>);
 
 const _: () = assert!(size_of::<BytesTracker>() == size_of::<*const TrackerInner>());
 
-/// Error returned by [`BytesMut::set_tracker`](crate::BytesMut::set_tracker).
-#[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum BytesTrackerError {
-    /// The allocation is shared with other handles.
-    Shared,
-    /// The allocation is charged to a different tracker.
-    Attributed,
-}
-
-impl fmt::Display for BytesTrackerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BytesTrackerError::Shared => f.write_str("buffer allocation is shared"),
-            BytesTrackerError::Attributed => {
-                f.write_str("buffer allocation is charged to a different tracker")
-            }
-        }
-    }
-}
-
-impl std::error::Error for BytesTrackerError {}
-
 /// Point-in-time values of a [`BytesTracker`].
 ///
 /// The counters are read one by one, the snapshot is exact only when

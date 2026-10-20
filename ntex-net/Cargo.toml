@@ -35,6 +35,9 @@ neon-uring = []
 # polling only
 neon-polling = []
 
+# read buffer memory attribution
+tracker = ["ntex-io/tracker"]
+
 trace = []
 
 [dependencies]

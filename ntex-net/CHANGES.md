@@ -3,6 +3,8 @@
 
 ## [4.6.0] - Unreleased
 
+* Add `tracker` feature, enables `ntex-io/tracker`
+
 * iocp: co-allocate each stream's read and write operations, removing one heap
   allocation per connection while preserving their completion lifetimes
 
