@@ -174,6 +174,16 @@ fn notification_delivery_reuses_registered_callback_storage() {
 }
 
 #[test]
+fn single_scope_notification_does_not_allocate() {
+    let (svc, gate) = probe();
+    let pl = Pipeline::new(10, svc);
+    complete(pl.ready()).unwrap();
+    expect_allocs("notify", 0, || gate.changed.notify());
+    assert!(!pl.is_ready());
+    assert_eq!(gate.notifications.get(), 1);
+}
+
+#[test]
 fn cached_pipeline_handles_skip_readiness_allocations() {
     let (svc, gate) = probe();
     let callback = svc.1.clone();

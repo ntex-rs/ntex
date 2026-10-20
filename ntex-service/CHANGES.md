@@ -2,6 +2,8 @@
 
 ## [5.3.0] - Unreleased
 
+* Avoid allocations when notifying a single readiness scope without dependents, and avoid hashing small dependency graphs
+
 * Yield instead of spinning when a service readiness check keeps invalidating its own readiness
 
 * Fix Stacked Borrows violations when checking readiness of nested and combined services, and when dropping a pipeline with a pending readiness check

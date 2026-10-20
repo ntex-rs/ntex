@@ -85,31 +85,74 @@ impl ReadyNotifier {
     /// A callback panic propagates and skips remaining callbacks, but observers
     /// are still woken during unwinding.
     pub fn notify(&self) {
-        let affected = self
-            .0
-            .scopes
-            .borrow()
-            .iter()
-            .filter_map(Weak::upgrade)
-            .map(|scope| (scope, 0))
-            .collect();
-        invalidate_scopes(affected, true);
+        let single = {
+            let scopes = self.0.scopes.borrow();
+            match scopes.as_slice() {
+                [] => return,
+                [scope] => Some(scope.upgrade()),
+                _ => None,
+            }
+        };
+        match single {
+            Some(Some(scope)) => invalidate_scope(scope, true),
+            Some(None) => {}
+            None => {
+                let affected = self
+                    .0
+                    .scopes
+                    .borrow()
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .map(|scope| (scope, 0))
+                    .collect();
+                invalidate_scopes(affected, true);
+            }
+        }
     }
 }
 
+/// Invalidates one directly affected scope without allocating graph state when
+/// it has no dependent ancestors.
+fn invalidate_scope(scope: Rc<ScopeInner>, notify_callbacks: bool) {
+    if !scope.parents.borrow().is_empty() {
+        return invalidate_scopes(vec![(scope, 0)], notify_callbacks);
+    }
+    scope.invalidate(true);
+    let count = if notify_callbacks {
+        scope.callbacks.borrow().len()
+    } else {
+        0
+    };
+    let mut wakers = Vec::new();
+    scope.take_wakers(&mut wakers);
+    let _wake = NotifyWakers(wakers);
+    scope.notify_callbacks(count);
+}
+
+/// Affected graphs up to this size are deduplicated by linear scan.
+const LINEAR_DEDUP: usize = 32;
+
 fn invalidate_scopes(mut affected: Vec<(Rc<ScopeInner>, usize)>, notify_callbacks: bool) {
     let direct = affected.len();
-    let mut visited: HashSet<_, foldhash::fast::RandomState> = affected
-        .iter()
-        .map(|(scope, _)| Rc::as_ptr(scope))
-        .collect();
+    let mut visited: Option<HashSet<_, foldhash::fast::RandomState>> = None;
 
     let mut idx = 0;
     while idx < affected.len() {
         let scope = Rc::clone(&affected[idx].0);
         scope.invalidate(idx < direct);
         for parent in scope.parents.borrow().iter().filter_map(Weak::upgrade) {
-            if visited.insert(Rc::as_ptr(&parent)) {
+            let ptr = Rc::as_ptr(&parent);
+            let new = if let Some(visited) = visited.as_mut() {
+                visited.insert(ptr)
+            } else if affected.len() < LINEAR_DEDUP {
+                !affected.iter().any(|(s, _)| Rc::as_ptr(s) == ptr)
+            } else {
+                let mut set: HashSet<_, _> = affected.iter().map(|(s, _)| Rc::as_ptr(s)).collect();
+                let new = set.insert(ptr);
+                visited = Some(set);
+                new
+            };
+            if new {
                 affected.push((parent, 0));
             }
         }
@@ -210,7 +253,7 @@ impl ReadyScope {
     }
 
     pub(crate) fn reset_root(&self) {
-        invalidate_scopes(vec![(self.0.clone(), 0)], false);
+        invalidate_scope(self.0.clone(), false);
     }
 
     /// Records a successful check only if no dependency changed while checking.
@@ -1032,6 +1075,37 @@ mod tests {
         assert_eq!(root.generation().value, pending.value + 1);
         assert!(!left.is_directly_invalidated(left_pending));
         assert!(sibling.is_ready());
+    }
+
+    #[test]
+    fn wide_fanout_invalidates_shared_ancestors_once() {
+        let source = ReadyNotifier::new();
+        let root = ReadyScope::new();
+        let mid = ReadyScope::new();
+        let calls = Rc::new(Cell::new(0));
+        let captured = calls.clone();
+        root.on_notify(&ReadyCallback::new(move || {
+            captured.set(captured.get() + 1);
+        }));
+        root.depend_on(&mid);
+        let leaves: Vec<_> = (0..LINEAR_DEDUP * 2)
+            .map(|idx| {
+                let leaf = ReadyScope::new();
+                leaf.subscribe(&source);
+                // Reach `root` both directly and through `mid`.
+                if idx % 2 == 0 { &root } else { &mid }.depend_on(&leaf);
+                root.depend_on(&leaf);
+                leaf
+            })
+            .collect();
+        let root_before = root.generation();
+        let mid_before = mid.generation();
+        source.notify();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(root.generation().value, root_before.value + 1);
+        assert_eq!(mid.generation().value, mid_before.value + 1);
+        assert!(!root.is_directly_invalidated(root_before));
+        assert!(leaves.iter().all(|leaf| !leaf.is_ready()));
     }
 
     #[test]
