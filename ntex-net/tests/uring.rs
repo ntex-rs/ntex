@@ -573,14 +573,14 @@ fn ring_recv_eof() {
 
 #[cfg(feature = "tracker")]
 mod tracker {
-    use ntex::io::ReadBufTracker;
+    use ntex::io::BufTracker;
     use ntex_bytes::BytesTracker;
 
     use super::*;
 
-    fn cfg_with(mode: ReadBufTracker) -> SharedCfg {
+    fn cfg_with(mode: BufTracker) -> SharedCfg {
         SharedCfg::new("URING")
-            .add(IoConfig::new().set_read_buf_tracker(mode))
+            .add(IoConfig::new().set_buf_tracker(mode))
             .build()
     }
 
@@ -601,12 +601,12 @@ mod tracker {
         run(64, || async {
             let shared = BytesTracker::new();
             for mode in [
-                ReadBufTracker::Shared(shared.clone()),
-                ReadBufTracker::PerConnection,
+                BufTracker::Shared(shared.clone()),
+                BufTracker::PerConnection,
             ] {
                 let (sock, mut peer) = UnixStream::pair().unwrap();
                 let io = ntex_net::from_unix_stream(sock, cfg_with(mode)).unwrap();
-                let t = io.read_buf_tracker().cloned().unwrap();
+                let t = io.buf_tracker().cloned().unwrap();
                 // the receive waits for input with a ring buffer
                 sleep(Duration::from_millis(20)).await;
                 assert_eq!(t.snapshot().live_allocations, 0);
@@ -644,8 +644,8 @@ mod tracker {
                 peer
             });
 
-            let io = ntex_net::from_unix_stream(sock, cfg_with(ReadBufTracker::Shared(t.clone())))
-                .unwrap();
+            let io =
+                ntex_net::from_unix_stream(sock, cfg_with(BufTracker::Shared(t.clone()))).unwrap();
             let mut chunks = Vec::new();
             let mut len = 0;
             while len < SIZE {

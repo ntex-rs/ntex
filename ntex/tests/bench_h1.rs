@@ -231,15 +231,15 @@ fn server_cfg() -> SharedCfg {
     }
     #[cfg(feature = "tracker")]
     {
-        use ntex::io::ReadBufTracker;
+        use ntex::io::BufTracker;
 
         let mode = match std::env::var("TRACKER").as_deref() {
-            Err(_) | Ok("off") => ReadBufTracker::Disabled,
-            Ok("per-connection") => ReadBufTracker::PerConnection,
-            Ok("shared") => ReadBufTracker::Shared(ntex::util::BytesTracker::new()),
+            Err(_) | Ok("off") => BufTracker::Disabled,
+            Ok("per-connection") => BufTracker::PerConnection,
+            Ok("shared") => BufTracker::Shared(ntex::util::BytesTracker::new()),
             Ok(v) => panic!("TRACKER={v}, expected off|per-connection|shared"),
         };
-        io = io.set_read_buf_tracker(mode);
+        io = io.set_buf_tracker(mode);
     }
     #[cfg(not(feature = "tracker"))]
     if std::env::var("TRACKER").is_ok_and(|v| v != "off") {

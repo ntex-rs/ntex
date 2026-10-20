@@ -835,7 +835,7 @@ impl StreamOpsStorage {
                 #[cfg_attr(not(feature = "tracker"), allow(unused_mut))]
                 let mut buf = ring.take(bid, size);
                 #[cfg(feature = "tracker")]
-                if let Some(t) = item.ctx.read_buf_tracker() {
+                if let Some(t) = item.ctx.buf_tracker() {
                     buf.set_tracker(t);
                 }
                 self.recv_complete(id, buf, flags, res, api);

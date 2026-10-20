@@ -73,12 +73,12 @@ impl IoContext {
     ///
     /// Read buffers a transport allocates itself should be charged to it
     /// with [`BytesMut::set_tracker`]. Returns `None` if
-    /// [`ReadBufTracker::Disabled`](crate::ReadBufTracker) is configured.
+    /// [`BufTracker::Disabled`](crate::BufTracker) is configured.
     #[cfg(feature = "tracker")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
     #[must_use]
-    pub fn read_buf_tracker(&self) -> Option<&ntex_bytes::BytesTracker> {
-        self.st().read_buf_tracker()
+    pub fn buf_tracker(&self) -> Option<&ntex_bytes::BytesTracker> {
+        self.st().buf_tracker()
     }
 
     #[doc(hidden)]

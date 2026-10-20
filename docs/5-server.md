@@ -741,7 +741,8 @@ connections to get the share of time a connection spends blocked.
   bounds how long they can hold a buffer, and a smaller minimum page in
   `set_read_size()` lowers the cost of each. Buffers held by a pending
   io-uring read, and frames split off a buffer that keep its page alive, are
-  not counted.
+  not counted; [Io buffer attribution](#io-buffer-attribution) counts
+  them.
 * **Slow clients.** Growing `write_backpressure_time` means clients read
   slower than the application writes. A few slow clients are normal; a
   steady high `write_backpressure_active` holds memory and connection slots.
@@ -839,6 +840,191 @@ or `page_cache.total()` for the sum. Each entry is a `PageCacheStats`:
 
 After a worker restart these statistics may be slightly off, because the old
 and new worker threads can update them at the same time.
+
+### Io buffer attribution
+
+The I/O metrics count only the read buffers a connection holds. Input that
+leaves the connection is not counted: `Bytes` frames split off a read buffer
+and kept by the application keep the whole buffer alive, and so do buffers
+held by a pending io-uring read. Io buffer attribution charges each read
+buffer allocation to a `BytesTracker` for as long as the allocation lives,
+wherever its data ends up. It answers questions such as "how much memory do
+request bodies of this listener hold" or "which connection holds the most
+input".
+
+Attribution needs the `tracker` feature, which adds a pointer to the header
+of every heap buffer:
+
+```toml
+ntex = { version = "4", features = ["tracker"] }
+```
+
+It is configured per `IoConfig` with `set_buf_tracker()`:
+
+| `BufTracker` | Behavior |
+|------------------|----------|
+| `Disabled` | Read buffers are not attributed. This is the default. |
+| `PerConnection` | Each connection charges its read buffers to its own tracker, created when first used. |
+| `Shared(tracker)` | All connections of the configuration, on all workers, charge their read buffers to `tracker`. |
+
+A shared tracker gives a total per listener or service. Create it before
+the server starts and keep a clone to read it:
+
+```rust,ignore
+use ntex::io::{IoConfig, BufTracker};
+use ntex::time::{Seconds, sleep};
+use ntex::util::BytesTracker;
+use ntex::SharedCfg;
+
+let api_input = BytesTracker::new();
+let cfg = SharedCfg::new("API").add(
+    IoConfig::new().set_buf_tracker(BufTracker::Shared(api_input.clone())),
+);
+
+let server = ntex::server::build()
+    .bind("api", "0.0.0.0:8080", cfg, async |_| { /* service */ })?
+    .run();
+
+ntex::rt::spawn(async move {
+    loop {
+        sleep(Seconds(10)).await;
+        let snap = api_input.snapshot();
+        println!(
+            "api input: {} bytes in {} buffers",
+            snap.live_bytes, snap.live_allocations
+        );
+    }
+});
+```
+
+With `PerConnection`, `IoRef::buf_tracker()` (and
+`IoContext::buf_tracker()` in filters) returns the connection's tracker,
+for example from `HttpRequest::io()` in a handler. It returns `None` when
+attribution is disabled. The returned reference must not be used after
+`Io::set_config()`; clone the tracker to keep it longer. A clone keeps
+reporting buffers that outlive the connection, but does not keep the
+connection alive.
+
+```rust,ignore
+if let Some(tracker) = req.io().and_then(|io| io.buf_tracker()) {
+    if tracker.snapshot().live_bytes > 64 * 1024 * 1024 {
+        // the connection holds too much input, reject or close it
+    }
+}
+```
+
+The tracker is not limited to the connection's own read buffers. The
+application can charge its own buffers to it, so memory a connection causes
+outside the I/O layer shows up in the same metrics, for example a body
+assembled from many frames, a decompressed payload, or a buffer received from
+another source on behalf of the connection. This works with `PerConnection`
+and `Shared` trackers:
+
+* `BytesMut::with_page_size_in(size, tracker)` takes a new buffer from the
+  page cache, charged to `tracker`.
+* `BytesMut::set_tracker(tracker)` charges an existing buffer. If the
+  allocation is already charged to another tracker, the charge moves, also
+  while `Bytes` frames split off it are still alive.
+* `BytesMut::tracker()` returns the tracker a buffer is charged to.
+
+```rust,ignore
+use ntex::util::{BytePageSize, BytesMut};
+
+let mut body = match req.io().and_then(|io| io.buf_tracker()) {
+    Some(tracker) => BytesMut::with_page_size_in(BytePageSize::Size16, tracker),
+    None => BytesMut::with_page_size(BytePageSize::Size16),
+};
+while let Some(chunk) = payload.next().await {
+    body.extend_from_slice(&chunk?);
+}
+```
+
+Such buffers follow the same rules as read buffers: the charge lasts until
+the last handle is dropped, a buffer that grows stays charged, and copies are
+not charged.
+
+`BytesTracker::snapshot()` returns a `BytesTrackerSnapshot`:
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `live_bytes` | gauge | Memory held by the attributed allocations, including the allocation header. |
+| `live_allocations` | gauge | Number of attributed allocations. |
+
+The values are not part of `ServerMetrics` or `IoMetricsSnapshot`; read the
+trackers you created and export them next to those metrics. The two fields
+are read one after the other, so a snapshot taken while buffers are
+allocated or released is only approximately consistent.
+`BytesTracker::ptr_eq()` tells whether two handles refer to the same
+tracker.
+
+What is charged:
+
+* Every read buffer the connection allocates or takes from the page cache,
+  with its full allocation size, not the bytes of data in it. A buffer that
+  grows into a new allocation stays charged to the same tracker.
+* Buffers of a pending read, including io-uring provided-buffer pages once
+  data is received into them. A buffer returned empty by a read goes back to
+  the page cache and its charge ends.
+* Plaintext read buffers of filters such as TLS.
+* Frames split off a read buffer, until the last `Bytes` or `BytesMut`
+  referring to the allocation is dropped. The charge ends on whichever
+  thread drops it, also after the connection is closed.
+
+What is not charged:
+
+* Pages in the page cache. A cached page is charged again to its next user
+  only.
+* Write buffers.
+* Copies of the data: small frames stored inline in the `Bytes` handle (up
+  to 23 bytes on 64-bit targets), the result of `Bytes::trimdown()`, and
+  anything the application copies into its own types, unless it charges
+  them explicitly as described above. Cloning, splitting
+  or freezing a buffer does not copy, so it stays charged.
+
+When `Io::set_config()` changes the configuration of a connection, for
+example after a protocol upgrade:
+
+* With `PerConnection` in both, the connection keeps its tracker.
+* Switching to `Shared(tracker)` moves the buffers the connection holds to
+  `tracker`. Frames that already left the connection stay charged to the
+  old tracker.
+* Switching from `Shared` or `Disabled` to `PerConnection` creates a new
+  tracker.
+* Switching to `Disabled` stops charging new buffers; existing buffers stay
+  charged until they are released.
+
+Cost:
+
+* Without the `tracker` feature there is no cost. With the feature, the
+  buffer header grows from 16 to 32 bytes on 64-bit targets (20 bytes on
+  32-bit targets), for every heap buffer, attributed or not.
+* Cloning, splitting and freezing buffers do no tracker work. Allocating,
+  growing and releasing the last handle of a buffer check for a tracker,
+  and update its atomic counters if there is one.
+* A `Shared` tracker is updated by every worker thread and becomes a
+  contended cache line under load. Use one per listener or service rather
+  than one per server, or `PerConnection` when only per-connection limits
+  are needed.
+
+Interpreting the values:
+
+* **Escaped input.** `live_bytes` of a shared tracker well above the sum of
+  `read_buffer_capacity` for the same service means the application keeps
+  input after the connection is done with it: request bodies queued for
+  later processing, frames stored in caches, or pending io-uring reads.
+  Storing a small part of a large buffer keeps the whole allocation; copy
+  it, for example with `Bytes::trimdown()`, to release the buffer.
+* **Leaks.** `live_allocations` that keeps growing while the number of
+  active connections is stable points to frames that are never dropped.
+* **Per-connection cost.** `live_bytes / live_allocations` is the average
+  allocation size, and `live_bytes` divided by `active_connections` the
+  average input memory per connection. A high average with little
+  traffic points to the partial-input case described in
+  [I/O metrics](#io-metrics).
+* **Abusive clients.** With `PerConnection`, check the connection's tracker
+  before accepting more input, and close connections that exceed a limit.
+  Unlike `set_read_backpressure()`, this also counts input the connection
+  already handed to the application.
 
 ## Worker stalls and busy loops
 

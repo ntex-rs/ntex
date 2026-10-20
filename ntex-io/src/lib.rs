@@ -39,9 +39,9 @@ mod waiters;
 use ntex_codec::Decoder;
 
 pub use self::buf::{FilterBuf, FilterCtx};
-pub use self::cfg::IoConfig;
 #[cfg(feature = "tracker")]
-pub use self::cfg::ReadBufTracker;
+pub use self::cfg::BufTracker;
+pub use self::cfg::IoConfig;
 pub use self::ctx::IoContext;
 pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
