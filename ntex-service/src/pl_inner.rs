@@ -264,8 +264,12 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         self.0.scope().on_notify(callback);
     }
 
+    pub(crate) fn is_ready(&self) -> bool {
+        self.0.scope().is_ready()
+    }
+
     pub(crate) async fn ready(&self, idx: u32) -> Result<(), Err> {
-        if self.0.scope().is_ready() {
+        if self.is_ready() {
             Ok(())
         } else {
             self.0.ready(idx).await
