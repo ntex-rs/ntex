@@ -50,7 +50,7 @@ struct Cfg {
     fail_ready: usize,
     /// Readiness checks never complete.
     pending_ready: bool,
-    /// Panic when processing this item.
+    /// Panic when processing this item, after blocking on it.
     panic_on: Option<usize>,
     /// Block the worker thread when processing this item.
     block_on: Option<(usize, Duration)>,
@@ -80,6 +80,16 @@ struct Srv {
     cfg: Cfg,
 }
 
+impl Srv {
+    fn block(&self, item: usize) {
+        if let Some((block, dur)) = self.cfg.block_on
+            && block == item
+        {
+            std::thread::sleep(dur);
+        }
+    }
+}
+
 impl Service<(), usize> for Srv {
     type Res = ();
     type Error = ();
@@ -97,18 +107,17 @@ impl Service<(), usize> for Srv {
     }
 
     async fn call(&self, item: usize, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
-        assert!(self.cfg.panic_on != Some(item), "item {item}");
+        if self.cfg.panic_on == Some(item) {
+            self.block(item);
+            panic!("item {item}");
+        }
         self.cfg.c.items.lock().unwrap().push(item);
         let name = std::thread::current()
             .name()
             .unwrap_or_default()
             .to_string();
         self.cfg.c.threads.lock().unwrap().push((item, name));
-        if let Some((block, dur)) = self.cfg.block_on
-            && block == item
-        {
-            std::thread::sleep(dur);
-        }
+        self.block(item);
         if let Some(ref tx) = self.cfg.items {
             let _ = tx.send(item);
         }
@@ -306,6 +315,59 @@ async fn pool_least_loaded_skips_blocked_worker() {
         threads[1..].iter().all(|(_, name)| *name != blocked),
         "{threads:?}"
     );
+
+    srv.stop(false).await;
+}
+
+/// Items queued at a blocked worker are sent to another worker.
+#[ntex::test]
+async fn pool_reschedules_blocked_worker_queue() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.block_on = Some((0, Duration::from_millis(2000)));
+    let srv = pool()
+        .workers(2)
+        .load_balancing(LoadBalancing::RoundRobin)
+        .run(cfg);
+    wait_for(|| c.created.load(Relaxed) == 2).await;
+    // wait for the first latency sample, see above
+    sleep(Millis(250)).await;
+
+    // the items are queued at both workers before the block is detected
+    for i in 0..=10 {
+        process(&srv, i).await;
+    }
+    wait_for(|| c.threads().len() == 11).await;
+    let threads = c.threads();
+    let blocked = threads.iter().find(|(i, _)| *i == 0).unwrap().1.clone();
+    assert!(
+        threads.iter().all(|(i, name)| *i == 0 || *name != blocked),
+        "{threads:?}"
+    );
+    let m = srv.metrics();
+    assert!(m.rescheduled > 0 && m.rescheduled <= 5, "{}", m.rescheduled);
+    assert_eq!(m.workers.iter().map(|w| w.items).sum::<u64>(), 11);
+
+    srv.stop(false).await;
+}
+
+/// Items queued at a failed worker are sent to its replacement.
+#[ntex::test]
+async fn pool_reschedules_failed_worker_queue() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.panic_on = Some(0);
+    cfg.block_on = Some((0, Duration::from_millis(200)));
+    let srv = pool().workers(1).run(cfg);
+
+    for i in 0..=5 {
+        process(&srv, i).await;
+    }
+    wait_for(|| c.items().len() == 5).await;
+    assert_eq!(c.items(), [1, 2, 3, 4, 5]);
+    let m = srv.metrics();
+    assert_eq!(m.rescheduled, 5);
+    assert_eq!(m.workers[0].restarts, 1);
 
     srv.stop(false).await;
 }

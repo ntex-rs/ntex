@@ -291,7 +291,8 @@ Only workers that are ready receive connections, see
 [Workers and service factories](#workers-and-service-factories). Among them,
 `LoadBalancing` decides:
 
-* `RoundRobin` sends connections to the workers in turn.
+* `RoundRobin` sends connections to the workers in turn, skipping workers
+  blocked by a task while another worker is available.
 * `LeastLoaded` picks two random workers and takes the one with the lower
   runtime utilization, the share of time the worker's runtime was busy,
   averaged over about 250 ms and sampled at most every 10 ms. If the two
@@ -336,6 +337,26 @@ irqbalance moves an interrupt, the connection stays on its worker.
 
 `ServerMetrics::incoming_cpu_hits` and `incoming_cpu_misses` show how well
 this works, see [Incoming CPU](#incoming-cpu).
+
+#### Rescheduling
+
+A connection waits in its worker's queue until the worker takes it. The
+server moves queued connections to other workers when their worker:
+
+* fails, for example its service panics. Connections that are queued while
+  no other worker is available wait in the server for the restarted worker;
+* is not ready, for example its service is re-created;
+* is blocked by a task, see [Stall detection](#stall-detection). With two or
+  more workers, the server checks for blocked workers every 50 ms and moves
+  their queued connections while another worker is not blocked.
+
+Only queued connections move. A connection the worker has taken is
+registered with that worker's runtime and stays there, a blocked worker
+handles it once it is unblocked, and a failed worker drops it. Moved
+connections are balanced again without their incoming CPU, and are not
+counted in `incoming_cpu_hits` and `incoming_cpu_misses` again.
+`ServerMetrics::rescheduled` counts them, see
+[Rescheduled connections](#rescheduled-connections).
 
 #### Windows: receive-side scaling
 
@@ -526,6 +547,19 @@ that the workers on the receiving CPUs are busier than the others, for
 example the adapter uses fewer queues than the server has workers. Check
 the adapter's RSS settings (`Get-NetAdapterRss` on Windows, `ethtool -l`
 and `/proc/interrupts` on Linux) against the worker placement.
+
+### Rescheduled connections
+
+This field is on `ServerMetrics`, see
+[Connection load balancing](#rescheduling).
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `rescheduled` | counter | Connections taken from the queue of a failed, not ready or blocked worker and sent to another worker. |
+
+An occasional increase follows a worker restart or a stall. A steady
+increase means workers are blocked often, check `latency.stalls` and
+`current_task` in [Runtime](#runtime) for the blocking code.
 
 ### Listeners
 
@@ -1068,11 +1102,12 @@ The same information is in `WorkerMetrics::runtime`:
 * Shorter blocking that stays under the threshold shows up as high values
   in the `latency.histogram` and `poll_histogram` differences.
 
-With `LoadBalancing::IncomingCpu`, the default, and `LoadBalancing::LeastLoaded`,
-new connections skip a worker whose runtime turn has lasted 100 ms or more,
+New connections skip a worker whose runtime turn has lasted 100 ms or more,
 that has recorded no latency sample for 100 ms past its interval, or that is
-stalled, as long as another worker is available. Connections already on the
-blocked worker still wait for it.
+stalled, as long as another worker is available. Connections queued at the
+blocked worker are moved to other workers, see
+[Rescheduling](#rescheduling). Connections the worker has already taken
+still wait for it.
 
 Change the interval and the threshold, both in milliseconds, on the system
 builder. `#[ntex::main]` has no options for them, build the system

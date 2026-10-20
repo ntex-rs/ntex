@@ -45,6 +45,8 @@ pub enum WorkerStatus {
 pub struct Worker<T> {
     name: String,
     reqs: Sender<T>,
+    /// Takes back items the worker has not received yet.
+    queue: Receiver<T>,
     stop: Sender<Shutdown>,
     avail: WorkerAvailability,
     arbiter: Arbiter,
@@ -119,6 +121,7 @@ impl<T> Worker<T> {
         }
         let worker = Worker {
             reqs,
+            queue: r_rx.clone(),
             avail,
             stop,
             name,
@@ -126,6 +129,7 @@ impl<T> Worker<T> {
             metrics: metrics.clone(),
             cpus,
         };
+        let reqs = Queue(r_rx);
 
         arbiter.handle().spawn_detached(async move {
             log::info!("Starting worker {n:?}");
@@ -134,7 +138,7 @@ impl<T> Worker<T> {
             // that catch task panics keep the arbiter running otherwise
             WorkerSlot::set_current(metrics.clone());
             let _ = spawn(async move {
-                match ServiceRunner::create(&n, cfg, r_rx, s_rx, a_tx, metrics).await {
+                match ServiceRunner::create(&n, cfg, reqs, s_rx, a_tx, metrics).await {
                     Ok(wrk) => {
                         log::debug!("Server instance has been created in {n:?}");
                         wrk.run().await;
@@ -185,6 +189,20 @@ impl<T> Worker<T> {
     /// the worker has stopped.
     pub fn send(&self, msg: T) -> Result<(), T> {
         self.reqs.try_send(msg).map_err(TrySendError::into_inner)
+    }
+
+    /// Takes the items queued for the worker that it has not received yet.
+    ///
+    /// Takes at most the items queued when called. If `close` is set, the
+    /// queue is closed first, so every queued item is taken and later sends
+    /// fail.
+    pub(crate) fn take_queued(&self, close: bool) -> Vec<T> {
+        if close {
+            self.queue.close();
+        }
+        (0..self.queue.len())
+            .map_while(|_| self.queue.try_recv().ok())
+            .collect()
     }
 
     /// Returns the current worker status.
@@ -245,6 +263,7 @@ impl<T> Clone for Worker<T> {
         Worker {
             name: self.name.clone(),
             reqs: self.reqs.clone(),
+            queue: self.queue.clone(),
             stop: self.stop.clone(),
             avail: self.avail.clone(),
             arbiter: self.arbiter.clone(),
@@ -388,6 +407,18 @@ impl Drop for WorkerAvailabilityTx {
     }
 }
 
+/// The worker's end of its item queue.
+///
+/// [`Worker`] handles keep the queue open, it is closed when the worker drops
+/// its end, so sends to a stopped worker fail.
+struct Queue<T>(Receiver<T>);
+
+impl<T> Drop for Queue<T> {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
 /// Service runner.
 ///
 /// The runner receives messages through an unbounded channel and processes them.
@@ -395,7 +426,7 @@ struct ServiceRunner<F: ServerConfiguration<Item = Req>, Req> {
     name: String,
     factory: F,
     svc: Pipeline<Req, (), ()>,
-    reqs: Receiver<Req>,
+    reqs: Queue<Req>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     availability: WorkerAvailabilityTx,
     metrics: Option<Arc<WorkerSlot>>,
@@ -409,7 +440,7 @@ where
     async fn create(
         name: &str,
         factory: F,
-        reqs: Receiver<Req>,
+        reqs: Queue<Req>,
         stop: Receiver<Shutdown>,
         availability: WorkerAvailabilityTx,
         metrics: Option<Arc<WorkerSlot>>,
@@ -441,7 +472,7 @@ where
 
     async fn run(mut self) {
         loop {
-            let mut recv = std::pin::pin!(self.reqs.recv());
+            let mut recv = std::pin::pin!(self.reqs.0.recv());
             let fut = poll_fn(|cx| {
                 match self.svc.poll_ready(cx) {
                     Poll::Ready(Ok(())) => {
