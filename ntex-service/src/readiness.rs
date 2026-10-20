@@ -2,10 +2,10 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
     future::{Future, poll_fn},
-    pin::pin,
+    pin::Pin,
     rc::{Rc, Weak},
     sync::{Arc, Mutex},
-    task::{Poll, Wake, Waker},
+    task::{Context, Poll, Wake, Waker},
 };
 
 /// A source of readiness-change notifications.
@@ -96,6 +96,10 @@ impl Drop for SourceInner {
 pub(crate) struct Generation {
     value: u64,
     direct: u64,
+}
+
+impl From<Generation> for () {
+    fn from(_: Generation) {}
 }
 
 /// A stable, shared readiness domain. Cloning aliases the same cache and graph.
@@ -200,7 +204,7 @@ impl ReadyScope {
             .await;
 
             let result = if owner.is_some() {
-                self.run_check(&mut check).await.map(|generation| {
+                RunCheck::new(self, &mut check).await.map(|generation| {
                     self.set_ready(generation);
                 })
             } else {
@@ -214,57 +218,12 @@ impl ReadyScope {
     }
 
     /// Checks raw services without borrowing the enclosing scope's cached success.
-    pub(crate) async fn check_uncached<F, Fut, E>(&self, mut check: F) -> Result<Generation, E>
+    pub(crate) fn check_uncached<F, Fut, E>(&self, check: F) -> RunCheck<'_, F, Fut>
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
-        self.run_check(&mut check).await
-    }
-
-    async fn run_check<F, Fut, E>(&self, check: &mut F) -> Result<Generation, E>
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = Result<(), E>>,
-    {
-        let mut observer: Option<ReadyObserver> = None;
-        loop {
-            let generation = self.generation();
-            let result = {
-                let mut fut = pin!(check());
-                poll_fn(|cx| {
-                    if let Some(observer) = &observer {
-                        observer.register(cx.waker());
-                    }
-                    if self.is_directly_invalidated(generation) {
-                        return Poll::Ready(None);
-                    }
-                    let before_poll = self.generation();
-                    let result = fut.as_mut().poll(cx);
-                    if result.is_pending() {
-                        observer
-                            .get_or_insert_with(|| self.observer())
-                            .register(cx.waker());
-                        // A first-poll notification may precede registration.
-                        if !self.is_current(before_poll) {
-                            cx.waker().wake_by_ref();
-                        }
-                    }
-                    result.map(Some)
-                })
-                .await
-            };
-            match result {
-                Some(Err(err)) => return Err(err),
-                Some(Ok(())) => {
-                    drop(observer.take());
-                    if self.is_current(generation) {
-                        return Ok(generation);
-                    }
-                }
-                None => {}
-            }
-        }
+        RunCheck::new(self, check)
     }
 
     /// Schedules observers without changing cached readiness or generations.
@@ -410,9 +369,108 @@ impl Drop for ReadyObserver {
     }
 }
 
+/// Runs a check until it completes without being invalidated.
+///
+/// Hand-written instead of an `async fn` to keep nested service readiness
+/// futures shallow, deep `async` nesting overflows the compiler's query depth.
+pub(crate) struct RunCheck<'a, F, Fut> {
+    scope: &'a ReadyScope,
+    check: F,
+    // Dropped before `observer`.
+    fut: Option<Fut>,
+    observer: Option<ReadyObserver>,
+    generation: Generation,
+}
+
+impl<'a, F, Fut, E> RunCheck<'a, F, Fut>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+{
+    pub(crate) fn new(scope: &'a ReadyScope, check: F) -> Self {
+        Self {
+            scope,
+            check,
+            fut: None,
+            observer: None,
+            generation: Generation::default(),
+        }
+    }
+
+    pub(crate) fn scope(&self) -> &'a ReadyScope {
+        self.scope
+    }
+
+    /// Polls the check. After completion, the next poll starts a new check.
+    pub(crate) fn poll_check(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Generation, E>> {
+        // SAFETY: `fut` is pinned in place and only dropped in place.
+        let this = unsafe { self.get_unchecked_mut() };
+        loop {
+            if this.fut.is_none() {
+                this.generation = this.scope.generation();
+                this.fut = Some((this.check)());
+            }
+            if let Some(observer) = &this.observer {
+                observer.register(cx.waker());
+            }
+            let result = if this.scope.is_directly_invalidated(this.generation) {
+                None
+            } else {
+                let before_poll = this.scope.generation();
+                // SAFETY: see above.
+                let fut = unsafe { Pin::new_unchecked(this.fut.as_mut().unwrap()) };
+                match fut.poll(cx) {
+                    Poll::Ready(result) => Some(result),
+                    Poll::Pending => {
+                        let scope = this.scope;
+                        this.observer
+                            .get_or_insert_with(|| scope.observer())
+                            .register(cx.waker());
+                        // A first-poll notification may precede registration.
+                        if !this.scope.is_current(before_poll) {
+                            cx.waker().wake_by_ref();
+                        }
+                        return Poll::Pending;
+                    }
+                }
+            };
+            this.fut = None;
+            match result {
+                Some(Err(err)) => {
+                    this.observer = None;
+                    return Poll::Ready(Err(err));
+                }
+                Some(Ok(())) => {
+                    this.observer = None;
+                    if this.scope.is_current(this.generation) {
+                        return Poll::Ready(Ok(this.generation));
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+}
+
+impl<F, Fut, E> Future for RunCheck<'_, F, Fut>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+{
+    type Output = Result<Generation, E>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.poll_check(cx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
+        pin::pin,
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
