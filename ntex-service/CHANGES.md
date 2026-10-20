@@ -2,12 +2,16 @@
 
 ## [5.3.0] - Unreleased
 
+* Share notification-invalidated readiness across all pipeline calls and bindings,
+  including `PipelineState` handles with different state values. Calls no longer
+  consume readiness. Retain one pending checker with cancellation handoff, and
+  let callers continue pipeline-owned checks when the original poller stops.
+
 * Add `ServiceBinding` and `Ctx::subscribe`. Context calls reuse bound readiness
   until notification, while raw services are checked on every call.
 
 * Add `ReadyNotifier` sources and internal readiness scopes with persistent
   subscriptions, generation-checked caching, and dependency invalidation.
-  Pipeline integration is separate.
 
 ## [5.2.0] - 2026-10-06
 

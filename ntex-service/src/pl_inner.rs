@@ -1,6 +1,224 @@
-use std::{cell, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
+use std::{
+    cell::RefCell, future::Future, future::poll_fn, ptr, rc::Rc, task::Context, task::Poll,
+    task::Waker,
+};
 
+use crate::readiness::{Generation, ReadyObserver, ReadyScope};
 use crate::{Ctx, Service, ctx::WaitersRef, util::BoxFuture};
+
+// Pipeline-owned checks can be driven by any waiting caller. Caller-owned
+// checks stay in their caller's future, so cancelling it releases ownership.
+pub(crate) struct PipelineReadiness<E> {
+    scope: ReadyScope,
+    observer: ReadyObserver,
+    checker_waker: Waker,
+    checker: RefCell<Checker<E>>,
+}
+
+enum Checker<E> {
+    Idle,
+    Caller,
+    Pipeline(BoxFuture<'static, Result<Generation, E>>),
+    Polling { cancelled: bool },
+}
+
+impl<E> PipelineReadiness<E> {
+    pub(crate) fn new(scope: &ReadyScope) -> Self {
+        Self {
+            scope: scope.clone(),
+            observer: scope.observer(),
+            checker_waker: scope.checker_waker(),
+            checker: RefCell::new(Checker::Idle),
+        }
+    }
+
+    pub(crate) fn unregister(&self) {
+        self.observer.clear();
+    }
+
+    pub(crate) fn cancel(&self) {
+        let previous = {
+            let mut checker = self.checker.borrow_mut();
+            match &mut *checker {
+                Checker::Polling { cancelled } => {
+                    *cancelled = true;
+                    None
+                }
+                Checker::Pipeline(_) => Some(std::mem::replace(
+                    &mut *checker,
+                    Checker::Polling { cancelled: true },
+                )),
+                Checker::Idle | Checker::Caller => None,
+            }
+        };
+        self.scope.reset_root();
+        if let Some(previous) = previous {
+            drop(previous);
+            self.checker.replace(Checker::Idle);
+            self.scope.wake_observers();
+        }
+    }
+
+    pub(crate) async fn ready<F, Fut>(&self, mut check: F) -> Result<(), E>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<Generation, E>>,
+    {
+        loop {
+            if self.scope.is_ready() {
+                return Ok(());
+            }
+            let mut owner = None;
+            let observer = self.scope.observer();
+            let result = poll_fn(|cx| {
+                observer.register(cx.waker());
+                if self.scope.is_ready() {
+                    return Poll::Ready(Ok(()));
+                }
+                match self.poll_check() {
+                    Poll::Ready(None) => {
+                        self.checker.replace(Checker::Caller);
+                        owner = Some(CallerCheck(self));
+                        Poll::Ready(Ok(()))
+                    }
+                    Poll::Ready(Some(result)) => Poll::Ready(result),
+                    Poll::Pending => Poll::Pending,
+                }
+            })
+            .await;
+            let result = if owner.is_some() {
+                check().await.map(|generation| {
+                    self.scope.set_ready(generation);
+                })
+            } else {
+                result
+            };
+            drop(observer);
+            drop(owner);
+            result?;
+        }
+    }
+
+    pub(crate) fn poll_ready(
+        &self,
+        cx: &mut Context<'_>,
+        check: impl FnOnce() -> BoxFuture<'static, Result<Generation, E>>,
+    ) -> Poll<Result<(), E>> {
+        let mut check = Some(check);
+        loop {
+            self.observer.register(cx.waker());
+            if self.scope.is_ready() {
+                return Poll::Ready(Ok(()));
+            }
+            match self.poll_check() {
+                Poll::Ready(None) => {
+                    let Some(check) = check.take() else {
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    };
+                    self.checker.replace(Checker::Polling { cancelled: false });
+                    let mut guard = PipelineCheck {
+                        readiness: self,
+                        fut: None,
+                        active: true,
+                    };
+                    guard.fut = Some(check());
+                    guard.retain();
+                }
+                Poll::Ready(Some(result)) => {
+                    result?;
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+
+    fn poll_check(&self) -> Poll<Option<Result<(), E>>> {
+        let previous = {
+            let mut checker = self.checker.borrow_mut();
+            match &*checker {
+                Checker::Idle => return Poll::Ready(None),
+                Checker::Caller | Checker::Polling { .. } => return Poll::Pending,
+                Checker::Pipeline(_) => {
+                    std::mem::replace(&mut *checker, Checker::Polling { cancelled: false })
+                }
+            }
+        };
+        let Checker::Pipeline(fut) = previous else {
+            unreachable!()
+        };
+        let mut guard = PipelineCheck {
+            readiness: self,
+            fut: Some(fut),
+            active: true,
+        };
+        let result = guard
+            .fut
+            .as_mut()
+            .unwrap()
+            .as_mut()
+            .poll(&mut Context::from_waker(&self.checker_waker));
+        if result.is_pending() {
+            guard.retain();
+            return Poll::Pending;
+        }
+        // Drop the future before handing ownership to another task.
+        drop(guard.fut.take());
+        if guard.cancelled() {
+            return Poll::Pending;
+        }
+        let result = result.map(|result| {
+            result.map(|generation| {
+                self.scope.set_ready(generation);
+            })
+        });
+        drop(guard);
+        result.map(Some)
+    }
+}
+
+struct CallerCheck<'a, E>(&'a PipelineReadiness<E>);
+
+impl<E> Drop for CallerCheck<'_, E> {
+    fn drop(&mut self) {
+        self.0.checker.replace(Checker::Idle);
+        self.0.scope.wake_observers();
+    }
+}
+
+struct PipelineCheck<'a, E> {
+    readiness: &'a PipelineReadiness<E>,
+    fut: Option<BoxFuture<'static, Result<Generation, E>>>,
+    active: bool,
+}
+
+impl<E> PipelineCheck<'_, E> {
+    fn cancelled(&self) -> bool {
+        matches!(
+            *self.readiness.checker.borrow(),
+            Checker::Polling { cancelled: true }
+        )
+    }
+
+    fn retain(&mut self) {
+        if !self.cancelled() {
+            self.readiness
+                .checker
+                .replace(Checker::Pipeline(self.fut.take().unwrap()));
+            self.active = false;
+        }
+    }
+}
+
+impl<E> Drop for PipelineCheck<'_, E> {
+    fn drop(&mut self) {
+        if self.active {
+            drop(self.fut.take());
+            self.readiness.checker.replace(Checker::Idle);
+            self.readiness.scope.wake_observers();
+        }
+    }
+}
 
 // ======================== PipelineApi ============================
 
@@ -13,11 +231,13 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         St: 'static,
         Req: 'static,
     {
+        let waiters = WaitersRef::new();
         PipelineApi(Rc::new(PipelineInner {
             s,
             st,
-            waiters: WaitersRef::new(),
-            st_runtime: cell::UnsafeCell::new(RuntimeState::New),
+            readiness: PipelineReadiness::new(waiters.scope()),
+            waiters,
+            st_runtime: RefCell::new(RuntimeState::New),
         }))
     }
 
@@ -67,7 +287,8 @@ impl<Req, Res, Err> Clone for PipelineApi<Req, Res, Err> {
 struct PipelineInner<S: Service<St, Req>, St, Req> {
     s: S,
     st: St,
-    st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
+    readiness: PipelineReadiness<S::Error>,
+    st_runtime: RefCell<RuntimeState>,
     waiters: WaitersRef,
 }
 
@@ -76,12 +297,13 @@ impl<S: Service<St, Req>, St, Req> Drop for PipelineInner<S, St, Req> {
         // Readiness and shutdown futures borrow `s`, `st` and `waiters`, so they
         // must be dropped before the fields they reference
         *self.st_runtime.get_mut() = RuntimeState::Done;
+        self.readiness.cancel();
     }
 }
 
-enum RuntimeState<E> {
+enum RuntimeState {
     New,
-    Readiness(BoxFuture<'static, Result<(), E>>),
+    Polling,
     Shutdown(BoxFuture<'static, ()>),
     Done,
 }
@@ -115,147 +337,83 @@ where
     }
 
     fn unreg(&self, index: u32) {
+        if index == 0 {
+            self.readiness.unregister();
+        }
         self.waiters.remove(index);
     }
 
     fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), S::Error>> {
-        Box::pin(async move {
-            self.waiters.set_ready(false);
-            let result = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
-                .ready(&self.s)
-                .await;
-            self.waiters.set_ready(result.is_ok());
-            result
-        })
+        Box::pin(self.readiness.ready(move || async move {
+            Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
+                .ready_generation(&self.s)
+                .await
+        }))
     }
 
     fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<S::Res, S::Error>> {
         Box::pin(async move {
             let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st);
-            if !self.waiters.take_ready() {
-                let result = ctx.ready(&self.s).await;
-                // the call consumes any readiness reported while it was waiting
-                self.waiters.set_ready(false);
-                result?;
-            }
-            ctx.call_nowait(&self.s, req).await
+            self.readiness
+                .ready(|| ctx.ready_generation(&self.s))
+                .await?;
+            self.s.call(req, ctx).await
         })
     }
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
-        let st = unsafe { &mut *self.st_runtime.get() };
-        match st {
-            RuntimeState::New => {
-                // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
-                // `fut` is stored in `self.st_runtime`, which is reset before other
-                // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
-                let pl = unsafe { &*(ptr::from_ref(self)) };
-                let fut = Box::pin(CheckReadiness {
-                    pl,
-                    f: ready,
-                    fut: None,
-                });
-                *st = RuntimeState::Readiness(fut);
-                self.poll_ready(cx)
-            }
-            RuntimeState::Readiness(fut) => Pin::new(fut).poll(cx),
-            RuntimeState::Shutdown(_) | RuntimeState::Done => Poll::Ready(Ok(())),
+        if self.waiters.is_shutdown() {
+            return Poll::Ready(Ok(()));
         }
+        self.readiness.poll_ready(cx, || {
+            // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
+            // `fut` is stored in `self.readiness`, which is reset before other
+            // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
+            let pl = unsafe { &*(ptr::from_ref(self)) };
+            Box::pin(async move {
+                let registration = pl.waiters.register();
+                Ctx::<'_, S, St>::new(registration.idx, &pl.waiters, &pl.st)
+                    .ready_generation(&pl.s)
+                    .await
+            })
+        })
     }
 
     fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let st = unsafe { &mut *self.st_runtime.get() };
-        match st {
-            RuntimeState::New | RuntimeState::Readiness(_) => {
+        let state = self.st_runtime.replace(RuntimeState::Polling);
+        let mut fut = match state {
+            RuntimeState::New => {
+                self.waiters.shutdown();
+                self.readiness.cancel();
                 // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
                 // `fut` is stored in `self.st_runtime`, which is reset before other
                 // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
                 let pl = unsafe { &*(ptr::from_ref(self)) };
 
-                let fut = Box::pin(async move {
+                Box::pin(async move {
                     let ctx = Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st);
                     pl.s.shutdown(ctx).await;
-                });
-                *st = RuntimeState::Shutdown(fut);
-                pl.waiters.shutdown();
-                self.poll_shutdown(cx)
+                }) as BoxFuture<'static, ()>
             }
-            RuntimeState::Shutdown(fut) => {
-                let res = Pin::new(fut).poll(cx);
-                if res.is_ready() {
-                    *st = RuntimeState::Done;
-                }
-                res
+            RuntimeState::Shutdown(fut) => fut,
+            RuntimeState::Polling => return Poll::Pending,
+            RuntimeState::Done => {
+                self.st_runtime.replace(RuntimeState::Done);
+                return Poll::Ready(());
             }
-            RuntimeState::Done => Poll::Ready(()),
+        };
+        let result = fut.as_mut().poll(cx);
+        if result.is_ready() {
+            drop(fut);
+            self.st_runtime.replace(RuntimeState::Done);
+        } else {
+            self.st_runtime.replace(RuntimeState::Shutdown(fut));
         }
+        result
     }
 
     fn is_shutdown(&self) -> bool {
         self.waiters.is_shutdown()
-    }
-}
-
-fn ready<S, St, Req>(
-    pl: &'static PipelineInner<S, St, Req>,
-) -> impl Future<Output = Result<(), S::Error>>
-where
-    S: Service<St, Req>,
-{
-    pl.s.ready(Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st))
-}
-
-struct CheckReadiness<S, St, Req, F, Fut>
-where
-    S: Service<St, Req> + 'static,
-    St: 'static,
-    Req: 'static,
-{
-    f: F,
-    fut: Option<Fut>,
-    pl: &'static PipelineInner<S, St, Req>,
-}
-
-impl<S, St, Req, F, Fut> Unpin for CheckReadiness<S, St, Req, F, Fut> where S: Service<St, Req> {}
-
-impl<S, St, Req, F, Fut> Drop for CheckReadiness<S, St, Req, F, Fut>
-where
-    S: Service<St, Req>,
-{
-    fn drop(&mut self) {
-        // future got dropped during polling, we must notify other waiters
-        if self.fut.is_some() {
-            self.pl.waiters.notify();
-        }
-    }
-}
-
-impl<S, St, Req, F, Fut> Future for CheckReadiness<S, St, Req, F, Fut>
-where
-    S: Service<St, Req>,
-    F: Fn(&'static PipelineInner<S, St, Req>) -> Fut,
-    Fut: Future<Output = Result<(), S::Error>>,
-{
-    type Output = Result<(), S::Error>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut();
-
-        let result = this.pl.waiters.run(0, cx, |cx| {
-            if this.fut.is_none() {
-                this.fut = Some((this.f)(this.pl));
-            }
-            let fut = this.fut.as_mut().unwrap();
-            let result = unsafe { Pin::new_unchecked(fut) }.poll(cx);
-            if result.is_ready() {
-                let _ = this.fut.take();
-            }
-            result
-        });
-        this.pl
-            .waiters
-            .set_ready(matches!(result, Poll::Ready(Ok(()))));
-        result
     }
 }
 

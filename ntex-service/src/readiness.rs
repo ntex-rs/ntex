@@ -4,7 +4,8 @@ use std::{
     future::{Future, poll_fn},
     pin::pin,
     rc::{Rc, Weak},
-    task::{Poll, Waker},
+    sync::{Arc, Mutex},
+    task::{Poll, Wake, Waker},
 };
 
 /// A source of readiness-change notifications.
@@ -119,6 +120,11 @@ impl ReadyScope {
         self.0.ready.get()
     }
 
+    pub(crate) fn reset_root(&self) {
+        self.0.invalidate(true);
+        self.wake_observers();
+    }
+
     /// Records a successful check only if no dependency changed while checking.
     pub(crate) fn set_ready(&self, generation: Generation) -> bool {
         if self.is_current(generation) {
@@ -155,8 +161,12 @@ impl ReadyScope {
     pub(crate) fn observer(&self) -> ReadyObserver {
         ReadyObserver {
             scope: Rc::downgrade(&self.0),
-            idx: self.0.observers.borrow_mut().insert(None),
+            idx: self.0.observers.0.lock().unwrap().insert(None),
         }
+    }
+
+    pub(crate) fn checker_waker(&self) -> Waker {
+        Waker::from(Arc::new(CheckerWake(Arc::downgrade(&self.0.observers))))
     }
 
     /// Drives or joins a shared check without allocating on a cached success.
@@ -272,7 +282,37 @@ struct ScopeInner {
     sources: RefCell<Vec<Weak<SourceInner>>>,
     parents: RefCell<Vec<Weak<Self>>>,
     children: RefCell<Vec<Weak<Self>>>,
-    observers: RefCell<slab::Slab<Option<Waker>>>,
+    observers: Arc<ReadyObservers>,
+}
+
+// Readiness scopes are local, but a future may send its waker to another thread.
+#[derive(Debug, Default)]
+struct ReadyObservers(Mutex<slab::Slab<Option<Waker>>>);
+
+impl ReadyObservers {
+    fn take_wakers(&self, wakers: &mut Vec<Waker>) {
+        for (_, waker) in self.0.lock().unwrap().iter_mut() {
+            wakers.extend(waker.take());
+        }
+    }
+}
+
+struct CheckerWake(std::sync::Weak<ReadyObservers>);
+
+impl Wake for CheckerWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        if let Some(observers) = self.0.upgrade() {
+            let mut wakers = Vec::new();
+            observers.take_wakers(&mut wakers);
+            for waker in wakers {
+                waker.wake();
+            }
+        }
+    }
 }
 
 struct CheckOwner<'a>(&'a ReadyScope);
@@ -299,9 +339,7 @@ impl ScopeInner {
     }
 
     fn take_wakers(&self, wakers: &mut Vec<Waker>) {
-        for (_, waker) in self.observers.borrow_mut().iter_mut() {
-            wakers.extend(waker.take());
-        }
+        self.observers.take_wakers(wakers);
     }
 }
 
@@ -333,12 +371,19 @@ pub(crate) struct ReadyObserver {
 }
 
 impl ReadyObserver {
+    pub(crate) fn clear(&self) {
+        if let Some(scope) = self.scope.upgrade() {
+            let waker = scope.observers.0.lock().unwrap()[self.idx].take();
+            drop(waker);
+        }
+    }
+
     /// Registers before checking readiness; returns false if the scope is gone.
     pub(crate) fn register(&self, waker: &Waker) -> bool {
         let Some(scope) = self.scope.upgrade() else {
             return false;
         };
-        if scope.observers.borrow()[self.idx]
+        if scope.observers.0.lock().unwrap()[self.idx]
             .as_ref()
             .is_some_and(|prev| prev.will_wake(waker))
         {
@@ -347,7 +392,7 @@ impl ReadyObserver {
 
         // Waker clone/drop implementations can reenter, just like wake.
         let waker = waker.clone();
-        let previous = scope.observers.borrow_mut()[self.idx].replace(waker);
+        let previous = scope.observers.0.lock().unwrap()[self.idx].replace(waker);
         drop(previous);
         true
     }
@@ -356,7 +401,7 @@ impl ReadyObserver {
 impl Drop for ReadyObserver {
     fn drop(&mut self) {
         if let Some(scope) = self.scope.upgrade() {
-            let waker = scope.observers.borrow_mut().remove(self.idx);
+            let waker = scope.observers.0.lock().unwrap().remove(self.idx);
             drop(waker);
         }
     }
@@ -595,7 +640,16 @@ mod tests {
                 for scope in [&hook_leaf, &hook_other, &hook_root] {
                     assert!(!scope.is_ready());
                     assert_eq!(scope.generation().value, 1);
-                    assert!(scope.0.observers.borrow().iter().all(|(_, w)| w.is_none()));
+                    assert!(
+                        scope
+                            .0
+                            .observers
+                            .0
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .all(|(_, w)| w.is_none())
+                    );
                 }
                 let before = hook_root.generation();
                 assert!(root_observer.register(&waker));
@@ -651,7 +705,7 @@ mod tests {
         source.notify();
         assert_eq!(latest.wakes(), 2);
         drop(observer);
-        assert!(scope.0.observers.borrow().is_empty());
+        assert!(scope.0.observers.0.lock().unwrap().is_empty());
         assert!(scope.set_ready(scope.generation()));
         source.notify();
         assert!(
@@ -711,7 +765,9 @@ mod tests {
         assert_eq!(child.0.parents.borrow().len(), 1);
 
         let observer = parent.observer();
-        assert!(observer.register(Waker::noop()));
+        let checker_waker = parent.checker_waker();
+        let observers = Arc::downgrade(&parent.0.observers);
+        assert!(observer.register(&checker_waker));
         let weak = Rc::downgrade(&parent.0);
         let alias = parent.clone();
         drop(parent);
@@ -719,6 +775,8 @@ mod tests {
         assert_eq!(source.0.scopes.borrow().len(), 1);
         drop(alias);
         assert!(weak.upgrade().is_none());
+        assert!(observers.upgrade().is_none());
+        checker_waker.wake_by_ref();
         assert!(source.0.scopes.borrow().is_empty());
         assert!(child.0.parents.borrow().is_empty());
         assert!(!observer.register(Waker::noop()));
@@ -761,7 +819,7 @@ mod tests {
         let hook_scope = scope.clone();
         ON_DROP.with_borrow_mut(|slot| {
             *slot = Some(Box::new(move || {
-                assert_eq!(hook_scope.0.observers.borrow().len(), 1);
+                assert_eq!(hook_scope.0.observers.0.lock().unwrap().len(), 1);
                 hook_source.notify();
             }));
         });
@@ -773,7 +831,7 @@ mod tests {
         let hook_ran = ran.clone();
         ON_DROP.with_borrow_mut(|slot| {
             *slot = Some(Box::new(move || {
-                assert!(scope.0.observers.borrow().is_empty());
+                assert!(scope.0.observers.0.lock().unwrap().is_empty());
                 let observer = scope.observer();
                 assert!(observer.register(Waker::noop()));
                 source.notify();

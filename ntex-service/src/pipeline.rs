@@ -10,6 +10,8 @@ pub use crate::pl_state::{PipelineState, PipelineStateBinding};
 ///
 /// A pipeline coordinates readiness, calls, and shutdown for the enclosed
 /// service chain.
+/// Successful readiness is shared by every binding until a subscribed
+/// [`crate::ReadyNotifier`] invalidates it. Calls do not consume readiness.
 pub struct Pipeline<Req, Res, Err> {
     api: PipelineApi<Req, Res, Err>,
 }
@@ -44,17 +46,25 @@ where
     #[inline]
     /// Returns when the pipeline is ready to process requests.
     ///
-    /// A successful check is consumed by the next call, which then skips
-    /// its own readiness check.
+    /// Reuses valid shared readiness. Cancelling the active caller drops its
+    /// check and lets another waiter take ownership. Returns successfully if
+    /// pipeline shutdown has started, like [`Self::poll_ready`].
     pub async fn ready(&self) -> Result<(), Err> {
-        future::poll_fn(|cx| self.api.poll_ready(cx)).await
+        let mut ready = self.api.ready(0);
+        future::poll_fn(|cx| {
+            if self.api.is_shutdown() {
+                Poll::Ready(Ok(()))
+            } else {
+                ready.as_mut().poll(cx)
+            }
+        })
+        .await
     }
 
     #[inline]
     /// Waits for readiness, then calls the service.
     ///
-    /// The readiness check is skipped if the last pipeline readiness check
-    /// succeeded and no call has started since.
+    /// Reuses valid shared readiness without consuming it.
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
         let pl = self.bind();
         pl.api.call(pl.idx, req).await
@@ -64,9 +74,9 @@ where
     /// Returns an owned future that waits for readiness and calls the service.
     ///
     /// Unlike [`Pipeline::call`], the returned future does not borrow the
-    /// pipeline and can be moved between local tasks. The readiness check is
-    /// skipped if the last pipeline readiness check succeeded and no call has
-    /// started since; this is decided when the future is first polled.
+    /// pipeline and can be moved between local tasks. Shared readiness is
+    /// consulted when the future is polled and the call is dispatched, not
+    /// when the future is constructed.
     pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
         PipelineCall::new(self.bind(), req)
     }
@@ -74,8 +84,9 @@ where
     #[inline]
     /// Returns `Ready` when the pipeline is ready to process requests.
     ///
-    /// A successful check is consumed by the next call, which then skips
-    /// its own readiness check.
+    /// Registers the task for readiness changes and reuses valid shared
+    /// readiness. A pending check is retained by the pipeline, even if this
+    /// task stops polling; other callers can continue driving it.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>> {
         self.api.poll_ready(cx)
     }
@@ -147,8 +158,7 @@ where
     #[inline]
     /// Waits until the pipeline is ready to process a request.
     ///
-    /// A successful check is consumed by the next call, which then skips
-    /// its own readiness check.
+    /// Reuses valid shared readiness without consuming it.
     pub async fn ready(&self) -> Result<(), Err> {
         self.api.ready(self.idx).await
     }
@@ -156,8 +166,7 @@ where
     #[inline]
     /// Waits for readiness, then calls the service.
     ///
-    /// The readiness check is skipped if the last pipeline readiness check
-    /// succeeded and no call has started since.
+    /// Reuses valid shared readiness without consuming it.
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
         let pl = self.clone();
         pl.api.call(pl.idx, req).await
@@ -167,9 +176,8 @@ where
     /// Returns an owned future that waits for readiness and calls the service.
     ///
     /// The returned future does not borrow this binding and can be moved between
-    /// local tasks. The readiness check is skipped if the last pipeline readiness
-    /// check succeeded and no call has started since; this is decided when the
-    /// future is first polled.
+    /// local tasks. Shared readiness is consulted when the future is polled
+    /// and the call is dispatched, not when the future is constructed.
     pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
         PipelineCall::new(self.clone(), req)
     }
