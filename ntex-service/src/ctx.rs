@@ -1,6 +1,9 @@
-use std::{cell, fmt, future, marker, ops, pin, rc::Rc, task::Context, task::Poll, task::Waker};
+use std::{
+    cell, fmt, future::Future, marker, ops, pin, rc::Rc, task::Context, task::Poll, task::Waker,
+};
 
-use crate::{ReadyNotifier, Service, readiness::Generation, readiness::ReadyScope};
+use crate::readiness::{Generation, ReadyScope, RunCheck};
+use crate::{ReadyNotifier, Service};
 
 /// Context provided to [`Service`] lifecycle methods.
 ///
@@ -212,29 +215,35 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     ///
     /// A [`crate::ServiceBinding`] reuses successful readiness until a subscribed
     /// source changes. A raw service is checked on every invocation.
-    pub async fn ready<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
+    pub fn ready<S, Req>(&self, svc: &'a S) -> impl Future<Output = Result<(), S::Error>>
     where
         S: Service<St, Req>,
     {
-        self.ready_generation(svc).await.map(|_| ())
+        self.ready_call(svc)
     }
 
-    pub(crate) async fn ready_generation<S, Req>(&self, svc: &'a S) -> Result<Generation, S::Error>
+    pub(crate) fn ready_generation<S, Req>(
+        &self,
+        svc: &'a S,
+    ) -> impl Future<Output = Result<Generation, S::Error>>
     where
         S: Service<St, Req>,
     {
-        loop {
-            let generation = ReadyCall {
-                completed: false,
-                fut: self.scope.check_uncached(|| svc.ready(self.cast())),
-                idx: self.idx,
-                waiters: self.waiters,
-            }
-            .await?;
-            // Scheduling another waiter can invalidate the completed check.
-            if self.scope.is_current(generation) {
-                return Ok(generation);
-            }
+        self.ready_call(svc)
+    }
+
+    fn ready_call<S, Req, O>(&self, svc: &'a S) -> impl Future<Output = Result<O, S::Error>>
+    where
+        S: Service<St, Req>,
+        O: From<Generation>,
+    {
+        let ctx = *self;
+        ReadyCall {
+            check: self.scope.check_uncached(move || svc.ready(ctx.cast())),
+            waiters: self.waiters,
+            idx: self.idx,
+            active: false,
+            _t: marker::PhantomData,
         }
     }
 
@@ -274,7 +283,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     where
         F: Fn(&mut Context<'a>) -> Poll<R>,
     {
-        future::poll_fn(move |_| {
+        std::future::poll_fn(move |_| {
             let wakers = self.waiters.get();
             let idx = self.waiters.cur.get() as usize;
             let mut ctx = if let Some(w) = wakers.get(idx).and_then(|w| w.as_ref()) {
@@ -371,35 +380,51 @@ impl<S, St> fmt::Debug for Ctx<'_, S, St> {
     }
 }
 
-struct ReadyCall<'a, F: future::Future> {
-    completed: bool,
-    fut: F,
-    idx: u32,
+// Hand-written to keep nested service readiness futures shallow, see `RunCheck`.
+struct ReadyCall<'a, F, Fut, O> {
+    check: RunCheck<'a, F, Fut>,
     waiters: &'a WaitersRef,
+    idx: u32,
+    // A started check that has not completed.
+    active: bool,
+    _t: marker::PhantomData<O>,
 }
 
-impl<F: future::Future> Drop for ReadyCall<'_, F> {
+impl<F, Fut, O> Drop for ReadyCall<'_, F, Fut, O> {
     fn drop(&mut self) {
-        if !self.completed && self.waiters.cur.get() == self.idx {
+        if self.active && self.waiters.cur.get() == self.idx {
             self.waiters.notify();
         }
     }
 }
 
-impl<F: future::Future> Unpin for ReadyCall<'_, F> {}
+impl<F, Fut, E, O> Future for ReadyCall<'_, F, Fut, O>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+    O: From<Generation>,
+{
+    type Output = Result<O, E>;
 
-impl<F: future::Future> future::Future for ReadyCall<'_, F> {
-    type Output = F::Output;
-
-    fn poll(mut self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.waiters.run(self.idx, cx, |cx| {
-            // SAFETY: `fut` never moves
-            let result = unsafe { pin::Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
-            if result.is_ready() {
-                self.completed = true;
+    fn poll(self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: `check` is pinned in place.
+        let this = unsafe { self.get_unchecked_mut() };
+        loop {
+            this.active = true;
+            let mut check = unsafe { pin::Pin::new_unchecked(&mut this.check) };
+            let result = this
+                .waiters
+                .run(this.idx, cx, |cx| check.as_mut().poll_check(cx));
+            let Poll::Ready(result) = result else {
+                return Poll::Pending;
+            };
+            this.active = false;
+            match result {
+                // Scheduling another waiter can invalidate the completed check.
+                Ok(generation) if !this.check.scope().is_current(generation) => {}
+                result => return Poll::Ready(result.map(O::from)),
             }
-            result
-        })
+        }
     }
 }
 
