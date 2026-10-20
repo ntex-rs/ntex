@@ -2,6 +2,11 @@
 
 ## [4.3.0] - Unreleased
 
+* Move items queued at a failed, unavailable or blocked worker to other workers,
+  add `ServerMetrics::rescheduled`
+
+* `LoadBalancing::RoundRobin` skips blocked workers while another worker is available
+
 * Add `Server::metrics()` with per-worker (`WorkerMetrics`), per-listener (`ListenerMetrics`)
   and accept-loop statistics (`ServerMetrics`)
 

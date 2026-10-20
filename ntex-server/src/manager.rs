@@ -4,7 +4,7 @@ use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, pin::pin, rc::R
 use async_channel::{Receiver, Sender, unbounded};
 use ntex_rt::{System, signals::PanicSource, signals::Signal};
 use ntex_util::future::{Either, join_all, select};
-use ntex_util::time::{Millis, sleep, timeout};
+use ntex_util::time::{Millis, interval, sleep, timeout};
 
 use crate::affinity::{self, Placement};
 use crate::{Server, ServerConfiguration, ServerStatus};
@@ -13,6 +13,8 @@ use crate::{balance::Balancer, metrics::Metrics, server::ServerShared};
 
 const STOP_DELAY: Millis = Millis(250);
 const RESTART_DELAY: Millis = Millis(250);
+/// Interval of the check for items queued at blocked workers.
+const RESCHEDULE_INTERVAL: Millis = Millis(50);
 
 #[derive(Clone)]
 pub(crate) struct ServerManager<F: ServerConfiguration>(Rc<Inner<F>>);
@@ -138,6 +140,11 @@ impl<T> Routing<T> {
             None
         };
         self.lock().dispatch(item, cpu, metrics)
+    }
+
+    /// Sends a rescheduled item to a worker, without its incoming CPU.
+    fn redispatch(&self, item: T, metrics: &Metrics) -> Result<(), Rejected<T>> {
+        self.lock().dispatch(item, None, metrics)
     }
 }
 
@@ -405,8 +412,9 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, placement: Option
 }
 
 struct HandleCmdState<F: ServerConfiguration> {
-    /// Items received while no worker was available.
-    backlog: VecDeque<F::Item>,
+    /// Items received while no worker was available, and whether the item
+    /// was rescheduled from a worker.
+    backlog: VecDeque<(F::Item, bool)>,
     mgr: ServerManager<F>,
 }
 
@@ -424,7 +432,47 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             self.mgr.0.router.dispatch(item, &self.mgr.0.shared.metrics)
         {
             log::error!("No workers");
-            self.backlog.push_back(item);
+            self.backlog.push_back((item, false));
+            self.mgr.set_available(false);
+        }
+    }
+
+    /// Moves the items queued at blocked workers to other workers.
+    fn reschedule_blocked(&mut self) {
+        let metrics = &self.mgr.0.shared.metrics;
+        let routing = self.mgr.0.router.clone();
+        let mut router = routing.lock();
+        let r = &mut *router;
+        // only if some workers are not blocked
+        if r.closed || !r.balancer.sample(&r.workers) {
+            return;
+        }
+        let mut items = Vec::new();
+        for (idx, wrk) in r.workers.iter().enumerate() {
+            if r.balancer.is_blocked(idx) {
+                let taken = wrk.take_queued(false);
+                if !taken.is_empty() {
+                    log::debug!(
+                        "Rescheduling {} items of blocked worker {:?}",
+                        taken.len(),
+                        wrk.name()
+                    );
+                    items.extend(taken);
+                }
+            }
+        }
+        metrics.rescheduled(items.len() as u64);
+
+        // the server is unavailable while the backlog is not empty
+        for item in items {
+            if !self.backlog.is_empty() {
+                self.backlog.push_back((item, true));
+            } else if let Err(Rejected::NoWorker(item)) = r.dispatch(item, None, metrics) {
+                self.backlog.push_back((item, true));
+            }
+        }
+        drop(router);
+        if !self.backlog.is_empty() {
             self.mgr.set_available(false);
         }
     }
@@ -454,15 +502,37 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                     let wrk = r.workers.remove(idx);
                     r.balancer.park(idx, wrk.name(), wrk.arbiter().id());
                 }
+                // items the worker has not received are sent to other
+                // workers, the update is stale if the worker is available
+                let status = worker.status();
+                if status != WorkerStatus::Available {
+                    let items = worker.take_queued(status == WorkerStatus::Failed);
+                    if !items.is_empty() {
+                        log::debug!(
+                            "Rescheduling {} items of {status:?} worker {:?}",
+                            items.len(),
+                            worker.name()
+                        );
+                        self.mgr.0.shared.metrics.rescheduled(items.len() as u64);
+                        self.backlog
+                            .extend(items.into_iter().map(|item| (item, true)));
+                    }
+                }
             }
         }
         drop(router);
 
         // handle backlog, the server is unavailable while it is not empty, so
         // new items do not overtake it
-        while let Some(item) = self.backlog.pop_front() {
-            if let Err(item) = routing.dispatch(item, &self.mgr.0.shared.metrics) {
-                self.backlog.push_front(item.into_inner());
+        let metrics = &self.mgr.0.shared.metrics;
+        while let Some((item, rescheduled)) = self.backlog.pop_front() {
+            let res = if rescheduled {
+                routing.redispatch(item, metrics)
+            } else {
+                routing.dispatch(item, metrics)
+            };
+            if let Err(item) = res {
+                self.backlog.push_front((item.into_inner(), rescheduled));
                 break;
             }
         }
@@ -565,10 +635,25 @@ async fn handle_cmd<F: ServerConfiguration>(
     rx: Receiver<ServerCommand<F::Item>>,
 ) {
     let _drop_hnd = DropHandle(mgr.clone());
+    // queued items are moved from blocked workers to other workers
+    let check = (mgr.0.cfg.num >= 2).then(|| interval(RESCHEDULE_INTERVAL));
     let mut state = HandleCmdState::new(mgr);
 
     loop {
-        let Ok(item) = rx.recv().await else {
+        let item = if let Some(ref check) = check {
+            match select(rx.recv(), check.tick()).await {
+                Either::Left(item) => item,
+                Either::Right(()) => {
+                    if !state.mgr.stopping() {
+                        state.reschedule_blocked();
+                    }
+                    continue;
+                }
+            }
+        } else {
+            rx.recv().await
+        };
+        let Ok(item) = item else {
             return;
         };
 

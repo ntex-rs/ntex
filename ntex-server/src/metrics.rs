@@ -35,6 +35,9 @@ pub struct ServerMetrics {
     /// worker, because no worker is placed on that CPU or its worker was
     /// busier than other workers.
     pub incoming_cpu_misses: u64,
+    /// Number of items taken from the queue of a failed, unavailable or
+    /// blocked worker and sent to another worker.
+    pub rescheduled: u64,
 }
 
 /// Metrics of a single worker.
@@ -203,6 +206,7 @@ pub(crate) struct Metrics {
     accept: OnceLock<AcceptSlot>,
     incoming_cpu_hits: AtomicU64,
     incoming_cpu_misses: AtomicU64,
+    rescheduled: AtomicU64,
 }
 
 impl Metrics {
@@ -216,6 +220,7 @@ impl Metrics {
             accept: OnceLock::new(),
             incoming_cpu_hits: AtomicU64::new(0),
             incoming_cpu_misses: AtomicU64::new(0),
+            rescheduled: AtomicU64::new(0),
         }
     }
 
@@ -228,6 +233,11 @@ impl Metrics {
             &self.incoming_cpu_misses
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Items were taken from a worker's queue to be sent to other workers.
+    pub(crate) fn rescheduled(&self, n: u64) {
+        self.rescheduled.fetch_add(n, Ordering::Relaxed);
     }
 
     pub(crate) fn worker(&self, id: WorkerId) -> Option<Arc<WorkerSlot>> {
@@ -282,6 +292,7 @@ impl Metrics {
             workers,
             incoming_cpu_hits: self.incoming_cpu_hits.load(Ordering::Relaxed),
             incoming_cpu_misses: self.incoming_cpu_misses.load(Ordering::Relaxed),
+            rescheduled: self.rescheduled.load(Ordering::Relaxed),
             ..Default::default()
         };
         if let Some(accept) = self.accept.get() {

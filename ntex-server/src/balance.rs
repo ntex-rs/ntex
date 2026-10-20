@@ -11,6 +11,9 @@ use crate::Worker;
 #[non_exhaustive]
 pub enum LoadBalancing {
     /// Items are sent to the workers in turn.
+    ///
+    /// Workers whose runtime is blocked by a task are skipped while another
+    /// worker is available.
     RoundRobin,
     /// Each item is sent to the less loaded of two randomly chosen workers.
     ///
@@ -211,12 +214,7 @@ impl Balancer {
         cpu: Option<usize>,
     ) -> (usize, Option<bool>) {
         match self.mode {
-            LoadBalancing::RoundRobin => {
-                if self.next >= workers.len() {
-                    self.next = workers.len() - 1;
-                }
-                (self.next, None)
-            }
+            LoadBalancing::RoundRobin => (self.round_robin(workers.len()), None),
             LoadBalancing::LeastLoaded | LoadBalancing::IncomingCpu => {
                 let now = Instant::now();
                 self.refresh(now, |idx| Sample::of(&workers[idx], now));
@@ -231,6 +229,32 @@ impl Balancer {
                 }
             }
         }
+    }
+
+    /// Next worker in turn that is not blocked, `len` workers.
+    fn round_robin(&mut self, len: usize) -> usize {
+        if self.next >= len {
+            self.next = len - 1;
+        }
+        // blocked flags are refreshed by `sample`
+        (0..len)
+            .map(|i| (self.next + i) % len)
+            .find(|&i| !self.is_blocked(i))
+            .unwrap_or(self.next)
+    }
+
+    /// Refreshes the load state of the workers.
+    ///
+    /// Returns `true` if some workers are blocked and others are not.
+    pub(crate) fn sample<T>(&mut self, workers: &[Worker<T>]) -> bool {
+        let now = Instant::now();
+        self.refresh(now, |idx| Sample::of(&workers[idx], now));
+        !self.ready.is_empty() && self.ready.len() < self.states.len()
+    }
+
+    /// Returns `true` if the worker at `idx` was blocked when last sampled.
+    pub(crate) fn is_blocked(&self, idx: usize) -> bool {
+        self.states.get(idx).is_some_and(|st| st.blocked)
     }
 
     /// The item was sent to the worker at `idx`.
@@ -422,6 +446,24 @@ mod tests {
             seen[b.least_loaded(|_| 0)] = true;
         }
         assert_eq!(seen, [true; 3]);
+    }
+
+    #[test]
+    fn round_robin_skips_blocked_workers() {
+        let t = Instant::now();
+        let mut b = balancer(3);
+        b.refresh(t, |i| sample(0, i == 1));
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            let idx = b.round_robin(3);
+            b.sent(idx, 3);
+            seen.push(idx);
+        }
+        assert_eq!(seen, [0, 2, 0, 2]);
+
+        // all workers are blocked
+        b.refresh(t + REFRESH, |_| sample(0, true));
+        assert_eq!(b.round_robin(3), 0);
     }
 
     #[test]
