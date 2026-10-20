@@ -525,6 +525,7 @@ where
     ) -> Poll<Result<Generation, E>> {
         // SAFETY: `fut` is pinned in place and only dropped in place.
         let this = unsafe { self.get_unchecked_mut() };
+        let mut restarted = false;
         loop {
             // `&Option<Fut>` would retag the whole future and invalidate
             // borrows it holds into itself, `&mut` to a `!Unpin` future is not retagged.
@@ -570,6 +571,12 @@ where
                 }
                 None => {}
             }
+            // A check that keeps invalidating its own scope must not starve the executor.
+            if restarted {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            restarted = true;
         }
     }
 }
@@ -882,6 +889,33 @@ mod tests {
             !scope.is_ready(),
             "raw checks do not publish cached success"
         );
+    }
+
+    #[test]
+    fn self_invalidating_check_yields() {
+        let source = ReadyNotifier::new();
+        let scope = ReadyScope::new();
+        scope.subscribe(&source);
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter.clone());
+        let checks = Cell::new(0);
+        let mut check = pin!(scope.check(|| {
+            checks.set(checks.get() + 1);
+            assert!(checks.get() < 100, "check never yields");
+            source.notify();
+            std::future::ready(Ok::<_, ()>(()))
+        }));
+        for poll in 1..=3 {
+            assert!(
+                check
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+            assert_eq!(checks.get(), poll * 2);
+            assert!(counter.wakes() >= poll);
+        }
+        assert!(!scope.is_ready());
     }
 
     #[test]
