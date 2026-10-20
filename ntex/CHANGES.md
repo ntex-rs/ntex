@@ -2,6 +2,9 @@
 
 ## [4.5.0] - Unreleased
 
+* Deprecate `Ctx::call_nowait` in favor of cache-aware `Ctx::call`. The legacy
+  method retains its readiness bypass during compatibility.
+
 * Forward initialization-time readiness binding through service adapters.
   Lazy web routes and default services use `Ctx::create` to bind their
   dependencies to the current scope before first use.

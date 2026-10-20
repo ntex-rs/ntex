@@ -111,14 +111,28 @@ async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self
 }
 ```
 
-[`Ctx::call`] waits for the inner service to become ready before calling it.
-[`Ctx::call_nowait`] skips that check and should only be used when readiness has
-already been established. `Ctx` also provides corresponding `ready()` and
-`shutdown()` operations for implementing service combinators and middleware.
+[`Ctx::call`] reuses valid readiness from the nearest upstream scope, checking
+only the target service on a cache miss. A child wrapped with `ready(svc)` also
+checks its own independent cache. Cached success is not consumed by calls, and
+the valid-cache path adds no readiness allocations.
 
-A wrapping service should not call an inner service's trait methods directly.
-Use `Ctx` so the pipeline can supply the required context and coordinate the
-service chain.
+[`Ctx::call_nowait`] is deprecated. Use `ctx.call(&self.inner, req).await` even
+after an explicit readiness check: it retains the cached fast path while
+observing intervening invalidation. The deprecated method still bypasses
+readiness, including through transparent adapters; it has not been changed to
+wait. Audit intentional bypasses before replacing them because `call` can wait
+or return a readiness error.
+
+`Ctx` also provides `ready()` and `shutdown()` operations. Wrappers must forward
+`Service::bind` and readiness to their children, for example with
+`forward_bind!` and `forward_ready!`. Services whose readiness changes must
+subscribe to a `ReadyNotifier` in `bind` and notify on every relevant change.
+A raw `Ctx::ready` call does not populate an upstream cache; use `ready(svc)`
+when a child needs independent persistent readiness.
+
+`Service::call` remains the primitive dispatch operation and is not deprecated.
+For ordinary nested calls, use `Ctx::call` to retain context and readiness
+coordination rather than bypassing them.
 
 ## Substituting state
 

@@ -88,6 +88,10 @@ where
     }
 
     #[inline]
+    #[allow(
+        deprecated,
+        reason = "preserve dispatch after capacity acquisition until notifier migration"
+    )]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         if !self.ready.get() {
             ctx.ready(self).await?;
@@ -307,6 +311,10 @@ mod tests {
         type Res = ();
         type Error = ();
 
+        #[allow(
+            deprecated,
+            reason = "exercise limiter enforcement under the legacy bypass"
+        )]
         async fn call(&self, req: (), ctx: Ctx<'_, Self>) -> Result<(), ()> {
             ctx.call_nowait(&self.0, req).await
         }
