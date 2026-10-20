@@ -1,5 +1,6 @@
 use std::{
-    cell, fmt, future::Future, marker, ops, pin, rc::Rc, task::Context, task::Poll, task::Waker,
+    cell, fmt, future::Future, marker, mem, ops, pin, rc::Rc, task::Context, task::Poll,
+    task::Waker,
 };
 
 use crate::readiness::{Generation, ReadyScope, RunCheck};
@@ -121,14 +122,15 @@ impl WaitersRef {
 
         if can_check {
             // only one readiness check can manage waiters
-            let initial_run = !self.running.get();
-            if initial_run {
+            let guard = (!self.running.get()).then(|| {
                 self.running.set(true);
-            }
+                RunGuard(self)
+            });
 
             let result = f(cx);
 
-            if initial_run {
+            if let Some(guard) = guard {
+                mem::forget(guard);
                 if result.is_pending() {
                     self.queue_wake(idx);
                 } else {
@@ -161,6 +163,17 @@ impl WaitersRef {
 
     pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown.get()
+    }
+}
+
+/// Releases readiness-check ownership if the check unwinds,
+/// so other bindings are woken and can retry.
+struct RunGuard<'a>(&'a WaitersRef);
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        self.0.running.set(false);
+        self.0.notify();
     }
 }
 
@@ -753,6 +766,48 @@ mod tests {
         con.notify(());
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
+    }
+
+    struct PanicOnce(Cell<bool>, ReadyNotifier);
+
+    impl Service<(), &'static str> for PanicOnce {
+        type Res = &'static str;
+        type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(&self.1);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+            assert!(self.0.replace(true), "ready panic");
+            Ok(())
+        }
+
+        async fn call(&self, req: &'static str, _: Ctx<'_, Self>) -> Result<&'static str, ()> {
+            Ok(req)
+        }
+    }
+
+    #[ntex::test]
+    async fn test_ready_after_panic() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let changed = ReadyNotifier::new();
+        let srv = Pipeline::new((), PanicOnce(Cell::new(false), changed.clone()));
+        let b = srv.bind();
+
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(catch_unwind(AssertUnwindSafe(|| srv.poll_ready(&mut cx))).is_err());
+        assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
+
+        // the panicked check must not keep ownership of later checks
+        changed.notify();
+        let mut fut = Box::pin(b.ready());
+        assert_eq!(fut.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+        changed.notify();
+        let mut fut = Box::pin(srv.ready());
+        assert_eq!(fut.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(b.call("ok").await, Ok("ok"));
     }
 
     #[ntex::test]
