@@ -1,6 +1,6 @@
 use std::{cell::Cell, fmt, marker};
 
-use crate::ctx::{Ctx, WaitersRef};
+use crate::Ctx;
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::{ServiceCaller, ServiceChain, ServiceChainFactory};
 
@@ -36,10 +36,8 @@ where
 #[derive(Debug)]
 /// Context passed to middleware functions created by [`apply_fn`].
 pub struct ApplyCtx<'a, S, St, Req> {
-    idx: u32,
-    waiters: &'a WaitersRef,
+    ctx: Ctx<'a, S, St>,
     service: &'a S,
-    st: &'a St,
     ready: &'a Cell<bool>,
     entered: &'a Cell<u32>,
     r: marker::PhantomData<Req>,
@@ -49,7 +47,7 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     /// Returns the pipeline state.
     #[inline]
     pub fn st(&self) -> &St {
-        self.st
+        self.ctx.st()
     }
 
     /// Waits for the wrapped service to become ready, then calls it.
@@ -59,7 +57,7 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     }
 
     async fn enter(&self, req: Req, skip_ready: bool) -> Result<S::Res, S::Error> {
-        let ctx = Ctx::<S, St>::new(self.idx, self.waiters, self.st);
+        let ctx = self.ctx;
         if !skip_ready {
             ctx.ready(self.service).await?;
         }
@@ -155,12 +153,8 @@ where
 
     #[inline]
     async fn call(&self, req: In, ctx: Ctx<'_, Self, St>) -> Result<Out, Err> {
-        let (idx, waiters, st) = ctx.inner();
-
         let ctx = ApplyCtx {
-            idx,
-            waiters,
-            st,
+            ctx: ctx.cast(),
             ready: &self.ready,
             entered: &self.entered,
             service: &self.svc,

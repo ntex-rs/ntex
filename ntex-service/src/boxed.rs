@@ -1,6 +1,6 @@
 use std::{fmt, rc::Rc};
 
-use crate::ctx::{Ctx, WaitersRef};
+use crate::Ctx;
 use crate::{Service, ServiceFactory, util::BoxFuture};
 
 // ============================ Service =============================
@@ -50,20 +50,17 @@ impl<St, Req, Res, Err> Service<St, Req> for BoxService<St, Req, Res, Err> {
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        let (idx, waiters, st) = ctx.inner();
-        self.inner.ready(idx, waiters, st).await
+        self.inner.ready(ctx.cast()).await
     }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, Err> {
-        let (idx, waiters, st) = ctx.inner();
-        self.inner.call(req, idx, waiters, st).await
+        self.inner.call(req, ctx.cast()).await
     }
 
     #[inline]
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        let (idx, waiters, st) = ctx.inner();
-        self.inner.shutdown(idx, waiters, st).await;
+        self.inner.shutdown(ctx.cast()).await;
     }
 }
 
@@ -71,24 +68,17 @@ trait ServiceObj<St, Req> {
     type Res;
     type Error;
 
-    fn ready<'a>(
-        &'a self,
-        i: u32,
-        w: &'a WaitersRef,
-        s: &'a St,
-    ) -> BoxFuture<'a, Result<(), Self::Error>>;
+    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<(), Self::Error>>;
 
     fn call<'a>(
         &'a self,
         r: Req,
-        i: u32,
-        w: &'a WaitersRef,
-        s: &'a St,
+        ctx: Ctx<'a, (), St>,
     ) -> BoxFuture<'a, Result<Self::Res, Self::Error>>
     where
         Req: 'a;
 
-    fn shutdown<'a>(&'a self, idx: u32, waiters: &'a WaitersRef, st: &'a St) -> BoxFuture<'a, ()>
+    fn shutdown<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, ()>
     where
         St: 'a,
         Req: 'a;
@@ -102,40 +92,25 @@ where
     type Error = S::Error;
 
     #[inline]
-    fn ready<'a>(
-        &'a self,
-        idx: u32,
-        waiters: &'a WaitersRef,
-        st: &'a St,
-    ) -> BoxFuture<'a, Result<(), Self::Error>> {
-        Box::pin(async move { Ctx::<'a, S, St>::new(idx, waiters, st).ready(self).await })
+    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<(), Self::Error>> {
+        Box::pin(async move { ctx.ready(self).await })
     }
 
     #[inline]
-    fn call<'a>(
-        &'a self,
-        req: Req,
-        idx: u32,
-        waiters: &'a WaitersRef,
-        st: &'a St,
-    ) -> BoxFuture<'a, Result<S::Res, S::Error>>
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<S::Res, S::Error>>
     where
         Req: 'a,
     {
-        Box::pin(async move {
-            Ctx::<'a, S, St>::new(idx, waiters, st)
-                .call_nowait(self, req)
-                .await
-        })
+        Box::pin(async move { ctx.call_nowait(self, req).await })
     }
 
     #[inline]
-    fn shutdown<'a>(&'a self, idx: u32, waiters: &'a WaitersRef, st: &'a St) -> BoxFuture<'a, ()>
+    fn shutdown<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, ()>
     where
         St: 'a,
         Req: 'a,
     {
-        Box::pin(async move { Ctx::<'a, S, St>::new(idx, waiters, st).shutdown(self).await })
+        Box::pin(async move { ctx.shutdown(self).await })
     }
 }
 

@@ -33,6 +33,7 @@ mod map_init_err;
 mod map_state;
 mod middleware;
 mod readiness;
+mod service_binding;
 pub mod state;
 mod then;
 mod util;
@@ -50,6 +51,7 @@ pub use crate::map_state::{map_state, map_state_factory};
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
 pub use crate::readiness::ReadyNotifier;
+pub use crate::service_binding::ServiceBinding;
 pub use crate::state::{RequestState, State};
 
 #[allow(unused_variables)]

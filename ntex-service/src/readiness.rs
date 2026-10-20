@@ -1,8 +1,10 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
+    future::{Future, poll_fn},
+    pin::pin,
     rc::{Rc, Weak},
-    task::Waker,
+    task::{Poll, Waker},
 };
 
 /// A source of readiness-change notifications.
@@ -95,8 +97,6 @@ pub(crate) struct Generation {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ReadyScope(Rc<ScopeInner>);
 
-// These entry points are wired into Ctx and pipelines by the follow-up integration.
-#[cfg_attr(not(test), allow(dead_code))]
 impl ReadyScope {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -159,6 +159,101 @@ impl ReadyScope {
         }
     }
 
+    /// Drives or joins a shared check without allocating on a cached success.
+    pub(crate) async fn check<F, Fut, E>(&self, mut check: F) -> Result<(), E>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<(), E>>,
+    {
+        loop {
+            if self.is_ready() {
+                return Ok(());
+            }
+
+            // Cancellation drops the check, then its observer, then ownership.
+            let mut owner = None;
+            let observer = self.observer();
+            poll_fn(|cx| {
+                observer.register(cx.waker());
+                if self.is_ready() {
+                    Poll::Ready(())
+                } else if self.0.checking.replace(true) {
+                    Poll::Pending
+                } else {
+                    owner = Some(CheckOwner(self));
+                    Poll::Ready(())
+                }
+            })
+            .await;
+
+            let result = if owner.is_some() {
+                self.run_check(&mut check).await.map(|generation| {
+                    self.set_ready(generation);
+                })
+            } else {
+                Ok(())
+            };
+            drop(observer);
+            drop(owner);
+            result?;
+            // Cleanup and handoff can reenter and invalidate the success.
+        }
+    }
+
+    /// Checks raw services without borrowing the enclosing scope's cached success.
+    pub(crate) async fn check_uncached<F, Fut, E>(&self, mut check: F) -> Result<Generation, E>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<(), E>>,
+    {
+        self.run_check(&mut check).await
+    }
+
+    async fn run_check<F, Fut, E>(&self, check: &mut F) -> Result<Generation, E>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<(), E>>,
+    {
+        let mut observer: Option<ReadyObserver> = None;
+        loop {
+            let generation = self.generation();
+            let result = {
+                let mut fut = pin!(check());
+                poll_fn(|cx| {
+                    if let Some(observer) = &observer {
+                        observer.register(cx.waker());
+                    }
+                    if self.is_directly_invalidated(generation) {
+                        return Poll::Ready(None);
+                    }
+                    let before_poll = self.generation();
+                    let result = fut.as_mut().poll(cx);
+                    if result.is_pending() {
+                        observer
+                            .get_or_insert_with(|| self.observer())
+                            .register(cx.waker());
+                        // A first-poll notification may precede registration.
+                        if !self.is_current(before_poll) {
+                            cx.waker().wake_by_ref();
+                        }
+                    }
+                    result.map(Some)
+                })
+                .await
+            };
+            match result {
+                Some(Err(err)) => return Err(err),
+                Some(Ok(())) => {
+                    drop(observer.take());
+                    if self.is_current(generation) {
+                        return Ok(generation);
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
     /// Schedules observers without changing cached readiness or generations.
     pub(crate) fn wake_observers(&self) {
         let mut wakers = Vec::new();
@@ -173,10 +268,20 @@ impl ReadyScope {
 struct ScopeInner {
     generation: Cell<Generation>,
     ready: Cell<bool>,
+    checking: Cell<bool>,
     sources: RefCell<Vec<Weak<SourceInner>>>,
     parents: RefCell<Vec<Weak<Self>>>,
     children: RefCell<Vec<Weak<Self>>>,
     observers: RefCell<slab::Slab<Option<Waker>>>,
+}
+
+struct CheckOwner<'a>(&'a ReadyScope);
+
+impl Drop for CheckOwner<'_> {
+    fn drop(&mut self) {
+        self.0.0.checking.set(false);
+        self.0.wake_observers();
+    }
 }
 
 impl ScopeInner {
@@ -227,7 +332,6 @@ pub(crate) struct ReadyObserver {
     idx: usize,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl ReadyObserver {
     /// Registers before checking readiness; returns false if the scope is gone.
     pub(crate) fn register(&self, waker: &Waker) -> bool {
@@ -265,7 +369,7 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         },
-        task::Wake,
+        task::{Context, Wake},
     };
 
     use super::*;
@@ -309,6 +413,61 @@ mod tests {
                 hook();
             }
         }
+    }
+
+    #[test]
+    fn first_poll_notification_is_not_lost_before_observer_registration() {
+        let source = ReadyNotifier::new();
+        let scope = ReadyScope::new();
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter.clone());
+        let mut cx = Context::from_waker(&waker);
+        let first_poll = Cell::new(true);
+        let mut check = pin!(scope.check_uncached(|| {
+            scope.subscribe(&source);
+            poll_fn(|_| {
+                if first_poll.replace(false) {
+                    source.notify();
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Ok::<_, ()>(()))
+                }
+            })
+        }));
+        assert!(check.as_mut().poll(&mut cx).is_pending());
+        assert!(counter.wakes() > 0);
+        assert_eq!(
+            check.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(scope.generation()))
+        );
+        assert!(
+            !scope.is_ready(),
+            "raw checks do not publish cached success"
+        );
+    }
+
+    #[test]
+    fn reentrant_handoff_invalidation_rechecks_before_returning_success() {
+        let source = ReadyNotifier::new();
+        let scope = ReadyScope::new();
+        scope.subscribe(&source);
+        let observer = scope.observer();
+        let waker = Waker::from(Arc::new(Counter::default()));
+        assert!(observer.register(&waker));
+        ON_WAKE.with_borrow_mut(|slot| {
+            *slot = Some(Box::new(move || source.notify()));
+        });
+        let checks = Cell::new(0);
+        let mut check = pin!(scope.check(|| {
+            checks.set(checks.get() + 1);
+            std::future::ready(Ok::<_, ()>(()))
+        }));
+        assert_eq!(
+            check.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(()))
+        );
+        assert_eq!(checks.get(), 2);
+        assert!(scope.is_ready());
     }
 
     #[test]
