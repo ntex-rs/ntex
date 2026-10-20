@@ -5,6 +5,7 @@ use super::{Ctx, Service, ServiceFactory};
 /// Service produced by the `map` combinator.
 ///
 /// This is created by the `Service::map()` and `ServiceChain::map()` methods.
+/// Mapping responses preserves the wrapped service's readiness identity.
 pub struct Map<F, S, Res> {
     f: F,
     svc: S,
@@ -63,11 +64,18 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, S::Error> {
-        ctx.call_nowait(&self.svc, req).await.map(|r| (self.f)(r))
+        self.svc.call(req, ctx.cast()).await.map(|r| (self.f)(r))
     }
 
-    crate::forward_ready!(St, svc);
-    crate::forward_shutdown!(St, svc);
+    #[inline]
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
+        self.svc.ready(ctx.cast()).await
+    }
+
+    #[inline]
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        self.svc.shutdown(ctx.cast()).await;
+    }
 }
 
 /// Service factory produced by the `map` combinator.

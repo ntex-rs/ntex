@@ -5,6 +5,7 @@ use super::{Ctx, Service, ServiceFactory};
 /// Service produced by the `map_err` combinator.
 ///
 /// This is created by the `Service::map_err()` and `ServiceChain::map_err()` methods.
+/// Mapping errors preserves the wrapped service's readiness identity.
 pub struct MapErr<F, S, E> {
     f: F,
     svc: S,
@@ -63,17 +64,21 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, E> {
-        ctx.call_nowait(&self.svc, req)
+        self.svc
+            .call(req, ctx.cast())
             .await
             .map_err(|e| (self.f)(e))
     }
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), E> {
-        ctx.ready(&self.svc).await.map_err(&self.f)
+        self.svc.ready(ctx.cast()).await.map_err(&self.f)
     }
 
-    crate::forward_shutdown!(St, svc);
+    #[inline]
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        self.svc.shutdown(ctx.cast()).await;
+    }
 }
 
 /// Service factory produced by the `map_err` combinator.

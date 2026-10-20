@@ -38,6 +38,9 @@ where
 }
 
 /// A builder for composing services and combinators into one service.
+///
+/// Forwarding through the builder preserves the enclosed service's readiness
+/// identity without repeating an already validated check.
 pub struct ServiceChain<S, St, Req> {
     service: S,
     st: PhantomData<(St, Req)>,
@@ -185,11 +188,18 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req>
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        ctx.call(&self.service, req).await
+        self.service.call(req, ctx.cast()).await
     }
 
-    crate::forward_ready!(St, service);
-    crate::forward_shutdown!(St, service);
+    #[inline]
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
+        self.service.ready(ctx.cast()).await
+    }
+
+    #[inline]
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        self.service.shutdown(ctx.cast()).await;
+    }
 }
 
 impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {

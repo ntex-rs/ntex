@@ -3,6 +3,8 @@ use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 /// Wraps a service with a fixed state value.
 ///
 /// The wrapped service uses `st` instead of the state from its outer pipeline.
+/// This changes the state passed to operations, not the service's readiness
+/// identity. A shared binding keeps one gate across mapped state values.
 pub fn map_state<S, St, Req>(st: St, s: impl IntoService<S, St, Req>) -> MapState<S, St>
 where
     S: Service<St, Req>,
@@ -32,6 +34,10 @@ where
 
 #[derive(Clone, Debug)]
 /// A service that substitutes fixed state for the outer pipeline state.
+///
+/// Readiness and lifecycle subscriptions retain the wrapped service's scope.
+/// Cloning follows the wrapped service: a [`crate::ServiceBinding`] clone gets
+/// fresh readiness, while an explicitly shared handle keeps its existing gate.
 pub struct MapState<S, St> {
     s: S,
     st: St,
@@ -46,17 +52,17 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, OtSt>) -> Result<S::Res, S::Error> {
-        ctx.map_state(&self.st).call_nowait(&self.s, req).await
+        self.s.call(req, ctx.map_state(&self.st).cast()).await
     }
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, OtSt>) -> Result<(), S::Error> {
-        ctx.map_state(&self.st).ready(&self.s).await
+        self.s.ready(ctx.map_state(&self.st).cast()).await
     }
 
     #[inline]
     async fn shutdown(&self, ctx: Ctx<'_, Self, OtSt>) {
-        ctx.map_state(&self.st).shutdown(&self.s).await;
+        self.s.shutdown(ctx.map_state(&self.st).cast()).await;
     }
 }
 

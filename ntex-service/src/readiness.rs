@@ -39,37 +39,41 @@ impl ReadyNotifier {
     /// Every notification advances the affected scopes' generations, including
     /// scopes that are already invalid or have a pending readiness check.
     pub fn notify(&self) {
-        let mut affected: Vec<_> = self
+        let affected = self
             .0
             .scopes
             .borrow()
             .iter()
             .filter_map(Weak::upgrade)
             .collect();
-        let direct = affected.len();
-        let mut visited: HashSet<_, foldhash::fast::RandomState> =
-            affected.iter().map(Rc::as_ptr).collect();
+        invalidate_scopes(affected);
+    }
+}
 
-        let mut idx = 0;
-        while idx < affected.len() {
-            let scope = Rc::clone(&affected[idx]);
-            scope.invalidate(idx < direct);
-            for parent in scope.parents.borrow().iter().filter_map(Weak::upgrade) {
-                if visited.insert(Rc::as_ptr(&parent)) {
-                    affected.push(parent);
-                }
+fn invalidate_scopes(mut affected: Vec<Rc<ScopeInner>>) {
+    let direct = affected.len();
+    let mut visited: HashSet<_, foldhash::fast::RandomState> =
+        affected.iter().map(Rc::as_ptr).collect();
+
+    let mut idx = 0;
+    while idx < affected.len() {
+        let scope = Rc::clone(&affected[idx]);
+        scope.invalidate(idx < direct);
+        for parent in scope.parents.borrow().iter().filter_map(Weak::upgrade) {
+            if visited.insert(Rc::as_ptr(&parent)) {
+                affected.push(parent);
             }
-            idx += 1;
         }
+        idx += 1;
+    }
 
-        // Drain the entire graph before a wake can reenter and register again.
-        let mut wakers = Vec::new();
-        for scope in &affected {
-            scope.take_wakers(&mut wakers);
-        }
-        for waker in wakers {
-            waker.wake();
-        }
+    // Drain the entire graph before a wake can reenter and register again.
+    let mut wakers = Vec::new();
+    for scope in &affected {
+        scope.take_wakers(&mut wakers);
+    }
+    for waker in wakers {
+        waker.wake();
     }
 }
 
@@ -121,8 +125,7 @@ impl ReadyScope {
     }
 
     pub(crate) fn reset_root(&self) {
-        self.0.invalidate(true);
-        self.wake_observers();
+        invalidate_scopes(vec![self.0.clone()]);
     }
 
     /// Records a successful check only if no dependency changed while checking.

@@ -1,7 +1,7 @@
 use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
-use crate::{IntoService, Service, ServiceCaller, util::BoxFuture};
+use crate::{Ctx, IntoService, Service, ServiceCaller, util::BoxFuture};
 
 pub use crate::pl_factory::PipelineFactory;
 pub use crate::pl_state::{PipelineState, PipelineStateBinding};
@@ -116,6 +116,11 @@ where
     pub fn bind(&self) -> PipelineBinding<Req, Res, Err> {
         PipelineBinding::new(self)
     }
+
+    #[doc(hidden)]
+    pub fn __register_ready_dependency<S, St>(&self, ctx: Ctx<'_, S, St>) {
+        self.api.register_ready_dependency(ctx);
+    }
 }
 
 impl<Req, Res, Err> ServiceCaller<Req, Res, Err> for Pipeline<Req, Res, Err>
@@ -180,6 +185,11 @@ where
     /// and the call is dispatched, not when the future is constructed.
     pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
         PipelineCall::new(self.clone(), req)
+    }
+
+    #[doc(hidden)]
+    pub fn __register_ready_dependency<S, St>(&self, ctx: Ctx<'_, S, St>) {
+        self.api.register_ready_dependency(ctx);
     }
 }
 
