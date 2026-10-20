@@ -1,6 +1,6 @@
 use std::{fmt, ptr, rc::Rc, task::Context, task::Poll};
 
-use crate::{BindCtx, Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
+use crate::{BindCtx, Ctx, IntoService, ReadyCallback, Service, ctx::WaitersRef, util::BoxFuture};
 
 use crate::pipeline::PipelineBinding;
 use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness};
@@ -127,6 +127,16 @@ where
     }
 
     #[inline]
+    /// Registers a callback for notifications reaching this pipeline's scope.
+    ///
+    /// Registration is shared by all bindings, regardless of their state, and
+    /// persists until the scope is dropped. Repeated registration of the same
+    /// handle is idempotent. See [`ReadyCallback`] for notification semantics.
+    pub fn on_notify(&self, callback: &ReadyCallback) {
+        self.api.scope().on_notify(callback);
+    }
+
+    #[inline]
     /// Registers this pipeline as a readiness dependency of the enclosing service.
     ///
     /// Call from [`Service::bind`] so changes to this pipeline's readiness also
@@ -198,6 +208,15 @@ where
             api: self.api.as_ref(),
         };
         pl.api.call(pl.idx, req, st).await
+    }
+
+    #[inline]
+    /// Registers a callback on the shared pipeline scope, independently of state.
+    ///
+    /// Dropping this binding does not remove the registration.
+    /// See [`PipelineState::on_notify`] and [`ReadyCallback`] for details.
+    pub fn on_notify(&self, callback: &ReadyCallback) {
+        self.api.scope().on_notify(callback);
     }
 
     #[inline]

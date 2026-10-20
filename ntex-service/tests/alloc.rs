@@ -9,8 +9,8 @@ use std::{
 };
 
 use ntex_service::{
-    BindCtx, Ctx, Pipeline, ReadyNotifier, Service, ServiceBinding, ServiceCaller, boxed,
-    map_state, pipeline::PipelineState, ready,
+    BindCtx, Ctx, Pipeline, ReadyCallback, ReadyNotifier, Service, ServiceBinding, ServiceCaller,
+    boxed, map_state, pipeline::PipelineState, ready,
 };
 
 struct Counting;
@@ -99,9 +99,10 @@ struct Gate {
     available: Cell<bool>,
     checks: Cell<usize>,
     active: Cell<usize>,
+    notifications: Cell<usize>,
 }
 
-struct Probe(Rc<Gate>);
+struct Probe(Rc<Gate>, ReadyCallback);
 
 struct ActiveCheck<'a>(&'a Gate);
 
@@ -117,6 +118,7 @@ impl Service<usize, usize> for Probe {
 
     fn bind(&self, ctx: BindCtx<'_>) {
         ctx.subscribe(&self.0.changed);
+        ctx.on_notify(&self.1);
     }
 
     async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), ()> {
@@ -141,15 +143,23 @@ impl Service<usize, usize> for Probe {
 fn probe() -> (Probe, Rc<Gate>) {
     let gate = Rc::new(Gate::default());
     gate.available.set(true);
-    (Probe(gate.clone()), gate)
+    let captured = gate.clone();
+    let callback = ReadyCallback::new(move || {
+        captured.notifications.set(captured.notifications.get() + 1);
+    });
+    (Probe(gate.clone(), callback), gate)
 }
 
 #[test]
 fn cached_pipeline_handles_skip_readiness_allocations() {
     let (svc, gate) = probe();
+    let callback = svc.1.clone();
     let pl = Pipeline::new(10, svc);
     let binding = pl.bind();
     let alias = binding.clone();
+    pl.on_notify(&callback);
+    binding.on_notify(&callback);
+    alias.on_notify(&callback.clone());
     assert_eq!(complete(pl.ready()), Ok(()));
 
     for _ in 0..4 {
@@ -187,9 +197,11 @@ fn cached_pipeline_handles_skip_readiness_allocations() {
         );
     }
     assert_eq!(gate.checks.get(), 1);
+    assert_eq!(gate.notifications.get(), 0);
 
     let deferred = binding.ready();
     gate.changed.notify();
+    assert_eq!(gate.notifications.get(), 1);
     assert_eq!(complete(deferred), Ok(()));
     assert_eq!(gate.checks.get(), 2);
 
@@ -200,16 +212,27 @@ fn cached_pipeline_handles_skip_readiness_allocations() {
         Ok(())
     );
     assert_eq!(gate.checks.get(), 2);
+    assert_eq!(
+        gate.notifications.get(),
+        1,
+        "shutdown is not a notification"
+    );
 }
 
 #[test]
 fn cached_state_handles_skip_readiness_allocations() {
     let (svc, gate) = probe();
+    let callback = svc.1.clone();
     let pl = PipelineState::new(svc);
     let binding = pl.bind();
     let alias = binding.clone();
     let attached = pl.bind_state(20);
     let attached_alias = attached.clone();
+    pl.on_notify(&callback);
+    binding.on_notify(&callback);
+    alias.on_notify(&callback.clone());
+    attached.on_notify(&callback);
+    attached_alias.on_notify(&callback);
     assert_eq!(complete(pl.ready(&10)), Ok(()));
 
     for st in [10, 20, 30, 40] {
@@ -257,9 +280,11 @@ fn cached_state_handles_skip_readiness_allocations() {
         );
     }
     assert_eq!(gate.checks.get(), 1);
+    assert_eq!(gate.notifications.get(), 0);
 
     let deferred = pl.ready(&50);
     gate.changed.notify();
+    assert_eq!(gate.notifications.get(), 1);
     assert_eq!(complete(deferred), Ok(()));
     assert_eq!(gate.checks.get(), 2);
     assert_eq!(
@@ -268,6 +293,11 @@ fn cached_state_handles_skip_readiness_allocations() {
         }),
         Ok(())
     );
+    drop((binding, alias, attached, attached_alias, callback));
+    gate.changed.notify();
+    assert_eq!(gate.notifications.get(), 2, "registrations outlive handles");
+    complete(pl.shutdown(&50));
+    assert_eq!(gate.notifications.get(), 2);
 }
 
 struct Forward<S>(S);
@@ -367,6 +397,11 @@ fn invalidation_and_cancellation_preserve_the_shared_checker() {
     let (_, cancellation) = measure(|| owner.set(None));
     assert!(cancellation.deallocs > 0);
     assert_eq!(gate.active.get(), 0);
+    assert_eq!(
+        gate.notifications.get(),
+        2,
+        "cancellation is not a notification"
+    );
     assert!(waiter.as_mut().poll(&mut cx).is_pending());
     assert_eq!(gate.active.get(), 1);
     assert_eq!(gate.checks.get(), 4);
@@ -418,6 +453,7 @@ fn invalidation_and_cancellation_preserve_the_shared_checker() {
         expect_allocs("retained checker cache", 0, || complete(pl.ready())),
         Ok(())
     );
+    assert_eq!(gate.notifications.get(), 5);
 
     eprintln!(
         "cold={cold:?}; recheck={recheck:?}; pending={pending:?}; \

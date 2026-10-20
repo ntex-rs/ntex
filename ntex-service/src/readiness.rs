@@ -1,12 +1,50 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
+    fmt,
     future::{Future, poll_fn},
     pin::Pin,
     rc::{Rc, Weak},
     sync::{Arc, Mutex},
     task::{Context, Poll, Wake, Waker},
 };
+
+/// A reusable callback invoked when a readiness scope receives a notification.
+///
+/// Register with [`crate::BindCtx::on_notify`] or [`crate::Pipeline::on_notify`].
+/// The callback runs synchronously when [`ReadyNotifier::notify`] reaches the
+/// registered scope, including notifications from dependencies and notifications
+/// received while already invalid. It does not run for successful checks,
+/// ordinary task wakeups, cached calls, or internal readiness resets.
+///
+/// Clones share one callback identity. Registering the same handle repeatedly on
+/// a scope is idempotent; registering it on distinct affected scopes invokes it
+/// once for each scope. Each scope retains its registration until it is dropped,
+/// including across completed or cancelled checks.
+///
+/// Callbacks run after all affected scopes are invalidated, outside internal
+/// borrows and locks, and before their observers are woken. Registrations made
+/// during a notification apply to subsequent notifications. A callback may
+/// notify again, but must prevent unbounded recursion itself.
+///
+/// Captures must be owned. Avoid capturing a pipeline that retains this callback
+/// or other strong references that would create a reference cycle.
+/// This type is neither `Send` nor `Sync`.
+#[derive(Clone)]
+pub struct ReadyCallback(Rc<dyn Fn()>);
+
+impl ReadyCallback {
+    /// Creates an independent callback identity.
+    pub fn new(callback: impl Fn() + 'static) -> Self {
+        Self(Rc::new(callback))
+    }
+}
+
+impl fmt::Debug for ReadyCallback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadyCallback").finish_non_exhaustive()
+    }
+}
 
 /// A source of readiness-change notifications.
 ///
@@ -34,11 +72,14 @@ impl ReadyNotifier {
         Self::default()
     }
 
-    /// Invalidates all subscribed readiness scopes and their ancestors, then
-    /// wakes their observers.
+    /// Invalidates all subscribed readiness scopes and their ancestors, invokes
+    /// their registered [`ReadyCallback`]s, then wakes their observers.
     ///
     /// Every notification advances the affected scopes' generations, including
     /// scopes that are already invalid or have a pending readiness check.
+    ///
+    /// A callback panic propagates and skips remaining callbacks, but observers
+    /// are still woken during unwinding.
     pub fn notify(&self) {
         let affected = self
             .0
@@ -47,11 +88,11 @@ impl ReadyNotifier {
             .iter()
             .filter_map(Weak::upgrade)
             .collect();
-        invalidate_scopes(affected);
+        invalidate_scopes(affected, true);
     }
 }
 
-fn invalidate_scopes(mut affected: Vec<Rc<ScopeInner>>) {
+fn invalidate_scopes(mut affected: Vec<Rc<ScopeInner>>, notify_callbacks: bool) {
     let direct = affected.len();
     let mut visited: HashSet<_, foldhash::fast::RandomState> =
         affected.iter().map(Rc::as_ptr).collect();
@@ -68,13 +109,28 @@ fn invalidate_scopes(mut affected: Vec<Rc<ScopeInner>>) {
         idx += 1;
     }
 
-    // Drain the entire graph before a wake can reenter and register again.
+    // Snapshot the entire graph before user code can reenter and register again.
+    let mut callbacks = Vec::new();
     let mut wakers = Vec::new();
     for scope in &affected {
+        if notify_callbacks {
+            callbacks.extend(scope.callbacks.borrow().iter().cloned());
+        }
         scope.take_wakers(&mut wakers);
     }
-    for waker in wakers {
-        waker.wake();
+    let _wake = NotifyWakers(wakers);
+    for callback in callbacks {
+        (callback.0)();
+    }
+}
+
+struct NotifyWakers(Vec<Waker>);
+
+impl Drop for NotifyWakers {
+    fn drop(&mut self) {
+        for waker in self.0.drain(..) {
+            waker.wake();
+        }
     }
 }
 
@@ -130,7 +186,7 @@ impl ReadyScope {
     }
 
     pub(crate) fn reset_root(&self) {
-        invalidate_scopes(vec![self.0.clone()]);
+        invalidate_scopes(vec![self.0.clone()], false);
     }
 
     /// Records a successful check only if no dependency changed while checking.
@@ -150,6 +206,13 @@ impl ReadyScope {
         if !sources.iter().any(|w| w.as_ptr() == ptr) {
             sources.push(Rc::downgrade(&source.0));
             source.0.scopes.borrow_mut().push(Rc::downgrade(&self.0));
+        }
+    }
+
+    pub(crate) fn on_notify(&self, callback: &ReadyCallback) {
+        let mut callbacks = self.0.callbacks.borrow_mut();
+        if !callbacks.iter().any(|c| Rc::ptr_eq(&c.0, &callback.0)) {
+            callbacks.push(callback.clone());
         }
     }
 
@@ -255,6 +318,7 @@ struct ScopeInner {
     generation: Cell<Generation>,
     ready: Cell<bool>,
     checking: Cell<bool>,
+    callbacks: RefCell<Vec<ReadyCallback>>,
     sources: RefCell<Vec<Weak<SourceInner>>>,
     parents: RefCell<Vec<Weak<Self>>>,
     children: RefCell<Vec<Weak<Self>>>,
@@ -533,6 +597,164 @@ mod tests {
                 hook();
             }
         }
+    }
+
+    #[test]
+    fn callbacks_follow_notifications_and_belong_to_scopes() {
+        let source = ReadyNotifier::new();
+        let leaf = ReadyScope::new();
+        let left = ReadyScope::new();
+        let right = ReadyScope::new();
+        let root = ReadyScope::new();
+        let sibling = ReadyScope::new();
+        leaf.subscribe(&source);
+        root.subscribe(&source);
+        left.depend_on(&leaf);
+        right.depend_on(&leaf);
+        root.depend_on(&left);
+        root.depend_on(&right);
+        left.depend_on(&sibling);
+
+        let calls = Rc::new(Cell::new(0));
+        let captured = calls.clone();
+        let callback = ReadyCallback::new(move || captured.set(captured.get() + 1));
+        for scope in [&leaf, &left, &right, &root, &sibling] {
+            scope.on_notify(&callback);
+            scope.on_notify(&callback.clone());
+            assert!(scope.set_ready(scope.generation()));
+        }
+        drop(callback);
+        leaf.wake_observers();
+        leaf.checker_waker().wake();
+        leaf.reset_root();
+        ReadyNotifier::new().notify();
+        assert_eq!(calls.get(), 0);
+
+        source.notify();
+        assert_eq!(
+            calls.get(),
+            4,
+            "once per affected scope, not per graph path"
+        );
+        source.notify();
+        assert_eq!(calls.get(), 8, "notify again even while already invalid");
+        assert!(sibling.is_ready());
+
+        let weak_calls = Rc::downgrade(&calls);
+        drop(calls);
+        assert!(weak_calls.upgrade().is_some());
+        drop((leaf, left, right, root, sibling));
+        assert!(weak_calls.upgrade().is_none());
+        source.notify();
+    }
+
+    #[test]
+    fn notification_snapshots_callbacks_and_wakers_before_reentry() {
+        let source = ReadyNotifier::new();
+        let leaf = ReadyScope::new();
+        let root = ReadyScope::new();
+        leaf.subscribe(&source);
+        root.depend_on(&leaf);
+        let scopes = [Rc::downgrade(&leaf.0), Rc::downgrade(&root.0)];
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter.clone());
+        let leaf_observer = leaf.observer();
+        let root_observer = root.observer();
+        assert!(leaf_observer.register(&waker));
+        assert!(root_observer.register(&waker));
+
+        let late_calls = Rc::new(Cell::new(0));
+        let captured = late_calls.clone();
+        let late = ReadyCallback::new(move || captured.set(captured.get() + 1));
+        let captured_source = source.clone();
+        leaf.on_notify(&ReadyCallback::new(move || {
+            let [leaf, root] = scopes.each_ref().map(|s| ReadyScope(s.upgrade().unwrap()));
+            for scope in [&leaf, &root] {
+                assert!(!scope.is_ready());
+                assert!(
+                    scope
+                        .0
+                        .observers
+                        .0
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .all(|(_, w)| w.is_none())
+                );
+            }
+            root.on_notify(&late);
+            leaf.subscribe(&captured_source);
+            root.depend_on(&leaf);
+            assert!(root_observer.register(&waker));
+        }));
+        for scope in [&leaf, &root] {
+            assert!(scope.set_ready(scope.generation()));
+        }
+
+        source.notify();
+        assert_eq!(
+            late_calls.get(),
+            0,
+            "new registrations wait until next notify"
+        );
+        assert_eq!(counter.wakes(), 2, "do not drain reentrant registrations");
+        source.notify();
+        assert_eq!(late_calls.get(), 1);
+        assert_eq!(counter.wakes(), 3);
+    }
+
+    #[test]
+    fn callbacks_can_notify_reentrantly() {
+        let source = ReadyNotifier::new();
+        let scope = ReadyScope::new();
+        scope.subscribe(&source);
+        let calls = Rc::new(Cell::new(0));
+        let captured = calls.clone();
+        let nested = source.clone();
+        scope.on_notify(&ReadyCallback::new(move || {
+            let previous = captured.replace(captured.get() + 1);
+            if previous == 0 {
+                nested.notify();
+            }
+        }));
+        let before = scope.generation();
+        source.notify();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(scope.generation().value, before.value + 2);
+    }
+
+    #[test]
+    fn callback_panic_still_wakes_invalidated_observers() {
+        let source = ReadyNotifier::new();
+        let scope = ReadyScope::new();
+        scope.subscribe(&source);
+        let panicking = Rc::new(Cell::new(true));
+        let captured = panicking.clone();
+        scope.on_notify(&ReadyCallback::new(move || {
+            assert!(!captured.get(), "callback panic");
+        }));
+        let calls = Rc::new(Cell::new(0));
+        let captured = calls.clone();
+        scope.on_notify(&ReadyCallback::new(move || {
+            captured.set(captured.get() + 1);
+        }));
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter.clone());
+        let observer = scope.observer();
+        assert!(observer.register(&waker));
+        assert!(scope.set_ready(scope.generation()));
+
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.notify())).is_err()
+        );
+        assert!(!scope.is_ready());
+        assert_eq!(counter.wakes(), 1);
+        assert_eq!(calls.get(), 0);
+        panicking.set(false);
+        assert!(observer.register(&waker));
+        source.notify();
+        assert_eq!(counter.wakes(), 2);
+        assert_eq!(calls.get(), 1);
     }
 
     #[test]
