@@ -1,9 +1,9 @@
 //! Middleware that permits one service call at a time.
 use std::{cell::Cell, future::poll_fn, task::Poll};
 
-use ntex_service::{Ctx, Middleware, Service};
+use ntex_service::{BindCtx, Ctx, Middleware, ReadyNotifier, Service, ServiceBinding};
 
-use crate::channel::condition::Condition;
+use crate::{channel::condition::Condition, future::OnDropFn};
 
 /// Middleware that serializes calls to its wrapped service.
 #[derive(Copy, Clone, Default, Debug)]
@@ -14,9 +14,10 @@ impl<S, St> Middleware<S, St> for OneRequest {
 
     fn create(&self, _: &St, service: S) -> Self::Service {
         OneRequestService {
-            service,
+            service: ServiceBinding::new(service),
             ready: Cell::new(true),
             waiters: Condition::new(),
+            changed: ReadyNotifier::new(),
         }
     }
 }
@@ -25,11 +26,16 @@ impl<S, St> Middleware<S, St> for OneRequest {
 ///
 /// This type is intentionally not cloneable. Cloning its readiness state would
 /// create another independent gate and allow calls to overlap.
+///
+/// Acquiring or releasing the call slot invalidates this service's readiness.
+/// The wrapped service has an independent readiness cache and must notify when
+/// its readiness changes.
 #[derive(Debug)]
 pub struct OneRequestService<S> {
     waiters: Condition,
-    service: S,
+    service: ServiceBinding<S>,
     ready: Cell<bool>,
+    changed: ReadyNotifier,
 }
 
 impl<S> OneRequestService<S> {
@@ -39,9 +45,10 @@ impl<S> OneRequestService<S> {
         S: Service<St, Req>,
     {
         Self {
-            service,
+            service: ServiceBinding::new(service),
             ready: Cell::new(true),
             waiters: Condition::new(),
+            changed: ReadyNotifier::new(),
         }
     }
 }
@@ -74,7 +81,8 @@ struct Release<'a, S>(&'a OneRequestService<S>);
 impl<S> Drop for Release<'_, S> {
     fn drop(&mut self) {
         self.0.ready.set(true);
-        self.0.waiters.notify(());
+        let _wake = OnDropFn::new(|| self.0.waiters.notify(()));
+        self.0.changed.notify();
     }
 }
 
@@ -82,7 +90,10 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for OneRequestService<S> {
     type Res = S::Res;
     type Error = S::Error;
 
-    ntex_service::forward_bind!(St, service);
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.subscribe(&self.changed);
+        ctx.bind::<_, St, Req>(&self.service);
+    }
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
@@ -96,6 +107,7 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for OneRequestService<S> {
         self.acquire().await;
         self.ready.set(false);
         let _release = Release(self);
+        self.changed.notify();
 
         ctx.call(&self.service, req).await
     }

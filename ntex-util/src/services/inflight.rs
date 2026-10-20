@@ -1,7 +1,5 @@
 //! Middleware for limiting concurrent service calls.
-use std::cell::Cell;
-
-use ntex_service::{Ctx, Middleware, Service};
+use ntex_service::{BindCtx, Ctx, Middleware, Service, ServiceBinding};
 
 use super::counter::Counter;
 
@@ -39,11 +37,12 @@ impl<S, St> Middleware<S, St> for InFlight {
 
 #[derive(Debug)]
 /// Service wrapper that enforces a concurrent-call limit.
+///
+/// Capacity changes invalidate this service's readiness. The wrapped service
+/// has an independent readiness cache and must notify when its readiness changes.
 pub struct InFlightService<S> {
     count: Counter,
-    service: S,
-    ready: Cell<bool>,
-    entered: Cell<u32>,
+    service: ServiceBinding<S>,
 }
 
 impl<S> InFlightService<S> {
@@ -52,10 +51,8 @@ impl<S> InFlightService<S> {
     /// A limit of zero keeps the service permanently unavailable.
     pub fn new(max: usize, service: S) -> Self {
         Self {
-            service,
+            service: ServiceBinding::new(service),
             count: Counter::new(max),
-            ready: Cell::new(false),
-            entered: Cell::new(0),
         }
     }
 }
@@ -67,12 +64,14 @@ where
     type Res = S::Res;
     type Error = S::Error;
 
-    ntex_service::forward_bind!(St, service);
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.count.bind(&ctx);
+        ctx.bind::<_, St, Req>(&self.service);
+    }
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
-        let entered = self.entered.get();
-        let result = if self.count.is_available() {
+        if self.count.is_available() {
             ctx.ready(&self.service).await
         } else {
             crate::future::join(self.count.available(), ctx.ready(&self.service))
@@ -80,26 +79,17 @@ where
                 .1?;
             // the inner readiness can be stale after waiting for a free slot
             ctx.ready(&self.service).await
-        };
-        // valid only if no call entered the service during the check
-        self.ready
-            .set(result.is_ok() && entered == self.entered.get());
-        result
+        }
     }
 
     #[inline]
-    #[allow(
-        deprecated,
-        reason = "preserve dispatch after capacity acquisition until notifier migration"
-    )]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
-        if !self.ready.get() {
-            ctx.ready(self).await?;
+        if !self.count.is_available() {
+            // Bypassed calls can wait independently of the shared readiness check.
+            self.count.clone().available().await;
         }
-        self.ready.set(false);
-        self.entered.set(self.entered.get().wrapping_add(1));
         let _guard = self.count.get();
-        ctx.call_nowait(&self.service, req).await
+        ctx.call(&self.service, req).await
     }
 
     ntex_service::forward_shutdown!(St, service);
@@ -107,13 +97,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, cell::RefCell, rc::Rc, task::Poll, time::Duration};
+    use std::{cell::Cell, cell::RefCell, future::Future, rc::Rc, task::Poll, time::Duration};
 
     use async_channel as mpmc;
-    use ntex_service::{Pipeline, apply, fn_factory};
+    use ntex_service::{Pipeline, ReadyNotifier, apply, fn_factory};
 
     use super::*;
-    use crate::{channel::oneshot, future::lazy};
+    use crate::{channel::oneshot, future::OnDropFn, future::lazy};
 
     struct SleepService(mpmc::Receiver<()>);
 
@@ -166,7 +156,8 @@ mod tests {
 
         let _ = tx.send(()).await;
         crate::time::sleep(Duration::from_millis(25)).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+        assert_eq!(counter.get(), 1);
 
         let _ = tx.send(()).await;
         crate::time::sleep(Duration::from_millis(25)).await;
@@ -250,6 +241,7 @@ mod tests {
         max: Cell<usize>,
         checks: Cell<usize>,
         waker: crate::task::LocalWaker,
+        changed: ReadyNotifier,
     }
 
     /// Inner service with its own concurrency limit
@@ -258,6 +250,10 @@ mod tests {
     impl Service<(), ()> for Probe {
         type Res = ();
         type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(&self.0.changed);
+        }
 
         async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
             self.0.checks.set(self.0.checks.get() + 1);
@@ -275,16 +271,25 @@ mod tests {
         async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<(), ()> {
             let st = &self.0;
             st.active.set(st.active.get() + 1);
+            let _release = OnDropFn::new(|| {
+                let active = st.active.get();
+                st.active.set(active - 1);
+                let _wake = OnDropFn::new(|| st.waker.wake());
+                if active == self.1 {
+                    st.changed.notify();
+                }
+            });
+            if st.active.get() == self.1 {
+                st.changed.notify();
+            }
             st.max.set(st.max.get().max(st.active.get()));
             let _ = self.2.recv().await;
-            st.active.set(st.active.get() - 1);
-            st.waker.wake();
             Ok(())
         }
     }
 
     #[ntex::test]
-    async fn test_inner_readiness_checked_once() {
+    async fn test_inner_readiness_cached_until_notification() {
         let (tx, rx) = mpmc::unbounded();
         let st = Rc::new(ProbeState::default());
         let srv = Pipeline::new((), InFlightService::new(4, Probe(st.clone(), 4, rx)));
@@ -292,15 +297,18 @@ mod tests {
             let _ = tx.send(()).await;
             srv.call(()).await.unwrap();
         }
-        assert_eq!(st.checks.get(), 3);
+        assert_eq!(st.checks.get(), 1);
 
-        st.checks.set(0);
         for _ in 0..3 {
             let _ = tx.send(()).await;
             srv.ready().await.unwrap();
             srv.call(()).await.unwrap();
         }
-        assert_eq!(st.checks.get(), 3);
+        assert_eq!(st.checks.get(), 1);
+
+        st.changed.notify();
+        srv.ready().await.unwrap();
+        assert_eq!(st.checks.get(), 2);
     }
 
     /// Calls the inner service without checking its readiness, the inner
@@ -310,6 +318,8 @@ mod tests {
     impl<S: Service<(), (), Res = (), Error = ()>> Service<(), ()> for NoWait<S> {
         type Res = ();
         type Error = ();
+
+        ntex_service::forward_bind!((), 0);
 
         #[allow(
             deprecated,
@@ -347,5 +357,18 @@ mod tests {
         assert_eq!(run_concurrent(1, 4).await, 1, "inflight limit");
         assert_eq!(run_concurrent(2, 1).await, 1, "inner limit");
         assert_eq!(run_concurrent(2, 4).await, 2, "inflight limit 2");
+    }
+
+    #[ntex::test]
+    async fn test_zero_limit() {
+        let (_tx, rx) = mpmc::unbounded();
+        let srv = Pipeline::new((), InFlightService::new(0, SleepService(rx.clone())));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+        let mut call = Box::pin(srv.call(()));
+        assert_eq!(lazy(|cx| call.as_mut().poll(cx)).await, Poll::Pending);
+
+        let srv = Pipeline::new((), NoWait(InFlightService::new(0, SleepService(rx))));
+        let mut call = Box::pin(srv.call(()));
+        assert_eq!(lazy(|cx| call.as_mut().poll(cx)).await, Poll::Pending);
     }
 }

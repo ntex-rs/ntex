@@ -1,5 +1,15 @@
 # Changes
 
+## [4.5.0] - Unreleased
+
+* `InFlightService` and `OneRequestService` notify readiness changes when capacity
+  fills or is released, including on cancellation and errors. Notifications reach
+  every pipeline sharing the service.
+
+* Both limiters keep an independent readiness cache for the wrapped service.
+  Capacity notifications preserve that cache; wrapped services must notify their
+  own readiness changes. `InFlightService` no longer uses `call_nowait()`.
+
 ## [4.4.0] - 2026-10-20
 
 * `BufferService` is ready while the buffer has room, independent of the inner
