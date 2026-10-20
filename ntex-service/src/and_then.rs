@@ -1,33 +1,25 @@
-use std::cell::Cell;
+use super::{Ctx, Service, ServiceBinding, ServiceFactory, util};
 
-use super::{Ctx, Service, ServiceFactory, util};
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// Service produced by the `and_then` combinator.
 ///
 /// This is created by the `Service::and_then()` and `ServiceChain::and_then()` methods.
+/// Each child retains independent readiness until its subscribed sources change.
+/// After the first call completes, the second child's readiness is revalidated.
+/// Calls do not consume readiness; clones and factory-created services get fresh
+/// child readiness.
 pub struct AndThen<A, B> {
-    svc1: A,
-    svc2: B,
-    ready: Cell<bool>,
-    entered: Cell<u32>,
+    svc1: ServiceBinding<A>,
+    svc2: ServiceBinding<B>,
 }
 
 impl<A, B> AndThen<A, B> {
     /// Creates a new `AndThen` service.
     pub(crate) fn new(svc1: A, svc2: B) -> Self {
         Self {
-            svc1,
-            svc2,
-            ready: Cell::new(false),
-            entered: Cell::new(0),
+            svc1: ServiceBinding::new(svc1),
+            svc2: ServiceBinding::new(svc2),
         }
-    }
-}
-
-impl<A: Clone, B: Clone> Clone for AndThen<A, B> {
-    fn clone(&self) -> Self {
-        Self::new(self.svc1.clone(), self.svc2.clone())
     }
 }
 
@@ -41,28 +33,13 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
-        let result = ctx.call_nowait(&self.svc1, req).await?;
-
-        if !self.ready.get() {
-            ctx.ready(&self.svc2).await?;
-        }
-        // entering svc2 invalidates all svc2 readiness observed so far
-        self.ready.set(false);
-        self.entered.set(self.entered.get().wrapping_add(1));
-        ctx.call_nowait(&self.svc2, result).await
+        let result = self.svc1.call(req, ctx.cast()).await?;
+        self.svc2.call_ready(result, ctx).await
     }
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        let entered = self.entered.get();
-        let res = util::ready(&self.svc1, &self.svc2, ctx).await;
-        if res.is_err() {
-            self.ready.set(false);
-        } else if self.entered.get() == entered {
-            // svc2 readiness is valid only if no call entered svc2 during the check
-            self.ready.set(true);
-        }
-        res
+        util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
     #[inline]
@@ -100,12 +77,10 @@ where
 
     #[inline]
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
-        Ok(AndThen {
-            svc1: self.svc1.create(st).await?,
-            svc2: self.svc2.create(st).await?,
-            ready: Cell::new(false),
-            entered: Cell::new(0),
-        })
+        Ok(AndThen::new(
+            self.svc1.create(st).await?,
+            self.svc2.create(st).await?,
+        ))
     }
 }
 
@@ -206,6 +181,7 @@ mod tests {
     #[ntex::test]
     async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
+        let checks = cnt.clone();
         let cnt2 = cnt.clone();
         let new_srv = factory(fn_factory(move |(): &()| {
             let cnt = cnt2.clone();
@@ -221,18 +197,25 @@ mod tests {
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));
+        assert_eq!(checks.get(), 2);
+        assert!(srv.call("again").await.is_ok());
+        assert_eq!(checks.get(), 2);
+        let other = new_srv.pipeline(()).await.unwrap();
+        assert!(other.call("fresh").await.is_ok());
+        assert_eq!(checks.get(), 4);
     }
 
-    mod ready_flag {
+    mod readiness {
         use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc, task::Poll, task::Waker};
 
         use ntex::channel::oneshot::{self, Receiver};
 
         use crate::util::tests::{Req, Single, State, concurrent_entry, start, tick};
-        use crate::{Ctx, Pipeline, Service, and_then::AndThen};
+        use crate::{Ctx, Pipeline, ReadyNotifier, Service, and_then::AndThen};
 
         #[derive(Default)]
         struct Gate {
+            changed: ReadyNotifier,
             closed: Cell<bool>,
             waker: RefCell<Option<Waker>>,
         }
@@ -244,7 +227,8 @@ mod tests {
             type Res = Receiver<()>;
             type Error = ();
 
-            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
+            async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), ()> {
+                ctx.subscribe(&self.0.changed);
                 poll_fn(|cx| {
                     if self.0.closed.get() {
                         *self.0.waker.borrow_mut() = Some(cx.waker().clone());
@@ -275,6 +259,7 @@ mod tests {
             let (a1, _a2) = start(&pl);
             tick().await; // A: ready, waits in svc1
             gate.closed.set(true);
+            gate.changed.notify();
             let (b1, _b2) = start(&pl);
             tick().await; // B: svc2 readiness is cached while svc1 is not ready
             let _ = b1.send(());
@@ -282,6 +267,7 @@ mod tests {
             tick().await; // A enters svc2
             assert_eq!(st.active.get(), 1);
             gate.closed.set(false);
+            gate.changed.notify();
             if let Some(w) = gate.waker.borrow_mut().take() {
                 w.wake();
             }

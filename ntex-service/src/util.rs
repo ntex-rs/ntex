@@ -1,6 +1,6 @@
 use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
 
-use crate::{Ctx, Service};
+use crate::{Ctx, Service, ServiceBinding};
 
 pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
 
@@ -32,30 +32,44 @@ where
 }
 
 pub(crate) async fn ready<S, St, A, B, RA, RB>(
-    svc1: &A,
-    svc2: &B,
+    svc1: &ServiceBinding<A>,
+    svc2: &ServiceBinding<B>,
     ctx: Ctx<'_, S, St>,
 ) -> Result<(), A::Error>
 where
     A: Service<St, RA>,
     B: Service<St, RB, Error = A::Error>,
 {
-    let mut fut1 = pin::pin!(ctx.ready(svc1));
-    let mut fut2 = pin::pin!(ctx.ready(svc2));
+    let mut fut1 = pin::pin!(Some(ctx.ready(svc1)));
+    let mut fut2 = pin::pin!(Some(ctx.ready(svc2)));
 
-    let mut ready1 = false;
-    let mut ready2 = false;
+    poll_fn(|cx| {
+        if fut1.is_none() && !svc1.is_ready() {
+            fut1.set(Some(ctx.ready(svc1)));
+        }
+        if let Some(fut) = fut1.as_mut().as_pin_mut()
+            && fut.poll(cx)?.is_ready()
+        {
+            fut1.set(None);
+        }
 
-    poll_fn(move |cx| {
-        if !ready1 && Pin::new(&mut fut1).poll(cx)?.is_ready() {
-            ready1 = true;
+        if fut2.is_none() && !svc2.is_ready() {
+            fut2.set(Some(ctx.ready(svc2)));
         }
-        if !ready2 && Pin::new(&mut fut2).poll(cx)?.is_ready() {
-            ready2 = true;
+        if let Some(fut) = fut2.as_mut().as_pin_mut()
+            && fut.poll(cx)?.is_ready()
+        {
+            fut2.set(None);
         }
-        if ready1 && ready2 {
+
+        if fut1.is_none() && fut2.is_none() && svc1.is_ready() && svc2.is_ready() {
             Poll::Ready(Ok(()))
         } else {
+            // A later poll or future drop can invalidate a completed sibling.
+            // Retain pending work, but schedule another check for the dirty child.
+            if (fut1.is_none() && !svc1.is_ready()) || (fut2.is_none() && !svc2.is_ready()) {
+                cx.waker().wake_by_ref();
+            }
             Poll::Pending
         }
     })
@@ -69,12 +83,13 @@ pub(crate) mod tests {
     use ntex::channel::oneshot::{self, Receiver, Sender};
     use ntex::time::{Millis, sleep};
 
-    use crate::{Ctx, Pipeline, Service};
+    use crate::{Ctx, Pipeline, ReadyNotifier, Service};
 
     pub(crate) type Req = (Receiver<()>, Receiver<()>);
 
     #[derive(Default)]
     pub(crate) struct State {
+        changed: ReadyNotifier,
         pub(crate) active: Cell<usize>,
         pub(crate) max: Cell<usize>,
         pub(crate) checks: Cell<usize>,
@@ -88,7 +103,8 @@ pub(crate) mod tests {
         type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
+        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), ()> {
+            ctx.subscribe(&self.0.changed);
             self.0.checks.set(self.0.checks.get() + 1);
             poll_fn(|cx| {
                 if self.0.active.get() >= 1 {
@@ -105,8 +121,10 @@ pub(crate) mod tests {
             let st = &self.0;
             st.active.set(st.active.get() + 1);
             st.max.set(st.max.get().max(st.active.get()));
+            st.changed.notify();
             let _ = rx.await;
             st.active.set(st.active.get() - 1);
+            st.changed.notify();
             if let Some(w) = st.waker.borrow_mut().take() {
                 w.wake();
             }
