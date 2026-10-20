@@ -1,26 +1,21 @@
-use super::{Ctx, Service, ServiceBinding, ServiceFactory, util};
+use super::{Ctx, Service, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
 /// Service produced by the `then` combinator.
 ///
 /// This is created by the `ServiceChain::then()` method.
-/// Each child retains independent readiness until its subscribed sources change.
-/// Calls check each child's binding directly, not the enclosing scope's cache.
-/// After the first call completes, the second child's readiness is revalidated.
-/// Calls do not consume readiness; clones and factory-created services get fresh
-/// child readiness.
+/// Children share the enclosing readiness scope unless explicitly wrapped with
+/// [`crate::ready`]. Calls forward directly to each child; a wrapped child checks
+/// its own readiness at call time, including after the first child's call awaits.
 pub struct Then<A, B> {
-    svc1: ServiceBinding<A>,
-    svc2: ServiceBinding<B>,
+    svc1: A,
+    svc2: B,
 }
 
 impl<A, B> Then<A, B> {
     /// Creates a new `Then` service.
     pub(crate) fn new(svc1: A, svc2: B) -> Then<A, B> {
-        Self {
-            svc1: ServiceBinding::new(svc1),
-            svc2: ServiceBinding::new(svc2),
-        }
+        Self { svc1, svc2 }
     }
 }
 
@@ -31,6 +26,8 @@ where
 {
     type Res = B::Res;
     type Error = B::Error;
+
+    crate::forward_bind!(St, svc1, svc2);
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
@@ -219,7 +216,7 @@ mod tests {
             Ok::<_, ()>(rx2)
         }))
         .then(crate::apply_fn(
-            Single(st.clone()),
+            crate::ready(Single(st.clone())),
             async |result: Result<Receiver<()>, ()>, ctx| ctx.call(result?).await,
         ))
         .pipeline(());

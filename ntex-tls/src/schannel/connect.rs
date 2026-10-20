@@ -53,6 +53,7 @@ where
     type Res = Io<Layer<SchannelFilter, F>>;
     type Error = Error<ConnectError>;
 
+    ntex_service::forward_bind!(SharedCfg, svc);
     ntex_service::forward_ready!(SharedCfg, svc);
     ntex_service::forward_shutdown!(SharedCfg, svc);
 

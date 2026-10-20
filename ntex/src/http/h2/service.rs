@@ -158,6 +158,8 @@ impl Service<(), h2::Control<Error<H2Error>>> for ControlService {
     type Res = h2::ControlAck;
     type Error = DispatchError;
 
+    crate::forward_pl_bind!((), inner);
+
     async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
         self.inner.ready().await
     }
@@ -233,6 +235,8 @@ where
 {
     type Res = ();
     type Error = Error<H2Error>;
+
+    crate::forward_pl_bind!((), svc, control);
 
     async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
         self.svc.shutdown().await;

@@ -981,6 +981,117 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn lazy_routes_bind_current_scope_before_dispatch() {
+        use std::{future::Future, task::Context, task::Waker};
+
+        use crate::service::{BindCtx, Ctx, ReadyNotifier, fn_factory, ready_factory};
+
+        #[derive(Default)]
+        struct Gate {
+            changed: ReadyNotifier,
+            available: Cell<bool>,
+            binds: Cell<usize>,
+            checks: Cell<usize>,
+            calls: Cell<usize>,
+            shutdowns: Cell<usize>,
+        }
+
+        struct Gated(Rc<Gate>);
+
+        impl Service<(), WebRequest<()>> for Gated {
+            type Res = WebResponse;
+            type Error = Infallible;
+
+            fn bind(&self, ctx: BindCtx<'_>) {
+                self.0.binds.set(self.0.binds.get() + 1);
+                ctx.subscribe(&self.0.changed);
+            }
+
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Infallible> {
+                self.0.checks.set(self.0.checks.get() + 1);
+                if !self.0.available.get() {
+                    std::future::pending::<()>().await;
+                }
+                Ok(())
+            }
+
+            async fn call(
+                &self,
+                req: WebRequest<()>,
+                _: Ctx<'_, Self>,
+            ) -> Result<WebResponse, Infallible> {
+                self.0.calls.set(self.0.calls.get() + 1);
+                Ok(req.into_response(HttpResponse::Ok()))
+            }
+
+            async fn shutdown(&self, _: Ctx<'_, Self>) {
+                self.0.shutdowns.set(self.0.shutdowns.get() + 1);
+            }
+        }
+
+        let route = Rc::new(Gate::default());
+        let default = Rc::new(Gate::default());
+        let filter_checks = Rc::new(Cell::new(0));
+        let checks = filter_checks.clone();
+        let factory = |gate: Rc<Gate>| {
+            ready_factory(fn_factory(async move |(): &()| {
+                Ok::<_, Infallible>(Gated(gate.clone()))
+            }))
+        };
+        let srv = init_service(
+            App::new()
+                .filter(
+                    crate::factory(async |req: WebRequest<()>| Ok::<_, Infallible>(req)).readiness(
+                        async move |(): &()| {
+                            checks.set(checks.get() + 1);
+                            Ok(())
+                        },
+                    ),
+                )
+                .service(web::service("/test").build(factory(route.clone())))
+                .default_service(factory(default.clone())),
+        )
+        .await;
+        srv.ready().await.unwrap();
+        assert_eq!((route.binds.get(), default.binds.get()), (0, 0));
+
+        for (path, gate) in [("/test", &route), ("/missing", &default)] {
+            let mut call = Box::pin(srv.call(TestRequest::with_uri(path).to_request()));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(call.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(gate.binds.get(), 1);
+            assert_eq!(gate.calls.get(), 0);
+            gate.available.set(true);
+            gate.changed.notify();
+            assert_eq!(call.await.unwrap().status(), StatusCode::OK);
+            assert_eq!(gate.checks.get(), 2);
+        }
+
+        srv.ready().await.unwrap();
+        let before = filter_checks.get();
+        route.available.set(false);
+        route.changed.notify();
+        srv.ready().await.unwrap();
+        assert_eq!(filter_checks.get(), before + 1);
+        let mut call = Box::pin(srv.call(TestRequest::with_uri("/test").to_request()));
+        assert!(
+            call.as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        let resp = call_service(&srv, TestRequest::with_uri("/missing").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(default.checks.get(), 2);
+        assert_eq!(route.calls.get(), 1);
+        route.available.set(true);
+        route.changed.notify();
+        assert_eq!(call.await.unwrap().status(), StatusCode::OK);
+        assert_eq!((route.binds.get(), default.binds.get()), (1, 1));
+        srv.shutdown().await;
+        assert_eq!((route.shutdowns.get(), default.shutdowns.get()), (1, 1));
+    }
+
+    #[crate::rt_test]
     async fn test_app_filter_error() {
         let srv = init_service(
             App::new()

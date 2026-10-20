@@ -54,7 +54,7 @@ pub use ntex_macros::{rt_main as main, rt_test as test};
 #[cfg(test)]
 pub(crate) use ntex_macros::rt_test_internal as rt_test;
 
-pub use ntex_service::{forward_ready, forward_shutdown};
+pub use ntex_service::{forward_bind, forward_pl_bind, forward_ready, forward_shutdown};
 
 pub mod client;
 pub mod http;
@@ -66,7 +66,7 @@ pub mod ws;
 pub use urly as url;
 
 pub use self::service::{
-    Ctx, IntoService, IntoServiceFactory, Middleware, Service, ServiceFactory, cfg::Cfg,
+    BindCtx, Ctx, IntoService, IntoServiceFactory, Middleware, Service, ServiceFactory, cfg::Cfg,
     cfg::SharedCfg, factory, fn_service, pipeline::Pipeline, pipeline::PipelineBinding,
     pipeline::PipelineFactory, service,
 };

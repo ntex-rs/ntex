@@ -21,6 +21,7 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
     type Res = ServiceResponse;
     type Error = Error<ClientError>;
 
+    crate::forward_bind!(SharedCfg, connector);
     crate::forward_ready!(SharedCfg, connector);
     crate::forward_shutdown!(SharedCfg, connector);
 

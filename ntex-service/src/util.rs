@@ -1,6 +1,6 @@
 use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
 
-use crate::{Ctx, Service, ServiceBinding};
+use crate::{Ctx, Service};
 
 pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
 
@@ -32,42 +32,49 @@ where
 }
 
 pub(crate) async fn ready<S, St, A, B, RA, RB>(
-    svc1: &ServiceBinding<A>,
-    svc2: &ServiceBinding<B>,
+    svc1: &A,
+    svc2: &B,
     ctx: Ctx<'_, S, St>,
 ) -> Result<(), A::Error>
 where
     A: Service<St, RA>,
     B: Service<St, RB, Error = A::Error>,
 {
-    let mut fut1 = pin::pin!(Some(ctx.ready(svc1)));
-    let mut fut2 = pin::pin!(Some(ctx.ready(svc2)));
+    let mut fut1 = pin::pin!(Some(ctx.ready_generation(svc1)));
+    let mut fut2 = pin::pin!(Some(ctx.ready_generation(svc2)));
+    let scope = ctx.scope();
+    let mut generation1 = scope.generation();
+    let mut generation2 = scope.generation();
 
     poll_fn(|cx| {
-        if fut1.is_none() && !svc1.is_ready() {
-            fut1.set(Some(ctx.ready(svc1)));
+        if fut1.is_none() && !scope.is_current(generation1) {
+            fut1.set(Some(ctx.ready_generation(svc1)));
         }
         if let Some(fut) = fut1.as_mut().as_pin_mut()
-            && fut.poll(cx)?.is_ready()
+            && let Poll::Ready(generation) = fut.poll(cx)?
         {
+            generation1 = generation;
             fut1.set(None);
         }
 
-        if fut2.is_none() && !svc2.is_ready() {
-            fut2.set(Some(ctx.ready(svc2)));
+        if fut2.is_none() && !scope.is_current(generation2) {
+            fut2.set(Some(ctx.ready_generation(svc2)));
         }
         if let Some(fut) = fut2.as_mut().as_pin_mut()
-            && fut.poll(cx)?.is_ready()
+            && let Poll::Ready(generation) = fut.poll(cx)?
         {
+            generation2 = generation;
             fut2.set(None);
         }
 
-        if fut1.is_none() && fut2.is_none() && svc1.is_ready() && svc2.is_ready() {
+        let current1 = scope.is_current(generation1);
+        let current2 = scope.is_current(generation2);
+        if fut1.is_none() && fut2.is_none() && current1 && current2 {
             Poll::Ready(Ok(()))
         } else {
             // A later poll or future drop can invalidate a completed sibling.
             // Retain pending work, but schedule another check for the dirty child.
-            if (fut1.is_none() && !svc1.is_ready()) || (fut2.is_none() && !svc2.is_ready()) {
+            if (fut1.is_none() && !current1) || (fut2.is_none() && !current2) {
                 cx.waker().wake_by_ref();
             }
             Poll::Pending
@@ -103,8 +110,11 @@ pub(crate) mod tests {
         type Res = ();
         type Error = ();
 
-        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), ()> {
+        fn bind(&self, ctx: crate::BindCtx<'_>) {
             ctx.subscribe(&self.0.changed);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
             self.0.checks.set(self.0.checks.get() + 1);
             poll_fn(|cx| {
                 if self.0.active.get() >= 1 {

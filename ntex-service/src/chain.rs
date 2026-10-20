@@ -118,6 +118,9 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
     ///
     /// The check runs after the wrapped service's own readiness check succeeds;
     /// the chain is ready only when both are ready.
+    ///
+    /// The callback receives only pipeline state. For scoped readiness and
+    /// change notifications, implement [`Service`] directly.
     pub fn readiness<F>(
         self,
         ready: F,
@@ -185,6 +188,8 @@ where
 impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req> {
     type Res = S::Res;
     type Error = S::Error;
+
+    crate::forward_bind!(St, service);
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
@@ -305,6 +310,9 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
     ///
     /// The check runs after the wrapped service's own readiness check succeeds;
     /// the service is ready only when both are ready.
+    ///
+    /// The callback receives only pipeline state. For scoped readiness and
+    /// change notifications, implement [`Service`] directly.
     pub fn readiness<F>(
         self,
         ready: F,

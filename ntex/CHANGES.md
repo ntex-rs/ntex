@@ -2,6 +2,10 @@
 
 ## [4.5.0] - Unreleased
 
+* Forward initialization-time readiness binding through service adapters.
+  Lazy web routes and default services use `Ctx::create` to bind their
+  dependencies to the current scope before first use.
+
 * Add `tracker` feature, memory attribution of read buffers with
   `IoConfig::set_buf_tracker()`. Re-export `BytesTracker` and
   `BytesTrackerSnapshot` in `ntex::util`

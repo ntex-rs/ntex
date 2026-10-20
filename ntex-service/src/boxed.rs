@@ -1,6 +1,6 @@
 use std::{fmt, rc::Rc};
 
-use crate::Ctx;
+use crate::{BindCtx, Ctx};
 use crate::{Service, ServiceFactory, util::BoxFuture};
 
 // ============================ Service =============================
@@ -52,6 +52,10 @@ impl<St, Req, Res, Err> Service<St, Req> for BoxService<St, Req, Res, Err> {
     type Res = Res;
     type Error = Err;
 
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.inner.bind(ctx);
+    }
+
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         self.inner.ready(ctx.cast()).await
@@ -71,6 +75,8 @@ impl<St, Req, Res, Err> Service<St, Req> for BoxService<St, Req, Res, Err> {
 trait ServiceObj<St, Req> {
     type Res;
     type Error;
+
+    fn bind(&self, ctx: BindCtx<'_>);
 
     fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<(), Self::Error>>;
 
@@ -94,6 +100,10 @@ where
 {
     type Res = S::Res;
     type Error = S::Error;
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        Service::bind(self, ctx);
+    }
 
     #[inline]
     fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<(), Self::Error>> {

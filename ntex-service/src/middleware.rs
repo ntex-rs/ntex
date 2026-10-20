@@ -46,6 +46,8 @@ where
 ///     type Res = S::Res;
 ///     type Error = TimeoutError<S::Error>;
 ///
+///     ntex_service::forward_bind!((), service);
+///
 ///     async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
 ///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
 ///     }
@@ -288,6 +290,8 @@ mod tests {
     impl<S: Service<(), R>, R> Service<(), R> for Srv<S> {
         type Res = S::Res;
         type Error = S::Error;
+
+        crate::forward_bind!((), 0);
 
         async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
             ctx.ready(&self.0).await

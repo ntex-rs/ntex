@@ -184,6 +184,7 @@ where
     type Res = Response;
     type Error = F::Error;
 
+    crate::forward_bind!(St, service);
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(St, service);
 
@@ -221,6 +222,9 @@ where
 }
 
 /// Web app service.
+///
+/// Routes and the default service are created lazily through [`Ctx::create`],
+/// binding their dependencies to the current scope before first use.
 #[derive(derive_more::Debug)]
 #[debug("Router")]
 pub struct WebServiceRouter<St: State, In, Out, F> {
@@ -258,6 +262,16 @@ where
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
 
+    fn bind(&self, ctx: crate::service::BindCtx<'_>) {
+        ctx.bind::<_, St, WebRequest<In>>(&self.filter);
+        for service in self.cache.borrow().values() {
+            ctx.bind::<_, St, WebRequest<Out>>(service);
+        }
+        if let Some(service) = &*self.cache_default.borrow() {
+            ctx.bind::<_, St, WebRequest<Out>>(service);
+        }
+    }
+
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         ctx.ready(&self.filter).await
@@ -283,7 +297,7 @@ where
         let svc = if let Some((sf, id)) = res {
             if let Some(svc) = self.cache.borrow().get(&id) {
                 svc.clone()
-            } else if let Ok(svc) = sf.create(ctx.st()).await {
+            } else if let Ok(svc) = ctx.create(sf).await {
                 self.cache.borrow_mut().insert(id, svc.clone());
                 svc
             } else {
@@ -292,7 +306,7 @@ where
         } else {
             if let Some(svc) = &*self.cache_default.borrow() {
                 svc.clone()
-            } else if let Ok(svc) = self.default.create(ctx.st()).await {
+            } else if let Ok(svc) = ctx.create(&self.default).await {
                 *self.cache_default.borrow_mut() = Some(svc.clone());
                 svc
             } else {

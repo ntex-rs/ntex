@@ -24,6 +24,7 @@ use std::{
 /// happen before another caller can use cached readiness.
 ///
 /// This type is neither `Send` nor `Sync`.
+/// Register sources with [`crate::BindCtx::subscribe`] in [`crate::Service::bind`].
 #[derive(Clone, Debug, Default)]
 pub struct ReadyNotifier(Rc<SourceInner>);
 
@@ -142,7 +143,7 @@ impl ReadyScope {
         }
     }
 
-    /// Subscribes before inspecting the resource's availability.
+    /// Subscribes during initialization of the service using this source.
     pub(crate) fn subscribe(&self, source: &ReadyNotifier) {
         let ptr = Rc::as_ptr(&source.0);
         let mut sources = self.0.sources.borrow_mut();
@@ -152,7 +153,7 @@ impl ReadyScope {
         }
     }
 
-    /// Registers the dependency before reading the child's cache, even on a hit.
+    /// Registers a child during service binding.
     pub(crate) fn depend_on(&self, child: &Self) {
         if Rc::ptr_eq(&self.0, &child.0) {
             return;
@@ -163,6 +164,19 @@ impl ReadyScope {
             children.push(Rc::downgrade(&child.0));
             child.0.parents.borrow_mut().push(Rc::downgrade(&self.0));
         }
+    }
+
+    pub(crate) fn assert_dependency(&self, child: &Self) {
+        assert!(
+            Rc::ptr_eq(&self.0, &child.0)
+                || self
+                    .0
+                    .children
+                    .borrow()
+                    .iter()
+                    .any(|w| w.as_ptr() == Rc::as_ptr(&child.0)),
+            "ServiceBinding must be registered by Service::bind before use"
+        );
     }
 
     pub(crate) fn observer(&self) -> ReadyObserver {
