@@ -2,6 +2,8 @@
 
 ## [5.3.0] - Unreleased
 
+* Reuse readiness waiter buffers when waking queued readiness checks
+
 * Avoid allocations when notifying a single readiness scope without dependents, and avoid hashing small dependency graphs
 
 * Yield instead of spinning when a service readiness check keeps invalidating its own readiness
