@@ -326,14 +326,16 @@ impl ReadyScope {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
+        // Reused across retries. Cancellation drops the check, then ownership,
+        // then the observer.
+        let mut observer = None;
         loop {
             if self.is_ready() {
                 return Ok(());
             }
 
-            // Cancellation drops the check, then its observer, then ownership.
             let mut owner = None;
-            let observer = self.observer();
+            let observer = observer.get_or_insert_with(|| self.observer());
             poll_fn(|cx| {
                 observer.register(cx.waker());
                 if self.is_ready() {
@@ -354,7 +356,6 @@ impl ReadyScope {
             } else {
                 Ok(())
             };
-            drop(observer);
             drop(owner);
             result?;
             // Cleanup and handoff can reenter and invalidate the success.
@@ -414,11 +415,21 @@ impl Wake for CheckerWake {
 
     fn wake_by_ref(self: &Arc<Self>) {
         if let Some(observers) = self.0.upgrade() {
-            let mut wakers = Vec::new();
-            observers.take_wakers(&mut wakers);
-            for waker in wakers {
-                waker.wake();
+            // Wake outside the lock, without allocating for a single observer.
+            // Checks polled by this waker register it too. Waking it would only
+            // repeat this pass, so it stays registered for later notifications.
+            let this = Arc::as_ptr(self).cast::<()>();
+            let (mut first, mut rest) = (None, Vec::new());
+            for (_, waker) in observers.0.lock().unwrap().iter_mut() {
+                if let Some(waker) = waker.take_if(|waker| waker.data() != this) {
+                    if first.is_none() {
+                        first = Some(waker);
+                    } else {
+                        rest.push(waker);
+                    }
+                }
             }
+            first.into_iter().chain(rest).for_each(Waker::wake);
         }
     }
 }

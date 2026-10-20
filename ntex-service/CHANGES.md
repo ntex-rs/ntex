@@ -2,6 +2,8 @@
 
 ## [5.3.0] - Unreleased
 
+* Reuse readiness observers across check retries, and avoid allocating and redundant self-wakes when waking pipeline readiness checks
+
 * Reuse readiness waiter buffers when waking queued readiness checks
 
 * Avoid allocations when notifying a single readiness scope without dependents, and avoid hashing small dependency graphs
