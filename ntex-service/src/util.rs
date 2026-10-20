@@ -47,7 +47,7 @@ where
     let mut generation2 = scope.generation();
 
     poll_fn(|cx| {
-        if fut1.is_none() && !scope.is_current(generation1) {
+        if is_idle(&mut fut1) && !scope.is_current(generation1) {
             fut1.set(Some(ctx.ready_generation(svc1)));
         }
         if let Some(fut) = fut1.as_mut().as_pin_mut()
@@ -57,7 +57,7 @@ where
             fut1.set(None);
         }
 
-        if fut2.is_none() && !scope.is_current(generation2) {
+        if is_idle(&mut fut2) && !scope.is_current(generation2) {
             fut2.set(Some(ctx.ready_generation(svc2)));
         }
         if let Some(fut) = fut2.as_mut().as_pin_mut()
@@ -69,18 +69,24 @@ where
 
         let current1 = scope.is_current(generation1);
         let current2 = scope.is_current(generation2);
-        if fut1.is_none() && fut2.is_none() && current1 && current2 {
+        if is_idle(&mut fut1) && is_idle(&mut fut2) && current1 && current2 {
             Poll::Ready(Ok(()))
         } else {
             // A later poll or future drop can invalidate a completed sibling.
             // Retain pending work, but schedule another check for the dirty child.
-            if (fut1.is_none() && !current1) || (fut2.is_none() && !current2) {
+            if (is_idle(&mut fut1) && !current1) || (is_idle(&mut fut2) && !current2) {
                 cx.waker().wake_by_ref();
             }
             Poll::Pending
         }
     })
     .await
+}
+
+// `Option::is_none()` would take `&Option<F>`, which retags the whole future
+// and invalidates borrows it holds into itself.
+fn is_idle<F>(fut: &mut Pin<&mut Option<F>>) -> bool {
+    fut.as_mut().as_pin_mut().is_none()
 }
 
 #[cfg(test)]

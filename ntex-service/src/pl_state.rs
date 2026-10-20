@@ -1,4 +1,4 @@
-use std::{fmt, ptr, rc::Rc, task::Context, task::Poll};
+use std::{fmt, marker::PhantomPinned, ptr, rc::Rc, task::Context, task::Poll};
 
 use crate::{BindCtx, Ctx, IntoService, ReadyCallback, Service, ctx::WaitersRef, util::BoxFuture};
 
@@ -41,6 +41,7 @@ where
                 s,
                 readiness: PipelineReadiness::new(waiters.scope()),
                 waiters,
+                _pinned: PhantomPinned,
             }),
         }
     }
@@ -284,6 +285,9 @@ struct PipelineInner<S, E> {
     s: S,
     waiters: WaitersRef,
     readiness: PipelineReadiness<E>,
+    // The pending readiness future borrows the other fields. `!Unpin` keeps
+    // `&mut self` in `Drop` from invalidating those borrows.
+    _pinned: PhantomPinned,
 }
 
 impl<S, E> Drop for PipelineInner<S, E> {
