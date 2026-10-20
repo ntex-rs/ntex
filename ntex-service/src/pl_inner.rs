@@ -1,6 +1,6 @@
 use std::{
-    cell::RefCell, future::Future, future::poll_fn, ptr, rc::Rc, task::Context, task::Poll,
-    task::Waker,
+    cell::RefCell, future::Future, future::poll_fn, marker::PhantomPinned, ptr, rc::Rc,
+    task::Context, task::Poll, task::Waker,
 };
 
 use crate::readiness::{Generation, ReadyObserver, ReadyScope};
@@ -239,6 +239,7 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
             readiness: PipelineReadiness::new(waiters.scope()),
             waiters,
             st_runtime: RefCell::new(RuntimeState::New),
+            _pinned: PhantomPinned,
         }))
     }
 
@@ -307,6 +308,9 @@ struct PipelineInner<S: Service<St, Req>, St, Req> {
     readiness: PipelineReadiness<S::Error>,
     st_runtime: RefCell<RuntimeState>,
     waiters: WaitersRef,
+    // The pending readiness future borrows the other fields. `!Unpin` keeps
+    // `&mut self` in `Drop` from invalidating those borrows.
+    _pinned: PhantomPinned,
 }
 
 impl<S: Service<St, Req>, St, Req> Drop for PipelineInner<S, St, Req> {

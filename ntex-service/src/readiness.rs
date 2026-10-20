@@ -526,7 +526,9 @@ where
         // SAFETY: `fut` is pinned in place and only dropped in place.
         let this = unsafe { self.get_unchecked_mut() };
         loop {
-            if this.fut.is_none() {
+            // `&Option<Fut>` would retag the whole future and invalidate
+            // borrows it holds into itself, `&mut` to a `!Unpin` future is not retagged.
+            if this.fut.as_mut().is_none() {
                 this.generation = this.scope.generation();
                 this.fut = Some((this.check)());
             }

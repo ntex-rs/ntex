@@ -2,6 +2,8 @@
 
 ## [5.3.0] - Unreleased
 
+* Fix Stacked Borrows violations when checking readiness of nested and combined services, and when dropping a pipeline with a pending readiness check
+
 * Remove `Ctx::poll_fn()` and `Ctx::poll_once()`
 
 * Release readiness-check ownership when a service readiness check panics, so other bindings do not wait forever
