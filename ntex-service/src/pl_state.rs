@@ -50,8 +50,13 @@ where
     ///
     /// Successful readiness is shared and reused until a subscribed
     /// [`crate::ReadyNotifier`] invalidates it. Calls do not consume it.
+    /// Reusing valid readiness does not allocate a readiness future.
     pub async fn ready(&self, st: &St) -> Result<(), Err> {
-        self.api.ready(0, st).await
+        if self.api.scope().is_ready() {
+            Ok(())
+        } else {
+            self.api.ready(0, st).await
+        }
     }
 
     #[inline]

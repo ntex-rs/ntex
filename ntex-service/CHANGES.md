@@ -37,6 +37,12 @@
 * Expose `bind_to(&BindCtx)` on pipelines and their runtime handles for explicit
   readiness dependency binding. `forward_pl_bind!` uses this public API.
 
+* Avoid boxed readiness futures on valid cached `ready()` calls for pipelines,
+  bindings, and state-taking pipelines. Cached calls add no readiness
+  allocations; call dispatch and type-erasure boxing remain unchanged.
+  Deduplicate queued wake-ups so repeated pending polls do not grow the waiter
+  list.
+
 ## [5.2.0] - 2026-10-06
 
 * Do not check readiness for inner services calls, readiness

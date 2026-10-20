@@ -46,11 +46,12 @@ where
     #[inline]
     /// Returns when the pipeline is ready to process requests.
     ///
-    /// Reuses valid shared readiness. Cancelling the active caller drops its
-    /// check and lets another waiter take ownership. Returns successfully if
-    /// pipeline shutdown has started, like [`Self::poll_ready`].
+    /// Reuses valid shared readiness without allocating a readiness future.
+    /// Cancelling the active caller drops its check and lets another waiter
+    /// take ownership. Returns successfully if pipeline shutdown has started,
+    /// like [`Self::poll_ready`].
     pub async fn ready(&self) -> Result<(), Err> {
-        let mut ready = self.api.ready(0);
+        let mut ready = std::pin::pin!(self.api.ready(0));
         future::poll_fn(|cx| {
             if self.api.is_shutdown() {
                 Poll::Ready(Ok(()))
@@ -168,7 +169,8 @@ where
     #[inline]
     /// Waits until the pipeline is ready to process a request.
     ///
-    /// Reuses valid shared readiness without consuming it.
+    /// Reuses valid shared readiness without consuming it or allocating a
+    /// readiness future.
     pub async fn ready(&self) -> Result<(), Err> {
         self.api.ready(self.idx).await
     }
