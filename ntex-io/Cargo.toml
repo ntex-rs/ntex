@@ -12,6 +12,10 @@ license = "MIT OR Apache-2.0"
 edition = "2024"
 rust-version = "1.97"
 
+[package.metadata.docs.rs]
+features = ["tracker"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "ntex_io"
 path = "src/lib.rs"
@@ -22,6 +26,9 @@ workspace = true
 [features]
 default = []
 trace = []
+
+# read buffer memory attribution
+tracker = ["ntex-bytes/tracker"]
 
 [dependencies]
 ntex-codec = { workspace = true }

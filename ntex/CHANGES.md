@@ -1,5 +1,11 @@
 # Changes
 
+## [4.5.0] - Unreleased
+
+* Add `tracker` feature, memory attribution of read buffers with
+  `IoConfig::set_read_buf_tracker()`. Re-export `BytesTracker` and
+  `BytesTrackerSnapshot` in `ntex::util`
+
 ## [4.4.0] - 2026-10-19
 
 * Add `HttpServer::load_balancing()`. New connections go to the worker on the

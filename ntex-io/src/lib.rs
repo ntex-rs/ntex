@@ -13,6 +13,7 @@
     clippy::missing_panics_doc,
     clippy::must_use_candidate
 )]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 use std::io::{Error as IoError, Result as IoResult};
 use std::{any::Any, any::TypeId, fmt, task::Poll};
 
@@ -39,6 +40,8 @@ use ntex_codec::Decoder;
 
 pub use self::buf::{FilterBuf, FilterCtx};
 pub use self::cfg::IoConfig;
+#[cfg(feature = "tracker")]
+pub use self::cfg::ReadBufTracker;
 pub use self::ctx::IoContext;
 pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;

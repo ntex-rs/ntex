@@ -2,6 +2,9 @@
 
 ## [4.5.0] - Unreleased
 
+* Add `tracker` feature and `IoConfig::set_read_buf_tracker()`, memory attribution
+  of read buffers to a `BytesTracker`, per connection or shared by a configuration
+
 * Enable write backpressure when deferred filter processing grows the output past the
   high watermark, for example a filter that expands its input
 

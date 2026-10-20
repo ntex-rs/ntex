@@ -127,8 +127,8 @@ impl BytesMut {
     /// The allocation stays charged while any `BytesMut` or [`Bytes`]
     /// handle refers to it. A buffer that grows into a new allocation
     /// charges it to the same tracker, the old allocation is uncharged when
-    /// its last handle is dropped. Copies made by [`Clone`] or conversions
-    /// are not charged.
+    /// its last handle is dropped. Copies made by [`Clone`], conversions or
+    /// [`Bytes::trimdown`] are not charged.
     ///
     /// # Examples
     ///
@@ -161,44 +161,38 @@ impl BytesMut {
     /// Charges the allocation of the buffer to `tracker`.
     ///
     /// The allocation stays charged as described in
-    /// [`with_page_size_in`](Self::with_page_size_in). Setting the tracker
-    /// the buffer is already charged to does nothing.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BytesTrackerError::Attributed`](crate::BytesTrackerError::Attributed)
-    /// if the buffer is charged to a different tracker, and
-    /// [`BytesTrackerError::Shared`](crate::BytesTrackerError::Shared) if
-    /// an untracked allocation is shared with [`Bytes`] handles.
+    /// [`with_page_size_in`](Self::with_page_size_in). If the allocation is
+    /// charged to a different tracker, the charge moves to `tracker`, also
+    /// while it is shared with [`Bytes`] handles. Setting the tracker the
+    /// buffer is already charged to does nothing.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesMut, BytesTracker, BytesTrackerError};
+    /// use ntex_bytes::{BytesMut, BytesTracker};
     ///
     /// let tracker = BytesTracker::new();
     /// let mut buf = BytesMut::with_capacity(256);
     /// buf.extend_from_slice(&[0; 128]);
     ///
     /// let head = buf.split_to(64);
-    /// assert_eq!(buf.set_tracker(&tracker), Err(BytesTrackerError::Shared));
-    ///
-    /// drop(head);
-    /// buf.set_tracker(&tracker).unwrap();
+    /// buf.set_tracker(&tracker);
     /// assert!(buf.tracker().unwrap().ptr_eq(&tracker));
     /// assert_eq!(tracker.snapshot().live_allocations, 1);
     ///
     /// let other = BytesTracker::new();
-    /// assert_eq!(buf.set_tracker(&other), Err(BytesTrackerError::Attributed));
+    /// buf.set_tracker(&other);
+    /// assert_eq!(tracker.snapshot().live_allocations, 0);
+    /// assert_eq!(other.snapshot().live_allocations, 1);
+    ///
+    /// drop((buf, head));
+    /// assert_eq!(other.snapshot().live_allocations, 0);
     /// ```
     #[cfg(feature = "tracker")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
     #[inline]
-    pub fn set_tracker(
-        &mut self,
-        tracker: &crate::BytesTracker,
-    ) -> Result<(), crate::BytesTrackerError> {
-        self.storage.set_tracker(tracker)
+    pub fn set_tracker(&mut self, tracker: &crate::BytesTracker) {
+        self.storage.set_tracker(tracker);
     }
 
     /// Returns the tracker charged with the allocation of the buffer.

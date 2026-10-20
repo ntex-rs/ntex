@@ -156,6 +156,8 @@ pub mod util {
     //! Common byte, collection, future, and service utilities.
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
     pub use ntex_bytes::{BytePage, BytePageSize, BytePages};
+    #[cfg(feature = "tracker")]
+    pub use ntex_bytes::{BytesTracker, BytesTrackerSnapshot};
     pub use ntex_error::{ErrorMessage, ErrorMessageChained, fmt_err, fmt_err_string};
     pub use ntex_util::{
         Equivalent, HashMap, HashRandomState, HashSet, clone_io_error, dyn_err, dyn_rc_err,

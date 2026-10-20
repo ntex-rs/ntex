@@ -52,7 +52,7 @@ impl Alloc {
         let mut buf = BytesMut::with_capacity(64);
         #[cfg(feature = "tracker")]
         if let Some(tracker) = &self.tracker {
-            buf.set_tracker(tracker).unwrap();
+            buf.set_tracker(tracker);
         }
         buf
     }

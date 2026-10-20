@@ -411,20 +411,8 @@ impl Storage {
             if self.len() <= INLINE_CAP {
                 *self = unsafe { Storage::from_ptr_inline(self.as_ptr(), self.len()) };
             } else if capacity - self.len() >= 64 {
-                let st = Storage::from_slice_with_capacity(self.len(), self.as_ref());
-                // the copy is attributed to the tracker of the allocation
-                #[cfg(feature = "tracker")]
-                if kind == KIND_VEC {
-                    // SAFETY: both allocations are live, the new one is unique,
-                    // `self` holds a reference to its tracker
-                    unsafe {
-                        stvec::Header::attach(
-                            st.shared_vec(),
-                            stvec::Header::tracker(self.shared_vec()),
-                        );
-                    }
-                }
-                *self = st;
+                // the copy is not attributed to a tracker
+                *self = Storage::from_slice_with_capacity(self.len(), self.as_ref());
             }
         }
     }
