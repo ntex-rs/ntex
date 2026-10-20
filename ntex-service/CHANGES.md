@@ -2,9 +2,12 @@
 
 ## [5.3.0] - Unreleased
 
+* Add `ServiceBinding` and `Ctx::subscribe`. Context calls reuse bound readiness
+  until notification, while raw services are checked on every call.
+
 * Add `ReadyNotifier` sources and internal readiness scopes with persistent
   subscriptions, generation-checked caching, and dependency invalidation.
-  Pipeline and context integration is separate.
+  Pipeline integration is separate.
 
 ## [5.2.0] - 2026-10-06
 

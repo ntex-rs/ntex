@@ -1,6 +1,6 @@
 use std::{cell, fmt, future, marker, ops, pin, rc::Rc, task::Context, task::Poll, task::Waker};
 
-use crate::Service;
+use crate::{ReadyNotifier, Service, readiness::ReadyScope};
 
 /// Context provided to [`Service`] lifecycle methods.
 ///
@@ -10,11 +10,13 @@ pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     idx: u32,
     st: &'a St,
     waiters: &'a WaitersRef,
+    scope: &'a ReadyScope,
     _t: marker::PhantomData<Rc<Svc>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
+    scope: ReadyScope,
     cur: cell::Cell<u32>,
     running: cell::Cell<bool>,
     shutdown: cell::Cell<bool>,
@@ -28,6 +30,7 @@ impl WaitersRef {
         let mut waiters = slab::Slab::with_capacity(16);
         waiters.insert(None);
         WaitersRef {
+            scope: ReadyScope::new(),
             cur: cell::Cell::new(u32::MAX),
             running: cell::Cell::new(false),
             shutdown: cell::Cell::new(false),
@@ -148,12 +151,27 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             idx,
             waiters,
             st,
+            scope: &waiters.scope,
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn inner(self) -> (u32, &'a WaitersRef, &'a St) {
-        (self.idx, self.waiters, self.st)
+    pub(crate) fn scope(&self) -> &'a ReadyScope {
+        self.scope
+    }
+
+    pub(crate) fn cast<S>(self) -> Ctx<'a, S, St> {
+        self.with_scope(self.scope)
+    }
+
+    pub(crate) fn with_scope<S>(self, scope: &'a ReadyScope) -> Ctx<'a, S, St> {
+        Ctx {
+            idx: self.idx,
+            st: self.st,
+            waiters: self.waiters,
+            scope,
+            _t: marker::PhantomData,
+        }
     }
 
     #[inline]
@@ -168,44 +186,50 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
         self.st
     }
 
+    /// Subscribes the current readiness scope to a source of readiness changes.
+    ///
+    /// Subscribe before inspecting availability. Repeated subscriptions are
+    /// idempotent and persist until the scope or source is dropped, including
+    /// after a readiness check completes or is cancelled.
+    pub fn subscribe(&self, source: &ReadyNotifier) {
+        self.scope.subscribe(source);
+    }
+
     /// Waits until `svc` is ready to process a request.
+    ///
+    /// A [`crate::ServiceBinding`] reuses successful readiness until a subscribed
+    /// source changes. A raw service is checked on every invocation.
     pub async fn ready<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
     where
         S: Service<St, Req>,
     {
-        // check readiness and notify waiters
-        ReadyCall {
-            completed: false,
-            fut: svc.ready(Ctx {
-                st: self.st,
+        loop {
+            let generation = ReadyCall {
+                completed: false,
+                fut: self.scope.check_uncached(|| svc.ready(self.cast())),
                 idx: self.idx,
                 waiters: self.waiters,
-                _t: marker::PhantomData,
-            }),
-            idx: self.idx,
-            waiters: self.waiters,
+            }
+            .await?;
+            // Scheduling another waiter can invalidate the completed check.
+            if self.scope.is_current(generation) {
+                return Ok(());
+            }
         }
-        .await
     }
 
     #[inline]
     /// Waits for `svc` to become ready, then calls it.
+    ///
+    /// Calls do not consume a [`crate::ServiceBinding`]'s cached readiness.
+    /// Raw services are checked before every call.
     pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
         S: Service<St, Req>,
     {
         self.ready(svc).await?;
 
-        svc.call(
-            req,
-            Ctx {
-                idx: self.idx,
-                st: self.st,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            },
-        )
-        .await
+        svc.call(req, self.cast()).await
     }
 
     #[inline]
@@ -216,16 +240,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     where
         S: Service<St, Req>,
     {
-        svc.call(
-            req,
-            Ctx {
-                st: self.st,
-                idx: self.idx,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            },
-        )
-        .await
+        svc.call(req, self.cast()).await
     }
 
     #[inline]
@@ -293,13 +308,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     where
         S: Service<St, Req>,
     {
-        svc.shutdown(Ctx {
-            idx: self.idx,
-            st: self.st,
-            waiters: self.waiters,
-            _t: marker::PhantomData,
-        })
-        .await;
+        svc.shutdown(self.cast()).await;
     }
 
     #[inline]
@@ -309,6 +318,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             st,
             idx: self.idx,
             waiters: self.waiters,
+            scope: self.scope,
             _t: marker::PhantomData,
         }
     }
