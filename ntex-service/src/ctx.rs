@@ -32,6 +32,8 @@ pub(crate) struct WaitersRef {
     running: cell::Cell<bool>,
     shutdown: cell::Cell<bool>,
     wakers: cell::UnsafeCell<Vec<u32>>,
+    /// Reused buffer for wakers collected by `notify`.
+    scratch: cell::RefCell<Vec<Waker>>,
     indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
 }
 
@@ -46,6 +48,7 @@ impl WaitersRef {
             shutdown: cell::Cell::new(false),
             indexes: cell::UnsafeCell::new(waiters),
             wakers: cell::UnsafeCell::new(Vec::default()),
+            scratch: cell::RefCell::default(),
         }
     }
 
@@ -79,22 +82,25 @@ impl WaitersRef {
     }
 
     pub(crate) fn notify(&self) {
-        let indexes_to_wake = std::mem::take(self.get_wakers());
-        let mut wakers = Vec::new();
-        if !indexes_to_wake.is_empty() {
-            let indexes = self.get();
-            for idx in indexes_to_wake {
-                if let Some(item) = indexes.get_mut(idx as usize)
-                    && let Some(waker) = item.take()
-                {
-                    wakers.push(waker);
-                }
+        // Collect before waking, wakers can re-enter. Both buffers keep their capacity.
+        let mut wakers = self.scratch.take();
+        let indexes = self.get();
+        for idx in self.get_wakers().drain(..) {
+            if let Some(item) = indexes.get_mut(idx as usize)
+                && let Some(waker) = item.take()
+            {
+                wakers.push(waker);
             }
         }
 
         self.cur.set(u32::MAX);
-        for waker in wakers {
+        for waker in wakers.drain(..) {
             waker.wake();
+        }
+        // A reentrant notify may have stored its own buffer, keep the larger one.
+        let mut scratch = self.scratch.borrow_mut();
+        if wakers.capacity() > scratch.capacity() {
+            *scratch = wakers;
         }
     }
 
@@ -617,6 +623,35 @@ mod tests {
         }));
         let raw = RawWaker::new(std::ptr::from_ref(cnt).cast(), &VTABLE);
         (cnt, unsafe { Waker::from_raw(raw) })
+    }
+
+    #[test]
+    fn notify_reuses_waiter_buffers() {
+        let waiters = WaitersRef::new();
+        let idx = [waiters.insert(), waiters.insert(), waiters.insert()];
+        let (cnt, waker) = counting_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut buffers = None;
+        for round in 1..=3 {
+            assert!(
+                waiters
+                    .run(idx[0], &mut cx, |_| Poll::<()>::Pending)
+                    .is_pending()
+            );
+            for i in &idx[1..] {
+                assert!(waiters.run(*i, &mut cx, |_| Poll::Ready(())).is_pending());
+            }
+            assert!(waiters.run(idx[0], &mut cx, |_| Poll::Ready(())).is_ready());
+            assert_eq!(cnt.wakes.get(), round * 3);
+            assert_eq!(waiters.get_wakers().as_slice(), [0u32; 0]);
+
+            let current = (
+                waiters.get_wakers().as_ptr(),
+                waiters.scratch.borrow().as_ptr(),
+            );
+            assert!(waiters.scratch.borrow().capacity() >= 3);
+            assert_eq!(*buffers.get_or_insert(current), current);
+        }
     }
 
     /// Wakes the dispatcher's task context during the readiness check
