@@ -310,17 +310,17 @@ where
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
-        ctx.ready(&**self).await
+        Service::ready(&**self, ctx.cast()).await
     }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
-        ctx.call_nowait(&**self, req).await
+        Service::call(&**self, req, ctx.cast()).await
     }
 
     #[inline]
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        ctx.shutdown(&**self).await;
+        Service::shutdown(&**self, ctx.cast()).await;
     }
 }
 
@@ -333,17 +333,17 @@ where
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
-        ctx.ready(&**self).await
+        Service::ready(&**self, ctx.cast()).await
     }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
-        ctx.call_nowait(&**self, req).await
+        Service::call(&**self, req, ctx.cast()).await
     }
 
     #[inline]
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        ctx.shutdown(&**self).await;
+        Service::shutdown(&**self, ctx.cast()).await;
     }
 }
 
@@ -356,17 +356,17 @@ where
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
-        ctx.ready(&**self).await
+        Service::ready(&**self, ctx.cast()).await
     }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
-        ctx.call_nowait(&**self, req).await
+        Service::call(&**self, req, ctx.cast()).await
     }
 
     #[inline]
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        ctx.shutdown(&**self).await;
+        Service::shutdown(&**self, ctx.cast()).await;
     }
 }
 
@@ -642,7 +642,7 @@ mod tests {
         );
         let pl = Pipeline::new(1, svc);
         assert_eq!(pl.call(2).await, Ok(5));
-        assert_eq!(cnt.get(), 105);
+        assert_eq!(cnt.get(), 104);
     }
 
     #[ntex::test]

@@ -54,6 +54,7 @@ where
     }
 
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.scope().depend_on(&self.scope);
         self.service.shutdown(ctx.with_scope(&self.scope)).await;
     }
 }
@@ -883,6 +884,306 @@ mod tests {
         probe.0.changed.notify();
         assert_eq!(next.as_mut().poll(&mut cx), Poll::Ready(Ok(2)));
         assert_eq!(probe.0.calls.get(), 2);
+    }
+
+    #[test]
+    fn transparent_adapters_preserve_shared_readiness_and_mapped_state() {
+        let waiters = WaitersRef::new();
+        let ctx = Ctx::<(), ()>::new(0, &waiters, &());
+        let probe = Probe::new();
+        let bound = Rc::new(ServiceBinding::new(probe.clone()));
+        let mapped = crate::map_state(
+            State(10),
+            Box::new(bound.clone())
+                .map(|res| res + 100)
+                .map_err(|_: Error| "unavailable"),
+        );
+        let erased: crate::boxed::BoxService<(), usize, usize, &str> =
+            crate::boxed::service(mapped);
+        let alias = erased.clone();
+        assert_eq!(run(ctx.call(&&erased, 1)), Ok(111));
+        let left = ServiceBinding::new(alias);
+        let right = ServiceBinding::new(crate::map_state(State(20), bound.clone()));
+        assert_eq!(run(ctx.call(&left, 2)), Ok(112));
+        assert_eq!(run(ctx.call(&right, 3)), Ok(23));
+        assert_eq!(&*probe.0.states.borrow(), &[10]);
+
+        probe.0.call_changed.notify();
+        assert!(!left.scope.is_ready());
+        assert!(!right.scope.is_ready());
+        assert_eq!(run(ctx.call(&right, 4)), Ok(24));
+        assert_eq!(run(ctx.call(&left, 5)), Ok(115));
+        assert_eq!(&*probe.0.states.borrow(), &[10, 20]);
+        run(ctx.shutdown(&left));
+        assert_eq!(probe.0.shutdown_state.get(), 10);
+        probe.0.shutdown_changed.notify();
+        assert!(!bound.scope.is_ready());
+        assert!(!left.scope.is_ready());
+        assert!(!right.scope.is_ready());
+
+        let mapped = crate::map_state(State(30), ServiceBinding::new(probe.clone()));
+        let fresh = mapped.clone();
+        assert_eq!(run(ctx.ready(&mapped)), Ok(()));
+        assert_eq!(run(ctx.ready(&fresh)), Ok(()));
+        assert_eq!(&*probe.0.states.borrow(), &[10, 20, 30, 30]);
+    }
+
+    #[test]
+    fn transparent_raw_adapters_do_not_cache_or_repeat_validated_checks() {
+        let waiters = WaitersRef::new();
+        let ctx = Ctx::<(), ()>::new(0, &waiters, &());
+        let probe = Probe::new();
+        let mapped = crate::map_state(
+            State(42),
+            Box::new(Rc::new(probe.clone()))
+                .map(|res| res + 100)
+                .map_err(|_: Error| "unavailable"),
+        );
+        let erased: crate::boxed::BoxService<(), usize, usize, &str> =
+            crate::boxed::service(mapped);
+        assert_eq!(run(ctx.call(&&erased, 1)), Ok(143));
+        assert_eq!(run(ctx.call(&erased.clone(), 2)), Ok(144));
+        assert_eq!(probe.0.starts.get(), 2);
+        let pl = Pipeline::new((), erased);
+        assert_eq!(run(pl.call(3)), Ok(145));
+        assert_eq!(run(pl.call(4)), Ok(146));
+        assert_eq!(probe.0.starts.get(), 3);
+        probe.0.changed.notify();
+        assert_eq!(run(pl.call(5)), Ok(147));
+        assert_eq!(probe.0.starts.get(), 4);
+    }
+
+    #[test]
+    fn erased_aliases_handoff_cancelled_checks_and_preserve_mapped_errors() {
+        let waiters = WaitersRef::new();
+        let other_waiters = WaitersRef::new();
+        let ctx = Ctx::<(), ()>::new(0, &waiters, &());
+        let other_ctx = Ctx::<(), ()>::new(0, &other_waiters, &());
+        let probe = Probe::new();
+        probe.0.available.set(false);
+        let erased: crate::boxed::BoxService<(), usize, usize, &str> =
+            crate::boxed::service(crate::map_state(
+                State(42),
+                ServiceBinding::new(probe.clone()).map_err(|_: Error| "unavailable"),
+            ));
+        let alias = erased.clone();
+        let mut first = Box::pin(ctx.ready(&erased));
+        let mut second = Box::pin(other_ctx.call(&alias, 1));
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(first.as_mut().poll(&mut cx).is_pending());
+        assert!(second.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.starts.get(), 1);
+        probe.0.changed.notify();
+        assert!(first.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.starts.get(), 2);
+        let before = counter.0.load(Ordering::Relaxed);
+        drop(first);
+        assert_eq!(probe.0.active.get(), 0);
+        assert!(counter.0.load(Ordering::Relaxed) > before);
+        assert!(second.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.starts.get(), 3);
+        probe.0.available.set(true);
+        probe.0.fail.set(true);
+        probe.0.changed.notify();
+        assert_eq!(
+            second.as_mut().poll(&mut cx),
+            Poll::Ready(Err("unavailable"))
+        );
+        assert_eq!(probe.0.calls.get(), 0);
+        probe.0.fail.set(false);
+        assert_eq!(run(ctx.call(&erased, 2)), Ok(44));
+        assert_eq!(run(other_ctx.call(&alias, 3)), Ok(45));
+        assert_eq!(probe.0.starts.get(), 5);
+        assert_eq!(probe.0.max_active.get(), 1);
+        assert!(probe.0.states.borrow().iter().all(|st| *st == 42));
+    }
+
+    struct PipelineForward {
+        inner: Rc<Pipeline<usize, usize, Error>>,
+    }
+
+    impl Service<State, usize> for PipelineForward {
+        type Res = usize;
+        type Error = Error;
+
+        crate::forward_pl_ready!(State, inner);
+        crate::forward_pl_shutdown!(State, inner);
+
+        async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Error> {
+            self.inner.call(req).await
+        }
+    }
+
+    #[test]
+    fn pipeline_forwarding_links_cached_children_and_shutdown_to_all_ancestors() {
+        let waiters = WaitersRef::new();
+        let st = State(0);
+        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        let probe = Probe::new();
+        let pl = Rc::new(Pipeline::new(State(10), probe.clone()));
+        assert_eq!(run(pl.ready()), Ok(()));
+        let parent = Rc::new(ServiceBinding::new(PipelineForward { inner: pl.clone() }));
+        let ancestor = Rc::new(ServiceBinding::new(parent.clone()));
+        assert_eq!(run(ctx.call(&ancestor, 1)), Ok(11));
+        assert_eq!(probe.0.starts.get(), 1);
+        probe.0.changed.notify();
+        assert!(!parent.scope.is_ready());
+        assert!(!ancestor.scope.is_ready());
+        assert_eq!(run(ctx.ready(&ancestor)), Ok(()));
+        assert_eq!(probe.0.starts.get(), 2);
+        probe.0.call_changed.notify();
+        assert!(!ancestor.scope.is_ready());
+        assert_eq!(run(ctx.ready(&ancestor)), Ok(()));
+        assert_eq!(probe.0.starts.get(), 3);
+
+        let observer = parent.scope.observer();
+        let counter = Arc::new(Counter::default());
+        observer.register(&Waker::from(counter.clone()));
+        let checked_parent = parent.clone();
+        let checked_ancestor = ancestor.clone();
+        ON_WAKE.with_borrow_mut(|slot| {
+            *slot = Some(Box::new(move || {
+                assert!(!checked_parent.scope.is_ready());
+                assert!(!checked_ancestor.scope.is_ready());
+            }));
+        });
+        run(pl.shutdown());
+        assert!(counter.0.load(Ordering::Relaxed) > 0);
+        assert!(!parent.scope.is_ready());
+        assert!(!ancestor.scope.is_ready());
+        assert_eq!(run(ctx.ready(&ancestor)), Ok(()));
+        probe.0.shutdown_changed.notify();
+        assert!(!ancestor.scope.is_ready());
+        assert_eq!(probe.0.shutdown_state.get(), 10);
+    }
+
+    struct BindingForward {
+        inner: crate::pipeline::PipelineBinding<usize, usize, Error>,
+    }
+
+    impl Service<State, usize> for BindingForward {
+        type Res = usize;
+        type Error = &'static str;
+
+        crate::forward_pl_ready!(State, inner, |_| "unavailable");
+
+        async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Self::Error> {
+            self.inner.call(req).await.map_err(|_| "unavailable")
+        }
+    }
+
+    #[test]
+    fn state_binding_forwarding_shares_readiness_without_losing_call_state() {
+        let waiters = WaitersRef::new();
+        let st = State(0);
+        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        let probe = Probe::new();
+        let pl = PipelineState::new(probe.clone());
+        let left = ServiceBinding::new(BindingForward {
+            inner: pl.bind_state(State(10)),
+        });
+        let right = ServiceBinding::new(BindingForward {
+            inner: pl.bind_state(State(20)),
+        });
+        assert_eq!(run(pl.ready(&State(30))), Ok(()));
+        assert_eq!(run(ctx.call(&left, 1)), Ok(11));
+        assert_eq!(run(ctx.call(&right, 2)), Ok(22));
+        assert_eq!(run(pl.bind().call(3, &State(40))), Ok(43));
+        assert_eq!(&*probe.0.states.borrow(), &[30]);
+        probe.0.fail.set(true);
+        probe.0.changed.notify();
+        assert!(!left.scope.is_ready());
+        assert!(!right.scope.is_ready());
+        assert_eq!(run(ctx.call(&left, 4)), Err("unavailable"));
+        assert_eq!(probe.0.calls.get(), 3);
+        probe.0.fail.set(false);
+        assert_eq!(run(ctx.call(&right, 5)), Ok(25));
+        assert_eq!(run(ctx.ready(&left)), Ok(()));
+        assert_eq!(&*probe.0.states.borrow(), &[30, 10, 20]);
+        run(pl.shutdown(&State(50)));
+        assert!(!left.scope.is_ready());
+        assert!(!right.scope.is_ready());
+        assert_eq!(probe.0.shutdown_state.get(), 50);
+        assert_eq!(run(ctx.call(&left, 6)), Ok(16));
+        assert_eq!(run(ctx.ready(&right)), Ok(()));
+        probe.0.shutdown_changed.notify();
+        assert!(!left.scope.is_ready());
+        assert!(!right.scope.is_ready());
+    }
+
+    struct ShutdownForward {
+        inner: Pipeline<usize, usize, Error>,
+    }
+
+    impl Service<State, usize> for ShutdownForward {
+        type Res = usize;
+        type Error = Error;
+
+        crate::forward_pl_shutdown!(State, inner);
+
+        async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Error> {
+            self.inner.call(req).await
+        }
+    }
+
+    #[test]
+    fn shutdown_forwarding_registers_dependencies_without_a_readiness_check() {
+        let waiters = WaitersRef::new();
+        let st = State(0);
+        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        let probe = Probe::new();
+        let parent = ServiceBinding::new(ShutdownForward {
+            inner: Pipeline::new(State(10), probe.clone()),
+        });
+        assert_eq!(run(ctx.ready(&parent)), Ok(()));
+        assert_eq!(probe.0.starts.get(), 0);
+        run(ctx.shutdown(&parent));
+        assert!(!parent.scope.is_ready());
+        assert_eq!(run(ctx.ready(&parent)), Ok(()));
+        probe.0.shutdown_changed.notify();
+        assert!(!parent.scope.is_ready());
+        assert_eq!(probe.0.shutdown_state.get(), 10);
+    }
+
+    #[test]
+    fn erased_binding_shutdown_subscriptions_reach_a_previously_ready_parent() {
+        struct ShutdownOnly<S> {
+            inner: S,
+        }
+
+        impl<S: Service<State, usize>> Service<State, usize> for ShutdownOnly<S> {
+            type Res = S::Res;
+            type Error = S::Error;
+
+            crate::forward_shutdown!(State, inner);
+
+            async fn call(
+                &self,
+                req: usize,
+                ctx: Ctx<'_, Self, State>,
+            ) -> Result<S::Res, S::Error> {
+                ctx.call(&self.inner, req).await
+            }
+        }
+
+        let waiters = WaitersRef::new();
+        let st = State(0);
+        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        let probe = Probe::new();
+        let parent = ServiceBinding::new(ShutdownOnly {
+            inner: crate::boxed::service(crate::map_state(
+                State(42),
+                ServiceBinding::new(probe.clone()),
+            )),
+        });
+        assert_eq!(run(ctx.ready(&parent)), Ok(()));
+        run(ctx.shutdown(&parent));
+        assert_eq!(probe.0.starts.get(), 0);
+        assert_eq!(probe.0.shutdown_state.get(), 42);
+        probe.0.shutdown_changed.notify();
+        assert!(!parent.scope.is_ready());
     }
 
     #[test]

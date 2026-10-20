@@ -4,6 +4,7 @@ use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 
 use crate::pipeline::PipelineBinding;
 use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness};
+use crate::readiness::ReadyScope;
 
 /// Execution container for a service whose state is supplied per operation.
 ///
@@ -191,6 +192,10 @@ struct PipelineInternal<St, Req, Res, Err> {
 }
 
 impl<St, Req, Res, Err> PipelineInternalApi<Req, Res, Err> for PipelineInternal<St, Req, Res, Err> {
+    fn scope(&self) -> &ReadyScope {
+        self.api.scope()
+    }
+
     fn reg(&self) -> u32 {
         self.api.reg()
     }
@@ -237,6 +242,8 @@ impl<S, E> Drop for PipelineInner<S, E> {
 }
 
 trait PipelineStateApi<St, Req, Res, Err> {
+    fn scope(&self) -> &ReadyScope;
+
     fn reg(&self) -> u32;
     fn unreg(&self, idx: u32);
 
@@ -264,6 +271,10 @@ where
     Req: 'static,
     E: 'static,
 {
+    fn scope(&self) -> &ReadyScope {
+        self.waiters.scope()
+    }
+
     fn reg(&self) -> u32 {
         self.waiters.insert()
     }

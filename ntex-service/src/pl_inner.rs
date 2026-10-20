@@ -255,6 +255,10 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         self.0.unreg(idx);
     }
 
+    pub(crate) fn register_ready_dependency<S, St>(&self, ctx: Ctx<'_, S, St>) {
+        ctx.scope().depend_on(self.0.scope());
+    }
+
     pub(crate) fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>> {
         self.0.ready(idx)
     }
@@ -311,6 +315,8 @@ enum RuntimeState {
 // ======================== PipelineInternalApi ============================
 
 pub(crate) trait PipelineInternalApi<Req, Res, Err> {
+    fn scope(&self) -> &ReadyScope;
+
     fn reg(&self) -> u32;
 
     fn unreg(&self, idx: u32);
@@ -332,6 +338,10 @@ where
     St: 'static,
     Req: 'static,
 {
+    fn scope(&self) -> &ReadyScope {
+        self.waiters.scope()
+    }
+
     fn reg(&self) -> u32 {
         self.waiters.insert()
     }

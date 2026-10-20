@@ -6,6 +6,10 @@ use crate::{Service, ServiceFactory, util::BoxFuture};
 // ============================ Service =============================
 
 /// Boxed service.
+///
+/// Type erasure preserves the wrapped service's readiness identity. Clones
+/// share that service and any bound readiness; boxing a raw service does not
+/// give it a cache.
 pub struct BoxService<St, Req, Res, Err> {
     inner: Rc<dyn ServiceObj<St, Req, Res = Res, Error = Err>>,
 }
@@ -93,7 +97,7 @@ where
 
     #[inline]
     fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<(), Self::Error>> {
-        Box::pin(async move { ctx.ready(self).await })
+        Box::pin(async move { Service::ready(self, ctx.cast()).await })
     }
 
     #[inline]
@@ -101,7 +105,7 @@ where
     where
         Req: 'a,
     {
-        Box::pin(async move { ctx.call_nowait(self, req).await })
+        Box::pin(Service::call(self, req, ctx.cast()))
     }
 
     #[inline]
@@ -110,7 +114,7 @@ where
         St: 'a,
         Req: 'a,
     {
-        Box::pin(async move { ctx.shutdown(self).await })
+        Box::pin(Service::shutdown(self, ctx.cast()))
     }
 }
 
