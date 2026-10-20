@@ -2,6 +2,11 @@
 
 ## [4.4.0] - 2026-10-20
 
+* `BufferService` is ready while the buffer has room, independent of the inner
+  service. Buffered requests are released in order and wait for inner readiness
+  themselves, so cached readiness no longer stalls calls. Inner readiness errors
+  are returned to the waiting request. The buffer size is a soft limit
+
 * Re-export `ntex_rt::spawn_detached()`
 
 * `time::now()` returns `ntex_rt::now()`, the start of the current runtime turn on

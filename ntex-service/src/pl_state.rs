@@ -52,11 +52,20 @@ where
     /// [`crate::ReadyNotifier`] invalidates it. Calls do not consume it.
     /// Reusing valid readiness does not allocate a readiness future.
     pub async fn ready(&self, st: &St) -> Result<(), Err> {
-        if self.api.scope().is_ready() {
+        if self.is_ready() {
             Ok(())
         } else {
             self.api.ready(0, st).await
         }
+    }
+
+    #[inline]
+    /// Returns `true` while the pipeline's shared readiness is valid.
+    ///
+    /// Does not run or register a readiness check. `false` means readiness is
+    /// unknown or was invalidated, not that the service is not ready.
+    pub fn is_ready(&self) -> bool {
+        self.api.scope().is_ready()
     }
 
     #[inline]
@@ -483,6 +492,30 @@ mod tests {
         assert_eq!(cnt.get(), 201);
         assert_eq!(pl.call(1, &2).await, Ok(3));
         assert_eq!(cnt.get(), 202);
+    }
+
+    #[ntex::test]
+    async fn is_ready_tracks_shared_readiness() {
+        let cond = condition::Condition::new();
+        cond.notify_and_lock(());
+        let changed = ReadyNotifier::new();
+        let srv = Srv(Rc::default(), cond.wait(), changed.clone());
+        let pl = PipelineState::new(srv);
+        assert!(!pl.is_ready());
+        assert_eq!(pl.ready(&1).await, Ok(()));
+        assert!(pl.is_ready());
+        assert_eq!(pl.call(1, &1).await, Ok(2));
+        assert!(pl.is_ready());
+        changed.notify();
+        assert!(!pl.is_ready());
+
+        let changed = ReadyNotifier::new();
+        let pl = crate::Pipeline::new(1, Srv(Rc::default(), cond.wait(), changed.clone()));
+        assert!(!pl.is_ready());
+        assert_eq!(pl.ready().await, Ok(()));
+        assert!(pl.is_ready());
+        changed.notify();
+        assert!(!pl.is_ready());
     }
 
     #[ntex::test]

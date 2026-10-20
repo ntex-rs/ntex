@@ -63,6 +63,15 @@ where
     }
 
     #[inline]
+    /// Returns `true` while the pipeline's shared readiness is valid.
+    ///
+    /// Does not run or register a readiness check. `false` means readiness is
+    /// unknown or was invalidated, not that the service is not ready.
+    pub fn is_ready(&self) -> bool {
+        self.api.is_ready()
+    }
+
+    #[inline]
     /// Waits for readiness, then calls the service.
     ///
     /// Reuses valid shared readiness without consuming it.

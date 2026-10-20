@@ -2,6 +2,8 @@
 
 ## [5.3.0] - Unreleased
 
+* Add `Pipeline::is_ready()` and `PipelineState::is_ready()`, report valid shared readiness without running a check
+
 * Share notification-invalidated readiness across all pipeline calls and bindings,
   including `PipelineState` handles with different state values. Calls no longer
   consume readiness. Retain one pending checker with cancellation handoff, and
