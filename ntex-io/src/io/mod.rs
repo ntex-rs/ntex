@@ -278,8 +278,7 @@ impl<F> Io<F> {
     /// recreated.
     ///
     /// With the `tracker` feature, the read buffers held by the connection
-    /// are charged to the tracker of the new
-    /// [`BufTracker`](crate::BufTracker) mode, a per-connection
+    /// are charged to the tracker of the new `BufTracker` mode, a per-connection
     /// tracker is kept if both configs use one. A read buffer taken by the
     /// transport for an in-flight read keeps its charge, buffers stay
     /// charged to the old tracker if the new mode is disabled.
