@@ -99,6 +99,10 @@ pub(crate) struct IoState {
     rd_batch: Cell<u32>,
     /// Consecutive read batches small enough for a smaller page.
     rd_small: Cell<u8>,
+    /// Tracker charged with new read buffers, resolved from the config on
+    /// first use, see [`IoState::take_read_buf_tracker`].
+    #[cfg(feature = "tracker")]
+    rd_tracker: Cell<Option<ntex_bytes::BytesTracker>>,
     pub(super) extensions: Extensions,
     metrics: UnsafeCell<Arc<IoMetrics>>,
     /// Read buffer size last reported to `metrics`, saturated at `u32::MAX`.
@@ -145,6 +149,8 @@ impl Io {
             rd_size: Cell::new(BytePageSize::Size4),
             rd_batch: Cell::new(0),
             rd_small: Cell::new(0),
+            #[cfg(feature = "tracker")]
+            rd_tracker: Cell::new(None),
             extensions: Extensions::default(),
             metrics: UnsafeCell::new(metrics),
             rd_buffered: Cell::new(0),
@@ -195,6 +201,8 @@ impl IoRef {
             rd_size: Cell::new(BytePageSize::Size4),
             rd_batch: Cell::new(0),
             rd_small: Cell::new(0),
+            #[cfg(feature = "tracker")]
+            rd_tracker: Cell::new(None),
             extensions: Extensions::default(),
             metrics: UnsafeCell::new(IoMetrics::detached()),
             rd_buffered: Cell::new(0),
@@ -269,6 +277,13 @@ impl<F> Io<F> {
     /// Existing allocated buffers and an already registered timer are not
     /// recreated.
     ///
+    /// With the `tracker` feature, the read buffers held by the connection
+    /// are charged to the tracker of the new
+    /// [`ReadBufTracker`](crate::ReadBufTracker) mode, a per-connection
+    /// tracker is kept if both configs use one. A read buffer taken by the
+    /// transport for an in-flight read keeps its charge, buffers stay
+    /// charged to the old tracker if the new mode is disabled.
+    ///
     /// # Safety
     ///
     /// No reference obtained from [`IoRef::cfg`] for this connection may be
@@ -299,6 +314,8 @@ impl<F> Io<F> {
                 *st.metrics.get() = metrics;
             }
         }
+        #[cfg(feature = "tracker")]
+        st.update_read_buf_tracker(&cfg);
         unsafe {
             st.cfg.replace(cfg);
         }

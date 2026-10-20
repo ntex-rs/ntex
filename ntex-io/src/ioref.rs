@@ -49,6 +49,17 @@ impl IoRef {
         self.0.cfg.shared()
     }
 
+    /// Returns the tracker charged with the read buffers of the connection.
+    ///
+    /// Returns `None` if [`ReadBufTracker::Disabled`](crate::ReadBufTracker)
+    /// is configured. A per-connection tracker is created on first use.
+    #[cfg(feature = "tracker")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+    #[must_use]
+    pub fn read_buf_tracker(&self) -> Option<ntex_bytes::BytesTracker> {
+        self.0.read_buf_tracker()
+    }
+
     #[inline]
     /// Checks whether the I/O stream is active.
     ///

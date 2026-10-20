@@ -1,8 +1,12 @@
 use std::task::{Context, Poll};
 use std::{fmt, future::poll_fn, hash, io, ptr};
 
+#[cfg(feature = "tracker")]
+use ntex_bytes::BytesTracker;
 use ntex_bytes::{BytePageSize, BytesMut};
 
+#[cfg(feature = "tracker")]
+use crate::cfg::{IoConfig, ReadBufTracker};
 use crate::filter::Filter;
 use crate::metrics::IoMetrics;
 use crate::ops::Id;
@@ -167,7 +171,66 @@ impl IoState {
     /// Acquires an empty read buffer of the connection's read page size from
     /// the thread-local page cache.
     pub(crate) fn get_read_buf(&self) -> BytesMut {
+        #[cfg(feature = "tracker")]
+        {
+            let tracker = self.take_read_buf_tracker();
+            let buf = match &tracker {
+                Some(t) => BytesMut::with_page_size_in(self.rd_size.get(), t),
+                None => BytesMut::with_page_size(self.rd_size.get()),
+            };
+            self.rd_tracker.set(tracker);
+            buf
+        }
+        #[cfg(not(feature = "tracker"))]
         BytesMut::with_page_size(self.rd_size.get())
+    }
+
+    /// Returns the tracker charged with new read buffers.
+    #[cfg(feature = "tracker")]
+    pub(crate) fn read_buf_tracker(&self) -> Option<BytesTracker> {
+        let tracker = self.take_read_buf_tracker();
+        self.rd_tracker.set(tracker.clone());
+        tracker
+    }
+
+    /// Takes the read buffer tracker out of the state, the caller puts it
+    /// back.
+    ///
+    /// It is resolved from the config if not set yet, a per-connection
+    /// tracker is created on first use.
+    #[cfg(feature = "tracker")]
+    fn take_read_buf_tracker(&self) -> Option<BytesTracker> {
+        self.rd_tracker
+            .take()
+            .or_else(|| match self.cfg.read_buf_tracker() {
+                ReadBufTracker::Disabled => None,
+                ReadBufTracker::PerConnection => Some(BytesTracker::new()),
+                ReadBufTracker::Shared(t) => Some(t.clone()),
+            })
+    }
+
+    /// Switches the read buffer tracker to the mode of `cfg`, before it
+    /// replaces the current config.
+    ///
+    /// The read buffers held by the stack are charged to the new tracker.
+    #[cfg(feature = "tracker")]
+    pub(super) fn update_read_buf_tracker(&self, cfg: &IoConfig) {
+        let current = self.rd_tracker.take();
+        let tracker = match cfg.read_buf_tracker() {
+            ReadBufTracker::Disabled => None,
+            ReadBufTracker::PerConnection => {
+                if matches!(self.cfg.read_buf_tracker(), ReadBufTracker::PerConnection) {
+                    current
+                } else {
+                    Some(BytesTracker::new())
+                }
+            }
+            ReadBufTracker::Shared(t) => Some(t.clone()),
+        };
+        if let Some(t) = &tracker {
+            self.buffer.set_read_buf_tracker(t);
+        }
+        self.rd_tracker.set(tracker);
     }
 
     /// Returns the page size of new read buffers.

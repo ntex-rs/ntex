@@ -5,6 +5,10 @@
 * Add `tracker` feature and `IoConfig::set_read_buf_tracker()`, memory attribution
   of read buffers to a `BytesTracker`, per connection or shared by a configuration
 
+* Add `IoRef::read_buf_tracker()` and `IoContext::read_buf_tracker()`, the tracker charged
+  with the read buffers of a connection, a per-connection tracker is created on first use.
+  `Io::set_config()` moves the read buffers held by the connection to the new tracker
+
 * Enable write backpressure when deferred filter processing grows the output past the
   high watermark, for example a filter that expands its input
 
