@@ -38,6 +38,7 @@ where
 ///
 /// Calls reuse the wrapped service's persistent readiness until a subscribed
 /// source invalidates it, including when the middleware awaits before calling.
+/// They check the wrapped binding directly, not the enclosing scope's cache.
 pub struct ApplyCtx<'a, S, St, Req> {
     ctx: Ctx<'a, S, St>,
     service: &'a ServiceBinding<S>,
@@ -54,7 +55,9 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     /// Waits for the wrapped service to become ready, then calls it.
     #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
-        self.service.call_ready(req, self.ctx).await
+        self.service
+            .call(req, self.ctx.without_bypass().cast())
+            .await
     }
 }
 

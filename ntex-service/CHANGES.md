@@ -7,8 +7,12 @@
   consume readiness. Retain one pending checker with cancellation handoff, and
   let callers continue pipeline-owned checks when the original poller stops.
 
-* Add `ServiceBinding` and `Ctx::subscribe`. Context calls reuse bound readiness
-  until notification, while raw services are checked on every call.
+* Add `ServiceBinding` and `Ctx::subscribe`. `Ctx::call` consults its nearest
+  upstream cache; a miss checks only the target service without marking that
+  scope ready. Direct binding calls check their own cache, including through
+  transparent adapters. `AndThen`, `Then`, and `ApplyCtx` call child bindings
+  directly without consulting the parent cache. `Ctx::call_nowait` retains its
+  explicit bypass.
 
 * Add `ReadyNotifier` sources and internal readiness scopes with persistent
   subscriptions, generation-checked caching, and dependency invalidation.
