@@ -19,6 +19,8 @@
 //! env: N (requests per pipelined run, default 100000, sequential runs use N/4),
 //! ONLY=<name substring>, SLEEP_US=<client sleep after each batch write>.
 //! Server env: WBUF=<write buffer high watermark>, WTHR=<eager write threshold>,
+//! TRACKER=off|per-connection|shared (read buffer tracker, needs
+//! `--features ntex/tracker`),
 //! STD_PER_RESP=1 (std server writes every response separately),
 //! TRACE=<count> prints backtraces of the first allocations made by the server
 //! thread during measured runs (local mode only).
@@ -226,6 +228,22 @@ fn server_cfg() -> SharedCfg {
     }
     if let Some(w) = std::env::var("WTHR").ok().and_then(|v| v.parse().ok()) {
         io = io.set_write_buf_threshold(w);
+    }
+    #[cfg(feature = "tracker")]
+    {
+        use ntex::io::ReadBufTracker;
+
+        let mode = match std::env::var("TRACKER").as_deref() {
+            Err(_) | Ok("off") => ReadBufTracker::Disabled,
+            Ok("per-connection") => ReadBufTracker::PerConnection,
+            Ok("shared") => ReadBufTracker::Shared(ntex::util::BytesTracker::new()),
+            Ok(v) => panic!("TRACKER={v}, expected off|per-connection|shared"),
+        };
+        io = io.set_read_buf_tracker(mode);
+    }
+    #[cfg(not(feature = "tracker"))]
+    if std::env::var("TRACKER").is_ok_and(|v| v != "off") {
+        panic!("TRACKER needs --features ntex/tracker");
     }
     SharedCfg::new("BENCH").add(io).into()
 }
