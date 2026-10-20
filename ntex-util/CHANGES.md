@@ -2,6 +2,11 @@
 
 ## [4.5.0] - Unreleased
 
+* Add `bstream::channel_with_notifier()` for notification-invalidated sender
+  readiness. Watermark and terminal-state transitions, including receiver drop,
+  invalidate subscribed services before waking waiters. Putting data back also
+  updates sender backpressure. Plain channels do not allocate a notifier.
+
 * `KeepAliveService` invalidates cached readiness when its idle timer expires.
   Its local timer task is canceled on shutdown or drop; calls extend the deadline
   and an explicit readiness bypass can restart an expired service.
