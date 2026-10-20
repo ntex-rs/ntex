@@ -151,6 +151,29 @@ fn probe() -> (Probe, Rc<Gate>) {
 }
 
 #[test]
+fn notification_delivery_reuses_registered_callback_storage() {
+    let (svc, gate) = probe();
+    let pl = Pipeline::new(10, svc);
+    let (_, baseline) = measure(|| gate.changed.notify());
+    let calls = Rc::new(Cell::new(0));
+    for _ in 0..64 {
+        let captured = calls.clone();
+        pl.on_notify(&ReadyCallback::new(move || {
+            captured.set(captured.get() + 1);
+        }));
+    }
+    for expected in [64, 128] {
+        let (_, callbacks) = measure(|| gate.changed.notify());
+        assert_eq!(
+            (callbacks.allocs, callbacks.bytes, callbacks.deallocs),
+            (baseline.allocs, baseline.bytes, baseline.deallocs),
+            "registered callbacks must not add notification allocations"
+        );
+        assert_eq!(calls.get(), expected);
+    }
+}
+
+#[test]
 fn cached_pipeline_handles_skip_readiness_allocations() {
     let (svc, gate) = probe();
     let callback = svc.1.clone();

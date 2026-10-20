@@ -166,6 +166,11 @@ calls, ordinary task wakeups, or internal resets such as lazy service creation
 and shutdown. All affected scopes are invalidated before callbacks run, outside
 internal borrows and locks.
 
+Nested notifications still invalidate every affected scope, but skip callback
+delivery on scopes already executing callbacks. Registrations made during that
+delivery are retained for later notifications. Delivery reuses each scope's
+registered callback storage without allocating a snapshot or cloning handles.
+
 Raw services share their enclosing scope; `ready(svc)` gives the service its own.
 Registering one handle on two affected scopes invokes it once for each scope.
 Cloning a handle preserves its identity. Registrations persist until the scope

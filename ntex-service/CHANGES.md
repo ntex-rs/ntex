@@ -32,7 +32,10 @@
   pipelines, and their bindings. Callbacks run only when `ReadyNotifier::notify`
   reaches the registered scope, including through children, after all affected
   scopes are invalidated. Registrations persist for the scope's lifetime and
-  deduplicate the same callback identity.
+  deduplicate the same callback identity. Delivery reuses registered storage
+  without a callback snapshot allocation or handle cloning. Nested notifications
+  still invalidate all affected scopes but coalesce callback delivery on scopes
+  already invoking callbacks; new registrations are retained.
 
 * Add synchronous `Service::bind` and a borrowed `BindCtx<'_>`.
   Register all notifier sources with `BindCtx::subscribe` and all children

@@ -24,8 +24,11 @@ use std::{
 ///
 /// Callbacks run after all affected scopes are invalidated, outside internal
 /// borrows and locks, and before their observers are woken. Registrations made
-/// during a notification apply to subsequent notifications. A callback may
-/// notify again, but must prevent unbounded recursion itself.
+/// during a notification apply to subsequent notifications. A nested
+/// notification still invalidates every affected scope, but skips callback
+/// delivery on scopes already executing callbacks. Registrations made on such
+/// a scope are retained for notifications after its current delivery finishes.
+/// Delivery reuses registered callback storage without cloning callback handles.
 ///
 /// Captures must be owned. Avoid capturing a pipeline that retains this callback
 /// or other strong references that would create a reference cycle.
@@ -77,6 +80,7 @@ impl ReadyNotifier {
     ///
     /// Every notification advances the affected scopes' generations, including
     /// scopes that are already invalid or have a pending readiness check.
+    /// Callback delivery is coalesced on scopes already executing callbacks.
     ///
     /// A callback panic propagates and skips remaining callbacks, but observers
     /// are still woken during unwinding.
@@ -87,40 +91,60 @@ impl ReadyNotifier {
             .borrow()
             .iter()
             .filter_map(Weak::upgrade)
+            .map(|scope| (scope, 0))
             .collect();
         invalidate_scopes(affected, true);
     }
 }
 
-fn invalidate_scopes(mut affected: Vec<Rc<ScopeInner>>, notify_callbacks: bool) {
+fn invalidate_scopes(mut affected: Vec<(Rc<ScopeInner>, usize)>, notify_callbacks: bool) {
     let direct = affected.len();
-    let mut visited: HashSet<_, foldhash::fast::RandomState> =
-        affected.iter().map(Rc::as_ptr).collect();
+    let mut visited: HashSet<_, foldhash::fast::RandomState> = affected
+        .iter()
+        .map(|(scope, _)| Rc::as_ptr(scope))
+        .collect();
 
     let mut idx = 0;
     while idx < affected.len() {
-        let scope = Rc::clone(&affected[idx]);
+        let scope = Rc::clone(&affected[idx].0);
         scope.invalidate(idx < direct);
         for parent in scope.parents.borrow().iter().filter_map(Weak::upgrade) {
             if visited.insert(Rc::as_ptr(&parent)) {
-                affected.push(parent);
+                affected.push((parent, 0));
             }
         }
         idx += 1;
     }
 
-    // Snapshot the entire graph before user code can reenter and register again.
-    let mut callbacks = Vec::new();
+    // Freeze callback counts and drain wakers before user code can register again.
     let mut wakers = Vec::new();
-    for scope in &affected {
+    for (scope, count) in &mut affected {
         if notify_callbacks {
-            callbacks.extend(scope.callbacks.borrow().iter().cloned());
+            *count = scope.callbacks.borrow().len();
         }
         scope.take_wakers(&mut wakers);
     }
     let _wake = NotifyWakers(wakers);
-    for callback in callbacks {
-        (callback.0)();
+    for (scope, count) in &affected {
+        scope.notify_callbacks(*count);
+    }
+}
+
+struct NotifyCallbacks<'a> {
+    scope: &'a ScopeInner,
+    callbacks: Vec<ReadyCallback>,
+}
+
+impl Drop for NotifyCallbacks<'_> {
+    fn drop(&mut self) {
+        let mut pending = self.scope.callbacks.borrow_mut();
+        for callback in pending.drain(..) {
+            if !self.callbacks.iter().any(|c| Rc::ptr_eq(&c.0, &callback.0)) {
+                self.callbacks.push(callback);
+            }
+        }
+        std::mem::swap(&mut *pending, &mut self.callbacks);
+        self.scope.notifying.set(false);
     }
 }
 
@@ -186,7 +210,7 @@ impl ReadyScope {
     }
 
     pub(crate) fn reset_root(&self) {
-        invalidate_scopes(vec![self.0.clone()], false);
+        invalidate_scopes(vec![(self.0.clone(), 0)], false);
     }
 
     /// Records a successful check only if no dependency changed while checking.
@@ -318,6 +342,7 @@ struct ScopeInner {
     generation: Cell<Generation>,
     ready: Cell<bool>,
     checking: Cell<bool>,
+    notifying: Cell<bool>,
     callbacks: RefCell<Vec<ReadyCallback>>,
     sources: RefCell<Vec<Weak<SourceInner>>>,
     parents: RefCell<Vec<Weak<Self>>>,
@@ -365,6 +390,20 @@ impl Drop for CheckOwner<'_> {
 }
 
 impl ScopeInner {
+    fn notify_callbacks(&self, count: usize) {
+        if count == 0 || self.notifying.replace(true) {
+            return;
+        }
+        // Moving the existing storage out leaves room for reentrant registrations.
+        let callbacks = NotifyCallbacks {
+            scope: self,
+            callbacks: self.callbacks.take(),
+        };
+        for callback in callbacks.callbacks.iter().take(count) {
+            (callback.0)();
+        }
+    }
+
     fn invalidate(&self, direct: bool) {
         let mut generation = self.generation.get();
         generation.value = generation
@@ -617,13 +656,26 @@ mod tests {
 
         let calls = Rc::new(Cell::new(0));
         let captured = calls.clone();
-        let callback = ReadyCallback::new(move || captured.set(captured.get() + 1));
+        let identity = Rc::new(std::cell::OnceCell::<Weak<dyn Fn()>>::new());
+        let captured_identity = identity.clone();
+        let references = Rc::new(Cell::new(0));
+        let captured_references = references.clone();
+        let callback = ReadyCallback::new(move || {
+            assert_eq!(
+                captured_identity.get().unwrap().strong_count(),
+                captured_references.get(),
+                "delivery must not clone registered callbacks"
+            );
+            captured.set(captured.get() + 1);
+        });
+        identity.set(Rc::downgrade(&callback.0)).unwrap();
         for scope in [&leaf, &left, &right, &root, &sibling] {
             scope.on_notify(&callback);
             scope.on_notify(&callback.clone());
             assert!(scope.set_ready(scope.generation()));
         }
         drop(callback);
+        references.set(identity.get().unwrap().strong_count());
         leaf.wake_observers();
         leaf.checker_waker().wake();
         leaf.reset_root();
@@ -649,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn notification_snapshots_callbacks_and_wakers_before_reentry() {
+    fn notification_freezes_callback_counts_and_wakers_before_reentry() {
         let source = ReadyNotifier::new();
         let leaf = ReadyScope::new();
         let root = ReadyScope::new();
@@ -682,6 +734,8 @@ mod tests {
                         .all(|(_, w)| w.is_none())
                 );
             }
+            leaf.on_notify(&late);
+            leaf.on_notify(&late);
             root.on_notify(&late);
             leaf.subscribe(&captured_source);
             root.depend_on(&leaf);
@@ -699,28 +753,57 @@ mod tests {
         );
         assert_eq!(counter.wakes(), 2, "do not drain reentrant registrations");
         source.notify();
-        assert_eq!(late_calls.get(), 1);
+        assert_eq!(late_calls.get(), 2);
         assert_eq!(counter.wakes(), 3);
+        source.notify();
+        assert_eq!(late_calls.get(), 4, "queued aliases remain idempotent");
+        assert_eq!(counter.wakes(), 4);
     }
 
     #[test]
-    fn callbacks_can_notify_reentrantly() {
+    fn callbacks_coalesce_reentry_without_losing_invalidation() {
         let source = ReadyNotifier::new();
         let scope = ReadyScope::new();
+        let root = ReadyScope::new();
+        root.depend_on(&scope);
         scope.subscribe(&source);
         let calls = Rc::new(Cell::new(0));
         let captured = calls.clone();
         let nested = source.clone();
+        let weak = Rc::downgrade(&scope.0);
+        let in_callback = Cell::new(false);
         scope.on_notify(&ReadyCallback::new(move || {
-            let previous = captured.replace(captured.get() + 1);
-            if previous == 0 {
-                nested.notify();
-            }
+            assert!(!in_callback.replace(true), "delivery must be coalesced");
+            captured.set(captured.get() + 1);
+            let scope = ReadyScope(weak.upgrade().unwrap());
+            let before = scope.generation();
+            assert!(scope.set_ready(before));
+            nested.notify();
+            assert!(!scope.is_ready());
+            assert!(
+                !scope.set_ready(before),
+                "nested invalidation must advance generation"
+            );
+            in_callback.set(false);
+        }));
+        let root_calls = Rc::new(Cell::new(0));
+        let captured = root_calls.clone();
+        root.on_notify(&ReadyCallback::new(move || {
+            captured.set(captured.get() + 1);
         }));
         let before = scope.generation();
         source.notify();
-        assert_eq!(calls.get(), 2);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            root_calls.get(),
+            2,
+            "inactive scopes still receive nested notifications"
+        );
         assert_eq!(scope.generation().value, before.value + 2);
+        source.notify();
+        assert_eq!(calls.get(), 2, "delivery resumes after the previous batch");
+        assert_eq!(root_calls.get(), 4);
+        assert_eq!(scope.generation().value, before.value + 4);
     }
 
     #[test]
@@ -730,7 +813,12 @@ mod tests {
         scope.subscribe(&source);
         let panicking = Rc::new(Cell::new(true));
         let captured = panicking.clone();
+        let late_calls = Rc::new(Cell::new(0));
+        let captured_late = late_calls.clone();
+        let late = ReadyCallback::new(move || captured_late.set(captured_late.get() + 1));
+        let weak = Rc::downgrade(&scope.0);
         scope.on_notify(&ReadyCallback::new(move || {
+            ReadyScope(weak.upgrade().unwrap()).on_notify(&late);
             assert!(!captured.get(), "callback panic");
         }));
         let calls = Rc::new(Cell::new(0));
@@ -750,11 +838,17 @@ mod tests {
         assert!(!scope.is_ready());
         assert_eq!(counter.wakes(), 1);
         assert_eq!(calls.get(), 0);
+        assert_eq!(late_calls.get(), 0);
         panicking.set(false);
         assert!(observer.register(&waker));
         source.notify();
         assert_eq!(counter.wakes(), 2);
         assert_eq!(calls.get(), 1);
+        assert_eq!(
+            late_calls.get(),
+            1,
+            "panic cleanup retains new registrations"
+        );
     }
 
     #[test]
