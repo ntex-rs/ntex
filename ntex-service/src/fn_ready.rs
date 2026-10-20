@@ -3,6 +3,9 @@ use std::{convert::Infallible, fmt, marker::PhantomData};
 use crate::{Ctx, Service, ServiceFactory};
 
 /// A pass-through service with readiness controlled by an asynchronous function.
+///
+/// The callback receives only pipeline state, not a readiness scope. For scoped
+/// readiness and change notifications, implement [`Service`] directly.
 pub struct FnReadiness<F, Err> {
     f: F,
     err: PhantomData<Err>,

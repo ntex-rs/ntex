@@ -62,6 +62,8 @@ where
     type Res = S::Res;
     type Error = E;
 
+    crate::forward_bind!(St, svc);
+
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, E> {
         self.svc

@@ -19,6 +19,7 @@ use std::rc::Rc;
 
 mod and_then;
 mod apply;
+mod bind;
 pub mod boxed;
 pub mod cfg;
 mod chain;
@@ -33,6 +34,7 @@ mod map_init_err;
 mod map_state;
 mod middleware;
 mod readiness;
+mod ready;
 mod service_binding;
 pub mod state;
 mod then;
@@ -44,6 +46,7 @@ mod pl_inner;
 mod pl_state;
 
 pub use crate::apply::{apply_fn, apply_fn_factory};
+pub use crate::bind::BindCtx;
 pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, service};
 pub use crate::ctx::Ctx;
 pub use crate::fn_service::{fn_factory, fn_service, fn_service_st};
@@ -51,6 +54,7 @@ pub use crate::map_state::{map_state, map_state_factory};
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
 pub use crate::readiness::ReadyNotifier;
+pub use crate::ready::{ready, ready_factory};
 pub use crate::service_binding::ServiceBinding;
 pub use crate::state::{RequestState, State};
 
@@ -126,9 +130,27 @@ pub trait Service<St, Req> {
     /// The enclosing pipeline checks readiness before invoking this method.
     /// Implementations should not call their own `ready` method. A composed
     /// service can use [`Ctx::call`] to call an inner service using the closest
-    /// upstream readiness cache. A stored [`ServiceBinding`] can be called
-    /// directly to check its own cache instead.
+    /// upstream readiness cache. A service wrapped with [`ready()`] can be
+    /// called directly to check its own cache instead.
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error>;
+
+    #[inline]
+    /// Initializes the service within a [`Pipeline`].
+    ///
+    /// Called during pipeline construction or [`Ctx::create`], before runtime
+    /// operations on the new service.
+    ///
+    /// The default is suitable for leaves without notification sources.
+    /// Composites must bind every existing child, and services with changing
+    /// readiness must subscribe to all their sources here. Lazily created
+    /// children must be initialized through [`Ctx::create`], which binds them
+    /// explicitly before use.
+    ///
+    /// Binding is synchronous. Shared services can be bound to multiple parents;
+    /// implementations must support repeated binding.
+    /// [`forward_bind!`] and [`forward_pl_bind!`] handle simple forwarding.
+    /// Ordinary readiness checks, calls, and shutdown do not add dependencies.
+    fn bind(&self, ctx: BindCtx<'_>) {}
 
     #[inline]
     /// Waits until the service is ready to process a request.
@@ -310,6 +332,10 @@ where
     type Res = S::Res;
     type Error = S::Error;
 
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, Req>(&**self);
+    }
+
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
         Service::ready(&**self, ctx.cast()).await
@@ -333,6 +359,10 @@ where
     type Res = S::Res;
     type Error = S::Error;
 
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, Req>(&**self);
+    }
+
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
         Service::ready(&**self, ctx.cast()).await
@@ -355,6 +385,10 @@ where
 {
     type Res = S::Res;
     type Error = S::Error;
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, Req>(&**self);
+    }
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
@@ -443,6 +477,7 @@ pub mod dev {
     pub use crate::map_init_err::MapInitErr;
     pub use crate::map_state::{MapState, MapStateFactory};
     pub use crate::middleware::{ApplyMiddleware, FnMiddleware};
+    pub use crate::ready::{Ready, ReadyFactory};
     pub use crate::then::{Then, ThenFactory};
 }
 
@@ -492,6 +527,7 @@ mod tests {
         type Res = usize;
         type Error = usize;
 
+        crate::forward_bind!(usize, inner);
         crate::forward_ready!(usize, inner, str::len);
 
         async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, usize> {
@@ -510,6 +546,7 @@ mod tests {
         type Res = usize;
         type Error = &'static str;
 
+        crate::forward_pl_bind!(usize, pl);
         crate::forward_pl_ready!(usize, pl);
         crate::forward_pl_shutdown!(usize, pl);
 
@@ -526,6 +563,7 @@ mod tests {
         type Res = usize;
         type Error = usize;
 
+        crate::forward_pl_bind!(usize, pl);
         crate::forward_pl_ready!(usize, pl, str::len);
 
         async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, usize> {

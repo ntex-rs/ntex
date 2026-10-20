@@ -50,6 +50,10 @@ where
     type Res = S::Res;
     type Error = S::Error;
 
+    fn bind(&self, ctx: crate::BindCtx<'_>) {
+        ctx.bind::<_, St, Req>(&self.s);
+    }
+
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, OtSt>) -> Result<S::Res, S::Error> {
         self.s.call(req, ctx.map_state(&self.st).cast()).await

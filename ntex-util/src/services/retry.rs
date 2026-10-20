@@ -75,6 +75,7 @@ where
         result
     }
 
+    ntex_service::forward_bind!(St, service);
     ntex_service::forward_ready!(St, service);
     ntex_service::forward_shutdown!(St, service);
 }

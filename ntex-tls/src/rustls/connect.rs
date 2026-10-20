@@ -89,6 +89,7 @@ where
         .await
     }
 
+    ntex_service::forward_bind!(SharedCfg, svc);
     ntex_service::forward_ready!(SharedCfg, svc);
     ntex_service::forward_shutdown!(SharedCfg, svc);
 }

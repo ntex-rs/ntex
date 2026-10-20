@@ -1,7 +1,7 @@
 use std::{io, marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
+use ntex_service::{BindCtx, IntoService, Pipeline, Service, cfg::SharedCfg};
 use ntex_util::future::BoxFuture;
 
 use super::{ServerAppConfig, Token, service::ConnGuard};
@@ -10,6 +10,8 @@ pub(super) type FactoryServiceType<St> = Box<dyn FactoryService<St>>;
 type CreateResult = Vec<(Box<dyn NetService>, Arc<str>, Vec<(Token, SharedCfg)>)>;
 
 pub(crate) trait NetService {
+    fn bind(&self, ctx: &BindCtx<'_>);
+
     fn call(&self, _: Io, _: ConnGuard);
 
     fn ready(&self) -> BoxFuture<'_, Result<(), ()>>;
@@ -85,6 +87,10 @@ pub(crate) struct ServerService {
 }
 
 impl NetService for ServerService {
+    fn bind(&self, ctx: &BindCtx<'_>) {
+        self.pipeline.bind_to(ctx);
+    }
+
     fn call(&self, io: Io, guard: ConnGuard) {
         let fut = self.pipeline.call_static(io);
         ntex_rt::spawn_detached(async move {

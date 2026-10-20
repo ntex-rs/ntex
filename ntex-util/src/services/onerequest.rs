@@ -82,6 +82,8 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for OneRequestService<S> {
     type Res = S::Res;
     type Error = S::Error;
 
+    ntex_service::forward_bind!(St, service);
+
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
         self.acquire().await;

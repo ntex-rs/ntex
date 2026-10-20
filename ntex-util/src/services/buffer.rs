@@ -163,6 +163,8 @@ where
     type Res = Res;
     type Error = BufferServiceError<Err>;
 
+    ntex_service::forward_pl_bind!(St, service);
+
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         // hold advancement until the last released task completes its call or
         // is dropped

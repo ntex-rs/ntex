@@ -129,6 +129,10 @@ impl Service<SharedCfg, Connect> for ConnectionPool {
     type Res = Connection;
     type Error = Error<ConnectError>;
 
+    fn bind(&self, ctx: crate::service::BindCtx<'_>) {
+        self.0.svc.bind_to(&ctx);
+    }
+
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, SharedCfg>) -> Result<(), Self::Error> {
         self.0.svc.ready(ctx.st()).await

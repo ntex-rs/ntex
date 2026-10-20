@@ -216,6 +216,7 @@ where
     type Res = Option<Message>;
     type Error = WsError<E>;
 
+    crate::forward_bind!(WsSink, svc);
     crate::forward_ready!(WsSink, svc, WsError::Service);
     crate::forward_shutdown!(WsSink, svc);
 

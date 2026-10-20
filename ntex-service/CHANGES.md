@@ -7,15 +7,35 @@
   consume readiness. Retain one pending checker with cancellation handoff, and
   let callers continue pipeline-owned checks when the original poller stops.
 
-* Add `ServiceBinding` and `Ctx::subscribe`. `Ctx::call` consults its nearest
+* Add `ServiceBinding`. `Ctx::call` consults its nearest
   upstream cache; a miss checks only the target service without marking that
   scope ready. Direct binding calls check their own cache, including through
-  transparent adapters. `AndThen`, `Then`, and `ApplyCtx` call child bindings
-  directly without consulting the parent cache. `Ctx::call_nowait` retains its
-  explicit bypass.
+  transparent adapters. `Ctx::call_nowait` retains its explicit bypass.
+
+* Add `ready(svc)` and `ready_factory(fac)` for explicit per-service readiness
+  caching and call-time checks. `AndThen`, `Then`, and `Apply` store raw children
+  without adding bindings. Their calls forward directly; wrap children with
+  `ready` to revalidate their independent readiness after an await or another
+  call. Wrapper clones and factory-created services get fresh bindings.
 
 * Add `ReadyNotifier` sources and internal readiness scopes with persistent
   subscriptions, generation-checked caching, and dependency invalidation.
+
+* Add synchronous `Service::bind` and a borrowed `BindCtx<'_>`.
+  Register all notifier sources with `BindCtx::subscribe` and all children
+  with `BindCtx::bind` during service initialization. Runtime `Ctx` cannot
+  register dependencies directly. The default hook is a no-op for leaves; composites
+  must forward binding explicitly, using `forward_bind!` or `forward_pl_bind!`
+  where appropriate. An unregistered `ServiceBinding` panics rather than
+  lazily wiring itself. Readiness callbacks continue to receive only `&St`.
+
+* Add `Ctx::create` to create and bind lazy children to the current scope.
+  Successful creation invalidates the scope and its ancestors; factory errors
+  and cancellation do not bind a service. Created services are returned
+  unchanged, with independent readiness caching remaining opt-in.
+
+* Expose `bind_to(&BindCtx)` on pipelines and their runtime handles for explicit
+  readiness dependency binding. `forward_pl_bind!` uses this public API.
 
 ## [5.2.0] - 2026-10-06
 

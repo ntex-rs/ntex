@@ -722,6 +722,16 @@ where
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
 
+    fn bind(&self, ctx: crate::service::BindCtx<'_>) {
+        ctx.bind(&self.filter);
+        for route in &self.routes {
+            ctx.bind(route);
+        }
+        if let Some(default) = &self.default {
+            ctx.bind(default);
+        }
+    }
+
     async fn call(
         &self,
         req: WebRequest<In>,

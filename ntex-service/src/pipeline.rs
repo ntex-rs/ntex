@@ -1,7 +1,7 @@
 use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
-use crate::{Ctx, IntoService, Service, ServiceCaller, util::BoxFuture};
+use crate::{BindCtx, IntoService, Service, ServiceCaller, util::BoxFuture};
 
 pub use crate::pl_factory::PipelineFactory;
 pub use crate::pl_state::{PipelineState, PipelineStateBinding};
@@ -117,9 +117,14 @@ where
         PipelineBinding::new(self)
     }
 
-    #[doc(hidden)]
-    pub fn __register_ready_dependency<S, St>(&self, ctx: Ctx<'_, S, St>) {
-        self.api.register_ready_dependency(ctx);
+    #[inline]
+    /// Registers this pipeline as a readiness dependency of the enclosing service.
+    ///
+    /// Call from [`Service::bind`] so changes to this pipeline's readiness also
+    /// invalidate the enclosing scope. Repeated registration is idempotent and
+    /// does not rebind the inner service or create another runtime handle.
+    pub fn bind_to(&self, ctx: &BindCtx<'_>) {
+        self.api.bind_to(ctx);
     }
 }
 
@@ -187,9 +192,12 @@ where
         PipelineCall::new(self.clone(), req)
     }
 
-    #[doc(hidden)]
-    pub fn __register_ready_dependency<S, St>(&self, ctx: Ctx<'_, S, St>) {
-        self.api.register_ready_dependency(ctx);
+    #[inline]
+    /// Registers this handle's pipeline as a readiness dependency.
+    ///
+    /// Call from [`Service::bind`]. See [`Pipeline::bind_to`] for details.
+    pub fn bind_to(&self, ctx: &BindCtx<'_>) {
+        self.api.bind_to(ctx);
     }
 }
 

@@ -3,7 +3,7 @@ use std::{
 };
 
 use crate::readiness::{Generation, ReadyScope, RunCheck};
-use crate::{ReadyNotifier, Service};
+use crate::{BindCtx, Service, ServiceFactory};
 
 /// Context provided to [`Service`] lifecycle methods.
 ///
@@ -12,6 +12,9 @@ use crate::{ReadyNotifier, Service};
 /// It borrows the current readiness scope from a pipeline or service binding.
 /// Copying or mapping the context preserves that scope; calling a binding
 /// selects the binding's own scope without changing the caller's context.
+/// Existing dependencies must be registered in [`Service::bind`] using
+/// [`BindCtx`]. Lazily created children can be initialized with [`Ctx::create`];
+/// readiness checks, calls, and shutdown never register dependencies implicitly.
 pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     idx: u32,
     st: &'a St,
@@ -217,13 +220,26 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
         self.st
     }
 
-    /// Subscribes the current readiness scope to a source of readiness changes.
+    /// Creates a child service and binds it to this context's readiness scope.
     ///
-    /// Subscribe before inspecting availability. Repeated subscriptions are
-    /// idempotent and persist until the scope or source is dropped, including
-    /// after a readiness check completes or is cancelled.
-    pub fn subscribe(&self, source: &ReadyNotifier) {
-        self.scope.subscribe(source);
+    /// Uses the current pipeline state to create the service, then invokes its
+    /// [`Service::bind`] hook before returning it. Successful creation invalidates
+    /// this scope's cached readiness and its ancestors. Failed or cancelled
+    /// creation does not bind a service or change this scope's dependencies.
+    ///
+    /// The service is returned unchanged, without checking readiness or adding
+    /// a cache. Use [`crate::ready_factory`] for independent child readiness.
+    /// Retain the created service for subsequent calls rather than recreating it
+    /// on each readiness check. Other scopes must bind it separately before use.
+    #[inline]
+    pub async fn create<Sf, Req>(&self, factory: &Sf) -> Result<Sf::Service, Sf::InitError>
+    where
+        Sf: ServiceFactory<St, Req>,
+    {
+        let service = factory.create(self.st).await?;
+        service.bind(BindCtx::new(self.scope));
+        self.scope.reset_root();
+        Ok(service)
     }
 
     /// Waits until `svc` is ready to process a request.
@@ -490,7 +506,7 @@ mod tests {
     use ntex::{rt::spawn, time, util::lazy, util::select};
 
     use super::*;
-    use crate::Pipeline;
+    use crate::{BindCtx, Pipeline, ReadyNotifier};
 
     struct Srv(Rc<Cell<usize>>, condition::Waiter, ReadyNotifier);
 
@@ -498,8 +514,11 @@ mod tests {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
+        fn bind(&self, ctx: BindCtx<'_>) {
             ctx.subscribe(&self.2);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())
@@ -608,6 +627,8 @@ mod tests {
     impl<S: Service<(), &'static str>> Service<(), &'static str> for Nested<S> {
         type Res = S::Res;
         type Error = S::Error;
+
+        crate::forward_bind!((), 0);
 
         async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
             ctx.ready(&self.0).await

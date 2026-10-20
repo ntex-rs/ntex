@@ -16,6 +16,13 @@ impl Service<SharedCfg, Connect> for Connector {
     type Res = Connection;
     type Error = Error<ClientError>;
 
+    fn bind(&self, ctx: crate::service::BindCtx<'_>) {
+        ctx.bind(&self.tcp_pool);
+        if let Some(ssl_pool) = &self.ssl_pool {
+            ctx.bind(ssl_pool);
+        }
+    }
+
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, SharedCfg>) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {

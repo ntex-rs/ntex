@@ -79,6 +79,7 @@ where
         ctx.call(&self.svc, req).await.map_err(WebError::from_err)
     }
 
+    crate::forward_bind!(St, svc);
     crate::forward_ready!(St, svc, WebError::from_err);
     crate::forward_shutdown!(St, svc);
 }

@@ -1,7 +1,7 @@
 use std::{fmt, marker};
 
 use crate::Ctx;
-use crate::{IntoService, IntoServiceFactory, Service, ServiceBinding, ServiceFactory};
+use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::{ServiceCaller, ServiceChain, ServiceChainFactory};
 
 /// Applies an asynchronous middleware function to a service.
@@ -36,12 +36,12 @@ where
 #[derive(Debug)]
 /// Context passed to middleware functions created by [`apply_fn`].
 ///
-/// Calls reuse the wrapped service's persistent readiness until a subscribed
-/// source invalidates it, including when the middleware awaits before calling.
-/// They check the wrapped binding directly, not the enclosing scope's cache.
+/// Calls forward directly to the inner service. Wrap it with [`crate::ready`]
+/// to check its independent readiness on each call, including after middleware
+/// awaits or makes another call.
 pub struct ApplyCtx<'a, S, St, Req> {
     ctx: Ctx<'a, S, St>,
-    service: &'a ServiceBinding<S>,
+    service: &'a S,
     r: marker::PhantomData<Req>,
 }
 
@@ -52,7 +52,7 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
         self.ctx.st()
     }
 
-    /// Waits for the wrapped service to become ready, then calls it.
+    /// Calls the inner service, preserving any explicit readiness wrapper.
     #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
         self.service
@@ -72,10 +72,10 @@ impl<S: Service<St, Req>, St, Req> ServiceCaller<Req, S::Res, S::Error>
 
 /// Service produced by [`apply_fn`].
 ///
-/// Owns persistent readiness for its child. Calls do not consume readiness;
-/// clones and factory-created services get fresh child readiness.
+/// Shares the enclosing readiness scope with its child unless the child is
+/// explicitly wrapped with [`crate::ready`].
 pub struct Apply<S, St, Req, F, In, Out, Err> {
-    svc: ServiceBinding<S>,
+    svc: S,
     f: F,
     r: marker::PhantomData<fn(St, Req) -> (In, Out, Err)>,
 }
@@ -87,7 +87,7 @@ where
     pub(crate) fn new(svc: S, f: F) -> Self {
         Apply {
             f,
-            svc: ServiceBinding::new(svc),
+            svc,
             r: marker::PhantomData,
         }
     }
@@ -127,6 +127,8 @@ where
 {
     type Res = Out;
     type Error = Err;
+
+    crate::forward_bind!(St, svc);
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Err> {
@@ -368,10 +370,13 @@ mod tests {
             let st = Rc::new(State::default());
             let pl = Pipeline::new(
                 (),
-                Apply::new(Single(st.clone()), async |(rx1, rx2): Req, svc| {
-                    let _ = rx1.await;
-                    svc.call(rx2).await
-                }),
+                Apply::new(
+                    crate::ready(Single(st.clone())),
+                    async |(rx1, rx2): Req, svc| {
+                        let _ = rx1.await;
+                        svc.call(rx2).await
+                    },
+                ),
             );
             concurrent_entry(&pl, &st).await;
         }

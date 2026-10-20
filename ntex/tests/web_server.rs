@@ -1054,6 +1054,8 @@ async fn test_request_state() {
         type Res = WebResponse;
         type Error = S::Error;
 
+        ntex::forward_bind!(St, 0);
+
         async fn call(
             &self,
             req: WebRequest<()>,

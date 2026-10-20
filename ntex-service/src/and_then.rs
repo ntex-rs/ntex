@@ -1,26 +1,21 @@
-use super::{Ctx, Service, ServiceBinding, ServiceFactory, util};
+use super::{BindCtx, Ctx, Service, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
 /// Service produced by the `and_then` combinator.
 ///
 /// This is created by the `Service::and_then()` and `ServiceChain::and_then()` methods.
-/// Each child retains independent readiness until its subscribed sources change.
-/// Calls check each child's binding directly, not the enclosing scope's cache.
-/// After the first call completes, the second child's readiness is revalidated.
-/// Calls do not consume readiness; clones and factory-created services get fresh
-/// child readiness.
+/// Children share the enclosing readiness scope unless explicitly wrapped with
+/// [`crate::ready`]. Calls forward directly to each child; a wrapped child checks
+/// its own readiness at call time, including after the first child's call awaits.
 pub struct AndThen<A, B> {
-    svc1: ServiceBinding<A>,
-    svc2: ServiceBinding<B>,
+    svc1: A,
+    svc2: B,
 }
 
 impl<A, B> AndThen<A, B> {
     /// Creates a new `AndThen` service.
     pub(crate) fn new(svc1: A, svc2: B) -> Self {
-        Self {
-            svc1: ServiceBinding::new(svc1),
-            svc2: ServiceBinding::new(svc2),
-        }
+        Self { svc1, svc2 }
     }
 }
 
@@ -31,6 +26,12 @@ where
 {
     type Res = B::Res;
     type Error = A::Error;
+
+    #[inline]
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, Req>(&self.svc1);
+        ctx.bind::<_, St, A::Res>(&self.svc2);
+    }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
@@ -212,7 +213,7 @@ mod tests {
         use ntex::channel::oneshot::{self, Receiver};
 
         use crate::util::tests::{Req, Single, State, concurrent_entry, start, tick};
-        use crate::{Ctx, Pipeline, ReadyNotifier, Service, and_then::AndThen};
+        use crate::{Ctx, Pipeline, ReadyNotifier, Service, and_then::AndThen, ready};
 
         #[derive(Default)]
         struct Gate {
@@ -228,8 +229,11 @@ mod tests {
             type Res = Receiver<()>;
             type Error = ();
 
-            async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), ()> {
+            fn bind(&self, ctx: crate::BindCtx<'_>) {
                 ctx.subscribe(&self.0.changed);
+            }
+
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
                 poll_fn(|cx| {
                     if self.0.closed.get() {
                         *self.0.waker.borrow_mut() = Some(cx.waker().clone());
@@ -250,7 +254,10 @@ mod tests {
         fn setup() -> (Rc<Gate>, Rc<State>, Pipeline<Req, (), ()>) {
             let gate = Rc::new(Gate::default());
             let st = Rc::new(State::default());
-            let pl = Pipeline::new((), AndThen::new(Svc1(gate.clone()), Single(st.clone())));
+            let pl = Pipeline::new(
+                (),
+                AndThen::new(ready(Svc1(gate.clone())), ready(Single(st.clone()))),
+            );
             (gate, st, pl)
         }
 

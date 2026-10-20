@@ -1,6 +1,6 @@
 use std::{fmt, ptr, rc::Rc, task::Context, task::Poll};
 
-use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
+use crate::{BindCtx, Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 
 use crate::pipeline::PipelineBinding;
 use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness};
@@ -34,9 +34,11 @@ where
         St: 'static,
     {
         let waiters = WaitersRef::new();
+        let s = service.into_service();
+        s.bind(BindCtx::new(waiters.scope()));
         PipelineState {
             api: Rc::new(PipelineInner {
-                s: service.into_service(),
+                s,
                 readiness: PipelineReadiness::new(waiters.scope()),
                 waiters,
             }),
@@ -118,6 +120,16 @@ where
 
         PipelineBinding::with(self.api.reg(), PipelineApi::with(internal))
     }
+
+    #[inline]
+    /// Registers this pipeline as a readiness dependency of the enclosing service.
+    ///
+    /// Call from [`Service::bind`] so changes to this pipeline's readiness also
+    /// invalidate the enclosing scope. Repeated registration is idempotent and
+    /// does not rebind the inner service or create another runtime handle.
+    pub fn bind_to(&self, ctx: &BindCtx<'_>) {
+        ctx.depend_on(self.api.scope());
+    }
 }
 
 impl<St, Req, Res, Err> Drop for PipelineState<St, Req, Res, Err> {
@@ -181,6 +193,14 @@ where
             api: self.api.as_ref(),
         };
         pl.api.call(pl.idx, req, st).await
+    }
+
+    #[inline]
+    /// Registers this handle's pipeline as a readiness dependency.
+    ///
+    /// Call from [`Service::bind`]. See [`PipelineState::bind_to`] for details.
+    pub fn bind_to(&self, ctx: &BindCtx<'_>) {
+        ctx.depend_on(self.api.scope());
     }
 }
 
@@ -373,8 +393,11 @@ mod tests {
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, ctx: Ctx<'_, Self, usize>) -> Result<(), ()> {
+        fn bind(&self, ctx: BindCtx<'_>) {
             ctx.subscribe(&self.2);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), ()> {
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())

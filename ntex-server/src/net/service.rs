@@ -1,7 +1,7 @@
 use std::{fmt, io, sync::Arc};
 
 use ntex_io::{IoConfig, IoMetricsGroup};
-use ntex_service::{Ctx, Service, cfg::SharedCfg};
+use ntex_service::{BindCtx, Ctx, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter, services::counter::CounterGuard};
 
 use crate::{ServerAppConfig, ServerConfiguration, affinity, metrics::WorkerSlot};
@@ -165,6 +165,12 @@ impl fmt::Debug for StreamService {
 impl Service<(), Connection> for StreamService {
     type Res = ();
     type Error = ();
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        for service in &self.services {
+            service.bind(&ctx);
+        }
+    }
 
     async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
