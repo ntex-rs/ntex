@@ -1,5 +1,3 @@
-use std::{future::Future, future::poll_fn, pin::pin, task::Poll};
-
 use crate::{Ctx, Service, readiness::ReadyScope};
 
 /// A service paired with persistent readiness.
@@ -8,6 +6,9 @@ use crate::{Ctx, Service, readiness::ReadyScope};
 /// until a subscribed [`crate::ReadyNotifier`] invalidates it. Calls do not
 /// consume readiness. Services whose readiness can change must subscribe through
 /// [`Ctx::subscribe`] before inspecting availability and notify when it changes.
+/// Direct [`Service::call`] also checks this binding's cache through `Ctx`;
+/// only the explicit [`Ctx::call_nowait`] bypass skips readiness.
+/// Direct calls do not wait for the enclosing scope's cache to become valid.
 ///
 /// A binding owns its service, not pipeline state. Its readiness describes one
 /// shared gate regardless of the state passed to a check or call. Independent
@@ -33,35 +34,6 @@ impl<S> ServiceBinding<S> {
     pub(crate) fn is_ready(&self) -> bool {
         self.scope.is_ready()
     }
-
-    /// A cached child can run while another child owns the pipeline readiness check.
-    pub(crate) async fn call_ready<T, St, Req>(
-        &self,
-        req: Req,
-        ctx: Ctx<'_, T, St>,
-    ) -> Result<S::Res, S::Error>
-    where
-        S: Service<St, Req>,
-    {
-        ctx.scope().depend_on(&self.scope);
-        while !self.is_ready() {
-            let result = {
-                let observer = self.scope.observer();
-                let mut ready = pin!(ctx.ready(self));
-                poll_fn(|cx| {
-                    observer.register(cx.waker());
-                    if self.is_ready() {
-                        Poll::Ready(Ok(()))
-                    } else {
-                        ready.as_mut().poll(cx)
-                    }
-                })
-                .await
-            };
-            result?;
-        }
-        self.call(req, ctx.cast()).await
-    }
 }
 
 impl<S: Clone> Clone for ServiceBinding<S> {
@@ -85,7 +57,12 @@ where
     }
 
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        self.service.call(req, ctx.with_scope(&self.scope)).await
+        ctx.scope().depend_on(&self.scope);
+        let ctx = ctx.with_scope::<Self>(&self.scope);
+        if !ctx.is_call_nowait() {
+            ctx.ready_cached(self).await?;
+        }
+        self.service.call(req, ctx.cast()).await
     }
 
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
@@ -308,7 +285,7 @@ mod tests {
     fn waiting_child_calls_observe_cache_success_before_an_unrelated_check_finishes() {
         struct Both {
             a: ServiceBinding<Probe>,
-            b: ServiceBinding<Probe>,
+            b: Rc<ServiceBinding<Probe>>,
         }
 
         impl Service<State, usize> for Both {
@@ -324,33 +301,102 @@ mod tests {
             }
         }
 
-        let waiters = WaitersRef::new();
-        let st = State(0);
-        let owner_ctx = Ctx::<(), State>::new(0, &waiters, &st);
-        let registration = waiters.register();
-        let caller_ctx = Ctx::<(), State>::new(registration.idx, &waiters, &st);
-        let a = Probe::new();
-        let b = Probe::new();
-        a.0.available.set(false);
-        let pair = Both {
-            a: ServiceBinding::new(a.clone()),
-            b: ServiceBinding::new(b.clone()),
-        };
-        let mut owner = Box::pin(owner_ctx.ready(&pair));
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(owner.as_mut().poll(&mut cx).is_pending());
-        b.0.changed.notify();
-        let mut call = Box::pin(pair.b.call_ready(1, caller_ctx));
-        let counter = Arc::new(Counter::default());
-        let waker = Waker::from(counter.clone());
-        let mut task = Context::from_waker(&waker);
-        assert!(call.as_mut().poll(&mut task).is_pending());
-        assert!(owner.as_mut().poll(&mut cx).is_pending());
-        assert!(pair.b.is_ready());
-        assert!(counter.0.load(Ordering::Relaxed) > 0);
-        assert_eq!(call.as_mut().poll(&mut task), Poll::Ready(Ok(1)));
-        assert_eq!((a.0.starts.get(), b.0.starts.get()), (1, 2));
-        assert_eq!(a.0.drops.get(), 0);
+        for path in 0..4 {
+            let waiters = WaitersRef::new();
+            let st = State(0);
+            let owner_ctx = Ctx::<(), State>::new(0, &waiters, &st);
+            let registration = waiters.register();
+            let caller_ctx = Ctx::<(), State>::new(registration.idx, &waiters, &st);
+            let a = Probe::new();
+            let b = Probe::new();
+            a.0.available.set(false);
+            let pair = Both {
+                a: ServiceBinding::new(a.clone()),
+                b: Rc::new(ServiceBinding::new(b.clone())),
+            };
+            let erased = crate::boxed::service(crate::map_state(
+                State(10),
+                Box::new(pair.b.clone())
+                    .map(|res| res + 100)
+                    .map_err(|err| err),
+            ));
+            let mut owner = Box::pin(owner_ctx.ready(&pair));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(owner.as_mut().poll(&mut cx).is_pending());
+            b.0.changed.notify();
+            let mut call = Box::pin(async {
+                match path {
+                    0 => caller_ctx.call(&pair.b, 1).await,
+                    1 => pair.b.call(1, caller_ctx.cast()).await,
+                    2 => erased.call(1, caller_ctx.cast()).await,
+                    _ => caller_ctx.with_scope::<()>(&pair.b.scope).call(&b, 1).await,
+                }
+            });
+            let counter = Arc::new(Counter::default());
+            let waker = Waker::from(counter.clone());
+            let mut task = Context::from_waker(&waker);
+            assert!(call.as_mut().poll(&mut task).is_pending());
+            assert!(owner.as_mut().poll(&mut cx).is_pending());
+            assert!(pair.b.is_ready());
+            assert_eq!((a.0.starts.get(), b.0.starts.get()), (1, 2));
+            assert_eq!(a.0.drops.get(), 0);
+            if path == 0 {
+                assert!(call.as_mut().poll(&mut task).is_pending());
+                a.0.available.set(true);
+                a.0.changed.notify();
+                assert_eq!(owner.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+            } else {
+                assert!(counter.0.load(Ordering::Relaxed) > 0);
+            }
+            let expected = if path == 2 { 111 } else { 1 };
+            assert_eq!(call.as_mut().poll(&mut task), Poll::Ready(Ok(expected)));
+        }
+    }
+
+    #[test]
+    fn built_in_calls_use_child_caches_while_an_unrelated_check_is_pending() {
+        for path in 0..3 {
+            let waiters = WaitersRef::new();
+            let st = State(10);
+            let owner_ctx = Ctx::<(), State>::new(0, &waiters, &st);
+            let registration = waiters.register();
+            let caller_ctx = Ctx::<(), State>::new(registration.idx, &waiters, &st);
+            let a = Probe::new();
+            let b = Probe::new();
+            let service = match path {
+                0 => compose_probes(a.clone(), b.clone(), false),
+                1 => compose_probes(a.clone(), b.clone(), true),
+                _ => crate::boxed::service(crate::apply_fn(
+                    b.clone(),
+                    async |req: usize, ctx: &crate::dev::ApplyCtx<'_, Probe, State, usize>| {
+                        ctx.call_service(req).await
+                    },
+                )),
+            };
+            assert_eq!(run(owner_ctx.ready(&service)), Ok(()));
+            assert!(!owner_ctx.scope().is_ready());
+
+            let unrelated = Probe::new();
+            unrelated.0.available.set(false);
+            let mut owner = Box::pin(owner_ctx.ready(&unrelated));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(owner.as_mut().poll(&mut cx).is_pending());
+            let expected = if path == 2 { 11 } else { 21 };
+            assert_eq!(run(service.call(1, caller_ctx.cast())), Ok(expected));
+            assert_eq!(b.0.starts.get(), 1);
+            assert_eq!(b.0.calls.get(), 1);
+            assert_eq!(unrelated.0.drops.get(), 0);
+            drop(owner);
+
+            a.0.fail.set(true);
+            a.0.changed.notify();
+            b.0.fail.set(true);
+            b.0.changed.notify();
+            assert_eq!(run(owner_ctx.call_nowait(&service, 2)), Err(Error));
+            assert_eq!(a.0.starts.get(), usize::from(path != 2));
+            assert_eq!(b.0.starts.get(), 2);
+            assert_eq!(b.0.calls.get(), 1);
+        }
     }
 
     #[test]
@@ -937,24 +983,31 @@ mod tests {
 
     #[test]
     fn scheduling_invalidation_is_observed_before_dispatch() {
-        let st = State(0);
-        let waiters = WaitersRef::new();
-        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
-        let probe = Probe::new();
-        let bound = ServiceBinding::new(probe.clone());
-        let idx = waiters.insert();
-        waiters.get()[idx as usize] = Some(Waker::from(Arc::new(Counter::default())));
-        waiters.get_wakers().push(idx);
-        let changed = probe.clone();
-        ON_WAKE.with_borrow_mut(|slot| {
-            *slot = Some(Box::new(move || {
-                changed.0.fail.set(true);
-                changed.0.changed.notify();
-            }));
-        });
-        assert_eq!(run(ctx.call(&bound, 1)), Err(Error));
-        assert_eq!(probe.0.starts.get(), 2);
-        assert_eq!(probe.0.calls.get(), 0);
+        for raw in [false, true] {
+            let st = State(0);
+            let waiters = WaitersRef::new();
+            let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+            let probe = Probe::new();
+            let bound = ServiceBinding::new(probe.clone());
+            let idx = waiters.insert();
+            waiters.get()[idx as usize] = Some(Waker::from(Arc::new(Counter::default())));
+            waiters.get_wakers().push(idx);
+            let changed = probe.clone();
+            ON_WAKE.with_borrow_mut(|slot| {
+                *slot = Some(Box::new(move || {
+                    changed.0.fail.set(true);
+                    changed.0.changed.notify();
+                }));
+            });
+            let result = if raw {
+                run(ctx.call(&probe, 1))
+            } else {
+                run(ctx.call(&bound, 1))
+            };
+            assert_eq!(result, Err(Error));
+            assert_eq!(probe.0.starts.get(), 2);
+            assert_eq!(probe.0.calls.get(), 0);
+        }
     }
 
     #[test]
@@ -985,8 +1038,107 @@ mod tests {
         assert_eq!(probe.0.starts.get(), 3, "legacy bypass does not check");
         probe.0.available.set(true);
         probe.0.changed.notify();
-        assert_eq!(run(ctx.call(&bound, 7)), Ok(17));
+        assert_eq!(run(bound.call(7, ctx.cast())), Ok(17));
         assert_eq!(probe.0.starts.get(), 4);
+    }
+
+    #[test]
+    fn raw_calls_use_the_closest_scope_without_caching_partial_readiness() {
+        struct RawPair(Probe, Probe);
+
+        impl Service<State, usize> for RawPair {
+            type Res = usize;
+            type Error = Error;
+
+            async fn ready(&self, ctx: Ctx<'_, Self, State>) -> Result<(), Error> {
+                ctx.ready(&self.0).await?;
+                ctx.ready(&self.1).await
+            }
+
+            async fn call(&self, req: usize, ctx: Ctx<'_, Self, State>) -> Result<usize, Error> {
+                ctx.call(&self.0, req).await
+            }
+        }
+
+        let waiters = WaitersRef::new();
+        let st = State(10);
+        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        let a = Probe::new();
+        let b = Probe::new();
+        let parent = ServiceBinding::new(RawPair(a.clone(), b.clone()));
+        let child_ctx = ctx.with_scope::<()>(&parent.scope);
+        assert_eq!(run(ctx.call(&parent, 1)), Ok(11));
+        assert_eq!(run(child_ctx.call(&a, 2)), Ok(12));
+        assert!(!ctx.scope().is_ready());
+        assert_eq!((a.0.starts.get(), b.0.starts.get()), (1, 1));
+
+        b.0.fail.set(true);
+        b.0.changed.notify();
+        assert_eq!(run(child_ctx.call(&a, 3)), Ok(13));
+        assert_eq!(run(child_ctx.call(&a, 4)), Ok(14));
+        assert!(
+            !parent.is_ready(),
+            "a raw child cannot validate its sibling"
+        );
+        assert_eq!((a.0.starts.get(), b.0.starts.get()), (3, 1));
+        assert_eq!(run(ctx.call(&parent, 5)), Err(Error));
+        assert_eq!((a.0.starts.get(), b.0.starts.get()), (4, 2));
+        assert_eq!(a.0.calls.get(), 4);
+    }
+
+    #[test]
+    fn bound_calls_do_not_borrow_a_ready_outer_scope() {
+        let waiters = WaitersRef::new();
+        let st = State(10);
+        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        let parent = ServiceBinding::new(Probe::new());
+        assert_eq!(run(ctx.ready(&parent)), Ok(()));
+        let child_ctx = ctx.with_scope::<()>(&parent.scope);
+        let probe = Probe::new();
+        probe.0.fail.set(true);
+        let bound = ServiceBinding::new(probe.clone());
+        assert_eq!(run(child_ctx.call(&bound, 1)), Err(Error));
+        assert_eq!(run(bound.call(2, child_ctx.cast())), Err(Error));
+        assert_eq!(probe.0.calls.get(), 0);
+        probe.0.fail.set(false);
+        assert_eq!(run(bound.call(3, child_ctx.cast())), Ok(13));
+        assert_eq!(run(child_ctx.call(&bound, 4)), Ok(14));
+        assert_eq!(probe.0.starts.get(), 3);
+        probe.0.changed.notify();
+        assert!(!parent.is_ready(), "calls retain the parent dependency");
+        assert_eq!(run(child_ctx.call(&bound, 5)), Ok(15));
+        assert_eq!(probe.0.starts.get(), 4);
+    }
+
+    #[test]
+    fn nowait_bypasses_transparent_bindings_but_not_nested_context_calls() {
+        let waiters = WaitersRef::new();
+        let st = State(0);
+        let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+        let probe = Probe::new();
+        probe.0.available.set(false);
+        let bound = Rc::new(ServiceBinding::new(ServiceBinding::new(probe.clone())));
+        let erased = crate::boxed::service(crate::map_state(
+            State(10),
+            Box::new(bound.clone())
+                .map(|res| res + 100)
+                .map_err(|err| err),
+        ));
+        assert_eq!(run(ctx.call_nowait(&&erased, 1)), Ok(111));
+        assert_eq!(probe.0.starts.get(), 0);
+        assert!(!bound.is_ready());
+
+        let parent = ServiceBinding::new(Forward(bound));
+        let mut call = Box::pin(ctx.call_nowait(&parent, 2));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.starts.get(), 1);
+        assert_eq!(probe.0.calls.get(), 1);
+        probe.0.available.set(true);
+        probe.0.fail.set(true);
+        probe.0.changed.notify();
+        assert_eq!(call.as_mut().poll(&mut cx), Poll::Ready(Err(Error)));
+        assert_eq!(probe.0.calls.get(), 1);
     }
 
     struct Forward<S>(S);

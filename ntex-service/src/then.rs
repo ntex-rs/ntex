@@ -5,6 +5,7 @@ use super::{Ctx, Service, ServiceBinding, ServiceFactory, util};
 ///
 /// This is created by the `ServiceChain::then()` method.
 /// Each child retains independent readiness until its subscribed sources change.
+/// Calls check each child's binding directly, not the enclosing scope's cache.
 /// After the first call completes, the second child's readiness is revalidated.
 /// Calls do not consume readiness; clones and factory-created services get fresh
 /// child readiness.
@@ -34,7 +35,7 @@ where
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
         let result = self.svc1.call(req, ctx.cast()).await;
-        self.svc2.call_ready(result, ctx).await
+        self.svc2.call(result, ctx.without_bypass().cast()).await
     }
 
     #[inline]

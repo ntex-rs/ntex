@@ -9,11 +9,15 @@ use crate::{ReadyNotifier, Service};
 ///
 /// A context gives a service access to pipeline state and coordinates calls to
 /// inner services with the pipeline's readiness and shutdown machinery.
+/// It borrows the current readiness scope from a pipeline or service binding.
+/// Copying or mapping the context preserves that scope; calling a binding
+/// selects the binding's own scope without changing the caller's context.
 pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     idx: u32,
     st: &'a St,
     waiters: &'a WaitersRef,
     scope: &'a ReadyScope,
+    call_nowait: bool,
     _t: marker::PhantomData<Rc<Svc>>,
 }
 
@@ -168,6 +172,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             waiters,
             st,
             scope: &waiters.scope,
+            call_nowait: false,
             _t: marker::PhantomData,
         }
     }
@@ -186,8 +191,18 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             st: self.st,
             waiters: self.waiters,
             scope,
+            call_nowait: self.call_nowait,
             _t: marker::PhantomData,
         }
+    }
+
+    pub(crate) fn is_call_nowait(&self) -> bool {
+        self.call_nowait
+    }
+
+    pub(crate) fn without_bypass(mut self) -> Self {
+        self.call_nowait = false;
+        self
     }
 
     #[inline]
@@ -250,26 +265,64 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     #[inline]
     /// Waits for `svc` to become ready, then calls it.
     ///
-    /// Calls do not consume a [`crate::ServiceBinding`]'s cached readiness.
-    /// Raw services are checked before every call.
+    /// Uses the nearest upstream scope carried by this context. A valid cache
+    /// allows immediate dispatch; otherwise, only `svc` is checked, without
+    /// marking the enclosing scope ready. A [`crate::ServiceBinding`] also
+    /// checks its own cache when called directly, independently of this scope.
+    /// Calls do not consume cached readiness.
     pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
         S: Service<St, Req>,
     {
-        self.ready(svc).await?;
+        let ctx = self.without_bypass().cast();
+        ctx.ready_cached(svc).await?;
 
-        svc.call(req, self.cast()).await
+        svc.call(req, ctx).await
+    }
+
+    pub(crate) async fn ready_cached<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
+    where
+        S: Service<St, Req>,
+    {
+        while !self.scope.is_ready() {
+            let result = {
+                let observer = self.scope.observer();
+                let mut ready = pin::pin!(self.ready_generation(svc));
+                std::future::poll_fn(|cx| {
+                    observer.register(cx.waker());
+                    // A queued caller can use success published by another checker.
+                    if self.scope.is_ready() {
+                        Poll::Ready(Ok(None))
+                    } else {
+                        ready.as_mut().poll(cx).map(|result| result.map(Some))
+                    }
+                })
+                .await
+            };
+            let generation = result?;
+            // Dropping the check or its observer can invalidate its success.
+            if self.scope.is_ready()
+                || generation.is_some_and(|generation| self.scope.is_current(generation))
+            {
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 
     #[inline]
     /// Calls `svc` without checking readiness.
     ///
-    /// The caller must ensure that `svc` is ready.
+    /// The caller must ensure that `svc` is ready. This also bypasses bindings
+    /// behind transparent adapters, but nested calls through [`Ctx::call`]
+    /// still perform their normal cache-aware readiness checks.
     pub async fn call_nowait<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
         S: Service<St, Req>,
     {
-        svc.call(req, self.cast()).await
+        let mut ctx = self.cast();
+        ctx.call_nowait = true;
+        svc.call(req, ctx).await
     }
 
     #[inline]
@@ -348,6 +401,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             idx: self.idx,
             waiters: self.waiters,
             scope: self.scope,
+            call_nowait: self.call_nowait,
             _t: marker::PhantomData,
         }
     }

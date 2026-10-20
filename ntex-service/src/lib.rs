@@ -125,7 +125,9 @@ pub trait Service<St, Req> {
     ///
     /// The enclosing pipeline checks readiness before invoking this method.
     /// Implementations should not call their own `ready` method. A composed
-    /// service can use `ctx` to call an inner service.
+    /// service can use [`Ctx::call`] to call an inner service using the closest
+    /// upstream readiness cache. A stored [`ServiceBinding`] can be called
+    /// directly to check its own cache instead.
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error>;
 
     #[inline]
@@ -562,7 +564,7 @@ mod tests {
         assert_eq!(pl.call(1).await, Ok(12));
         assert_eq!(pl.call(0).await, Err(4));
         pl.shutdown().await;
-        assert_eq!(cnt.get(), 407);
+        assert_eq!(cnt.get(), 405);
 
         let pl = Pipeline::new(
             1,
@@ -573,7 +575,7 @@ mod tests {
         assert_eq!(pl.call(1).await, Ok(11));
         pl.shutdown().await;
         // inner pipeline readiness is checked once, by `forward_pl_ready!`
-        assert_eq!(cnt.get(), 508);
+        assert_eq!(cnt.get(), 506);
 
         let pl = Pipeline::new(
             1,
@@ -583,7 +585,7 @@ mod tests {
         );
         assert_eq!(pl.call(0).await, Err(4));
         pl.shutdown().await;
-        assert_eq!(cnt.get(), 509);
+        assert_eq!(cnt.get(), 507);
     }
 
     #[ntex::test]
