@@ -1,15 +1,19 @@
-use std::{cell, fmt, future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
+use std::{fmt, ptr, rc::Rc, task::Context, task::Poll};
 
 use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 
 use crate::pipeline::PipelineBinding;
-use crate::pl_inner::{PipelineApi, PipelineInternalApi};
+use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness};
 
 /// Execution container for a service whose state is supplied per operation.
 ///
 /// Unlike [`crate::Pipeline`], this type does not own a state value. Callers
 /// provide a state reference when checking readiness, calling, or shutting
 /// down the service.
+///
+/// All bindings share one readiness cache and checker, including bindings with
+/// different state values. Readiness may inspect state, but must describe the
+/// shared pipeline-wide gate. Independent gates require separate pipelines.
 pub struct PipelineState<St, Req, Res, Err> {
     api: Rc<dyn PipelineStateApi<St, Req, Res, Err>>,
 }
@@ -28,11 +32,12 @@ where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
     {
+        let waiters = WaitersRef::new();
         PipelineState {
             api: Rc::new(PipelineInner {
                 s: service.into_service(),
-                waiters: WaitersRef::new(),
-                st_runtime: cell::UnsafeCell::new(RuntimeState::New),
+                readiness: PipelineReadiness::new(waiters.scope()),
+                waiters,
             }),
         }
     }
@@ -40,8 +45,8 @@ where
     #[inline]
     /// Returns when the pipeline is ready to process requests.
     ///
-    /// A successful check is consumed by the next call, which then skips
-    /// its own readiness check.
+    /// Successful readiness is shared and reused until a subscribed
+    /// [`crate::ReadyNotifier`] invalidates it. Calls do not consume it.
     pub async fn ready(&self, st: &St) -> Result<(), Err> {
         self.api.ready(0, st).await
     }
@@ -49,8 +54,7 @@ where
     #[inline]
     /// Waits for readiness, then calls the service with `st`.
     ///
-    /// The readiness check is skipped if the last pipeline readiness check
-    /// succeeded and no call has started since.
+    /// Reuses valid shared readiness without consuming it.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = self.binding();
         self.api.call(pl.idx, req, st).await
@@ -65,8 +69,9 @@ where
     #[inline]
     /// Returns `Ready` when the pipeline is ready to process requests.
     ///
-    /// A successful check is consumed by the next call, which then skips
-    /// its own readiness check.
+    /// Registers the task for readiness changes and reuses valid shared
+    /// readiness. A pending check is retained by the pipeline, even if this
+    /// task stops polling; other callers can continue driving it.
     ///
     /// # Panics
     ///
@@ -168,8 +173,7 @@ where
     #[inline]
     /// Waits for readiness, then calls the service with `st`.
     ///
-    /// The readiness check is skipped if the last pipeline readiness check
-    /// succeeded and no call has started since.
+    /// Reuses valid shared readiness without consuming it, regardless of `st`.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = Binding {
             idx: self.api.reg(),
@@ -218,24 +222,18 @@ impl<St, Req, Res, Err> PipelineInternalApi<Req, Res, Err> for PipelineInternal<
 
 // ========================== `PipelineStateApi` ===========================
 
-struct PipelineInner<S, St, E> {
+struct PipelineInner<S, E> {
     s: S,
     waiters: WaitersRef,
-    st_runtime: cell::UnsafeCell<RuntimeState<St, E>>,
+    readiness: PipelineReadiness<E>,
 }
 
-impl<S, St, E> Drop for PipelineInner<S, St, E> {
+impl<S, E> Drop for PipelineInner<S, E> {
     fn drop(&mut self) {
         // The readiness future borrows `s` and `waiters`, so it must be dropped
         // before the fields it references
-        *self.st_runtime.get_mut() = RuntimeState::New;
+        self.readiness.cancel();
     }
-}
-
-enum RuntimeState<St, E> {
-    New,
-    Readiness(Box<dyn CheckReadiness<St, E>>),
-    Shutdown,
 }
 
 trait PipelineStateApi<St, Req, Res, Err> {
@@ -259,7 +257,7 @@ trait PipelineStateApi<St, Req, Res, Err> {
     fn is_shutdown(&self) -> bool;
 }
 
-impl<S, St, Req, E> PipelineStateApi<St, Req, S::Res, S::Error> for PipelineInner<S, St, E>
+impl<S, St, Req, E> PipelineStateApi<St, Req, S::Res, S::Error> for PipelineInner<S, E>
 where
     S: Service<St, Req, Error = E> + 'static,
     St: 'static,
@@ -271,6 +269,9 @@ where
     }
 
     fn unreg(&self, idx: u32) {
+        if idx == 0 {
+            self.readiness.unregister();
+        }
         self.waiters.remove(idx);
     }
 
@@ -278,21 +279,17 @@ where
     where
         Req: 'a,
     {
-        Box::pin(async move {
-            self.waiters.set_ready(false);
-            let result = Ctx::<'_, S, St>::new(idx, &self.waiters, st)
-                .ready(&self.s)
-                .await;
-            self.waiters.set_ready(result.is_ok());
-            result
-        })
+        Box::pin(self.readiness.ready(move || async move {
+            Ctx::<'_, S, St>::new(idx, &self.waiters, st)
+                .ready_generation(&self.s)
+                .await
+        }))
     }
 
     fn shutdown<'a>(&'a self, idx: u32, st: &'a St) -> BoxFuture<'a, ()> {
         Box::pin(async move {
-            let pl_state = unsafe { &mut *self.st_runtime.get() };
-            *pl_state = RuntimeState::Shutdown;
-            self.waiters.set_ready(false);
+            self.waiters.shutdown();
+            self.readiness.cancel();
 
             Ctx::<'_, S, St>::new(idx, &self.waiters, st)
                 .shutdown(&self.s)
@@ -306,13 +303,10 @@ where
     {
         Box::pin(async move {
             let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, st);
-            if !self.waiters.take_ready() {
-                let result = ctx.ready(&self.s).await;
-                // the call consumes any readiness reported while it was waiting
-                self.waiters.set_ready(false);
-                result?;
-            }
-            ctx.call_nowait(&self.s, req).await
+            self.readiness
+                .ready(|| ctx.ready_generation(&self.s))
+                .await?;
+            self.s.call(req, ctx).await
         })
     }
 
@@ -320,92 +314,24 @@ where
     where
         St: Clone,
     {
-        let pl_state = unsafe { &mut *self.st_runtime.get() };
-        match pl_state {
-            RuntimeState::New => {
-                // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
-                // `fut` is stored in `self.st_runtime`, which is reset before other
-                // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
-                let pl = unsafe { &*(ptr::from_ref(self)) };
-                let fut = Box::new(CheckReadinessFut {
-                    pl,
-                    f: ready,
-                    st: st.clone(),
-                    fut: None,
-                });
-                *pl_state = RuntimeState::Readiness(fut);
-                self.poll_ready(cx, st)
-            }
-            RuntimeState::Readiness(fut) => fut.poll(cx, st),
-            RuntimeState::Shutdown => panic!("Pipeline is shutting down"),
-        }
+        assert!(!self.waiters.is_shutdown(), "Pipeline is shutting down");
+        self.readiness.poll_ready(cx, || {
+            // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
+            // `fut` is stored in `self.readiness`, which is reset before other
+            // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
+            let pl = unsafe { &*(ptr::from_ref(self)) };
+            let st = st.clone();
+            Box::pin(async move {
+                let registration = pl.waiters.register();
+                Ctx::<'_, S, St>::new(registration.idx, &pl.waiters, &st)
+                    .ready_generation(&pl.s)
+                    .await
+            })
+        })
     }
 
     fn is_shutdown(&self) -> bool {
         self.waiters.is_shutdown()
-    }
-}
-
-trait CheckReadiness<St, E> {
-    fn poll(&mut self, cx: &mut Context<'_>, st: &St) -> Poll<Result<(), E>>;
-}
-
-struct CheckReadinessFut<S, St, Req, F, Fut>
-where
-    S: Service<St, Req> + 'static,
-    St: 'static,
-    Req: 'static,
-{
-    f: F,
-    st: St,
-    fut: Option<Fut>,
-    pl: &'static PipelineInner<S, St, S::Error>,
-}
-
-fn ready<S, St, Req>(
-    st: &'static St,
-    pl: &'static PipelineInner<S, St, S::Error>,
-) -> impl future::Future<Output = Result<(), S::Error>>
-where
-    S: Service<St, Req>,
-{
-    pl.s.ready(Ctx::<'_, S, St>::new(0, &pl.waiters, st))
-}
-
-impl<S: Service<St, Req>, St, Req, F, Fut> Drop for CheckReadinessFut<S, St, Req, F, Fut> {
-    fn drop(&mut self) {
-        // future got dropped during polling, we must notify other waiters
-        if self.fut.is_some() {
-            self.pl.waiters.notify();
-        }
-    }
-}
-
-impl<S, St, Req, F, Fut> CheckReadiness<St, S::Error> for CheckReadinessFut<S, St, Req, F, Fut>
-where
-    St: Clone,
-    S: Service<St, Req>,
-    F: Fn(&'static St, &'static PipelineInner<S, St, S::Error>) -> Fut,
-    Fut: Future<Output = Result<(), S::Error>>,
-{
-    fn poll(&mut self, cx: &mut Context<'_>, st: &St) -> Poll<Result<(), S::Error>> {
-        let result = self.pl.waiters.run(0, cx, |cx| {
-            if self.fut.is_none() {
-                self.st = st.clone();
-                let st: &'static St = unsafe { std::mem::transmute(&self.st) };
-                self.fut = Some((self.f)(st, self.pl));
-            }
-            let fut = self.fut.as_mut().unwrap();
-            let result = unsafe { Pin::new_unchecked(fut) }.poll(cx);
-            if result.is_ready() {
-                let _ = self.fut.take();
-            }
-            result
-        });
-        self.pl
-            .waiters
-            .set_ready(matches!(result, Poll::Ready(Ok(()))));
-        result
     }
 }
 
@@ -423,19 +349,21 @@ impl<St, Req, Res, Err> fmt::Debug for PipelineStateBinding<St, Req, Res, Err> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, future::pending, task::Waker};
+    use std::{cell::Cell, future::Future, future::pending, task::Waker};
 
     use ntex::{channel::condition, util::lazy};
 
     use super::*;
+    use crate::ReadyNotifier;
 
-    struct Srv(Rc<Cell<usize>>, condition::Waiter);
+    struct Srv(Rc<Cell<usize>>, condition::Waiter, ReadyNotifier);
 
     impl Service<usize, usize> for Srv {
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), ()> {
+        async fn ready(&self, ctx: Ctx<'_, Self, usize>) -> Result<(), ()> {
+            ctx.subscribe(&self.2);
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())
@@ -454,56 +382,57 @@ mod tests {
     async fn pipeline_state() {
         let cnt = Rc::new(Cell::new(0));
         let cond = condition::Condition::new();
-        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait()));
+        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait(), ReadyNotifier::new()));
         assert!(format!("{pl:?}").contains("PipelineState"));
 
         cond.notify_and_lock(());
         assert_eq!(pl.ready(&1).await, Ok(()));
         assert_eq!(cnt.get(), 1);
-        // the successful readiness check is consumed by the next call
+        // state values and calls do not invalidate shared readiness
         assert_eq!(pl.call(1, &2).await, Ok(3));
         assert_eq!(cnt.get(), 1);
         assert_eq!(pl.call(0, &2).await, Err(()));
         assert_eq!(pl.call(2, &3).await, Ok(5));
-        assert_eq!(cnt.get(), 3);
+        assert_eq!(cnt.get(), 1);
 
         let b = pl.bind();
         assert!(format!("{b:?}").contains("PipelineStateBinding"));
         let b2 = b.clone();
         drop(b);
         assert_eq!(b2.call(1, &10).await, Ok(11));
-        assert_eq!(cnt.get(), 4);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(pl.ready(&1).await, Ok(()));
         assert_eq!(b2.call(1, &20).await, Ok(21));
-        assert_eq!(cnt.get(), 5);
+        assert_eq!(cnt.get(), 1);
 
         let b = pl.bind_state(7);
         assert_eq!(b.ready().await, Ok(()));
         assert_eq!(b.call(1).await, Ok(8));
-        assert_eq!(cnt.get(), 6);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(b.call(2).await, Ok(9));
         assert_eq!(b.clone().call_static(3).await, Ok(10));
-        assert_eq!(cnt.get(), 8);
+        assert_eq!(cnt.get(), 1);
         drop(b);
 
         assert_eq!(lazy(|cx| pl.poll_ready(cx, &1)).await, Poll::Ready(Ok(())));
-        assert_eq!(cnt.get(), 9);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(pl.call(1, &2).await, Ok(3));
-        assert_eq!(cnt.get(), 9);
+        assert_eq!(cnt.get(), 1);
 
-        // shutdown resets the flag
+        // shutdown invalidates cached readiness
         assert_eq!(pl.ready(&1).await, Ok(()));
         pl.shutdown(&2).await;
-        assert_eq!(cnt.get(), 210);
+        assert_eq!(cnt.get(), 201);
         assert_eq!(pl.call(1, &2).await, Ok(3));
-        assert_eq!(cnt.get(), 211);
+        assert_eq!(cnt.get(), 202);
     }
 
     #[ntex::test]
     async fn pipeline_state_poll_ready() {
         let cnt = Rc::new(Cell::new(0));
         let cond = condition::Condition::new();
-        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait()));
+        let changed = ReadyNotifier::new();
+        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait(), changed.clone()));
 
         assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
         assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
@@ -519,7 +448,17 @@ mod tests {
         assert_eq!(lazy(|cx| pl.poll_ready(cx, &1)).await, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 1);
 
-        // binding owns the readiness check now
+        // binding shares the completed readiness check
+        assert_eq!(
+            fut.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(()))
+        );
+        assert_eq!(cnt.get(), 1);
+        drop(fut);
+
+        changed.notify();
+        let mut fut = Box::pin(b.ready());
+        // binding owns a new readiness check after invalidation
         assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
         assert_eq!(cnt.get(), 2);
         assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
@@ -532,10 +471,11 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn pipeline_state_ready_flag() {
+    async fn pipeline_state_cached_readiness() {
         let cnt = Rc::new(Cell::new(0));
         let cond = condition::Condition::new();
-        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait()));
+        let changed = ReadyNotifier::new();
+        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait(), changed.clone()));
 
         let mut fut = Box::pin(pl.ready(&1));
         assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
@@ -543,7 +483,10 @@ mod tests {
         assert_eq!(fut.await, Ok(()));
         assert_eq!(cnt.get(), 1);
 
-        // a pending readiness check clears the flag
+        // only notification, not another caller, invalidates success
+        assert_eq!(lazy(|cx| pl.poll_ready(cx, &2)).await, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 1);
+        changed.notify();
         assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
         assert_eq!(cnt.get(), 2);
         let mut call = Box::pin(pl.call(1, &2));
@@ -553,24 +496,25 @@ mod tests {
         cond.notify(());
         assert_eq!(lazy(|cx| pl.poll_ready(cx, &1)).await, Poll::Ready(Ok(())));
 
-        // the waiting call checks readiness itself
-        assert!(lazy(|cx| call.as_mut().poll(cx)).await.is_pending());
-        assert_eq!(cnt.get(), 3);
-        cond.notify(());
+        // the waiting call reuses the shared successful check
         assert_eq!(lazy(|cx| call.as_mut().poll(cx)).await, Poll::Ready(Ok(3)));
-        assert_eq!(cnt.get(), 3);
+        assert_eq!(cnt.get(), 2);
 
-        // readiness reported while the call was waiting is consumed by it
+        // calls do not consume readiness
+        let mut call = Box::pin(pl.call(1, &2));
+        assert_eq!(lazy(|cx| call.as_mut().poll(cx)).await, Poll::Ready(Ok(3)));
+        assert_eq!(cnt.get(), 2);
+        changed.notify();
         let mut call = Box::pin(pl.call(1, &2));
         assert!(lazy(|cx| call.as_mut().poll(cx)).await.is_pending());
-        assert_eq!(cnt.get(), 4);
+        assert_eq!(cnt.get(), 3);
     }
 
     #[ntex::test]
     #[should_panic(expected = "Pipeline is shutting down")]
     async fn pipeline_state_poll_ready_after_shutdown() {
         let cond = condition::Condition::new();
-        let pl = PipelineState::new(Srv(Rc::default(), cond.wait()));
+        let pl = PipelineState::new(Srv(Rc::default(), cond.wait(), ReadyNotifier::new()));
         pl.shutdown(&1).await;
         let _ = lazy(|cx| pl.poll_ready(cx, &1)).await;
     }

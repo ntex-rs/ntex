@@ -540,17 +540,17 @@ mod tests {
         assert_eq!(pl.call(1).await, Ok(2));
         assert_eq!(pl.call(0).await, Err("zero"));
         pl.shutdown().await;
-        assert_eq!(cnt.get(), 102);
+        assert_eq!(cnt.get(), 101);
 
         let pl = Pipeline::new(2, Box::new(Srv(cnt.clone())));
         assert_eq!(pl.call(1).await, Ok(3));
         pl.shutdown().await;
-        assert_eq!(cnt.get(), 203);
+        assert_eq!(cnt.get(), 202);
 
         let pl = Pipeline::new(3, Rc::new(Srv(cnt.clone())));
         assert_eq!(pl.call(1).await, Ok(4));
         pl.shutdown().await;
-        assert_eq!(cnt.get(), 304);
+        assert_eq!(cnt.get(), 303);
 
         let pl = Pipeline::new(
             1,
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(pl.call(1).await, Ok(12));
         assert_eq!(pl.call(0).await, Err(4));
         pl.shutdown().await;
-        assert_eq!(cnt.get(), 409);
+        assert_eq!(cnt.get(), 407);
 
         let pl = Pipeline::new(
             1,
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(pl.call(1).await, Ok(11));
         pl.shutdown().await;
         // inner pipeline readiness is checked once, by `forward_pl_ready!`
-        assert_eq!(cnt.get(), 510);
+        assert_eq!(cnt.get(), 508);
 
         let pl = Pipeline::new(
             1,
@@ -583,7 +583,7 @@ mod tests {
         );
         assert_eq!(pl.call(0).await, Err(4));
         pl.shutdown().await;
-        assert_eq!(cnt.get(), 511);
+        assert_eq!(cnt.get(), 509);
     }
 
     #[ntex::test]
@@ -594,45 +594,45 @@ mod tests {
         assert_eq!(pl.call_static(1).await, Ok(2));
         assert_eq!(cnt.get(), 1);
 
-        // a successful readiness check is consumed by the next call only
+        // all entry points reuse the same successful readiness check
         assert_eq!(pl.ready().await, Ok(()));
-        assert_eq!(cnt.get(), 2);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(pl.call(2).await, Ok(3));
-        assert_eq!(cnt.get(), 2);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(ServiceCaller::call_service(&pl, 3).await, Ok(4));
-        assert_eq!(cnt.get(), 3);
+        assert_eq!(cnt.get(), 1);
 
         assert_eq!(lazy(|cx| pl.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(cnt.get(), 4);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(pl.call_static(3).await, Ok(4));
         assert_eq!(pl.call_static(3).await, Ok(4));
-        assert_eq!(cnt.get(), 5);
+        assert_eq!(cnt.get(), 1);
 
         let b = pl.bind();
         assert!(format!("{b:?}").contains("PipelineBinding"));
         assert_eq!(b.call_static(4).await, Ok(5));
-        assert_eq!(cnt.get(), 6);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(b.ready().await, Ok(()));
-        assert_eq!(cnt.get(), 7);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(pl.call(4).await, Ok(5));
         assert_eq!(b.call(4).await, Ok(5));
-        assert_eq!(cnt.get(), 8);
+        assert_eq!(cnt.get(), 1);
 
-        // the flag is decided on the first poll, not on creation
+        // owned calls also share readiness regardless of polling order
         assert_eq!(pl.ready().await, Ok(()));
         let fut1 = pl.call_static(1);
         let fut2 = pl.call_static(2);
         assert_eq!(fut2.await, Ok(3));
-        assert_eq!(cnt.get(), 9);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(fut1.await, Ok(2));
-        assert_eq!(cnt.get(), 10);
+        assert_eq!(cnt.get(), 1);
 
-        // shutdown resets the flag
+        // shutdown invalidates cached readiness
         assert_eq!(pl.ready().await, Ok(()));
-        assert_eq!(cnt.get(), 11);
+        assert_eq!(cnt.get(), 1);
         pl.shutdown().await;
         assert_eq!(pl.call(1).await, Ok(2));
-        assert_eq!(cnt.get(), 112);
+        assert_eq!(cnt.get(), 102);
 
         let svc = apply_fn(
             Srv(cnt.clone()),
@@ -642,7 +642,7 @@ mod tests {
         );
         let pl = Pipeline::new(1, svc);
         assert_eq!(pl.call(2).await, Ok(5));
-        assert_eq!(cnt.get(), 115);
+        assert_eq!(cnt.get(), 105);
     }
 
     #[ntex::test]

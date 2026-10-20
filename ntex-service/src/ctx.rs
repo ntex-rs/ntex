@@ -1,6 +1,6 @@
 use std::{cell, fmt, future, marker, ops, pin, rc::Rc, task::Context, task::Poll, task::Waker};
 
-use crate::{ReadyNotifier, Service, readiness::ReadyScope};
+use crate::{ReadyNotifier, Service, readiness::Generation, readiness::ReadyScope};
 
 /// Context provided to [`Service`] lifecycle methods.
 ///
@@ -20,7 +20,6 @@ pub(crate) struct WaitersRef {
     cur: cell::Cell<u32>,
     running: cell::Cell<bool>,
     shutdown: cell::Cell<bool>,
-    ready: cell::Cell<bool>,
     wakers: cell::UnsafeCell<Vec<u32>>,
     indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
 }
@@ -34,7 +33,6 @@ impl WaitersRef {
             cur: cell::Cell::new(u32::MAX),
             running: cell::Cell::new(false),
             shutdown: cell::Cell::new(false),
-            ready: cell::Cell::new(false),
             indexes: cell::UnsafeCell::new(waiters),
             wakers: cell::UnsafeCell::new(Vec::default()),
         }
@@ -63,19 +61,23 @@ impl WaitersRef {
     }
 
     pub(crate) fn notify(&self) {
-        let wakers = self.get_wakers();
-        if !wakers.is_empty() {
+        let indexes_to_wake = std::mem::take(self.get_wakers());
+        let mut wakers = Vec::new();
+        if !indexes_to_wake.is_empty() {
             let indexes = self.get();
-            for idx in wakers.drain(..) {
+            for idx in indexes_to_wake {
                 if let Some(item) = indexes.get_mut(idx as usize)
                     && let Some(waker) = item.take()
                 {
-                    waker.wake();
+                    wakers.push(waker);
                 }
             }
         }
 
         self.cur.set(u32::MAX);
+        for waker in wakers {
+            waker.wake();
+        }
     }
 
     pub(crate) fn run<F, R>(&self, idx: u32, cx: &mut Context<'_>, f: F) -> Poll<R>
@@ -127,21 +129,32 @@ impl WaitersRef {
 
     pub(crate) fn shutdown(&self) {
         self.shutdown.set(true);
-        self.ready.set(false);
     }
 
-    /// Records the result of a pipeline readiness check
-    pub(crate) fn set_ready(&self, ready: bool) {
-        self.ready.set(ready);
+    pub(crate) fn scope(&self) -> &ReadyScope {
+        &self.scope
     }
 
-    /// Consumes the result of the last successful pipeline readiness check
-    pub(crate) fn take_ready(&self) -> bool {
-        self.ready.replace(false)
+    pub(crate) fn register(&self) -> WaiterRegistration<'_> {
+        WaiterRegistration {
+            idx: self.insert(),
+            waiters: self,
+        }
     }
 
     pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown.get()
+    }
+}
+
+pub(crate) struct WaiterRegistration<'a> {
+    pub(crate) idx: u32,
+    waiters: &'a WaitersRef,
+}
+
+impl Drop for WaiterRegistration<'_> {
+    fn drop(&mut self) {
+        self.waiters.remove(self.idx);
     }
 }
 
@@ -203,6 +216,13 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     where
         S: Service<St, Req>,
     {
+        self.ready_generation(svc).await.map(|_| ())
+    }
+
+    pub(crate) async fn ready_generation<S, Req>(&self, svc: &'a S) -> Result<Generation, S::Error>
+    where
+        S: Service<St, Req>,
+    {
         loop {
             let generation = ReadyCall {
                 completed: false,
@@ -213,7 +233,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             .await?;
             // Scheduling another waiter can invalidate the completed check.
             if self.scope.is_current(generation) {
-                return Ok(());
+                return Ok(generation);
             }
         }
     }
@@ -393,13 +413,14 @@ mod tests {
     use super::*;
     use crate::Pipeline;
 
-    struct Srv(Rc<Cell<usize>>, condition::Waiter);
+    struct Srv(Rc<Cell<usize>>, condition::Waiter, ReadyNotifier);
 
     impl Service<(), &'static str> for Srv {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
+            ctx.subscribe(&self.2);
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())
@@ -424,7 +445,8 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
+        let changed = ReadyNotifier::new();
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait(), changed.clone()));
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
@@ -438,6 +460,9 @@ mod tests {
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 1);
 
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 1);
+        changed.notify();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 2);
@@ -447,6 +472,7 @@ mod tests {
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 2);
 
+        changed.notify();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 3);
@@ -523,26 +549,29 @@ mod tests {
 
         let (cnt1, waker1) = counting_waker();
         let mut cx = Context::from_waker(&waker1);
+        assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        let clones = cnt1.clones.get();
+        let wakes = cnt1.wakes.get();
         for _ in 0..4 {
             assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
         }
-        assert_eq!(cnt1.clones.get(), 1);
-        assert_eq!(cnt1.wakes.get(), 4);
+        assert_eq!(cnt1.clones.get(), clones);
+        assert_eq!(cnt1.wakes.get(), wakes);
 
         // a different waker replaces the stored one
         let (cnt2, waker2) = counting_waker();
         let mut cx = Context::from_waker(&waker2);
         assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
         assert_eq!(cnt2.clones.get(), 1);
-        assert_eq!(cnt2.wakes.get(), 1);
-        assert_eq!(cnt1.wakes.get(), 4);
+        assert_eq!(cnt2.wakes.get(), 0);
+        assert_eq!(cnt1.wakes.get(), wakes);
     }
 
     #[ntex::test]
     async fn test_ready_on_drop() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait(), ReadyNotifier::new()));
 
         let srv1 = srv.bind();
         let (tx, rx) = oneshot::channel();
@@ -570,7 +599,7 @@ mod tests {
     async fn test_ready_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait(), ReadyNotifier::new()));
 
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
@@ -599,7 +628,7 @@ mod tests {
     async fn test_pipeline_binding_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait(), ReadyNotifier::new()));
         poll_fn(|cx| srv.poll_shutdown(cx)).await;
         let _ = poll_fn(|cx| srv.poll_ready(cx)).await;
     }
@@ -611,7 +640,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait(), ReadyNotifier::new()));
 
         let srv1 = srv.bind();
         let data1 = data.clone();
@@ -634,13 +663,7 @@ mod tests {
         con.notify(());
         time::sleep(time::Millis(150)).await;
 
-        assert_eq!(cnt.get(), 2);
-        assert_eq!(&*data.borrow(), &["srv1"]);
-
-        con.notify(());
-        time::sleep(time::Millis(150)).await;
-
-        assert_eq!(cnt.get(), 2);
+        assert_eq!(cnt.get(), 1);
         assert_eq!(&*data.borrow(), &["srv1", "srv2"]);
     }
 }

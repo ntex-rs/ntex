@@ -73,12 +73,13 @@ mod tests {
     };
 
     use super::*;
-    use crate::{ReadyNotifier, ctx::WaitersRef};
+    use crate::{Pipeline, ReadyNotifier, ServiceCaller, ctx::WaitersRef, pipeline::PipelineState};
 
     thread_local! {
         static ON_WAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::default();
     }
 
+    #[derive(Clone)]
     struct State(usize);
 
     #[derive(Debug, PartialEq, Eq)]
@@ -100,6 +101,7 @@ mod tests {
         drops: Cell<usize>,
         calls: Cell<usize>,
         states: RefCell<Vec<usize>>,
+        waker: RefCell<Option<Waker>>,
         shutdown_state: Cell<usize>,
     }
 
@@ -141,8 +143,9 @@ mod tests {
             let check = PendingCheck(&self.0);
             async move {
                 let _check = check;
-                poll_fn(|_| {
+                poll_fn(|cx| {
                     if !self.0.available.get() {
+                        *self.0.waker.borrow_mut() = Some(cx.waker().clone());
                         Poll::Pending
                     } else if self.0.fail.get() {
                         Poll::Ready(Err(Error))
@@ -192,6 +195,367 @@ mod tests {
                 hook();
             }
         }
+    }
+
+    #[test]
+    fn pipeline_raw_roots_cache_all_call_entry_points_until_notification() {
+        let probe = Probe::new();
+        let pl = Pipeline::new(State(10), probe.clone());
+        let binding = pl.bind();
+        assert_eq!(run(pl.call(1)), Ok(11));
+        assert_eq!(run(pl.ready()), Ok(()));
+        assert_eq!(run(binding.ready()), Ok(()));
+        assert_eq!(run(binding.call(2)), Ok(12));
+        assert_eq!(run(ServiceCaller::call_service(&pl, 3)), Ok(13));
+        assert_eq!(run(pl.call_static(4)), Ok(14));
+        assert_eq!(run(binding.call_static(5)), Ok(15));
+        assert_eq!(
+            probe.0.starts.get(),
+            1,
+            "root dispatch must not raw-check again"
+        );
+
+        let mut owned = Box::pin(pl.call_static(6));
+        let mut bound_owned = Box::pin(binding.call_static(7));
+        probe.0.invalidate_call.set(true);
+        assert_eq!(run(pl.call(8)), Ok(18));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(owned.as_mut().poll(&mut cx).is_pending());
+        assert!(bound_owned.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.calls.get(), 6);
+        assert_eq!(probe.0.starts.get(), 2);
+        probe.0.available.set(true);
+        probe.0.changed.notify();
+        assert_eq!(owned.as_mut().poll(&mut cx), Poll::Ready(Ok(16)));
+        assert_eq!(bound_owned.as_mut().poll(&mut cx), Poll::Ready(Ok(17)));
+        assert_eq!(probe.0.starts.get(), 3);
+        assert_eq!(probe.0.max_active.get(), 1);
+        assert!(probe.0.states.borrow().iter().all(|st| *st == 10));
+    }
+
+    #[test]
+    fn pipeline_callers_cancel_and_restart_one_checker_with_independent_observers() {
+        let probe = Probe::new();
+        probe.0.available.set(false);
+        let pl = Pipeline::new(State(0), probe.clone());
+        let binding = pl.bind();
+        let mut first = Box::pin(pl.ready());
+        let mut second = Box::pin(pl.ready());
+        let mut cancelled = Box::pin(binding.ready());
+        let counters = std::array::from_fn::<_, 4, _>(|_| Arc::new(Counter::default()));
+        let wakers = counters
+            .each_ref()
+            .map(|counter| Waker::from(counter.clone()));
+        assert!(
+            first
+                .as_mut()
+                .poll(&mut Context::from_waker(&wakers[0]))
+                .is_pending()
+        );
+        assert!(
+            second
+                .as_mut()
+                .poll(&mut Context::from_waker(&wakers[1]))
+                .is_pending()
+        );
+        assert!(
+            cancelled
+                .as_mut()
+                .poll(&mut Context::from_waker(&wakers[2]))
+                .is_pending()
+        );
+        assert!(
+            pl.poll_ready(&mut Context::from_waker(&wakers[3]))
+                .is_pending()
+        );
+        assert_eq!(probe.0.starts.get(), 1);
+        drop(cancelled);
+        assert_eq!(probe.0.drops.get(), 0);
+        probe.0.changed.notify();
+        probe.0.changed.notify();
+        assert_eq!(
+            probe.0.drops.get(),
+            0,
+            "notifications only invalidate and wake"
+        );
+        assert!(counters[0].0.load(Ordering::Relaxed) > 0);
+        assert!(counters[1].0.load(Ordering::Relaxed) > 0);
+        assert_eq!(counters[2].0.load(Ordering::Relaxed), 0);
+        assert!(counters[3].0.load(Ordering::Relaxed) > 0);
+        assert!(
+            first
+                .as_mut()
+                .poll(&mut Context::from_waker(&wakers[0]))
+                .is_pending()
+        );
+        assert_eq!(probe.0.starts.get(), 2);
+        assert_eq!(probe.0.drops.get(), 1);
+        assert!(
+            second
+                .as_mut()
+                .poll(&mut Context::from_waker(&wakers[1]))
+                .is_pending()
+        );
+        let before = counters[1].0.load(Ordering::Relaxed);
+        drop(first);
+        assert_eq!(probe.0.active.get(), 0);
+        assert!(counters[1].0.load(Ordering::Relaxed) > before);
+        assert!(
+            second
+                .as_mut()
+                .poll(&mut Context::from_waker(&wakers[1]))
+                .is_pending()
+        );
+        assert_eq!(probe.0.starts.get(), 3);
+        probe.0.available.set(true);
+        probe.0.changed.notify();
+        assert_eq!(
+            second.as_mut().poll(&mut Context::from_waker(&wakers[1])),
+            Poll::Ready(Ok(()))
+        );
+        assert_eq!(
+            pl.poll_ready(&mut Context::from_waker(&wakers[3])),
+            Poll::Ready(Ok(()))
+        );
+        assert_eq!(probe.0.starts.get(), 4);
+        assert_eq!(probe.0.max_active.get(), 1);
+    }
+
+    #[test]
+    fn retained_pipeline_check_survives_poller_and_joiner_loss() {
+        let probe = Probe::new();
+        probe.0.available.set(false);
+        let pl = Pipeline::new(State(10), probe.clone());
+        let binding = pl.bind();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(pl.poll_ready(&mut cx).is_pending());
+        let mut abandoned = Box::pin(binding.ready());
+        assert!(abandoned.as_mut().poll(&mut cx).is_pending());
+        drop(abandoned);
+        drop(pl);
+        assert_eq!(probe.0.drops.get(), 0);
+        let mut call = Box::pin(binding.call_static(1));
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.starts.get(), 1);
+        probe.0.changed.notify();
+        assert_eq!(probe.0.drops.get(), 0);
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.starts.get(), 2);
+        assert_eq!(probe.0.drops.get(), 1);
+        probe.0.available.set(true);
+        probe.0.changed.notify();
+        assert_eq!(call.as_mut().poll(&mut cx), Poll::Ready(Ok(11)));
+        assert_eq!(probe.0.starts.get(), 3);
+        assert_eq!(probe.0.active.get(), 0);
+        assert_eq!(probe.0.max_active.get(), 1);
+    }
+
+    #[test]
+    fn retained_checker_wakes_every_live_observer_even_from_another_thread() {
+        let probe = Probe::new();
+        probe.0.available.set(false);
+        let pl = Pipeline::new(State(0), probe.clone());
+        let mut first = Box::pin(pl.ready());
+        let mut second = Box::pin(pl.ready());
+        let counters = std::array::from_fn::<_, 3, _>(|_| Arc::new(Counter::default()));
+        let wakers = counters
+            .each_ref()
+            .map(|counter| Waker::from(counter.clone()));
+        assert!(
+            pl.poll_ready(&mut Context::from_waker(&wakers[0]))
+                .is_pending()
+        );
+        assert!(
+            first
+                .as_mut()
+                .poll(&mut Context::from_waker(&wakers[1]))
+                .is_pending()
+        );
+        assert!(
+            second
+                .as_mut()
+                .poll(&mut Context::from_waker(&wakers[2]))
+                .is_pending()
+        );
+        // The last poller may stop polling without dropping the pipeline.
+        assert!(
+            pl.poll_ready(&mut Context::from_waker(&wakers[0]))
+                .is_pending()
+        );
+        drop(second);
+        let wake = probe.0.waker.borrow_mut().take().unwrap();
+        std::thread::spawn(move || wake.wake()).join().unwrap();
+        assert!(counters[0].0.load(Ordering::Relaxed) > 0);
+        assert!(counters[1].0.load(Ordering::Relaxed) > 0);
+        assert_eq!(counters[2].0.load(Ordering::Relaxed), 0);
+        probe.0.available.set(true);
+        assert_eq!(
+            first.as_mut().poll(&mut Context::from_waker(&wakers[1])),
+            Poll::Ready(Ok(()))
+        );
+        assert_eq!(
+            probe.0.starts.get(),
+            1,
+            "scheduling wakes do not invalidate"
+        );
+        assert_eq!(probe.0.max_active.get(), 1);
+    }
+
+    #[test]
+    fn pipeline_rejects_stale_success_and_does_not_cache_errors() {
+        let probe = Probe::new();
+        let pl = Pipeline::new(State(0), probe.clone());
+        probe.0.invalidate_ready.set(true);
+        assert_eq!(run(pl.call(1)), Ok(1));
+        assert_eq!(probe.0.starts.get(), 2);
+        probe.0.changed.notify();
+        probe.0.invalidate_drop.set(true);
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(pl.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(probe.0.starts.get(), 4);
+        probe.0.fail.set(true);
+        probe.0.changed.notify();
+        assert_eq!(pl.poll_ready(&mut cx), Poll::Ready(Err(Error)));
+        assert_eq!(run(pl.call(2)), Err(Error));
+        assert_eq!(run(pl.call_static(3)), Err(Error));
+        assert_eq!(probe.0.calls.get(), 1);
+        assert_eq!(probe.0.starts.get(), 7);
+        probe.0.fail.set(false);
+        assert_eq!(run(pl.call(4)), Ok(4));
+        assert_eq!(probe.0.starts.get(), 8);
+    }
+
+    #[test]
+    fn pipeline_handoff_invalidation_prevents_stale_dispatch() {
+        let probe = Probe::new();
+        probe.0.available.set(false);
+        let pl = Pipeline::new(State(0), probe.clone());
+        let mut call = Box::pin(pl.call(1));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter);
+        assert!(pl.poll_ready(&mut Context::from_waker(&waker)).is_pending());
+        let changed = probe.clone();
+        ON_WAKE.with_borrow_mut(|slot| {
+            *slot = Some(Box::new(move || {
+                changed.0.fail.set(true);
+                changed.0.changed.notify();
+            }));
+        });
+        // Complete the pending operation; ownership handoff then invalidates it.
+        probe.0.available.set(true);
+        assert_eq!(call.as_mut().poll(&mut cx), Poll::Ready(Err(Error)));
+        assert_eq!(probe.0.starts.get(), 2);
+        assert_eq!(probe.0.calls.get(), 0);
+        assert_eq!(probe.0.max_active.get(), 1);
+    }
+
+    #[test]
+    fn state_pipeline_aliases_share_cache_and_retained_checker_but_not_call_state() {
+        let probe = Probe::new();
+        let pl = PipelineState::new(probe.clone());
+        let binding = pl.bind();
+        let bound = pl.bind_state(State(20));
+        assert_eq!(run(pl.ready(&State(10))), Ok(()));
+        assert_eq!(run(binding.call(1, &State(30))), Ok(31));
+        assert_eq!(run(bound.ready()), Ok(()));
+        assert_eq!(run(bound.call(2)), Ok(22));
+        assert_eq!(run(pl.call(3, &State(40))), Ok(43));
+        assert_eq!(&*probe.0.states.borrow(), &[10]);
+
+        let mut owned = Box::pin(bound.call_static(4));
+        probe.0.available.set(false);
+        probe.0.changed.notify();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(pl.poll_ready(&mut cx, &State(50)).is_pending());
+        assert!(pl.poll_ready(&mut cx, &State(60)).is_pending());
+        assert!(owned.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(&*probe.0.states.borrow(), &[10, 50]);
+        drop(pl);
+        probe.0.available.set(true);
+        probe.0.changed.notify();
+        assert_eq!(owned.as_mut().poll(&mut cx), Poll::Ready(Ok(24)));
+        assert_eq!(&*probe.0.states.borrow(), &[10, 50, 50]);
+        assert_eq!(run(binding.call(5, &State(70))), Ok(75));
+        assert_eq!(probe.0.max_active.get(), 1);
+        assert_eq!(probe.0.starts.get(), 3);
+    }
+
+    #[test]
+    fn state_pipeline_cancellation_hands_off_to_the_waiting_calls_state() {
+        let probe = Probe::new();
+        probe.0.available.set(false);
+        let pl = PipelineState::new(probe.clone());
+        let bound = pl.bind_state(State(20));
+        let mut owner = Box::pin(pl.ready(&State(10)));
+        let mut waiting = Box::pin(bound.call_static(1));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(owner.as_mut().poll(&mut cx).is_pending());
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(&*probe.0.states.borrow(), &[10]);
+        drop(owner);
+        assert_eq!(probe.0.active.get(), 0);
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(&*probe.0.states.borrow(), &[10, 20]);
+        probe.0.available.set(true);
+        probe.0.fail.set(true);
+        probe.0.changed.notify();
+        assert_eq!(waiting.as_mut().poll(&mut cx), Poll::Ready(Err(Error)));
+        assert_eq!(probe.0.calls.get(), 0);
+        probe.0.fail.set(false);
+        assert_eq!(run(pl.call(2, &State(30))), Ok(32));
+        assert_eq!(&*probe.0.states.borrow(), &[10, 20, 20, 30]);
+        assert_eq!(probe.0.max_active.get(), 1);
+    }
+
+    #[test]
+    fn shutdown_cancels_retained_checks_without_bypassing_bound_call_readiness() {
+        let probe = Probe::new();
+        probe.0.available.set(false);
+        let pl = Pipeline::new(State(10), probe.clone());
+        let binding = pl.bind();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(pl.poll_ready(&mut cx).is_pending());
+        let mut main = Box::pin(pl.ready());
+        let mut bound = Box::pin(binding.ready());
+        assert!(main.as_mut().poll(&mut cx).is_pending());
+        assert!(bound.as_mut().poll(&mut cx).is_pending());
+        run(pl.shutdown());
+        assert_eq!(probe.0.active.get(), 0);
+        assert_eq!(probe.0.drops.get(), 1);
+        assert_eq!(pl.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(main.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+        assert!(bound.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(probe.0.starts.get(), 2);
+        drop(bound);
+        probe.0.available.set(true);
+        assert_eq!(run(binding.call(1)), Ok(11));
+        assert_eq!(probe.0.starts.get(), 3);
+    }
+
+    #[test]
+    fn reentrant_shutdown_defers_dropping_the_currently_polled_checker() {
+        let probe = Probe::new();
+        probe.0.invalidate_ready.set(true);
+        let pl = Rc::new(Pipeline::new(State(10), probe.clone()));
+        let shutdown = pl.clone();
+        let checked = probe.clone();
+        ON_WAKE.with_borrow_mut(|slot| {
+            *slot = Some(Box::new(move || {
+                run(shutdown.shutdown());
+                assert_eq!(checked.0.active.get(), 1);
+                assert_eq!(checked.0.drops.get(), 0);
+            }));
+        });
+        let waker = Waker::from(Arc::new(Counter::default()));
+        let mut cx = Context::from_waker(&waker);
+        assert!(pl.poll_ready(&mut cx).is_pending());
+        assert_eq!(probe.0.active.get(), 0);
+        assert_eq!(probe.0.drops.get(), probe.0.starts.get());
+        assert_eq!(probe.0.max_active.get(), 1);
+        assert_eq!(pl.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(probe.0.calls.get(), 0);
     }
 
     #[test]
@@ -399,6 +763,39 @@ mod tests {
         async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Error> {
             Ok(req)
         }
+    }
+
+    #[test]
+    fn pipeline_ancestor_invalidation_preserves_pending_siblings() {
+        let a = Probe::new();
+        let b = Probe::new();
+        b.0.available.set(false);
+        let pair = Rc::new(Pair {
+            a: ServiceBinding::new(a.clone()),
+            b: ServiceBinding::new(b.clone()),
+            starts: Cell::new(0),
+        });
+        let pl = Pipeline::new(State(0), pair.clone());
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(pl.poll_ready(&mut cx).is_pending());
+        a.0.available.set(false);
+        a.0.changed.notify();
+        assert!(pl.poll_ready(&mut cx).is_pending());
+        assert_eq!(pair.starts.get(), 1);
+        assert_eq!(b.0.starts.get(), 1);
+        assert_eq!(b.0.drops.get(), 0);
+        b.0.available.set(true);
+        b.0.changed.notify();
+        assert!(pl.poll_ready(&mut cx).is_pending());
+        assert_eq!(pair.starts.get(), 2);
+        assert_eq!(a.0.starts.get(), 2);
+        assert_eq!(b.0.starts.get(), 2);
+        a.0.available.set(true);
+        a.0.changed.notify();
+        assert_eq!(pl.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(run(pl.call(1)), Ok(1));
+        assert_eq!(a.0.starts.get(), 3);
+        assert_eq!(b.0.starts.get(), 2);
     }
 
     #[test]
