@@ -1,5 +1,11 @@
 # Changes
 
+## [5.3.0] - Unreleased
+
+* Add `ReadyNotifier` sources and internal readiness scopes with persistent
+  subscriptions, generation-checked caching, and dependency invalidation.
+  Pipeline and context integration is separate.
+
 ## [5.2.0] - 2026-10-06
 
 * Do not check readiness for inner services calls, readiness
