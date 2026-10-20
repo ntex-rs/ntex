@@ -58,6 +58,13 @@ impl WaitersRef {
         unsafe { &mut *self.wakers.get() }
     }
 
+    fn queue_wake(&self, idx: u32) {
+        let wakers = self.get_wakers();
+        if !wakers.contains(&idx) {
+            wakers.push(idx);
+        }
+    }
+
     pub(crate) fn insert(&self) -> u32 {
         self.get().insert(None) as u32
     }
@@ -123,7 +130,7 @@ impl WaitersRef {
 
             if initial_run {
                 if result.is_pending() {
-                    self.get_wakers().push(idx);
+                    self.queue_wake(idx);
                 } else {
                     self.notify();
                 }
@@ -132,7 +139,7 @@ impl WaitersRef {
             result
         } else {
             // Another pipeline binding owns the readiness check.
-            self.get_wakers().push(idx);
+            self.queue_wake(idx);
             Poll::Pending
         }
     }
@@ -364,7 +371,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             // if the current runner is not the main one, wake up the main task
             // so it re-registers all required wakers
             if idx != 0 {
-                self.waiters.get_wakers().push(0);
+                self.waiters.queue_wake(0);
             }
 
             f(&mut ctx)
@@ -394,7 +401,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
         // if the current runner is not the main one, wake up the main task
         // so it re-registers all required wakers
         if idx != 0 {
-            self.waiters.get_wakers().push(0);
+            self.waiters.queue_wake(0);
         }
 
         f(&mut ctx)

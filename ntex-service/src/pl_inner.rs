@@ -260,8 +260,12 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         ctx.depend_on(self.0.scope());
     }
 
-    pub(crate) fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>> {
-        self.0.ready(idx)
+    pub(crate) async fn ready(&self, idx: u32) -> Result<(), Err> {
+        if self.0.scope().is_ready() {
+            Ok(())
+        } else {
+            self.0.ready(idx).await
+        }
     }
 
     pub(crate) fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<Res, Err>> {
