@@ -1,6 +1,10 @@
-use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc, task::Context, task::Poll};
+use std::{
+    cell::Cell, cell::OnceCell, cell::RefCell, future::poll_fn, rc::Rc, task::Context, task::Poll,
+};
 
-use crate::task::LocalWaker;
+use ntex_service::{BindCtx, ReadyNotifier};
+
+use crate::{future::OnDropFn, task::LocalWaker};
 
 /// A shared count with an asynchronous capacity notification.
 ///
@@ -14,6 +18,7 @@ struct CounterInner {
     count: Cell<usize>,
     capacity: Cell<usize>,
     tasks: RefCell<slab::Slab<LocalWaker>>,
+    changed: OnceCell<ReadyNotifier>,
 }
 
 impl Counter {
@@ -28,6 +33,7 @@ impl Counter {
                 count: Cell::new(0),
                 capacity: Cell::new(capacity),
                 tasks: RefCell::new(tasks),
+                changed: OnceCell::new(),
             }),
         )
     }
@@ -95,6 +101,10 @@ impl Counter {
     pub fn total(&self) -> usize {
         self.1.count.get()
     }
+
+    pub(super) fn bind(&self, ctx: &BindCtx<'_>) {
+        ctx.subscribe(self.1.changed.get_or_init(ReadyNotifier::new));
+    }
 }
 
 impl Clone for Counter {
@@ -118,8 +128,9 @@ pub struct CounterGuard(Rc<CounterInner>);
 
 impl CounterGuard {
     fn new(inner: Rc<CounterInner>) -> Self {
-        inner.inc();
-        CounterGuard(inner)
+        let guard = CounterGuard(inner);
+        guard.0.inc();
+        guard
     }
 }
 
@@ -149,9 +160,14 @@ impl CounterInner {
     }
 
     fn notify(&self) {
-        let tasks = self.tasks.borrow();
-        for (_, task) in &*tasks {
-            task.wake();
+        let _wake = OnDropFn::new(|| {
+            let tasks = self.tasks.borrow();
+            for (_, task) in &*tasks {
+                task.wake();
+            }
+        });
+        if let Some(changed) = self.changed.get() {
+            changed.notify();
         }
     }
 }
