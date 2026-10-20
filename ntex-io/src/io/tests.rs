@@ -4541,3 +4541,150 @@ async fn shutdown_does_not_wait_for_filter_readiness() {
     assert!(res.is_ok());
     assert!(client.is_closed());
 }
+
+#[cfg(feature = "tracker")]
+mod read_buf_tracker {
+    use ntex_bytes::BytesTracker;
+
+    use super::*;
+    use crate::ReadBufTracker;
+
+    fn io_with(mode: ReadBufTracker) -> (IoTest, Io) {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf_tracker(mode)),
+        );
+        (client, io)
+    }
+
+    fn cfg_with(mode: ReadBufTracker) -> SharedCfg {
+        SharedCfg::new("SRV2")
+            .add(IoConfig::default().set_read_buf_tracker(mode))
+            .into()
+    }
+
+    #[ntex::test]
+    async fn disabled() {
+        let (client, io) = io_with(ReadBufTracker::Disabled);
+        assert!(io.read_buf_tracker().is_none());
+
+        client.write(TEXT);
+        io.read_more().await.unwrap();
+        assert!(io.read_buf_tracker().is_none());
+        assert!(io.st().get_read_buf().tracker().is_none());
+    }
+
+    #[ntex::test]
+    async fn per_connection_is_created_once() {
+        let (client, io) = io_with(ReadBufTracker::PerConnection);
+        let t = io.read_buf_tracker().unwrap();
+        assert!(t.ptr_eq(&io.read_buf_tracker().unwrap()));
+        assert_eq!(t.snapshot().live_allocations, 0);
+
+        client.write(TEXT);
+        io.read_more().await.unwrap();
+        assert_eq!(t.snapshot().live_allocations, 1);
+
+        // another connection gets its own tracker
+        let (_, io2) = io_with(ReadBufTracker::PerConnection);
+        assert!(!t.ptr_eq(&io2.read_buf_tracker().unwrap()));
+    }
+
+    /// Allocating a read buffer creates the per-connection tracker.
+    #[ntex::test]
+    async fn per_connection_created_by_read_buf() {
+        let (_client, io) = io_with(ReadBufTracker::PerConnection);
+        let buf = io.st().get_read_buf();
+        assert!(
+            buf.tracker()
+                .unwrap()
+                .ptr_eq(&io.read_buf_tracker().unwrap())
+        );
+    }
+
+    #[ntex::test]
+    async fn shared() {
+        let t = BytesTracker::new();
+        let (client, io) = io_with(ReadBufTracker::Shared(t.clone()));
+        let (client2, io2) = io_with(ReadBufTracker::Shared(t.clone()));
+        assert!(t.ptr_eq(&io.read_buf_tracker().unwrap()));
+
+        client.write(TEXT);
+        client2.write(TEXT);
+        io.read_more().await.unwrap();
+        io2.read_more().await.unwrap();
+        assert_eq!(t.snapshot().live_allocations, 2);
+
+        // the received data keeps the charge after the connection is gone
+        let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+        drop(io);
+        assert!(t.snapshot().live_allocations >= 1);
+        drop(item);
+        drop(io2);
+        drop((client, client2));
+        assert_eq!(t.snapshot().live_allocations, 0);
+        assert_eq!(t.snapshot().live_bytes, 0);
+    }
+
+    #[ntex::test]
+    async fn set_config_keeps_per_connection() {
+        let (_client, io) = io_with(ReadBufTracker::PerConnection);
+        let t = io.read_buf_tracker().unwrap();
+        unsafe {
+            io.set_config(cfg_with(ReadBufTracker::PerConnection));
+        }
+        assert!(t.ptr_eq(&io.read_buf_tracker().unwrap()));
+    }
+
+    /// Read buffers held by the connection move to the new tracker.
+    #[ntex::test]
+    async fn set_config_moves_read_buffers() {
+        let (client, io) = io_with(ReadBufTracker::PerConnection);
+        client.write(TEXT);
+        io.read_more().await.unwrap();
+        let old = io.read_buf_tracker().unwrap();
+        assert_eq!(old.snapshot().live_allocations, 1);
+
+        let t = BytesTracker::new();
+        unsafe {
+            io.set_config(cfg_with(ReadBufTracker::Shared(t.clone())));
+        }
+        assert!(t.ptr_eq(&io.read_buf_tracker().unwrap()));
+        assert_eq!(old.snapshot().live_allocations, 0);
+        assert_eq!(t.snapshot().live_allocations, 1);
+
+        // switching back creates a new per-connection tracker
+        unsafe {
+            io.set_config(cfg_with(ReadBufTracker::PerConnection));
+        }
+        let t2 = io.read_buf_tracker().unwrap();
+        assert!(!t2.ptr_eq(&old));
+        assert_eq!(t.snapshot().live_allocations, 0);
+        assert_eq!(t2.snapshot().live_allocations, 1);
+
+        let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(item, TEXT.as_bytes());
+    }
+
+    /// Disabling keeps existing buffers charged to the old tracker.
+    #[ntex::test]
+    async fn set_config_disabled() {
+        let t = BytesTracker::new();
+        let (client, io) = io_with(ReadBufTracker::Shared(t.clone()));
+        client.write(TEXT);
+        io.read_more().await.unwrap();
+
+        unsafe {
+            io.set_config(cfg_with(ReadBufTracker::Disabled));
+        }
+        assert!(io.read_buf_tracker().is_none());
+        assert!(io.st().get_read_buf().tracker().is_none());
+        assert_eq!(t.snapshot().live_allocations, 1);
+
+        drop(io.recv(&BytesCodec).await.unwrap().unwrap());
+        drop(io);
+        assert_eq!(t.snapshot().live_allocations, 0);
+    }
+}

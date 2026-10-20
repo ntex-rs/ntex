@@ -69,6 +69,18 @@ impl IoContext {
         self.0.tag()
     }
 
+    /// Returns the tracker charged with the read buffers of the connection.
+    ///
+    /// Read buffers a transport allocates itself should be charged to it
+    /// with [`BytesMut::set_tracker`]. Returns `None` if
+    /// [`ReadBufTracker::Disabled`](crate::ReadBufTracker) is configured.
+    #[cfg(feature = "tracker")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tracker")))]
+    #[must_use]
+    pub fn read_buf_tracker(&self) -> Option<ntex_bytes::BytesTracker> {
+        self.st().read_buf_tracker()
+    }
+
     #[doc(hidden)]
     /// Gets the state flags. (for debug purpose only)
     pub fn flags(&self) -> Flags {

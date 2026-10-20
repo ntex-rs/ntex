@@ -209,6 +209,17 @@ impl Stack {
         self.borrow().transport().read.take()
     }
 
+    /// Charges the read buffers of all layers to `tracker`.
+    #[cfg(feature = "tracker")]
+    pub(crate) fn set_read_buf_tracker(&self, tracker: &ntex_bytes::BytesTracker) {
+        for b in self.borrow().buffers() {
+            if let Some(mut buf) = b.read.take() {
+                buf.set_tracker(tracker);
+                b.read.set(Some(buf));
+            }
+        }
+    }
+
     pub(crate) fn set_read_buf(&self, buf: BytesMut) {
         let layers = self.borrow();
         let buffer = layers.transport();
