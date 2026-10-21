@@ -859,7 +859,7 @@ mod tests {
     use ntex_bytes::{BytePageSize, BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Io, IoConfig, IoRef, testing::IoTest};
-    use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
+    use ntex_service::{BindCtx, Ctx, Pipeline, ReadyNotifier, Service, cfg::SharedCfg};
     use ntex_util::time::{Millis, sleep, timeout};
     use ntex_util::{channel::condition::Condition, channel::oneshot, future::lazy, spawn};
     use rand::Rng;
@@ -1327,6 +1327,7 @@ mod tests {
             shutdown: Cell<usize>,
             ready: Condition,
             requests: Condition,
+            changed: ReadyNotifier,
         }
 
         struct Request(Rc<Data>);
@@ -1345,6 +1346,10 @@ mod tests {
         impl Service<(), DispatchItem<BCodec>> for Srv {
             type Res = Option<Bytes>;
             type Error = ();
+
+            fn bind(&self, ctx: BindCtx<'_>) {
+                ctx.subscribe(&self.data.changed);
+            }
 
             async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
                 while self.data.blocked.get() {
@@ -1405,6 +1410,7 @@ mod tests {
             assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
             assert_eq!(disp.inner.shared.inflight.get(), count as u32);
             data.blocked.set(true);
+            data.changed.notify();
             ioref.terminate();
             timeout(Millis(2500), &mut disp).await.unwrap().unwrap();
 
@@ -2227,18 +2233,42 @@ mod tests {
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
     }
 
+    /// Readiness gate installed by the test.
+    #[derive(Clone, Default)]
+    struct Gate(Rc<(RefCell<Option<oneshot::Receiver<()>>>, ReadyNotifier)>);
+
+    impl Gate {
+        /// Pauses readiness until `rx` resolves, invalidating cached readiness.
+        fn close(&self, rx: oneshot::Receiver<()>) {
+            *self.0.0.borrow_mut() = Some(rx);
+            self.0.1.notify();
+        }
+
+        fn changed(&self) -> &ReadyNotifier {
+            &self.0.1
+        }
+
+        async fn ready(&self) {
+            let rx = self.0.0.borrow_mut().take();
+            if let Some(rx) = rx {
+                let _ = rx.await;
+            }
+        }
+    }
+
     /// Service whose readiness waits on a gate installed by the test.
-    struct GateSrv(Rc<RefCell<Option<oneshot::Receiver<()>>>>, Rc<Cell<bool>>);
+    struct GateSrv(Gate, Rc<Cell<bool>>);
 
     impl Service<(), DispatchItem<BCodec>> for GateSrv {
         type Res = Option<Bytes>;
         type Error = ();
 
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(self.0.changed());
+        }
+
         async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
-            let rx = self.0.borrow_mut().take();
-            if let Some(rx) = rx {
-                let _ = rx.await;
-            }
+            self.0.ready().await;
             Ok(())
         }
 
@@ -2261,7 +2291,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let gate = Rc::new(RefCell::new(None));
+        let gate = Gate::default();
         let timed_out = Rc::new(Cell::new(false));
         let io = Io::new(
             server,
@@ -2290,7 +2320,7 @@ mod tests {
                 client.write("abc");
             }
             let (tx, rx) = oneshot::channel();
-            *gate.borrow_mut() = Some(rx);
+            gate.close(rx);
             client.write("abc");
             sleep(Millis(100)).await;
             let _ = tx.send(());
@@ -2306,7 +2336,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let gate = Rc::new(RefCell::new(None));
+        let gate = Gate::default();
         let timed_out = Rc::new(Cell::new(false));
         let io = Io::new(
             server,
@@ -2328,7 +2358,7 @@ mod tests {
         client.write("abc");
         sleep(Millis(100)).await;
         let (tx, rx) = oneshot::channel();
-        *gate.borrow_mut() = Some(rx);
+        gate.close(rx);
         client.write("abc");
         sleep(Millis(1500)).await;
         let _ = tx.send(());
@@ -2465,14 +2495,14 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let gate = Rc::new(RefCell::new(None));
+        let gate = Gate::default();
         let io = Io::new(
             server,
             SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
         );
         let ioref = io.get_ref();
         let (tx, rx) = oneshot::channel();
-        *gate.borrow_mut() = Some(rx);
+        gate.close(rx);
         let disp = Dispatcher::new(
             io,
             BCodec(1),
@@ -2689,11 +2719,12 @@ mod tests {
         type Res = Option<Bytes>;
         type Error = ();
 
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(self.gate.changed());
+        }
+
         async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
-            let rx = self.gate.borrow_mut().take();
-            if let Some(rx) = rx {
-                let _ = rx.await;
-            }
+            self.gate.ready().await;
             Ok(())
         }
 
@@ -2719,7 +2750,6 @@ mod tests {
         }
     }
 
-    type Gate = Rc<RefCell<Option<oneshot::Receiver<()>>>>;
     type Events = Rc<RefCell<Vec<&'static str>>>;
 
     fn write_dispatcher(
@@ -2727,7 +2757,7 @@ mod tests {
         cfg: IoConfig,
         size: usize,
     ) -> (Dispatcher<BCodec, ()>, Gate, Events) {
-        let gate = Rc::new(RefCell::new(None));
+        let gate = Gate::default();
         let events = Rc::new(RefCell::new(Vec::new()));
         let io = Io::new(
             server,
@@ -2821,7 +2851,7 @@ mod tests {
 
         // the service is not ready for a while
         let (tx, rx) = oneshot::channel::<()>();
-        *gate.borrow_mut() = Some(rx);
+        gate.close(rx);
 
         // io is closed without waiting for service readiness
         wait_closed(&client, Millis(5000)).await;
@@ -2853,7 +2883,7 @@ mod tests {
 
         // the service is not ready while the peer drains the output
         let (tx, rx) = oneshot::channel::<()>();
-        *gate.borrow_mut() = Some(rx);
+        gate.close(rx);
         client.remote_buffer_cap(65536);
         sleep(Millis(100)).await;
         assert_eq!(client.read_any().len(), 8192);
@@ -3464,7 +3494,7 @@ mod tests {
                 (),
                 WriteSrv {
                     size,
-                    gate: Rc::new(RefCell::new(None)),
+                    gate: Gate::default(),
                     events: events.clone(),
                 },
             ),

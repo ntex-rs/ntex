@@ -102,7 +102,12 @@ impl Counter {
         self.1.count.get()
     }
 
-    pub(super) fn bind(&self, ctx: &BindCtx<'_>) {
+    /// Subscribes `ctx` to capacity changes.
+    ///
+    /// Services whose readiness depends on this counter must call this in
+    /// [`Service::bind`](ntex_service::Service::bind), otherwise their cached
+    /// readiness is not invalidated when the counter fills or frees a slot.
+    pub fn bind(&self, ctx: &BindCtx<'_>) {
         ctx.subscribe(self.1.changed.get_or_init(ReadyNotifier::new));
     }
 }

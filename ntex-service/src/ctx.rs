@@ -296,7 +296,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     {
         let ctx = *self;
         ReadyCall {
-            check: self.scope.check_uncached(move || svc.ready(ctx.cast())),
+            check: RunCheck::new(self.scope, move || svc.ready(ctx.cast())),
             waiters: self.waiters,
             idx: self.idx,
             active: false,
@@ -502,9 +502,7 @@ where
         loop {
             this.active = true;
             let mut check = unsafe { pin::Pin::new_unchecked(&mut this.check) };
-            let result = this
-                .waiters
-                .run(this.idx, cx, |cx| check.as_mut().poll_check(cx));
+            let result = this.waiters.run(this.idx, cx, |cx| check.as_mut().poll(cx));
             let Poll::Ready(result) = result else {
                 return Poll::Pending;
             };

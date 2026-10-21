@@ -1,7 +1,7 @@
 use std::{io, sync::Arc};
 
 use ntex_io::{Filter, Io, Layer};
-use ntex_service::{Ctx, Service, cfg::Cfg, cfg::Configuration};
+use ntex_service::{BindCtx, Ctx, Service, cfg::Cfg, cfg::Configuration};
 use ntex_util::services::Counter;
 use tls_rustls::ServerConfig;
 
@@ -32,6 +32,10 @@ impl From<ServerConfig> for TlsAcceptor {
 impl<F: Filter, St> Service<St, Io<F>> for TlsAcceptor {
     type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.conns.bind(&ctx);
+    }
 
     async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {

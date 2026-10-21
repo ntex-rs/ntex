@@ -2,6 +2,9 @@
 
 ## [4.4.0] - Unreleased
 
+* Subscribe TLS acceptors to the max handshake counter in `Service::bind`, so
+  cached readiness is invalidated when the counter fills or frees a slot
+
 * rustls: stop feeding an empty ciphertext buffer to the session after the
   input is drained, saving a read/process cycle per read and no longer
   signalling a false transport EOF to rustls

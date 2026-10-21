@@ -1,6 +1,6 @@
 # Changes
 
-## [5.3.0] - Unreleased
+## [5.3.0] - 2026-10-21
 
 * Reuse readiness observers across check retries, and avoid allocating and redundant self-wakes when waking pipeline readiness checks
 
@@ -9,8 +9,6 @@
 * Avoid allocations when notifying a single readiness scope without dependents, and avoid hashing small dependency graphs
 
 * Yield instead of spinning when a service readiness check keeps invalidating its own readiness
-
-* Fix Stacked Borrows violations when checking readiness of nested and combined services, and when dropping a pipeline with a pending readiness check
 
 * Remove `Ctx::poll_fn()` and `Ctx::poll_once()`
 

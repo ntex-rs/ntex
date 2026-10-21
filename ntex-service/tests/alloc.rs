@@ -1,4 +1,10 @@
 //! Readiness allocation counts, excluding executor and service-owned allocations.
+//!
+//! Run the timing comparison separately from other tests:
+//! `cargo test -p ntex-service --release --test alloc benchmark_readiness -- --ignored --exact --nocapture`.
+//! It reports seven warmed samples using the counting system allocator, with no
+//! executor or I/O. Timings are descriptive, not pass/fail thresholds. Cached
+//! calls still include dispatch boxing; invalidated cases include notification.
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::{Cell, RefCell},
@@ -540,4 +546,235 @@ fn invalidation_and_cancellation_preserve_the_shared_checker() {
         "cold={cold:?}; recheck={recheck:?}; pending={pending:?}; \
          waiter={waiting:?}; cancellation={cancellation:?}; retained={retained:?}"
     );
+}
+
+#[test]
+fn shared_child_cache_hits_do_not_allocate_per_parent() {
+    let (svc, gate) = probe();
+    let child = Rc::new(ServiceBinding::new(svc));
+    let parents: Vec<_> = (0..16)
+        .map(|st| Pipeline::new(st, Forward(child.clone())))
+        .collect();
+    for parent in &parents {
+        complete(parent.ready()).unwrap();
+    }
+    assert_eq!(gate.checks.get(), 1);
+
+    for _ in 0..4 {
+        for (st, parent) in parents.iter().enumerate() {
+            expect_allocs("shared child cached ready", 0, || {
+                complete(parent.ready()).unwrap();
+            });
+            assert_eq!(
+                expect_allocs("shared child cached call", 1, || complete(parent.call(2))),
+                Ok(st + 2)
+            );
+        }
+    }
+    assert_eq!(gate.checks.get(), 1);
+
+    gate.changed.notify();
+    assert!(parents.iter().all(|parent| !parent.is_ready()));
+    for parent in &parents {
+        complete(parent.ready()).unwrap();
+    }
+    assert_eq!(gate.checks.get(), 2, "one shared child recheck");
+    for parent in &parents {
+        expect_allocs("shared child revalidated cache", 0, || {
+            complete(parent.ready()).unwrap();
+        });
+    }
+}
+
+#[test]
+#[ignore = "run the readiness microbenchmark explicitly in release mode"]
+fn benchmark_readiness() {
+    use std::{
+        hint::black_box,
+        time::{Duration, Instant},
+    };
+
+    fn bench<R>(name: &str, iterations: usize, mut operation: impl FnMut() -> R) -> usize {
+        const SAMPLES: usize = 7;
+        for _ in 0..iterations / 10 {
+            black_box(operation());
+        }
+        let mut elapsed = [Duration::ZERO; SAMPLES];
+        let mut counts = Counts::default();
+        for sample in &mut elapsed {
+            let (time, measured) = measure(|| {
+                let start = Instant::now();
+                for _ in 0..iterations {
+                    black_box(operation());
+                }
+                start.elapsed()
+            });
+            *sample = time;
+            counts.allocs += measured.allocs;
+            counts.bytes += measured.bytes;
+        }
+        elapsed.sort_unstable();
+        let ns = |time: Duration| time.as_secs_f64() * 1e9 / iterations as f64;
+        let total = (iterations * SAMPLES) as f64;
+        println!(
+            "{name:32} {:9.2} ns/op [{:9.2}, {:9.2}] {:7.3} alloc/op {:9.2} B/op",
+            ns(elapsed[SAMPLES / 2]),
+            ns(elapsed[0]),
+            ns(elapsed[SAMPLES - 1]),
+            counts.allocs as f64 / total,
+            counts.bytes as f64 / total,
+        );
+        iterations * SAMPLES + iterations / 10
+    }
+
+    println!(
+        "median [min, max] of 7 samples; System allocator; 10% warmup; debug_assertions={}",
+        cfg!(debug_assertions)
+    );
+    const ITERATIONS: usize = 1_000_000;
+    let (svc, gate) = probe();
+    let pl = Pipeline::new(10, svc);
+    let binding = pl.bind();
+    let mut cx = Context::from_waker(Waker::noop());
+    complete(pl.ready()).unwrap();
+    bench("ready/cache-hit", ITERATIONS, || {
+        complete(black_box(&pl).ready()).unwrap();
+    });
+    bench("poll-ready/cache-hit", ITERATIONS, || {
+        assert_eq!(black_box(&pl).poll_ready(&mut cx), Poll::Ready(Ok(())));
+    });
+    bench("call/cache-hit", ITERATIONS, || {
+        complete(black_box(&pl).call(black_box(2))).unwrap()
+    });
+    bench("binding-call/cache-hit", ITERATIONS, || {
+        complete(black_box(&binding).call(black_box(2))).unwrap()
+    });
+    bench("owned-call/cache-hit", ITERATIONS, || {
+        complete(black_box(&binding).call_static(black_box(2))).unwrap()
+    });
+    assert_eq!(gate.checks.get(), 1, "calls must not consume readiness");
+
+    let operations = bench("notify+ready", ITERATIONS, || {
+        black_box(&gate.changed).notify();
+        complete(black_box(&pl).ready()).unwrap();
+    });
+    assert_eq!(gate.checks.get(), operations + 1);
+    let checks = gate.checks.get();
+    let operations = bench("notify+call", ITERATIONS, || {
+        black_box(&gate.changed).notify();
+        complete(black_box(&pl).call(black_box(2))).unwrap()
+    });
+    assert_eq!(gate.checks.get(), checks + operations);
+
+    let (svc, gate) = probe();
+    let state = PipelineState::new(svc);
+    complete(state.ready(&10)).unwrap();
+    bench("state-ready/cache-hit", ITERATIONS, || {
+        complete(black_box(&state).ready(black_box(&20))).unwrap();
+    });
+    bench("state-call/cache-hit", ITERATIONS, || {
+        complete(black_box(&state).call(black_box(2), black_box(&20))).unwrap()
+    });
+    assert_eq!(gate.checks.get(), 1, "state handles share readiness");
+
+    let (svc, gate) = probe();
+    let mapped = Pipeline::new(
+        10,
+        Forward(ready(map_state(7usize, ServiceBinding::new(svc))).map(|res| res + 1)),
+    );
+    complete(mapped.ready()).unwrap();
+    bench("mapped-child/call/cache-hit", ITERATIONS, || {
+        complete(black_box(&mapped).call(black_box(2))).unwrap()
+    });
+    assert_eq!(gate.checks.get(), 1);
+
+    let (svc, gate) = probe();
+    let erased = Pipeline::new(10, Forward(ready(boxed::service(svc))));
+    complete(erased.ready()).unwrap();
+    bench("erased-child/call/cache-hit", ITERATIONS, || {
+        complete(black_box(&erased).call(black_box(2))).unwrap()
+    });
+    assert_eq!(gate.checks.get(), 1);
+
+    for count in [1, 8, 64] {
+        let (svc, gate) = probe();
+        let child = Rc::new(ServiceBinding::new(svc));
+        let parents: Vec<_> = (0..count)
+            .map(|st| Pipeline::new(st, Forward(child.clone())))
+            .collect();
+        for parent in &parents {
+            complete(parent.ready()).unwrap();
+        }
+        let operations = bench(&format!("notify+ready/{count}-parent-dag"), 10_000, || {
+            black_box(&gate.changed).notify();
+            for parent in black_box(&parents) {
+                complete(parent.ready()).unwrap();
+            }
+        });
+        assert_eq!(
+            gate.checks.get(),
+            operations + 1,
+            "one child per generation"
+        );
+    }
+
+    let (svc, gate) = probe();
+    gate.available.set(false);
+    let pl = Pipeline::new(10, svc);
+    let bindings: Vec<_> = (0..8).map(|_| pl.bind()).collect();
+    let mut owner = pin!(Some(pl.ready()));
+    assert!(
+        owner
+            .as_mut()
+            .as_pin_mut()
+            .unwrap()
+            .poll(&mut cx)
+            .is_pending()
+    );
+    let mut waiters: Vec<_> = bindings.iter().map(|b| Box::pin(b.ready())).collect();
+    for waiter in &mut waiters {
+        assert!(waiter.as_mut().poll(&mut cx).is_pending());
+    }
+    bench("pending/owner-repoll", ITERATIONS, || {
+        assert!(
+            black_box(&mut owner)
+                .as_mut()
+                .as_pin_mut()
+                .unwrap()
+                .poll(&mut cx)
+                .is_pending()
+        );
+    });
+    bench("pending/8-waiter-repolls", ITERATIONS, || {
+        for waiter in black_box(&mut waiters) {
+            assert!(waiter.as_mut().poll(&mut cx).is_pending());
+        }
+    });
+    assert_eq!(gate.checks.get(), 1);
+    owner.set(None);
+    assert!(waiters[0].as_mut().poll(&mut cx).is_pending());
+    assert_eq!(
+        gate.checks.get(),
+        2,
+        "cancelled owner hands off one checker"
+    );
+    gate.available.set(true);
+    gate.changed.notify();
+    for waiter in &mut waiters {
+        assert_eq!(waiter.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    }
+    assert_eq!(gate.active.get(), 0);
+
+    let (svc, gate) = probe();
+    gate.available.set(false);
+    let pl = Pipeline::new(10, svc);
+    assert!(pl.poll_ready(&mut cx).is_pending());
+    bench("pending/retained-repoll", ITERATIONS, || {
+        assert!(black_box(&pl).poll_ready(&mut cx).is_pending());
+    });
+    assert_eq!(gate.checks.get(), 1);
+    gate.available.set(true);
+    gate.changed.notify();
+    assert_eq!(pl.poll_ready(&mut cx), Poll::Ready(Ok(())));
+    assert_eq!(gate.active.get(), 0);
 }

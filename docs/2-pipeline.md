@@ -295,10 +295,187 @@ This coordination prevents multiple callers from independently driving the same
 readiness check. It also avoids hiding excess work in unbounded internal queues:
 when the pipeline is not ready, callers wait.
 
-A successful pipeline readiness check, such as `Pipeline::poll_ready()`, is
-remembered. The next call skips its own readiness check, later calls check
-readiness again. A dispatcher that waits for readiness before each call
-therefore checks the service only once per request.
+The pipeline owns a readiness scope. A successful readiness check, such as
+`Pipeline::poll_ready()`, is cached by that scope until a service notifies it
+that its readiness has changed. Every binding and every call of the pipeline
+reuses the cached result, and calls do not consume it. A dispatcher that waits
+for readiness before each call therefore re-checks the services only after
+something has changed.
+
+### The Service Tree
+
+A composed pipeline is a directed tree of services. The pipeline is the root,
+combinators are inner nodes, and the services that do the actual work are the
+leaves:
+
+```rust
+let pipeline = service(authenticate)
+    .and_then(ready(throttle))
+    .and_then(execute)
+    .pipeline(());
+```
+
+```text
+Pipeline                        <- scope
+└── AndThen
+    ├── AndThen
+    │   ├── authenticate
+    │   └── ready(throttle)     <- scope
+    └── execute
+```
+
+Requests flow down the tree, from the root to the leaves. Readiness flows in
+the opposite direction: every node depends on the readiness of the nodes below
+it, so readiness links point backward from the leaves to the root. The pipeline
+is ready only when `authenticate`, `throttle`, and `execute` are all ready.
+
+A service shared through `Rc` can be bound under several parents. Its readiness
+then feeds every one of them, which turns the tree into a directed acyclic
+graph.
+
+#### Building Dependencies in `Service::bind()`
+
+Readiness links are not discovered at runtime. Each service declares them once
+in `Service::bind()`. The pipeline calls `bind()` when it is constructed, and
+`Ctx::create()` calls it for services created later. In both cases, `bind()`
+runs synchronously before any `ready()`, `call()`, or `shutdown()`.
+
+The [`BindCtx`](https://docs.ntex.rs/api/ntex_service/struct.BindCtx.html)
+passed to `bind()` registers dependencies in the current readiness scope:
+
+- `ctx.subscribe(&notifier)` registers a `ReadyNotifier` that the service uses
+  to report changes in its own readiness.
+- `ctx.bind(&child)` binds a child service. It must be called for every child
+  the service uses, including children that are only called and never checked
+  for readiness. A raw child shares the current scope. A `ServiceBinding` or
+  `ready()` child links its own scope below the current one.
+- `ctx.on_notify(&callback)` optionally registers a `ReadyCallback` that runs
+  when a notification reaches the current scope.
+- A child pipeline is bound with `pipeline.bind_to(&ctx)`.
+
+```rust
+struct Limited<S> {
+    inner: S,
+    changed: ReadyNotifier,
+}
+
+impl<S: Service<(), u8>> Service<(), u8> for Limited<S> {
+    type Res = S::Res;
+    type Error = S::Error;
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.subscribe(&self.changed); // changes of our own readiness
+        ctx.bind(&self.inner);        // readiness of the child
+    }
+
+    // ready() and call() ...
+}
+```
+
+When a child implements `Service` for several request types, pass the types
+explicitly, for example `ctx.bind::<_, St, Req>(&self.first)`. Services that
+only forward to their children can use the `forward_bind!(St, field, ...)` or
+`forward_pl_bind!` macros. The default `bind()` does nothing, which is correct
+for leaf services that have no notification sources.
+
+A few rules follow from this design:
+
+- All dependencies must be known at bind time. `ready()` and `call()` cannot
+  register new ones.
+- Using a `ServiceBinding` that its parent did not bind panics, so a missing
+  `bind()` forward is detected instead of silently losing notifications.
+- Shared services can be bound more than once. Repeated subscriptions are
+  idempotent.
+- Children created lazily at runtime must use `ctx.create(&factory).await`,
+  which binds the new service in the current scope and invalidates it.
+
+### Readiness Scopes
+
+A readiness scope caches a successful readiness check of its subtree until it
+is notified that readiness has changed. Not every node of the tree has its own
+scope. Scopes exist only at:
+
+- the pipeline root,
+- each [`ServiceBinding`](https://docs.ntex.rs/api/ntex_service/struct.ServiceBinding.html),
+- each service wrapped with `ready()` or created by `ready_factory()`.
+
+Plain services and combinators such as `and_then`, `then`, and `apply` store
+their children raw, so those children share the nearest scope above them.
+
+A scope's cached readiness remains valid only while every service below it is
+still ready:
+
+- When a service calls `ReadyNotifier::notify()`, the scope it is subscribed to
+  and every scope above it are invalidated before any waiting task is woken.
+  Scopes in unrelated branches stay valid. In the example above, a notification
+  from `throttle` invalidates both scopes, while one from `execute` invalidates
+  only the pipeline scope.
+- A notification never marks a service ready. It only forces the next `ready()`
+  or `call()` to check again.
+
+A service whose readiness can change must therefore notify on every change, such
+as taking the last free slot, releasing a slot, a timer firing, or an external
+failure, before another caller can reuse the stale result. Waking a task is not
+the same as invalidating a scope: a wake only re-polls a pending check.
+
+```rust
+fn acquire(&self) {
+    self.in_flight.set(self.in_flight.get() + 1);
+    self.changed.notify(); // may have become not ready
+}
+
+fn release(&self) {
+    self.in_flight.set(self.in_flight.get() - 1);
+    self.changed.notify(); // may have become ready
+}
+```
+
+### Observing Readiness Notifications
+
+Use a reusable
+[`ReadyCallback`](https://docs.ntex.rs/api/ntex_service/struct.ReadyCallback.html)
+to observe explicit readiness notifications. A service registers its handle
+during `Service::bind`:
+
+```rust
+fn bind(&self, ctx: BindCtx<'_>) {
+    ctx.subscribe(&self.changed);
+    ctx.on_notify(&self.on_notify);
+    ctx.bind(&self.inner);
+}
+```
+
+Pipelines also expose `pipeline.on_notify(&callback)`, as do `PipelineBinding`,
+`PipelineState`, and `PipelineStateBinding`. For example:
+
+```rust
+use ntex::service::ReadyCallback;
+
+let callback = ReadyCallback::new(|| println!("readiness notified"));
+# let pipeline = ntex::Pipeline::new((), async |_: ()| Ok::<_, ()>(()));
+pipeline.on_notify(&callback);
+pipeline.bind().on_notify(&callback); // Same scope and identity: one registration.
+```
+
+The callback runs synchronously when `ReadyNotifier::notify()` reaches its
+scope, including notifications propagated from child scopes and repeated
+notifications while the scope is already invalid. It does not run for
+successful readiness checks, cached calls, ordinary task wakeups, or internal
+resets such as lazy service creation and shutdown. All affected scopes are
+invalidated before callbacks run, outside internal borrows and locks.
+
+Nested notifications still invalidate every affected scope, but skip callback
+delivery on scopes already executing callbacks. Registrations made during that
+delivery are retained for later notifications. Delivery reuses each scope's
+registered callback storage without allocating a snapshot or cloning handles.
+
+Callbacks are registered on the nearest scope: raw services share their
+enclosing one, while `ready(svc)` gives the service its own. Registering one
+handle on two affected scopes invokes it once for each scope. Cloning a handle
+preserves its identity. Registrations persist until the scope is dropped,
+independently of readiness checks and runtime binding handles. Callbacks must
+own their captures; avoid strong reference cycles through a pipeline that
+retains the callback.
 
 ### Readiness Between Services
 
@@ -312,13 +489,28 @@ Instead, services call one another through an execution context:
 let result = ctx.call(&next_service, request).await?;
 ```
 
-The context waits for `next_service` to become ready before invoking it. This
-allows backpressure to propagate through the chain, even if readiness changes
-while a request is being processed.
-
 In ntex-service, this execution context is represented by `Ctx`. It carries the
 pipeline-level information needed to coordinate otherwise independent service
-instances.
+instances, including the nearest readiness scope above the current service.
+
+`Ctx` uses that scope to decide whether a readiness check is needed:
+
+| Operation | Behavior |
+|---|---|
+| `ctx.call(&svc, req)`, scope valid | Dispatches immediately, without a check. |
+| `ctx.call(&svc, req)`, scope invalid | Waits for `svc.ready()` only. The scope above is not marked ready. |
+| `ctx.call(&binding, req)` | Checks the binding's own scope, independent of the scope above. |
+| `ctx.ready(&svc)` | Checks the raw service every time and does not update any scope. |
+| `ctx.ready(&binding)` | Reuses the binding's scope, re-checking only after a notification. |
+
+The same rules apply to services wrapped with `ready()`, which use a
+`ServiceBinding` internally. This allows backpressure to propagate through the
+chain, even if readiness changes while a request is being processed.
+
+Use `ready()` when a child needs its own readiness, independent of its siblings.
+A typical case is a second stage called after an `.await`: its readiness may
+change in the meantime, and with its own scope it is re-checked only when it
+notifies, not every time a sibling changes.
 
 A useful mental model is:
 
@@ -326,7 +518,9 @@ A useful mental model is:
   defines what happens at each step.
 - `ServiceChain` describes how the steps are connected.
 - [`Pipeline`](https://docs.ntex.rs/api/ntex_service/pipeline/struct.Pipeline.html)
-  owns the runnable graph and coordinates shared readiness.
+  owns the runnable graph and its root readiness scope.
+- `ServiceBinding` and `ready()` add independent readiness scopes inside the
+  graph.
 - [`Ctx`](https://docs.ntex.rs/api/ntex_service/struct.Ctx.html)
   controls how execution moves safely between services.
 
@@ -340,6 +534,8 @@ trait Service<St, Req> {
     type Res;
     type Error;
 
+    fn bind(&self, ctx: BindCtx<'_>) {}
+
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error>;
 
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error>;
@@ -352,7 +548,8 @@ The context serves several related purposes:
 
 - It provides access to the pipeline state.
 - It connects services to the pipeline that owns them.
-- It coordinates readiness between services.
+- It coordinates readiness between services through the nearest readiness
+  scope.
 - It allows one service to call another without bypassing backpressure.
 - It participates in orderly shutdown.
 
