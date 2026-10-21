@@ -1,6 +1,6 @@
 # Changes
 
-## [4.5.0] - Unreleased
+## [4.5.0] - 2026-10-21
 
 * Add `bstream::channel_with_notifier()` for notification-invalidated sender
   readiness. Watermark and terminal-state transitions, including receiver drop,
@@ -22,6 +22,10 @@
 * Both limiters keep an independent readiness cache for the wrapped service.
   Capacity notifications preserve that cache; wrapped services must notify their
   own readiness changes. `InFlightService` no longer uses `call_nowait()`.
+
+* Restore timer wheel storage on unwinding and refresh time between expiry
+  passes. Wakers run in place without a notification buffer; timer operations
+  are not reentrant
 
 ## [4.4.0] - 2026-10-20
 
