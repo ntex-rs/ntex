@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, OnceCell, RefCell, RefMut},
+    cell::{Cell, OnceCell, RefCell},
     collections::HashSet,
     fmt,
     future::{Future, poll_fn},
@@ -88,7 +88,8 @@ impl ReadyNotifier {
     /// Callback delivery is coalesced on scopes already executing callbacks.
     ///
     /// A callback panic propagates and skips remaining callbacks, but observers
-    /// are still woken during unwinding.
+    /// are still woken during unwinding. Wakers must not panic: a panicking
+    /// waker skips the remaining wakers, and aborts if already unwinding.
     pub fn notify(&self) {
         let scopes = self.0.scopes.borrow();
         if let [scope] = scopes.as_slice() {
@@ -334,7 +335,7 @@ impl ReadyScope {
     pub(crate) fn observer(&self) -> ReadyObserver {
         ReadyObserver {
             scope: Rc::downgrade(&self.0),
-            idx: self.0.observers.borrow_mut().insert(None),
+            idx: self.0.observers.slots.borrow_mut().insert(None),
         }
     }
 
@@ -356,30 +357,26 @@ impl ReadyScope {
                 return Ok(());
             }
 
-            let mut owner = None;
             let observer = observer.get_or_insert_with(|| self.observer());
-            poll_fn(|cx| {
+            let owner = poll_fn(|cx| {
                 observer.register(cx.waker());
                 if self.is_ready() {
-                    Poll::Ready(())
+                    Poll::Ready(None)
                 } else if self.0.checking.replace(true) {
                     Poll::Pending
                 } else {
-                    owner = Some(CheckOwner(self));
-                    Poll::Ready(())
+                    Poll::Ready(Some(CheckOwner(self)))
                 }
             })
             .await;
 
-            let result = if owner.is_some() {
-                RunCheck::new(self, &mut check).await.map(|generation| {
+            if let Some(owner) = owner {
+                let result = RunCheck::new(self, &mut check).await.map(|generation| {
                     self.set_ready(generation);
-                })
-            } else {
-                Ok(())
-            };
-            drop(owner);
-            result?;
+                });
+                drop(owner);
+                result?;
+            }
             // Cleanup and handoff can reenter and invalidate the success.
         }
     }
@@ -416,10 +413,6 @@ struct ReadyObservers {
 }
 
 impl ReadyObservers {
-    fn borrow_mut(&self) -> RefMut<'_, slab::Slab<Option<Waker>>> {
-        self.slots.borrow_mut()
-    }
-
     fn checker_waker(self: &Rc<Self>) -> Waker {
         let checker = self.checker.get_or_init(|| {
             let idx = CHECKERS.with_borrow_mut(|slots| slots.insert(Rc::downgrade(self)));
@@ -435,7 +428,7 @@ impl ReadyObservers {
     /// Takes registered wakers, except those with `skip` data.
     fn take_wakers(&self, wakers: &mut Wakers, skip: Option<*const ()>) {
         // Waker clone/drop/wake may reenter; keep them outside the borrow.
-        for (_, waker) in self.borrow_mut().iter_mut() {
+        for (_, waker) in self.slots.borrow_mut().iter_mut() {
             if let Some(waker) = waker.take_if(|waker| Some(waker.data()) != skip) {
                 wakers.push(waker);
             }
@@ -544,7 +537,7 @@ pub(crate) struct ReadyObserver {
 impl ReadyObserver {
     pub(crate) fn clear(&self) {
         if let Some(scope) = self.scope.upgrade() {
-            let waker = scope.observers.borrow_mut()[self.idx].take();
+            let waker = scope.observers.slots.borrow_mut()[self.idx].take();
             drop(waker);
         }
     }
@@ -554,7 +547,7 @@ impl ReadyObserver {
         let Some(scope) = self.scope.upgrade() else {
             return false;
         };
-        if scope.observers.borrow_mut()[self.idx]
+        if scope.observers.slots.borrow_mut()[self.idx]
             .as_ref()
             .is_some_and(|prev| prev.will_wake(waker))
         {
@@ -563,7 +556,7 @@ impl ReadyObserver {
 
         // Waker clone/drop implementations can reenter, just like wake.
         let waker = waker.clone();
-        let previous = scope.observers.borrow_mut()[self.idx].replace(waker);
+        let previous = scope.observers.slots.borrow_mut()[self.idx].replace(waker);
         drop(previous);
         true
     }
@@ -572,7 +565,7 @@ impl ReadyObserver {
 impl Drop for ReadyObserver {
     fn drop(&mut self) {
         if let Some(scope) = self.scope.upgrade() {
-            let waker = scope.observers.borrow_mut().remove(self.idx);
+            let waker = scope.observers.slots.borrow_mut().remove(self.idx);
             drop(waker);
         }
     }
@@ -655,18 +648,12 @@ where
                 }
             };
             this.fut = None;
-            match result {
-                Some(Err(err)) => {
-                    this.observer = None;
-                    return Poll::Ready(Err(err));
+            if let Some(result) = result {
+                this.observer = None;
+                result?;
+                if this.scope.is_current(this.generation) {
+                    return Poll::Ready(Ok(this.generation));
                 }
-                Some(Ok(())) => {
-                    this.observer = None;
-                    if this.scope.is_current(this.generation) {
-                        return Poll::Ready(Ok(this.generation));
-                    }
-                }
-                None => {}
             }
             // A check that keeps invalidating its own scope must not starve the executor.
             if restarted {
@@ -821,6 +808,7 @@ mod tests {
                     scope
                         .0
                         .observers
+                        .slots
                         .borrow_mut()
                         .iter()
                         .all(|(_, w)| w.is_none())
@@ -1185,6 +1173,7 @@ mod tests {
                         scope
                             .0
                             .observers
+                            .slots
                             .borrow_mut()
                             .iter()
                             .all(|(_, w)| w.is_none())
@@ -1244,7 +1233,7 @@ mod tests {
         source.notify();
         assert_eq!(latest.wakes(), 2);
         drop(observer);
-        assert!(scope.0.observers.borrow_mut().is_empty());
+        assert!(scope.0.observers.slots.borrow_mut().is_empty());
         assert!(scope.set_ready(scope.generation()));
         source.notify();
         assert!(
@@ -1386,7 +1375,7 @@ mod tests {
         for consume in [false, true] {
             assert!(observer.register(&waker));
             let before = counter.wakes();
-            let borrowed = scope.0.observers.borrow_mut();
+            let borrowed = scope.0.observers.slots.borrow_mut();
             let remote = checker.clone();
             let error = thread::spawn(move || {
                 if consume {
@@ -1557,7 +1546,7 @@ mod tests {
         let hook_scope = scope.clone();
         ON_DROP.with_borrow_mut(|slot| {
             *slot = Some(Box::new(move || {
-                assert_eq!(hook_scope.0.observers.borrow_mut().len(), 1);
+                assert_eq!(hook_scope.0.observers.slots.borrow_mut().len(), 1);
                 hook_source.notify();
             }));
         });
@@ -1569,7 +1558,7 @@ mod tests {
         let hook_ran = ran.clone();
         ON_DROP.with_borrow_mut(|slot| {
             *slot = Some(Box::new(move || {
-                assert!(scope.0.observers.borrow_mut().is_empty());
+                assert!(scope.0.observers.slots.borrow_mut().is_empty());
                 let observer = scope.observer();
                 assert!(observer.register(Waker::noop()));
                 source.notify();
