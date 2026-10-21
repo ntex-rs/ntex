@@ -193,41 +193,29 @@ impl WaitersRef {
             *slot = Some(cx.waker().clone());
         }
 
-        // calculate owner for readiness check
         let cur = self.cur.get();
-        let can_check = if cur == idx {
-            true
-        } else if cur == u32::MAX {
+        if cur == u32::MAX {
             self.cur.set(idx);
-            true
-        } else {
-            false
-        };
-
-        if can_check {
-            // only one readiness check can manage waiters
-            let guard = (!self.running.get()).then(|| {
-                self.running.set(true);
-                RunGuard(self)
-            });
-
-            let result = f(cx);
-
-            if let Some(guard) = guard {
-                mem::forget(guard);
-                if result.is_pending() {
-                    self.queue_wake(idx);
-                } else {
-                    self.notify();
-                }
-                self.running.set(false);
-            }
-            result
-        } else {
+        } else if cur != idx {
             // Another pipeline binding owns the readiness check.
             self.queue_wake(idx);
-            Poll::Pending
+            return Poll::Pending;
         }
+
+        // Only the outermost readiness check manages waiters.
+        if self.running.replace(true) {
+            return f(cx);
+        }
+        let guard = RunGuard(self);
+        let result = f(cx);
+        mem::forget(guard);
+        if result.is_pending() {
+            self.queue_wake(idx);
+        } else {
+            self.notify();
+        }
+        self.running.set(false);
+        result
     }
 
     pub(crate) fn shutdown(&self) {

@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell, future::Future, future::poll_fn, marker::PhantomPinned, ptr, rc::Rc,
+    cell::RefCell, future::Future, future::poll_fn, marker::PhantomPinned, mem, ptr, rc::Rc,
     task::Context, task::Poll, task::Waker,
 };
 
@@ -120,7 +120,6 @@ impl<E> PipelineReadiness<E> {
                     let mut guard = PipelineCheck {
                         readiness: self,
                         fut: None,
-                        active: true,
                     };
                     guard.fut = Some(check());
                     guard.retain();
@@ -150,30 +149,30 @@ impl<E> PipelineReadiness<E> {
         let mut guard = PipelineCheck {
             readiness: self,
             fut: Some(fut),
-            active: true,
         };
-        let result = guard
+        let result = match guard
             .fut
             .as_mut()
             .unwrap()
             .as_mut()
-            .poll(&mut Context::from_waker(&self.checker_waker));
-        if result.is_pending() {
-            guard.retain();
-            return Poll::Pending;
-        }
+            .poll(&mut Context::from_waker(&self.checker_waker))
+        {
+            Poll::Pending => {
+                guard.retain();
+                return Poll::Pending;
+            }
+            Poll::Ready(result) => result,
+        };
         // Drop the future before handing ownership to another task.
         drop(guard.fut.take());
         if guard.cancelled() {
             return Poll::Pending;
         }
-        let result = result.map(|result| {
-            result.map(|generation| {
-                self.scope.set_ready(generation);
-            })
+        let result = result.map(|generation| {
+            self.scope.set_ready(generation);
         });
         drop(guard);
-        result.map(Some)
+        Poll::Ready(Some(result))
     }
 }
 
@@ -189,7 +188,6 @@ impl<E> Drop for CallerCheck<'_, E> {
 struct PipelineCheck<'a, E> {
     readiness: &'a PipelineReadiness<E>,
     fut: Option<BoxFuture<'static, Result<Generation, E>>>,
-    active: bool,
 }
 
 impl<E> PipelineCheck<'_, E> {
@@ -200,23 +198,22 @@ impl<E> PipelineCheck<'_, E> {
         )
     }
 
-    fn retain(&mut self) {
+    fn retain(mut self) {
         if !self.cancelled() {
             self.readiness
                 .checker
                 .replace(Checker::Pipeline(self.fut.take().unwrap()));
-            self.active = false;
+            // The future and ownership have moved back into the pipeline.
+            mem::forget(self);
         }
     }
 }
 
 impl<E> Drop for PipelineCheck<'_, E> {
     fn drop(&mut self) {
-        if self.active {
-            drop(self.fut.take());
-            self.readiness.checker.replace(Checker::Idle);
-            self.readiness.scope.wake_observers();
-        }
+        drop(self.fut.take());
+        self.readiness.checker.replace(Checker::Idle);
+        self.readiness.scope.wake_observers();
     }
 }
 
