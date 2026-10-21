@@ -10,7 +10,14 @@ use super::wheel::{TIMER, TimerEntry};
 ///
 /// Each construction or reset arms one invocation of the retained callback.
 /// The callback may capture `Rc` state; this handle is neither `Send` nor `Sync`
-/// and cannot be cloned. Dropping the handle cancels pending delivery.
+/// and cannot be cloned. Keep the handle alive until the callback should run.
+/// Dropping it cancels pending delivery, including an expired callback that has
+/// not started, and releases its captures. An active invocation retains its
+/// captures until it finishes.
+///
+/// Expiration and cancellation retain the callback for reuse. The callback
+/// implements `Fn`, so use interior mutability for state that changes between
+/// invocations.
 ///
 /// Callbacks run outside wheel access and may create, reset, cancel or drop
 /// timers, including themselves. They must be short, synchronous and
@@ -20,6 +27,37 @@ use super::wheel::{TIMER, TimerEntry};
 /// driver and disarm other timers; remaining callbacks need not be delivered.
 /// Runtime shutdown suppresses pending delivery. A surviving handle retains
 /// its callback and can be explicitly reset in a new runtime on the same thread.
+/// Starting a new runtime does not automatically rearm the handle.
+///
+/// # Examples
+///
+/// Retain local state across invocations, cancel an arm, then reuse the timer:
+///
+/// ```
+/// use std::{cell::Cell, rc::Rc};
+/// use ntex::time::{CallbackTimer, Millis, sleep};
+///
+/// #[ntex::main]
+/// async fn main() {
+///     let calls = Rc::new(Cell::new(0));
+///     let count = calls.clone();
+///     let timer = CallbackTimer::new(Millis::ZERO, move || {
+///         count.set(count.get() + 1);
+///     });
+///     assert_eq!(calls.get(), 0); // Zero duration never invokes inline.
+///     sleep(Millis(50)).await;
+///     assert!(timer.is_elapsed());
+///     assert_eq!(calls.get(), 1);
+///
+///     timer.reset(Millis(1_000));
+///     timer.cancel();
+///     assert!(timer.is_elapsed());
+///
+///     timer.reset(Millis::ZERO);
+///     sleep(Millis(50)).await;
+///     assert_eq!(calls.get(), 2);
+/// }
+/// ```
 pub struct CallbackTimer {
     pub(super) hnd: NonZeroUsize,
     pub(super) state: Rc<CallbackState>,
@@ -27,6 +65,10 @@ pub struct CallbackTimer {
 
 impl CallbackTimer {
     /// Arms a callback after `duration`, using the wheel's rounding and limits.
+    ///
+    /// The base granularity is approximately 16 ms; longer delays use coarser
+    /// rounding, and delays beyond the wheel's capacity (about 24 days) are
+    /// clamped. Callback delivery may be delayed further while the runtime is busy.
     ///
     /// A zero duration waits for a subsequent timer tick, as with [`crate::time::Sleep`];
     /// the callback is never invoked inline.
@@ -71,6 +113,9 @@ impl CallbackTimer {
 
     /// Arms another invocation, invalidating any previous pending delivery.
     ///
+    /// This also suppresses an expired invocation that has been queued but has
+    /// not started. It can be called before or after expiration or cancellation.
+    ///
     /// A zero duration waits for a subsequent tick. Resetting from within the
     /// callback arms a new invocation, which survives completion of the old one.
     pub fn reset(&self, duration: Millis) {
@@ -95,6 +140,9 @@ impl CallbackTimer {
     }
 
     /// Disarms the timer and suppresses pending delivery, retaining the callback.
+    ///
+    /// This also suppresses an expired invocation that has not started. Calling
+    /// this method on an already disarmed timer is harmless.
     ///
     /// An invocation that has already started cannot be interrupted.
     pub fn cancel(&self) {
