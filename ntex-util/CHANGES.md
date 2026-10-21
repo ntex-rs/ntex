@@ -23,9 +23,12 @@
   Capacity notifications preserve that cache; wrapped services must notify their
   own readiness changes. `InFlightService` no longer uses `call_nowait()`.
 
-* Restore timer wheel storage on unwinding and refresh time between expiry
-  passes. Wakers run in place without a notification buffer; timer operations
-  are not reentrant
+* Add local `time::CallbackTimer` with reusable one-shot callbacks, reset,
+  cancellation and shutdown-safe delivery
+
+* Restore timer wheel storage on unwinding. Wakers run in place without a
+  notification buffer; timer operations are not reentrant. Callback delivery
+  runs outside wheel access and refreshes time before processing further timers
 
 ## [4.4.0] - 2026-10-20
 
