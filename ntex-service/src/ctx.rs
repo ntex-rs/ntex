@@ -22,6 +22,8 @@ pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     waiters: &'a WaitersRef,
     scope: &'a ReadyScope,
     call_nowait: bool,
+    // Readiness checks made while handling a call don't wait for the pipeline gate.
+    in_call: bool,
     _t: marker::PhantomData<Rc<Svc>>,
 }
 
@@ -35,6 +37,8 @@ pub(crate) struct WaitersRef {
     /// Reused buffer for wakers collected by `notify`.
     scratch: cell::RefCell<Vec<Waker>>,
     indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
+    /// Wakers of pending call-time checks that bypass the gate owner.
+    calls: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
 }
 
 impl WaitersRef {
@@ -47,6 +51,7 @@ impl WaitersRef {
             running: cell::Cell::new(false),
             shutdown: cell::Cell::new(false),
             indexes: cell::UnsafeCell::new(waiters),
+            calls: cell::UnsafeCell::new(slab::Slab::new()),
             wakers: cell::UnsafeCell::new(Vec::default()),
             scratch: cell::RefCell::default(),
         }
@@ -55,6 +60,11 @@ impl WaitersRef {
     #[allow(clippy::mut_from_ref)]
     pub(crate) fn get(&self) -> &mut slab::Slab<Option<Waker>> {
         unsafe { &mut *self.indexes.get() }
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    fn get_calls(&self) -> &mut slab::Slab<Option<Waker>> {
+        unsafe { &mut *self.calls.get() }
     }
 
     #[allow(clippy::mut_from_ref)]
@@ -92,8 +102,20 @@ impl WaitersRef {
                 wakers.push(waker);
             }
         }
+        self.take_calls(&mut wakers);
 
         self.cur.set(u32::MAX);
+        self.wake_all(wakers);
+    }
+
+    fn take_calls(&self, wakers: &mut Vec<Waker>) {
+        let calls = self.get_calls();
+        if !calls.is_empty() {
+            wakers.extend(calls.iter_mut().filter_map(|(_, waker)| waker.take()));
+        }
+    }
+
+    fn wake_all(&self, mut wakers: Vec<Waker>) {
         for waker in wakers.drain(..) {
             waker.wake();
         }
@@ -102,6 +124,62 @@ impl WaitersRef {
         if wakers.capacity() > scratch.capacity() {
             *scratch = wakers;
         }
+    }
+
+    /// Wakes the gate owner and pending call-time checks after a call-time
+    /// check that bypassed the owner completes or is dropped.
+    ///
+    /// The check may have replaced their wakers in a shared service. Nothing to
+    /// do without an owner: pending call-time checks were woken when the owner
+    /// released the gate, and later polls take the free gate.
+    fn wake_checks(&self) {
+        let cur = self.cur.get();
+        if cur == u32::MAX {
+            return;
+        }
+        let mut wakers = self.scratch.take();
+        if let Some(Some(waker)) = self.get().get(cur as usize) {
+            wakers.push(waker.clone());
+        }
+        self.take_calls(&mut wakers);
+        self.wake_all(wakers);
+    }
+
+    fn remove_call(&self, key: &mut Option<u32>) {
+        if let Some(key) = key.take() {
+            self.get_calls().remove(key as usize);
+        }
+    }
+
+    /// Runs a readiness check made while handling a call.
+    ///
+    /// Takes the gate if it is free. Otherwise runs without waiting for the
+    /// owner, which can wait for resources held by this call.
+    fn run_call<F, R>(&self, idx: u32, key: &mut Option<u32>, cx: &mut Context<'_>, f: F) -> Poll<R>
+    where
+        F: FnOnce(&mut Context<'_>) -> Poll<R>,
+    {
+        let cur = self.cur.get();
+        if cur == u32::MAX || cur == idx {
+            self.remove_call(key);
+            return self.run(idx, cx, f);
+        }
+
+        let result = f(cx);
+        if result.is_pending() {
+            let calls = self.get_calls();
+            if let Some(slot) = key.and_then(|key| calls.get_mut(key as usize)) {
+                if !slot.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
+                    *slot = Some(cx.waker().clone());
+                }
+            } else {
+                *key = Some(calls.insert(Some(cx.waker().clone())) as u32);
+            }
+        } else {
+            self.remove_call(key);
+            self.wake_checks();
+        }
+        result
     }
 
     pub(crate) fn run<F, R>(&self, idx: u32, cx: &mut Context<'_>, f: F) -> Poll<R>
@@ -202,6 +280,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             st,
             scope: &waiters.scope,
             call_nowait: false,
+            in_call: false,
             _t: marker::PhantomData,
         }
     }
@@ -221,6 +300,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             waiters: self.waiters,
             scope,
             call_nowait: self.call_nowait,
+            in_call: self.in_call,
             _t: marker::PhantomData,
         }
     }
@@ -231,6 +311,12 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     pub(crate) fn without_bypass(mut self) -> Self {
         self.call_nowait = false;
+        self
+    }
+
+    /// Marks a context passed to [`Service::call`].
+    pub(crate) fn into_call(mut self) -> Self {
+        self.in_call = true;
         self
     }
 
@@ -299,6 +385,8 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             check: RunCheck::new(self.scope, move || svc.ready(ctx.cast())),
             waiters: self.waiters,
             idx: self.idx,
+            in_call: self.in_call,
+            key: None,
             active: false,
             _t: marker::PhantomData,
         }
@@ -318,6 +406,10 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     /// allocation, while invalidation before dispatch is still observed.
     /// Raw [`Self::ready`] calls do not populate the upstream cache; use
     /// [`crate::ready()`] for independent child caching.
+    ///
+    /// Readiness checks made while handling a call, including this one, do not
+    /// wait for another binding's pipeline-level readiness check, which may itself
+    /// be waiting for resources held by the call. They may run concurrently with it.
     ///
     /// ```
     /// use ntex_service::{Ctx, Service};
@@ -346,7 +438,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
         let ctx = self.without_bypass().cast();
         ctx.ready_cached(svc).await?;
 
-        svc.call(req, ctx).await
+        svc.call(req, ctx.into_call()).await
     }
 
     pub(crate) async fn ready_cached<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
@@ -415,7 +507,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     where
         S: Service<St, Req>,
     {
-        let mut ctx = self.cast();
+        let mut ctx = self.cast().into_call();
         ctx.call_nowait = true;
         svc.call(req, ctx).await
     }
@@ -438,6 +530,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             waiters: self.waiters,
             scope: self.scope,
             call_nowait: self.call_nowait,
+            in_call: self.in_call,
             _t: marker::PhantomData,
         }
     }
@@ -475,6 +568,9 @@ struct ReadyCall<'a, F, Fut, O> {
     check: RunCheck<'a, F, Fut>,
     waiters: &'a WaitersRef,
     idx: u32,
+    in_call: bool,
+    // Pending call-time check that bypassed the gate owner.
+    key: Option<u32>,
     // A started check that has not completed.
     active: bool,
     _t: marker::PhantomData<O>,
@@ -482,7 +578,10 @@ struct ReadyCall<'a, F, Fut, O> {
 
 impl<F, Fut, O> Drop for ReadyCall<'_, F, Fut, O> {
     fn drop(&mut self) {
-        if self.active && self.waiters.cur.get() == self.idx {
+        if self.key.is_some() {
+            self.waiters.remove_call(&mut self.key);
+            self.waiters.wake_checks();
+        } else if self.active && self.waiters.cur.get() == self.idx {
             self.waiters.notify();
         }
     }
@@ -502,7 +601,12 @@ where
         loop {
             this.active = true;
             let mut check = unsafe { pin::Pin::new_unchecked(&mut this.check) };
-            let result = this.waiters.run(this.idx, cx, |cx| check.as_mut().poll(cx));
+            let f = |cx: &mut Context<'_>| check.as_mut().poll(cx);
+            let result = if this.in_call {
+                this.waiters.run_call(this.idx, &mut this.key, cx, f)
+            } else {
+                this.waiters.run(this.idx, cx, f)
+            };
             let Poll::Ready(result) = result else {
                 return Poll::Pending;
             };
@@ -857,5 +961,226 @@ mod tests {
 
         assert_eq!(cnt.get(), 1);
         assert_eq!(&*data.borrow(), &["srv1", "srv2"]);
+    }
+
+    /// Readiness with a single waker slot, a later check replaces the earlier waker.
+    #[derive(Clone)]
+    struct SingleWaker(Rc<(Cell<bool>, RefCell<Option<Waker>>, ReadyNotifier)>);
+
+    impl SingleWaker {
+        fn new(open: bool) -> Self {
+            Self(Rc::new((
+                Cell::new(open),
+                RefCell::new(None),
+                ReadyNotifier::new(),
+            )))
+        }
+
+        fn close(&self) {
+            self.0.0.set(false);
+            self.0.2.notify();
+        }
+
+        fn open(&self, wake: bool) {
+            self.0.0.set(true);
+            if wake && let Some(waker) = self.0.1.borrow_mut().take() {
+                waker.wake();
+            }
+        }
+    }
+
+    impl Service<(), ()> for SingleWaker {
+        type Res = ();
+        type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(&self.0.2);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
+            poll_fn(|cx| {
+                if self.0.0.get() {
+                    Poll::Ready(Ok(()))
+                } else {
+                    *self.0.1.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+            })
+            .await
+        }
+
+        async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    /// Takes a slot of a limit, pauses, then calls the inner service.
+    struct Limited {
+        inner: SingleWaker,
+        cap: usize,
+        used: Cell<usize>,
+        waiters: RefCell<Vec<Waker>>,
+        changed: ReadyNotifier,
+        pause: condition::Condition,
+    }
+
+    impl Limited {
+        fn new(inner: SingleWaker, cap: usize, pause: &condition::Condition) -> Self {
+            Self {
+                inner,
+                cap,
+                used: Cell::new(0),
+                waiters: RefCell::default(),
+                changed: ReadyNotifier::new(),
+                pause: pause.clone(),
+            }
+        }
+    }
+
+    impl Service<(), ()> for Limited {
+        type Res = ();
+        type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(&self.changed);
+            ctx.bind::<_, (), ()>(&self.inner);
+        }
+
+        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), ()> {
+            poll_fn(|cx| {
+                if self.used.get() < self.cap {
+                    Poll::Ready(())
+                } else {
+                    self.waiters.borrow_mut().push(cx.waker().clone());
+                    Poll::Pending
+                }
+            })
+            .await;
+            ctx.ready(&self.inner).await
+        }
+
+        async fn call(&self, (): (), ctx: Ctx<'_, Self>) -> Result<(), ()> {
+            self.used.set(self.used.get() + 1);
+            if self.used.get() == self.cap {
+                self.changed.notify();
+            }
+            self.pause.wait().ready().await;
+            let result = ctx.call(&self.inner, ()).await;
+            self.used.set(self.used.get() - 1);
+            for waker in self.waiters.borrow_mut().drain(..) {
+                waker.wake();
+            }
+            result
+        }
+    }
+
+    fn spawn_ready(pl: &Pipeline<(), (), ()>, done: &Rc<Cell<usize>>) {
+        let (pl, done) = (pl.bind(), done.clone());
+        spawn(async move {
+            pl.ready().await.unwrap();
+            done.set(done.get() + 1);
+        });
+    }
+
+    fn spawn_call(pl: &Pipeline<(), (), ()>, done: &Rc<Cell<usize>>) -> oneshot::Sender<()> {
+        let (tx, rx) = oneshot::channel();
+        let (pl, done) = (pl.bind(), done.clone());
+        spawn(async move {
+            if let ntex::util::Either::Right(result) = select(rx, pl.call(())).await {
+                result.unwrap();
+                done.set(done.get() + 1);
+            }
+        });
+        tx
+    }
+
+    async fn settle() {
+        time::sleep(time::Millis(10)).await;
+    }
+
+    #[ntex::test]
+    async fn call_time_check_does_not_wait_for_owner_waiting_on_call() {
+        let inner = SingleWaker::new(true);
+        let pause = condition::Condition::new();
+        let pl = Pipeline::new((), Limited::new(inner, 1, &pause));
+        let (calls, checks) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+
+        let _call = spawn_call(&pl, &calls);
+        settle().await;
+        // Owns the readiness gate and waits for the slot held by the call.
+        spawn_ready(&pl, &checks);
+        settle().await;
+        assert_eq!((calls.get(), checks.get()), (0, 0));
+
+        pause.notify(());
+        settle().await;
+        assert_eq!((calls.get(), checks.get()), (1, 1));
+    }
+
+    #[ntex::test]
+    async fn call_time_checks_wake_owner_and_each_other() {
+        let inner = SingleWaker::new(true);
+        let pause = condition::Condition::new();
+        let pl = Pipeline::new((), Limited::new(inner.clone(), 10, &pause));
+        let (calls, checks) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+
+        let _call1 = spawn_call(&pl, &calls);
+        let _call2 = spawn_call(&pl, &calls);
+        settle().await;
+        inner.close();
+        // Owns the readiness gate and waits for the inner service.
+        spawn_ready(&pl, &checks);
+        settle().await;
+
+        // Both calls bypass the owner and replace the inner waker.
+        pause.notify(());
+        settle().await;
+        assert_eq!((calls.get(), checks.get()), (0, 0));
+
+        // Only the last stored waker is woken.
+        inner.open(true);
+        settle().await;
+        assert_eq!((calls.get(), checks.get()), (2, 1));
+    }
+
+    #[ntex::test]
+    async fn dropped_call_time_check_wakes_owner() {
+        let inner = SingleWaker::new(true);
+        let pause = condition::Condition::new();
+        let pl = Pipeline::new((), Limited::new(inner.clone(), 10, &pause));
+        let (calls, checks) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+
+        let call = spawn_call(&pl, &calls);
+        settle().await;
+        inner.close();
+        spawn_ready(&pl, &checks);
+        settle().await;
+        pause.notify(());
+        settle().await;
+
+        inner.open(false);
+        let _ = call.send(());
+        settle().await;
+        assert_eq!((calls.get(), checks.get()), (0, 1));
+    }
+
+    #[ntex::test]
+    async fn call_time_checks_take_free_gate() {
+        let inner = SingleWaker::new(true);
+        let pause = condition::Condition::new();
+        let pl = Pipeline::new((), Limited::new(inner.clone(), 10, &pause));
+        let calls = Rc::new(Cell::new(0));
+
+        let _call1 = spawn_call(&pl, &calls);
+        let _call2 = spawn_call(&pl, &calls);
+        settle().await;
+        inner.close();
+        pause.notify(());
+        settle().await;
+        assert_eq!(calls.get(), 0);
+
+        inner.open(true);
+        settle().await;
+        assert_eq!(calls.get(), 2);
     }
 }
