@@ -598,6 +598,7 @@ where
     fn poll(self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: `check` is pinned in place.
         let this = unsafe { self.get_unchecked_mut() };
+        let mut restarted = false;
         loop {
             this.active = true;
             let mut check = unsafe { pin::Pin::new_unchecked(&mut this.check) };
@@ -616,13 +617,20 @@ where
                 Ok(generation) if !this.check.scope().is_current(generation) => {}
                 result => return Poll::Ready(result.map(O::from)),
             }
+            // Waking other checks can invalidate this one on every pass, see `RunCheck`.
+            if restarted {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            restarted = true;
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, cell::RefCell, future::poll_fn};
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    use std::{cell::Cell, cell::RefCell, future::poll_fn, task::Wake};
 
     use ntex::channel::{condition, oneshot};
     use ntex::{rt::spawn, time, util::lazy, util::select};
@@ -1182,5 +1190,86 @@ mod tests {
         inner.open(true);
         settle().await;
         assert_eq!(calls.get(), 2);
+    }
+
+    /// Runs `0` after `rx` resolves; readiness also depends on `1`.
+    struct Delayed(
+        SingleWaker,
+        SingleWaker,
+        RefCell<Option<oneshot::Receiver<()>>>,
+    );
+
+    impl Service<(), ()> for Delayed {
+        type Res = ();
+        type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.bind(&self.0);
+            ctx.bind(&self.1);
+        }
+
+        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), ()> {
+            ctx.ready(&self.1).await?;
+            ctx.ready(&self.0).await
+        }
+
+        async fn call(&self, (): (), ctx: Ctx<'_, Self>) -> Result<(), ()> {
+            let rx = self.2.borrow_mut().take().unwrap();
+            let _ = rx.await;
+            ctx.call(&self.0, ()).await
+        }
+    }
+
+    thread_local! {
+        static WAKE_NOTIFIER: RefCell<Option<ReadyNotifier>> = const { RefCell::new(None) };
+    }
+
+    /// Invalidates readiness whenever it is woken.
+    struct NotifyingWaker(AtomicUsize);
+
+    impl Wake for NotifyingWaker {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            assert!(
+                self.0.fetch_add(1, Ordering::Relaxed) < 100,
+                "readiness spins"
+            );
+            WAKE_NOTIFIER.with(|n| n.borrow().as_ref().unwrap().notify());
+        }
+    }
+
+    #[ntex::test]
+    async fn call_check_yields_when_waking_owner_invalidates_it() {
+        let inner = SingleWaker::new(true);
+        let gate = SingleWaker::new(true);
+        let (inner_h, gate_h) = (SingleWaker(inner.0.clone()), SingleWaker(gate.0.clone()));
+        let (tx, rx) = oneshot::channel();
+        let pl = Pipeline::new((), Delayed(inner, gate, RefCell::new(Some(rx))));
+        let mut noop = Context::from_waker(Waker::noop());
+
+        let caller = pl.bind();
+        let mut call = Box::pin(caller.call(()));
+        assert!(call.as_mut().poll(&mut noop).is_pending());
+
+        // The owner's waker invalidates the call's nested check on every wake.
+        gate_h.close();
+        WAKE_NOTIFIER.with(|n| *n.borrow_mut() = Some(inner_h.0.2.clone()));
+        let owner = pl.bind();
+        let mut ready = Box::pin(owner.ready());
+        let wakes = Arc::new(NotifyingWaker(AtomicUsize::new(0)));
+        let waker = Waker::from(wakes.clone());
+        assert!(
+            ready
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+
+        let _ = tx.send(());
+        assert!(call.as_mut().poll(&mut noop).is_pending());
+        assert!(wakes.0.load(Ordering::Relaxed) < 10);
     }
 }

@@ -50,6 +50,11 @@ where
     /// Cancelling the active caller drops its check and lets another waiter
     /// take ownership. Returns successfully if pipeline shutdown has started,
     /// like [`Self::poll_ready`].
+    ///
+    /// The first caller that finds readiness invalid runs the shared check in its
+    /// own future, and other waiters wait for it. Like a held lock, a pending
+    /// future must be polled or dropped: keeping it alive without polling stalls
+    /// every other readiness waiter on this pipeline.
     pub async fn ready(&self) -> Result<(), Err> {
         let mut ready = std::pin::pin!(self.api.ready(0));
         future::poll_fn(|cx| {
@@ -191,6 +196,11 @@ where
     ///
     /// Reuses valid shared readiness without consuming it or allocating a
     /// readiness future.
+    ///
+    /// The first caller that finds readiness invalid runs the shared check in its
+    /// own future, and other waiters wait for it. Like a held lock, a pending
+    /// future must be polled or dropped: keeping it alive without polling stalls
+    /// every other readiness waiter on this pipeline.
     pub async fn ready(&self) -> Result<(), Err> {
         self.api.ready(self.idx).await
     }
