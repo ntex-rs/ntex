@@ -37,6 +37,12 @@ impl<S> ServiceBinding<S> {
         }
     }
 
+    /// Enters this binding's scope from a scope that has bound it.
+    fn enter<'a, T, St>(&'a self, ctx: Ctx<'a, Self, St>) -> Ctx<'a, T, St> {
+        ctx.scope().assert_dependency(&self.scope);
+        ctx.with_scope(&self.scope)
+    }
+
     #[cfg(test)]
     pub(crate) fn is_ready(&self) -> bool {
         self.scope.is_ready()
@@ -62,15 +68,12 @@ where
     }
 
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        ctx.scope().assert_dependency(&self.scope);
-        self.scope
-            .check(|| self.service.ready(ctx.with_scope(&self.scope)))
-            .await
+        let ctx = self.enter(ctx);
+        self.scope.check(|| self.service.ready(ctx)).await
     }
 
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        ctx.scope().assert_dependency(&self.scope);
-        let ctx = ctx.with_scope::<Self>(&self.scope);
+        let ctx = self.enter::<Self, _>(ctx);
         if !ctx.is_call_nowait() {
             ctx.ready_cached(self).await?;
         }
@@ -78,8 +81,7 @@ where
     }
 
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        ctx.scope().assert_dependency(&self.scope);
-        self.service.shutdown(ctx.with_scope(&self.scope)).await;
+        self.service.shutdown(self.enter(ctx)).await;
     }
 }
 
@@ -1064,6 +1066,66 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_owned_readiness_rejects_remote_wakes() {
+        for stateful in [false, true] {
+            let probe = Probe::new();
+            probe.0.available.set(false);
+            let pl = Pipeline::new(State(10), probe.clone());
+            let state_pl = PipelineState::new(probe.clone());
+            let poll = |cx: &mut Context<'_>| {
+                if stateful {
+                    state_pl.poll_ready(cx, &State(10))
+                } else {
+                    pl.poll_ready(cx)
+                }
+            };
+            let counter = Arc::new(Counter::default());
+            let waker = Waker::from(counter.clone());
+            let mut cx = Context::from_waker(&waker);
+            assert!(poll(&mut cx).is_pending());
+            let checker = probe.0.waker.borrow_mut().take().unwrap();
+            let remote = checker.clone();
+            assert!(std::thread::spawn(move || remote.wake()).join().is_err());
+            assert_eq!(counter.0.load(Ordering::Relaxed), 0);
+
+            probe.0.available.set(true);
+            checker.wake();
+            assert_eq!(counter.0.load(Ordering::Relaxed), 1);
+            assert_eq!(poll(&mut cx), Poll::Ready(Ok(())));
+            assert_eq!(probe.0.starts.get(), 1);
+            assert_eq!(probe.0.active.get(), 0);
+        }
+    }
+
+    #[test]
+    fn service_call_task_wakers_still_support_remote_wakes() {
+        let captured = Rc::new(RefCell::new(None));
+        let slot = captured.clone();
+        let service = crate::fn_service(move |(): ()| {
+            let slot = slot.clone();
+            async move {
+                poll_fn(|cx| {
+                    *slot.borrow_mut() = Some(cx.waker().clone());
+                    Poll::<Result<(), ()>>::Pending
+                })
+                .await
+            }
+        });
+        let pl = Pipeline::new((), service);
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter.clone());
+        let mut call = Box::pin(pl.call(()));
+        assert!(
+            call.as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        let remote = captured.borrow_mut().take().unwrap();
+        std::thread::spawn(move || remote.wake()).join().unwrap();
+        assert_eq!(counter.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn pipeline_callers_cancel_and_restart_one_checker_with_independent_observers() {
         let probe = Probe::new();
         probe.0.available.set(false);
@@ -1181,7 +1243,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_checker_wakes_every_live_observer_even_from_another_thread() {
+    fn retained_checker_wakes_every_live_observer_on_its_owning_thread() {
         let probe = Probe::new();
         probe.0.available.set(false);
         let pl = Pipeline::new(State(0), probe.clone());
@@ -1214,7 +1276,7 @@ mod tests {
         );
         drop(second);
         let wake = probe.0.waker.borrow_mut().take().unwrap();
-        std::thread::spawn(move || wake.wake()).join().unwrap();
+        wake.wake();
         assert!(counters[0].0.load(Ordering::Relaxed) > 0);
         assert!(counters[1].0.load(Ordering::Relaxed) > 0);
         assert_eq!(counters[2].0.load(Ordering::Relaxed), 0);

@@ -97,6 +97,7 @@ where
     /// Registers the task for readiness changes and reuses valid shared
     /// readiness. A pending check is retained by the pipeline, even if this
     /// task stops polling; other callers can continue driving it.
+    /// The retained check and its wake sources run on this pipeline's thread.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>> {
         self.api.poll_ready(cx)
     }

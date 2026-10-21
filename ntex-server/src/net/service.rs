@@ -167,6 +167,7 @@ impl Service<(), Connection> for StreamService {
     type Error = ();
 
     fn bind(&self, ctx: BindCtx<'_>) {
+        self.conns.bind(&ctx);
         for service in &self.services {
             service.bind(&ctx);
         }

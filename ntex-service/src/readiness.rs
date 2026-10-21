@@ -1,12 +1,17 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell, RefMut},
     collections::HashSet,
     fmt,
     future::{Future, poll_fn},
+    marker::PhantomData,
     pin::Pin,
     rc::{Rc, Weak},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll, Wake, Waker},
+    thread::{self, ThreadId},
 };
 
 /// A reusable callback invoked when a readiness scope receives a notification.
@@ -85,28 +90,21 @@ impl ReadyNotifier {
     /// A callback panic propagates and skips remaining callbacks, but observers
     /// are still woken during unwinding.
     pub fn notify(&self) {
-        let single = {
-            let scopes = self.0.scopes.borrow();
-            match scopes.as_slice() {
-                [] => return,
-                [scope] => Some(scope.upgrade()),
-                _ => None,
+        let scopes = self.0.scopes.borrow();
+        if let [scope] = scopes.as_slice() {
+            let scope = scope.upgrade();
+            drop(scopes);
+            if let Some(scope) = scope {
+                invalidate_scope(scope, true);
             }
-        };
-        match single {
-            Some(Some(scope)) => invalidate_scope(scope, true),
-            Some(None) => {}
-            None => {
-                let affected = self
-                    .0
-                    .scopes
-                    .borrow()
-                    .iter()
-                    .filter_map(Weak::upgrade)
-                    .map(|scope| (scope, 0))
-                    .collect();
-                invalidate_scopes(affected, true);
-            }
+        } else {
+            let affected: Vec<_> = scopes
+                .iter()
+                .filter_map(Weak::upgrade)
+                .map(|scope| (scope, 0))
+                .collect();
+            drop(scopes);
+            invalidate_scopes(affected, true);
         }
     }
 }
@@ -118,15 +116,7 @@ fn invalidate_scope(scope: Rc<ScopeInner>, notify_callbacks: bool) {
         return invalidate_scopes(vec![(scope, 0)], notify_callbacks);
     }
     scope.invalidate(true);
-    let count = if notify_callbacks {
-        scope.callbacks.borrow().len()
-    } else {
-        0
-    };
-    let mut wakers = Vec::new();
-    scope.take_wakers(&mut wakers);
-    let _wake = NotifyWakers(wakers);
-    scope.notify_callbacks(count);
+    notify_scopes(&mut [(scope, 0)], notify_callbacks);
 }
 
 /// Affected graphs up to this size are deduplicated by linear scan.
@@ -158,17 +148,21 @@ fn invalidate_scopes(mut affected: Vec<(Rc<ScopeInner>, usize)>, notify_callback
         }
         idx += 1;
     }
+    notify_scopes(&mut affected, notify_callbacks);
+}
 
+/// Runs callbacks of invalidated scopes, then wakes their observers, even if a
+/// callback panics.
+fn notify_scopes(affected: &mut [(Rc<ScopeInner>, usize)], notify_callbacks: bool) {
     // Freeze callback counts and drain wakers before user code can register again.
-    let mut wakers = Vec::new();
-    for (scope, count) in &mut affected {
+    let mut wakers = Wakers::default();
+    for (scope, count) in &mut *affected {
         if notify_callbacks {
             *count = scope.callbacks.borrow().len();
         }
-        scope.take_wakers(&mut wakers);
+        scope.observers.take_wakers(&mut wakers, None);
     }
-    let _wake = NotifyWakers(wakers);
-    for (scope, count) in &affected {
+    for (scope, count) in &*affected {
         scope.notify_callbacks(*count);
     }
 }
@@ -191,11 +185,31 @@ impl Drop for NotifyCallbacks<'_> {
     }
 }
 
-struct NotifyWakers(Vec<Waker>);
+/// Wakers taken from observers, woken in order on drop.
+///
+/// Does not allocate for a single waker.
+#[derive(Default)]
+struct Wakers {
+    first: Option<Waker>,
+    rest: Vec<Waker>,
+}
 
-impl Drop for NotifyWakers {
+impl Wakers {
+    fn push(&mut self, waker: Waker) {
+        if self.first.is_none() {
+            self.first = Some(waker);
+        } else {
+            self.rest.push(waker);
+        }
+    }
+}
+
+impl Drop for Wakers {
     fn drop(&mut self) {
-        for waker in self.0.drain(..) {
+        if let Some(waker) = self.first.take() {
+            waker.wake();
+        }
+        for waker in self.rest.drain(..) {
             waker.wake();
         }
     }
@@ -209,9 +223,32 @@ struct SourceInner {
 impl Drop for SourceInner {
     fn drop(&mut self) {
         let ptr = std::ptr::from_ref(self);
-        for scope in self.scopes.get_mut().drain(..).filter_map(|w| w.upgrade()) {
-            scope.sources.borrow_mut().retain(|w| w.as_ptr() != ptr);
-        }
+        unlink(self.scopes.get_mut(), ptr, |scope| &scope.sources);
+    }
+}
+
+/// Adds `item` unless already linked, returns whether it was added.
+fn link<T>(links: &RefCell<Vec<Weak<T>>>, item: &Rc<T>) -> bool {
+    let mut links = links.borrow_mut();
+    let new = !contains(&links, item);
+    if new {
+        links.push(Rc::downgrade(item));
+    }
+    new
+}
+
+fn contains<T>(links: &[Weak<T>], item: &Rc<T>) -> bool {
+    links.iter().any(|w| w.as_ptr() == Rc::as_ptr(item))
+}
+
+/// Drops the links, removing `ptr` from each live item's back-links.
+fn unlink<T, U>(
+    links: &mut Vec<Weak<T>>,
+    ptr: *const U,
+    back: impl Fn(&T) -> &RefCell<Vec<Weak<U>>>,
+) {
+    for item in links.drain(..).filter_map(|w| w.upgrade()) {
+        back(&item).borrow_mut().retain(|w| w.as_ptr() != ptr);
     }
 }
 
@@ -268,10 +305,7 @@ impl ReadyScope {
 
     /// Subscribes during initialization of the service using this source.
     pub(crate) fn subscribe(&self, source: &ReadyNotifier) {
-        let ptr = Rc::as_ptr(&source.0);
-        let mut sources = self.0.sources.borrow_mut();
-        if !sources.iter().any(|w| w.as_ptr() == ptr) {
-            sources.push(Rc::downgrade(&source.0));
+        if link(&self.0.sources, &source.0) {
             source.0.scopes.borrow_mut().push(Rc::downgrade(&self.0));
         }
     }
@@ -285,26 +319,14 @@ impl ReadyScope {
 
     /// Registers a child during service binding.
     pub(crate) fn depend_on(&self, child: &Self) {
-        if Rc::ptr_eq(&self.0, &child.0) {
-            return;
-        }
-        let ptr = Rc::as_ptr(&child.0);
-        let mut children = self.0.children.borrow_mut();
-        if !children.iter().any(|w| w.as_ptr() == ptr) {
-            children.push(Rc::downgrade(&child.0));
+        if !Rc::ptr_eq(&self.0, &child.0) && link(&self.0.children, &child.0) {
             child.0.parents.borrow_mut().push(Rc::downgrade(&self.0));
         }
     }
 
     pub(crate) fn assert_dependency(&self, child: &Self) {
         assert!(
-            Rc::ptr_eq(&self.0, &child.0)
-                || self
-                    .0
-                    .children
-                    .borrow()
-                    .iter()
-                    .any(|w| w.as_ptr() == Rc::as_ptr(&child.0)),
+            Rc::ptr_eq(&self.0, &child.0) || contains(&self.0.children.borrow(), &child.0),
             "ServiceBinding must be registered by Service::bind before use"
         );
     }
@@ -312,12 +334,12 @@ impl ReadyScope {
     pub(crate) fn observer(&self) -> ReadyObserver {
         ReadyObserver {
             scope: Rc::downgrade(&self.0),
-            idx: self.0.observers.0.lock().unwrap().insert(None),
+            idx: self.0.observers.borrow_mut().insert(None),
         }
     }
 
     pub(crate) fn checker_waker(&self) -> Waker {
-        Waker::from(Arc::new(CheckerWake(Arc::downgrade(&self.0.observers))))
+        self.0.observers.checker_waker()
     }
 
     /// Drives or joins a shared check without allocating on a cached success.
@@ -362,22 +384,9 @@ impl ReadyScope {
         }
     }
 
-    /// Checks raw services without borrowing the enclosing scope's cached success.
-    pub(crate) fn check_uncached<F, Fut, E>(&self, check: F) -> RunCheck<'_, F, Fut>
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = Result<(), E>>,
-    {
-        RunCheck::new(self, check)
-    }
-
     /// Schedules observers without changing cached readiness or generations.
     pub(crate) fn wake_observers(&self) {
-        let mut wakers = Vec::new();
-        self.0.take_wakers(&mut wakers);
-        for waker in wakers {
-            waker.wake();
-        }
+        self.0.observers.take_wakers(&mut Wakers::default(), None);
     }
 }
 
@@ -391,22 +400,67 @@ struct ScopeInner {
     sources: RefCell<Vec<Weak<SourceInner>>>,
     parents: RefCell<Vec<Weak<Self>>>,
     children: RefCell<Vec<Weak<Self>>>,
-    observers: Arc<ReadyObservers>,
+    observers: Rc<ReadyObservers>,
 }
 
-// Readiness scopes are local, but a future may send its waker to another thread.
+thread_local! {
+    static THREAD_ID: ThreadId = thread::current().id();
+    static CHECKERS: RefCell<slab::Slab<Weak<ReadyObservers>>> = RefCell::default();
+}
+
 #[derive(Debug, Default)]
-struct ReadyObservers(Mutex<slab::Slab<Option<Waker>>>);
+struct ReadyObservers {
+    slots: RefCell<slab::Slab<Option<Waker>>>,
+    checker: OnceCell<Arc<CheckerWake>>,
+    _local: PhantomData<Rc<()>>,
+}
 
 impl ReadyObservers {
-    fn take_wakers(&self, wakers: &mut Vec<Waker>) {
-        for (_, waker) in self.0.lock().unwrap().iter_mut() {
-            wakers.extend(waker.take());
+    fn borrow_mut(&self) -> RefMut<'_, slab::Slab<Option<Waker>>> {
+        self.slots.borrow_mut()
+    }
+
+    fn checker_waker(self: &Rc<Self>) -> Waker {
+        let checker = self.checker.get_or_init(|| {
+            let idx = CHECKERS.with_borrow_mut(|slots| slots.insert(Rc::downgrade(self)));
+            Arc::new(CheckerWake {
+                owner: THREAD_ID.with(|id| *id),
+                idx,
+                closed: AtomicBool::new(false),
+            })
+        });
+        Waker::from(checker.clone())
+    }
+
+    /// Takes registered wakers, except those with `skip` data.
+    fn take_wakers(&self, wakers: &mut Wakers, skip: Option<*const ()>) {
+        // Waker clone/drop/wake may reenter; keep them outside the borrow.
+        for (_, waker) in self.borrow_mut().iter_mut() {
+            if let Some(waker) = waker.take_if(|waker| Some(waker.data()) != skip) {
+                wakers.push(waker);
+            }
         }
     }
 }
 
-struct CheckerWake(std::sync::Weak<ReadyObservers>);
+impl Drop for ReadyObservers {
+    fn drop(&mut self) {
+        if let Some(checker) = self.checker.get() {
+            // Invalidate old wakers before their registry slot can be reused.
+            checker.closed.store(true, Ordering::Release);
+            // The registry may already be destroyed during thread-local teardown.
+            let _ = CHECKERS.try_with(|slots| slots.borrow_mut().remove(checker.idx));
+        }
+    }
+}
+
+// Only thread-safe routing metadata escapes the local observer storage.
+#[derive(Debug)]
+struct CheckerWake {
+    owner: ThreadId,
+    idx: usize,
+    closed: AtomicBool,
+}
 
 impl Wake for CheckerWake {
     fn wake(self: Arc<Self>) {
@@ -414,22 +468,21 @@ impl Wake for CheckerWake {
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        if let Some(observers) = self.0.upgrade() {
-            // Wake outside the lock, without allocating for a single observer.
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
+        assert!(
+            THREAD_ID.with(|id| *id == self.owner),
+            "ntex-service readiness observers can only be accessed on their owning thread"
+        );
+        // Local destructors may wake a checker after the registry is destroyed.
+        if let Ok(Some(observers)) =
+            CHECKERS.try_with(|slots| slots.borrow().get(self.idx).and_then(Weak::upgrade))
+        {
             // Checks polled by this waker register it too. Waking it would only
             // repeat this pass, so it stays registered for later notifications.
             let this = Arc::as_ptr(self).cast::<()>();
-            let (mut first, mut rest) = (None, Vec::new());
-            for (_, waker) in observers.0.lock().unwrap().iter_mut() {
-                if let Some(waker) = waker.take_if(|waker| waker.data() != this) {
-                    if first.is_none() {
-                        first = Some(waker);
-                    } else {
-                        rest.push(waker);
-                    }
-                }
-            }
-            first.into_iter().chain(rest).for_each(Waker::wake);
+            observers.take_wakers(&mut Wakers::default(), Some(this));
         }
     }
 }
@@ -470,29 +523,14 @@ impl ScopeInner {
         self.generation.set(generation);
         self.ready.set(false);
     }
-
-    fn take_wakers(&self, wakers: &mut Vec<Waker>) {
-        self.observers.take_wakers(wakers);
-    }
 }
 
 impl Drop for ScopeInner {
     fn drop(&mut self) {
         let ptr = std::ptr::from_ref(self);
-        for source in self.sources.get_mut().drain(..).filter_map(|w| w.upgrade()) {
-            source.scopes.borrow_mut().retain(|w| w.as_ptr() != ptr);
-        }
-        for child in self
-            .children
-            .get_mut()
-            .drain(..)
-            .filter_map(|w| w.upgrade())
-        {
-            child.parents.borrow_mut().retain(|w| w.as_ptr() != ptr);
-        }
-        for parent in self.parents.get_mut().drain(..).filter_map(|w| w.upgrade()) {
-            parent.children.borrow_mut().retain(|w| w.as_ptr() != ptr);
-        }
+        unlink(self.sources.get_mut(), ptr, |source| &source.scopes);
+        unlink(self.children.get_mut(), ptr, |child| &child.parents);
+        unlink(self.parents.get_mut(), ptr, |parent| &parent.children);
     }
 }
 
@@ -506,7 +544,7 @@ pub(crate) struct ReadyObserver {
 impl ReadyObserver {
     pub(crate) fn clear(&self) {
         if let Some(scope) = self.scope.upgrade() {
-            let waker = scope.observers.0.lock().unwrap()[self.idx].take();
+            let waker = scope.observers.borrow_mut()[self.idx].take();
             drop(waker);
         }
     }
@@ -516,7 +554,7 @@ impl ReadyObserver {
         let Some(scope) = self.scope.upgrade() else {
             return false;
         };
-        if scope.observers.0.lock().unwrap()[self.idx]
+        if scope.observers.borrow_mut()[self.idx]
             .as_ref()
             .is_some_and(|prev| prev.will_wake(waker))
         {
@@ -525,7 +563,7 @@ impl ReadyObserver {
 
         // Waker clone/drop implementations can reenter, just like wake.
         let waker = waker.clone();
-        let previous = scope.observers.0.lock().unwrap()[self.idx].replace(waker);
+        let previous = scope.observers.borrow_mut()[self.idx].replace(waker);
         drop(previous);
         true
     }
@@ -534,7 +572,7 @@ impl ReadyObserver {
 impl Drop for ReadyObserver {
     fn drop(&mut self) {
         if let Some(scope) = self.scope.upgrade() {
-            let waker = scope.observers.0.lock().unwrap().remove(self.idx);
+            let waker = scope.observers.borrow_mut().remove(self.idx);
             drop(waker);
         }
     }
@@ -571,12 +609,17 @@ where
     pub(crate) fn scope(&self) -> &'a ReadyScope {
         self.scope
     }
+}
+
+impl<F, Fut, E> Future for RunCheck<'_, F, Fut>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+{
+    type Output = Result<Generation, E>;
 
     /// Polls the check. After completion, the next poll starts a new check.
-    pub(crate) fn poll_check(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<Generation, E>> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: `fut` is pinned in place and only dropped in place.
         let this = unsafe { self.get_unchecked_mut() };
         let mut restarted = false;
@@ -632,18 +675,6 @@ where
             }
             restarted = true;
         }
-    }
-}
-
-impl<F, Fut, E> Future for RunCheck<'_, F, Fut>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<(), E>>,
-{
-    type Output = Result<Generation, E>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.poll_check(cx)
     }
 }
 
@@ -790,9 +821,7 @@ mod tests {
                     scope
                         .0
                         .observers
-                        .0
-                        .lock()
-                        .unwrap()
+                        .borrow_mut()
                         .iter()
                         .all(|(_, w)| w.is_none())
                 );
@@ -922,7 +951,7 @@ mod tests {
         let waker = Waker::from(counter.clone());
         let mut cx = Context::from_waker(&waker);
         let first_poll = Cell::new(true);
-        let mut check = pin!(scope.check_uncached(|| {
+        let mut check = pin!(RunCheck::new(&scope, || {
             scope.subscribe(&source);
             poll_fn(|_| {
                 if first_poll.replace(false) {
@@ -1156,9 +1185,7 @@ mod tests {
                         scope
                             .0
                             .observers
-                            .0
-                            .lock()
-                            .unwrap()
+                            .borrow_mut()
                             .iter()
                             .all(|(_, w)| w.is_none())
                     );
@@ -1217,7 +1244,7 @@ mod tests {
         source.notify();
         assert_eq!(latest.wakes(), 2);
         drop(observer);
-        assert!(scope.0.observers.0.lock().unwrap().is_empty());
+        assert!(scope.0.observers.borrow_mut().is_empty());
         assert!(scope.set_ready(scope.generation()));
         source.notify();
         assert!(
@@ -1254,6 +1281,205 @@ mod tests {
     }
 
     #[test]
+    fn observer_storage_stays_local() {
+        trait AmbiguousIfSendOrSync<A> {
+            fn check() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSendOrSync<()> for T {}
+        impl<T: ?Sized + Send> AmbiguousIfSendOrSync<u8> for T {}
+        impl<T: ?Sized + Sync> AmbiguousIfSendOrSync<u16> for T {}
+
+        // Inference becomes ambiguous if the storage gains Send or Sync.
+        let _ = <ReadyObservers as AmbiguousIfSendOrSync<_>>::check;
+    }
+
+    #[test]
+    fn stale_checker_cannot_wake_reused_registry_slot() {
+        let before = CHECKERS.with_borrow(slab::Slab::len);
+        let scope = ReadyScope::new();
+        let stale = scope.checker_waker();
+        let idx = scope.0.observers.checker.get().unwrap().idx;
+        let storage = Rc::downgrade(&scope.0.observers);
+        drop(scope);
+        assert!(storage.upgrade().is_none());
+        assert_eq!(CHECKERS.with_borrow(slab::Slab::len), before);
+
+        let scope = ReadyScope::new();
+        let checker = scope.checker_waker();
+        assert_eq!(scope.0.observers.checker.get().unwrap().idx, idx);
+        let observer = scope.observer();
+        let counter = Arc::new(Counter::default());
+        assert!(observer.register(&Waker::from(counter.clone())));
+        stale.wake_by_ref();
+        assert_eq!(counter.wakes(), 0);
+        checker.wake_by_ref();
+        assert_eq!(counter.wakes(), 1);
+        drop(scope);
+        assert_eq!(CHECKERS.with_borrow(slab::Slab::len), before);
+        thread::spawn(move || {
+            stale.wake();
+            checker.wake();
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn checker_wake_can_reenter_registry() {
+        let scope = ReadyScope::new();
+        let checker = scope.checker_waker();
+        let storage = Rc::downgrade(&scope.0.observers);
+        let observer = scope.observer();
+        let counter = Arc::new(Counter::default());
+        assert!(observer.register(&Waker::from(counter.clone())));
+        ON_WAKE.with_borrow_mut(|slot| {
+            *slot = Some(Box::new(move || {
+                drop(scope);
+                let nested = ReadyScope::new();
+                let checker = nested.checker_waker();
+                drop(nested);
+                checker.wake();
+            }));
+        });
+        checker.wake();
+        assert_eq!(counter.wakes(), 1);
+        assert!(storage.upgrade().is_none());
+    }
+
+    #[test]
+    fn checker_outlives_owner_thread_and_registry_teardown() {
+        struct WakeOnDrop(Waker);
+
+        impl Drop for WakeOnDrop {
+            fn drop(&mut self) {
+                self.0.wake_by_ref();
+            }
+        }
+
+        thread_local! {
+            static LATE_SCOPE: RefCell<Option<(WakeOnDrop, ReadyScope)>> =
+                const { RefCell::new(None) };
+        }
+
+        let checker = thread::spawn(|| {
+            // Initialize this slot first so the registry is destroyed before it.
+            LATE_SCOPE.with(|slot| {
+                let scope = ReadyScope::new();
+                let checker = scope.checker_waker();
+                *slot.borrow_mut() = Some((WakeOnDrop(checker.clone()), scope));
+                checker
+            })
+        })
+        .join()
+        .unwrap();
+        checker.wake();
+    }
+
+    #[test]
+    fn checker_wakes_reject_remote_access_before_borrowing() {
+        let scope = ReadyScope::new();
+        let checker = scope.checker_waker();
+        let observer = scope.observer();
+        let counter = Arc::new(Counter::default());
+        let waker = Waker::from(counter.clone());
+
+        for consume in [false, true] {
+            assert!(observer.register(&waker));
+            let before = counter.wakes();
+            let borrowed = scope.0.observers.borrow_mut();
+            let remote = checker.clone();
+            let error = thread::spawn(move || {
+                if consume {
+                    remote.wake();
+                } else {
+                    remote.wake_by_ref();
+                }
+            })
+            .join()
+            .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<&str>().copied(),
+                Some(
+                    "ntex-service readiness observers can only be accessed on their owning thread"
+                )
+            );
+            drop(borrowed);
+            assert_eq!(counter.wakes(), before);
+            checker.wake_by_ref();
+            assert_eq!(counter.wakes(), before + 1);
+        }
+
+        drop(scope);
+        thread::spawn(move || checker.wake()).join().unwrap();
+    }
+
+    #[test]
+    fn checker_waker_clone_and_drop_race_local_observer_lifecycle() {
+        let scope = ReadyScope::new();
+        let before = scope.generation();
+        assert!(scope.set_ready(before));
+        let checker = scope.checker_waker();
+        let storage = Rc::downgrade(&scope.0.observers);
+        let iterations = if cfg!(miri) { 16 } else { 256 };
+
+        std::thread::scope(|threads| {
+            let (command, commands) = std::sync::mpsc::channel();
+            let (done, completed) = std::sync::mpsc::channel();
+            let remote_checker = checker.clone();
+            let worker = threads.spawn(move || {
+                for _ in 0..=iterations {
+                    commands.recv().unwrap();
+                    for _ in 0..8 {
+                        drop(remote_checker.clone());
+                    }
+                    commands.recv().unwrap();
+                    drop(remote_checker.clone());
+                    done.send(()).unwrap();
+                }
+                drop(remote_checker);
+            });
+
+            for _ in 0..iterations {
+                let first = Arc::new(Counter::default());
+                let latest = Arc::new(Counter::default());
+                let survivor = Arc::new(Counter::default());
+                command.send(()).unwrap();
+                let observer = scope.observer();
+                let idx = observer.idx;
+                assert!(observer.register(&Waker::from(first.clone())));
+                assert!(observer.register(&Waker::from(latest.clone())));
+                observer.clear();
+                drop(observer);
+                let observer = scope.observer();
+                assert_eq!(observer.idx, idx);
+                assert!(observer.register(&Waker::from(survivor.clone())));
+                command.send(()).unwrap();
+                completed.recv().unwrap();
+                checker.wake_by_ref();
+                assert!(first.wakes() <= 1);
+                assert!(latest.wakes() <= 1);
+                assert_eq!(survivor.wakes(), 1);
+                drop(observer);
+                assert!(scope.is_current(before));
+                assert!(scope.is_ready());
+            }
+
+            let observer = scope.observer();
+            assert!(observer.register(&checker));
+            command.send(()).unwrap();
+            drop(scope);
+            command.send(()).unwrap();
+            completed.recv().unwrap();
+            worker.join().unwrap();
+            assert!(storage.upgrade().is_none());
+            assert!(!observer.register(Waker::noop()));
+            observer.clear();
+            drop(observer);
+        });
+        checker.wake_by_ref();
+    }
+
+    #[test]
     fn registration_cleanup_at_both_endpoints() {
         let source = ReadyNotifier::new();
         let parent = ReadyScope::new();
@@ -1278,7 +1504,7 @@ mod tests {
 
         let observer = parent.observer();
         let checker_waker = parent.checker_waker();
-        let observers = Arc::downgrade(&parent.0.observers);
+        let observers = Rc::downgrade(&parent.0.observers);
         assert!(observer.register(&checker_waker));
         let weak = Rc::downgrade(&parent.0);
         let alias = parent.clone();
@@ -1331,7 +1557,7 @@ mod tests {
         let hook_scope = scope.clone();
         ON_DROP.with_borrow_mut(|slot| {
             *slot = Some(Box::new(move || {
-                assert_eq!(hook_scope.0.observers.0.lock().unwrap().len(), 1);
+                assert_eq!(hook_scope.0.observers.borrow_mut().len(), 1);
                 hook_source.notify();
             }));
         });
@@ -1343,7 +1569,7 @@ mod tests {
         let hook_ran = ran.clone();
         ON_DROP.with_borrow_mut(|slot| {
             *slot = Some(Box::new(move || {
-                assert!(scope.0.observers.0.lock().unwrap().is_empty());
+                assert!(scope.0.observers.borrow_mut().is_empty());
                 let observer = scope.observer();
                 assert!(observer.register(Waker::noop()));
                 source.notify();

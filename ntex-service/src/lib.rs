@@ -162,6 +162,24 @@ pub trait Service<St, Req> {
     ///
     /// Pipeline readiness is coordinated across all services in a composed
     /// chain. A request is dispatched only when the chain is ready.
+    ///
+    /// A [`Pipeline`] or [`ServiceBinding`] caches success until a subscribed
+    /// [`ReadyNotifier`] invalidates it; calls do not consume that success.
+    /// Subscribe in [`Self::bind`] and notify on every readiness-changing
+    /// transition, including consuming or releasing capacity and external
+    /// failures, before another caller can use stale cached readiness.
+    /// A task wake schedules a pending check but does not invalidate a cached
+    /// success. Services must not rely on this method being polled on every
+    /// call to drive background progress.
+    ///
+    /// Readiness checks and their wake sources run on the pipeline's thread.
+    /// This local-only requirement does not apply to task wakers supplied to
+    /// [`Self::call`] or [`Self::shutdown`].
+    ///
+    /// Readiness may inspect [`Ctx::st`], but it describes the shared gate, not
+    /// a reservation for one request or state value. State-taking pipeline
+    /// handles share the same cache; independent gates need separate pipelines
+    /// or service bindings.
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         Ok(())
     }

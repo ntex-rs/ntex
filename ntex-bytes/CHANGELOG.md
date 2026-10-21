@@ -1,6 +1,6 @@
 # Changes
 
-## [1.14.0] - Unreleased
+## [1.14.0] - 2026-10-21
 
 * Add `tracker` feature for per-allocation memory attribution: `BytesTracker`, `BytesTrackerSnapshot`, `BytesMut::with_page_size_in()`, `BytesMut::set_tracker()` and `BytesMut::tracker()`. An attributed allocation stays charged until its last `Bytes`/`BytesMut` handle is dropped, on any thread; `set_tracker()` moves the charge, also for shared buffers; cached pages and copies made by `Bytes::trimdown()` are not charged. The feature grows the buffer header from 16 to 32 bytes (20 on 32-bit targets)
 

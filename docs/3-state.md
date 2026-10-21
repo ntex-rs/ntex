@@ -130,53 +130,13 @@ subscribe to a `ReadyNotifier` in `bind` and notify on every relevant change.
 A raw `Ctx::ready` call does not populate an upstream cache; use `ready(svc)`
 when a child needs independent persistent readiness.
 
+Readiness checks and their wake sources run on the pipeline's thread. This
+local-only requirement is specific to readiness; ordinary call, shutdown,
+runtime, and I/O task wakers are unchanged.
+
 `Service::call` remains the primitive dispatch operation and is not deprecated.
 For ordinary nested calls, use `Ctx::call` to retain context and readiness
 coordination rather than bypassing them.
-
-## Observing readiness notifications
-
-Use a reusable [`ReadyCallback`] to observe explicit readiness notifications.
-A service registers its handle during `Service::bind`:
-
-```rust,ignore
-fn bind(&self, ctx: BindCtx<'_>) {
-    ctx.subscribe(&self.changed);
-    ctx.on_notify(&self.on_notify);
-    ctx.bind(&self.inner);
-}
-```
-
-Pipelines also expose `pipeline.on_notify(&callback)`, as do `PipelineBinding`,
-`PipelineState`, and `PipelineStateBinding`. For example:
-
-```rust
-use ntex::service::ReadyCallback;
-
-let callback = ReadyCallback::new(|| println!("readiness notified"));
-# let pipeline = ntex::Pipeline::new((), async |_: ()| Ok::<_, ()>(()));
-pipeline.on_notify(&callback);
-pipeline.bind().on_notify(&callback); // Same scope and identity: one registration.
-```
-
-The callback runs synchronously when `ReadyNotifier::notify()` reaches its scope,
-including notifications propagated from child scopes and repeated notifications
-while already invalid. It does not run for successful readiness checks, cached
-calls, ordinary task wakeups, or internal resets such as lazy service creation
-and shutdown. All affected scopes are invalidated before callbacks run, outside
-internal borrows and locks.
-
-Nested notifications still invalidate every affected scope, but skip callback
-delivery on scopes already executing callbacks. Registrations made during that
-delivery are retained for later notifications. Delivery reuses each scope's
-registered callback storage without allocating a snapshot or cloning handles.
-
-Raw services share their enclosing scope; `ready(svc)` gives the service its own.
-Registering one handle on two affected scopes invokes it once for each scope.
-Cloning a handle preserves its identity. Registrations persist until the scope
-is dropped, independently of readiness checks and runtime binding handles.
-Callbacks must own their captures; avoid strong reference cycles through a
-pipeline that retains the callback.
 
 ## Substituting state
 
@@ -243,6 +203,12 @@ a state selected by each caller. `PipelineState::bind_state()` can attach an
 owned state value and produce a normal `PipelineBinding`, the state type must
 implement `Clone`.
 
+All of these handles share one readiness cache and pending checker, even when
+they supply different state values. Passing a different state does not
+invalidate cached success. `Service::ready` may inspect the state, but its result
+must describe the shared pipeline-wide gate; use separate pipelines or service
+bindings for independent state-specific gates.
+
 ## Carrying state with a request
 
 Some protocol boundaries receive both a request and the state that a nested
@@ -283,7 +249,6 @@ for an example that wraps an accepted `Io` in `State`.
 [`Pipeline::new`]: https://docs.ntex.rs/api/ntex/struct.Pipeline.html#method.new
 [`PipelineBinding`]: https://docs.ntex.rs/api/ntex/struct.PipelineBinding.html
 [`PipelineState`]: https://docs.ntex.rs/api/ntex/service/pipeline/struct.PipelineState.html
-[`ReadyCallback`]: https://docs.ntex.rs/api/ntex/service/struct.ReadyCallback.html
 [`RequestState`]: https://docs.ntex.rs/api/ntex/service/trait.RequestState.html
 [`State<St, Req>`]: https://docs.ntex.rs/api/ntex/service/struct.State.html
 [`tests/mockall`]: https://github.com/ntex-rs/examples/tree/main/tests/mockall

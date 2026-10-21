@@ -16,7 +16,8 @@
 
 * `InFlightService` and `OneRequestService` notify readiness changes when capacity
   fills or is released, including on cancellation and errors. Notifications reach
-  every pipeline sharing the service.
+  every pipeline sharing the service. `Counter::bind()` subscribes other
+  services to the counter's capacity changes.
 
 * Both limiters keep an independent readiness cache for the wrapped service.
   Capacity notifications preserve that cache; wrapped services must notify their
