@@ -43,7 +43,7 @@ pub(crate) struct WaitersRef {
 
 impl WaitersRef {
     pub(crate) fn new() -> Self {
-        let mut waiters = slab::Slab::with_capacity(16);
+        let mut waiters = slab::Slab::with_capacity(4);
         waiters.insert(None);
         WaitersRef {
             scope: ReadyScope::new(),

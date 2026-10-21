@@ -222,6 +222,42 @@ impl Wake for WakeCount {
 }
 
 #[test]
+fn notification_of_single_pending_caller_does_not_allocate() {
+    for retained in [false, true] {
+        let (svc, gate) = probe();
+        gate.available.set(false);
+        let pl = Pipeline::new(10, svc);
+        let count = Arc::new(WakeCount::default());
+        let waker = Waker::from(count.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut caller = pin!(pl.ready());
+
+        let first_wakes = if retained { 1 } else { 2 };
+        for (available, expected_wakes) in [(false, first_wakes), (true, 1)] {
+            let result = if retained {
+                pl.poll_ready(&mut cx)
+            } else {
+                caller.as_mut().poll(&mut cx)
+            };
+            assert!(result.is_pending());
+            assert_eq!(gate.active.get(), 1);
+            let wakes = count.0.load(Ordering::Relaxed);
+            gate.available.set(available);
+            expect_allocs("notify pending caller", 0, || gate.changed.notify());
+            assert_eq!(count.0.load(Ordering::Relaxed), wakes + expected_wakes);
+        }
+
+        let result = if retained {
+            pl.poll_ready(&mut cx)
+        } else {
+            caller.as_mut().poll(&mut cx)
+        };
+        assert_eq!(result, Poll::Ready(Ok(())));
+        assert_eq!(gate.active.get(), 0);
+    }
+}
+
+#[test]
 fn checker_wake_of_single_observer_does_not_allocate() {
     let parked = Rc::new(RefCell::new(None));
     let pl = Pipeline::new((), Parked(parked.clone()));
@@ -632,6 +668,10 @@ fn benchmark_readiness() {
         cfg!(debug_assertions)
     );
     const ITERATIONS: usize = 1_000_000;
+    let parked = Rc::new(RefCell::new(None));
+    bench("pipeline/new+drop", ITERATIONS, || {
+        black_box(Pipeline::new((), Parked(parked.clone())));
+    });
     let (svc, gate) = probe();
     let pl = Pipeline::new(10, svc);
     let binding = pl.bind();

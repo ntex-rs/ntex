@@ -188,17 +188,17 @@ impl Drop for NotifyCallbacks<'_> {
 
 /// Wakers taken from observers, woken in order on drop.
 ///
-/// Does not allocate for a single waker.
+/// Does not allocate for up to two wakers.
 #[derive(Default)]
 struct Wakers {
-    first: Option<Waker>,
+    inline: [Option<Waker>; 2],
     rest: Vec<Waker>,
 }
 
 impl Wakers {
     fn push(&mut self, waker: Waker) {
-        if self.first.is_none() {
-            self.first = Some(waker);
+        if let Some(slot) = self.inline.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(waker);
         } else {
             self.rest.push(waker);
         }
@@ -207,8 +207,10 @@ impl Wakers {
 
 impl Drop for Wakers {
     fn drop(&mut self) {
-        if let Some(waker) = self.first.take() {
-            waker.wake();
+        for slot in &mut self.inline {
+            if let Some(waker) = slot.take() {
+                waker.wake();
+            }
         }
         for waker in self.rest.drain(..) {
             waker.wake();
@@ -908,21 +910,25 @@ mod tests {
         }));
         let counter = Arc::new(Counter::default());
         let waker = Waker::from(counter.clone());
-        let observer = scope.observer();
-        assert!(observer.register(&waker));
+        let observers = [scope.observer(), scope.observer(), scope.observer()];
+        for observer in &observers {
+            assert!(observer.register(&waker));
+        }
         assert!(scope.set_ready(scope.generation()));
 
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.notify())).is_err()
         );
         assert!(!scope.is_ready());
-        assert_eq!(counter.wakes(), 1);
+        assert_eq!(counter.wakes(), 3);
         assert_eq!(calls.get(), 0);
         assert_eq!(late_calls.get(), 0);
         panicking.set(false);
-        assert!(observer.register(&waker));
+        for observer in &observers {
+            assert!(observer.register(&waker));
+        }
         source.notify();
-        assert_eq!(counter.wakes(), 2);
+        assert_eq!(counter.wakes(), 6);
         assert_eq!(calls.get(), 1);
         assert_eq!(
             late_calls.get(),
