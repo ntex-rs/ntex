@@ -846,10 +846,11 @@ mod tests {
     use std::cell::RefCell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::{Context, Wake, Waker};
 
     use super::*;
+    use crate::future::OnDropFn;
     use crate::time::{CallbackTimer, Millis, interval, sleep};
 
     #[derive(Default)]
@@ -966,6 +967,17 @@ mod tests {
         assert_eq!(calls.get(), 0);
         assert!(!reset.is_elapsed());
         assert!(!replacement.is_elapsed());
+        timer.elapsed_time.set(Some(
+            Instant::now().checked_sub(Duration::from_secs(20)).unwrap(),
+        ));
+        for _ in 0..2 {
+            assert!(
+                Pin::new(&mut driver)
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            assert_eq!(calls.get(), 101);
+        }
     }
 
     #[test]
@@ -1003,47 +1015,154 @@ mod tests {
             handles.borrow().iter().filter(|h| !h.is_elapsed()).count(),
             1
         );
+        timer.elapsed_time.set(Some(
+            Instant::now().checked_sub(Duration::from_secs(20)).unwrap(),
+        ));
+        for _ in 0..2 {
+            assert!(
+                Pin::new(&mut driver)
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            assert_eq!(calls.get(), 2);
+        }
     }
 
     #[test]
-    fn test_callback_drop_during_invocation() {
-        struct Capture {
-            finished: Rc<Cell<bool>>,
-            drops: Rc<Cell<usize>>,
-        }
-        impl Drop for Capture {
-            fn drop(&mut self) {
-                assert!(self.finished.get());
-                self.drops.set(self.drops.get() + 1);
-                drop(TimerHandle::new(0));
+    fn test_callback_capture_drop_schedules_timers() {
+        for active in [false, true] {
+            let timer = timer_state();
+            let released = Rc::new(Cell::new(false));
+            let finished = Rc::new(Cell::new(false));
+            let reset_calls = Rc::new(Cell::new(0));
+            let new_calls = Rc::new(Cell::new(0));
+            let count = reset_calls.clone();
+            let reset = Rc::new(CallbackTimer::new(Millis(20_000), move || {
+                count.set(count.get() + 1);
+            }));
+            let cancelled = Rc::new(CallbackTimer::new(Millis(20_000), || {
+                panic!("cancelled callback");
+            }));
+            let replacement = Rc::new(RefCell::new(None::<CallbackTimer>));
+            let capture = {
+                let reset = reset.clone();
+                let cancelled = cancelled.clone();
+                let replacement = replacement.clone();
+                let new_calls = new_calls.clone();
+                let released = released.clone();
+                let finished = finished.clone();
+                OnDropFn::new(move || {
+                    assert!(!active || finished.get());
+                    let ordinary = TimerHandle::new(10_000);
+                    ordinary.reset(0);
+                    drop(ordinary);
+                    cancelled.cancel();
+                    reset.reset(Millis(10_000));
+                    *replacement.borrow_mut() =
+                        Some(CallbackTimer::new(Millis(10_000), move || {
+                            new_calls.set(new_calls.get() + 1);
+                        }));
+                    released.set(true);
+                })
+            };
+            let handle = Rc::new(RefCell::new(None::<CallbackTimer>));
+            let weak = Rc::downgrade(&handle);
+            let was_released = released.clone();
+            *handle.borrow_mut() = Some(CallbackTimer::new(Millis(1), move || {
+                let _capture = &capture;
+                assert!(active, "dropped queued callback must not run");
+                drop(weak.upgrade().unwrap().borrow_mut().take());
+                assert!(!was_released.get());
+                finished.set(true);
+            }));
+            let old_slot = handle.borrow().as_ref().unwrap().hnd;
+            if !active {
+                timer.with_wheel(|wheel| {
+                    wheel.relink(old_slot.get(), 1);
+                    wheel.execute_expired_timers(1);
+                });
+                drop(handle.borrow_mut().take());
+                assert!(released.get());
+            }
+            make_due(&timer);
+            let mut driver = timer_driver(&timer);
+            assert!(
+                Pin::new(&mut driver)
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            assert!(released.get());
+            assert!(handle.borrow().is_none());
+            assert!(cancelled.is_elapsed());
+            assert!(!reset.is_elapsed());
+            assert_eq!(replacement.borrow().as_ref().unwrap().hnd, old_slot);
+            assert!(!replacement.borrow().as_ref().unwrap().is_elapsed());
+            assert_eq!((reset_calls.get(), new_calls.get()), (0, 0));
+
+            timer.elapsed_time.set(Some(
+                Instant::now().checked_sub(Duration::from_secs(20)).unwrap(),
+            ));
+            for _ in 0..2 {
+                assert!(
+                    Pin::new(&mut driver)
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                        .is_pending()
+                );
+                assert_eq!((reset_calls.get(), new_calls.get()), (1, 1));
             }
         }
+    }
 
+    #[test]
+    fn test_callback_capture_drop_resets_runtime() {
         let timer = timer_state();
-        let handle = Rc::new(RefCell::new(None::<CallbackTimer>));
-        let finished = Rc::new(Cell::new(false));
-        let drops = Rc::new(Cell::new(0));
-        let capture = Capture {
-            finished: finished.clone(),
-            drops: drops.clone(),
+        let new_calls = Rc::new(Cell::new(0));
+        let replacement = Rc::new(RefCell::new(None::<CallbackTimer>));
+        let capture = {
+            let timer = timer.clone();
+            let new_calls = new_calls.clone();
+            let replacement = replacement.clone();
+            OnDropFn::new(move || {
+                timer.reset();
+                timer.insert_flags(Flags::DRIVER_STARTED);
+                let callback = CallbackTimer::new(Millis(1), move || {
+                    new_calls.set(new_calls.get() + 1);
+                });
+                timer.with_wheel(|wheel| {
+                    wheel.relink(callback.hnd.get(), 1);
+                    wheel.execute_expired_timers(1);
+                });
+                *replacement.borrow_mut() = Some(callback);
+            })
         };
+        let handle = Rc::new(RefCell::new(None::<CallbackTimer>));
         let weak = Rc::downgrade(&handle);
         *handle.borrow_mut() = Some(CallbackTimer::new(Millis(1), move || {
             let _capture = &capture;
             drop(weak.upgrade().unwrap().borrow_mut().take());
-            assert_eq!(capture.drops.get(), 0);
-            capture.finished.set(true);
         }));
         make_due(&timer);
-        let mut driver = timer_driver(&timer);
+        let mut old_driver = timer_driver(&timer);
         assert!(
-            Pin::new(&mut driver)
+            Pin::new(&mut old_driver)
                 .poll(&mut Context::from_waker(Waker::noop()))
-                .is_pending()
+                .is_ready()
         );
         assert!(handle.borrow().is_none());
-        assert!(finished.get());
-        assert_eq!(drops.get(), 1);
+        assert!(replacement.borrow().as_ref().unwrap().is_elapsed());
+        assert_eq!(new_calls.get(), 0);
+        drop(old_driver);
+
+        make_due(&timer);
+        let mut driver = timer_driver(&timer);
+        for _ in 0..2 {
+            assert!(
+                Pin::new(&mut driver)
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            assert_eq!(new_calls.get(), 1);
+        }
     }
 
     #[test]
@@ -1079,9 +1198,16 @@ mod tests {
     }
 
     #[test]
-    fn test_callback_panic_cleanup() {
+    fn test_callback_panic_after_rearm_cleanup() {
         let timer = timer_state();
-        let callback = CallbackTimer::new(Millis(1), || panic!("callback"));
+        let callback = Rc::new_cyclic(|weak: &std::rc::Weak<CallbackTimer>| {
+            let weak = weak.clone();
+            CallbackTimer::new(Millis(1), move || {
+                let callback = weak.upgrade().unwrap();
+                callback.reset(Millis(10_000));
+                panic!("callback");
+            })
+        });
         let later = CallbackTimer::new(Millis(10_000), || panic!("not due"));
         let ordinary = TimerHandle::new(10_000);
         make_due(&timer);
@@ -1092,8 +1218,10 @@ mod tests {
             }))
             .is_err()
         );
+        assert!(!callback.is_elapsed());
         drop(driver);
         assert!(callback.is_elapsed());
+        assert!(!callback.state.pending.get());
         assert!(later.is_elapsed());
         assert!(ordinary.is_elapsed());
         assert!(!later.state.pending.get());
@@ -1149,6 +1277,88 @@ mod tests {
                 .is_pending()
         );
         assert_eq!(new_calls.get(), 1);
+    }
+
+    #[test]
+    fn test_callback_mixed_bucket_waker_panic() {
+        for panic_position in 0..3 {
+            let timer = timer_state();
+            let calls = Rc::new(Cell::new(0));
+            let callbacks = [0, 1].map(|_| {
+                let calls = calls.clone();
+                CallbackTimer::new(Millis(10_000), move || calls.set(calls.get() + 1))
+            });
+            let ordinary = TimerHandle::new(10_000);
+            let task = Arc::new(InPlaceWaker {
+                panic_on_wake: true,
+                ..InPlaceWaker::default()
+            });
+            let waker = Waker::from(task.clone());
+            assert!(
+                ordinary
+                    .poll_elapsed(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+            timer.with_wheel(|wheel| {
+                // Control slab drain positions, not public callback delivery order.
+                let mut entries = [
+                    callbacks[0].hnd.get(),
+                    ordinary.0.get(),
+                    callbacks[1].hnd.get(),
+                ];
+                entries.swap(1, panic_position);
+                for no in entries {
+                    wheel.unlink(no);
+                }
+                wheel.buckets[3] = Slab::new();
+                for no in entries {
+                    wheel.link(no, 3);
+                }
+            });
+            timer.next_expiry.set(3);
+            make_due(&timer);
+            let mut driver = timer_driver(&timer);
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let _ = Pin::new(&mut driver).poll(&mut Context::from_waker(Waker::noop()));
+                }))
+                .is_err()
+            );
+            assert_eq!(task.wakes.load(Ordering::Relaxed), 1);
+            assert_eq!(calls.get(), 0);
+            assert!(ordinary.is_elapsed());
+            assert!(callbacks.iter().all(CallbackTimer::is_elapsed));
+            timer.with_wheel(|wheel| {
+                assert!(wheel.buckets.iter().all(Slab::is_empty));
+                assert_eq!(wheel.occupied, [0; LVL_DEPTH as usize]);
+                assert_eq!(
+                    wheel.callbacks.as_ref().unwrap().ready.len(),
+                    panic_position
+                );
+            });
+            drop(driver);
+            assert!(
+                callbacks
+                    .iter()
+                    .all(|callback| !callback.state.pending.get())
+            );
+            timer.with_wheel(|wheel| {
+                assert!(wheel.callbacks.as_ref().unwrap().ready.is_empty());
+            });
+
+            timer.insert_flags(Flags::DRIVER_STARTED);
+            callbacks[0].reset(Millis::ZERO);
+            make_due(&timer);
+            let mut driver = timer_driver(&timer);
+            for _ in 0..2 {
+                assert!(
+                    Pin::new(&mut driver)
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                        .is_pending()
+                );
+                assert_eq!(calls.get(), 1);
+            }
+        }
     }
 
     #[test]
@@ -1346,6 +1556,41 @@ mod tests {
         })
         .join();
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_drop_callback_after_wheel_destroyed() {
+        thread_local! {
+            static HOLDER: RefCell<Option<CallbackTimer>> = const { RefCell::new(None) };
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let destroyed = Arc::new(AtomicBool::new(false));
+        let count = drops.clone();
+        let was_destroyed = destroyed.clone();
+        std::thread::spawn(move || {
+            // Register this destructor before the timer's thread-local storage.
+            HOLDER.with(|holder| holder.borrow_mut().take());
+            ntex::rt::System::build()
+                .build(ntex::rt::DefaultRuntime)
+                .block_on(async move {
+                    let ordinary = TimerHandle::new(10_000);
+                    let capture = OnDropFn::new(move || {
+                        was_destroyed.store(TIMER.try_with(|_| ()).is_err(), Ordering::Relaxed);
+                        drop(ordinary);
+                        count.fetch_add(1, Ordering::Relaxed);
+                    });
+                    let callback = CallbackTimer::new(Millis(10_000), move || {
+                        let _capture = &capture;
+                        panic!("callback after shutdown");
+                    });
+                    HOLDER.with(|holder| *holder.borrow_mut() = Some(callback));
+                });
+        })
+        .join()
+        .unwrap();
+        assert!(destroyed.load(Ordering::Relaxed));
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 
     /// The drivers of a stopped system may never be dropped, the next system

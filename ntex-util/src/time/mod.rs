@@ -1,4 +1,8 @@
 //! Utilities for tracking time.
+//!
+//! Use [`sleep`], [`deadline`] or [`interval`] for asynchronous waits. To run a
+//! short synchronous callback without polling a timer future, retain a
+//! [`CallbackTimer`].
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

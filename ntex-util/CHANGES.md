@@ -27,7 +27,7 @@
   cancellation and shutdown-safe delivery
 
 * Restore timer wheel storage on unwinding. Wakers run in place without a
-  notification buffer; timer operations are not reentrant. Callback delivery
+  notification buffer and must not reenter the timer wheel. Callback delivery
   runs outside wheel access and refreshes time before processing further timers
 
 ## [4.4.0] - 2026-10-20
