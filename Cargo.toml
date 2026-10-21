@@ -48,12 +48,12 @@ ntex-util = { path = "ntex-util" }
 urly = { path = "urly" }
 
 [workspace.dependencies]
-ntex = "4.3.0"
+ntex = "4.4.0"
 ntex-bytes = "1.14.0"
 ntex-codec = "2.0.0"
 ntex-dispatcher = "4.4.0"
 ntex-error = "3.1.0"
-ntex-h2 = "4.3.0"
+ntex-h2 = "4.4.0"
 ntex-http = "2.1.0"
 ntex-io = "4.5.0"
 ntex-macros = "4.2.0"
