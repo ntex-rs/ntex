@@ -1,19 +1,17 @@
-use std::{cell::Cell, convert::Infallible, fmt, future::poll_fn, rc::Rc, task::Context};
-use std::{task::Poll, time};
+use std::{cell::Cell, convert::Infallible, fmt, rc::Rc, rc::Weak, time};
 
 use ntex_service::{BindCtx, Ctx, ReadyNotifier, Service, ServiceFactory};
 
-use crate::future::OnDropFn;
-use crate::task::LocalWaker;
-use crate::time::{Millis, Sleep, now, sleep};
+use crate::time::{CallbackTimer, Millis, now};
 
 /// Middleware that fails readiness once the service has been idle too long.
 ///
 /// Every call records the current time and passes the request through
 /// unchanged. When no call has been made for the keep-alive duration,
 /// [`ready`](Service::ready) fails with the error produced by `f`.
-/// A local timer task invalidates cached readiness on expiration, even when
-/// readiness is not being polled.
+/// A timer callback invalidates cached readiness on expiration, even when
+/// readiness is not being polled. Extended deadlines are rearmed without
+/// notifying readiness; active calls only update the activity timestamp.
 pub struct KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
@@ -84,41 +82,27 @@ where
 {
     f: F,
     shared: Rc<Shared>,
-    task: Cell<Option<ntex_rt::JoinHandle<()>>>,
 }
 
 struct Shared {
     dur: time::Duration,
-    sleep: Sleep,
+    timer: CallbackTimer,
     expire: Cell<time::Instant>,
     expired: Cell<bool>,
+    stopped: Cell<bool>,
     changed: ReadyNotifier,
-    waker: LocalWaker,
 }
 
 impl Shared {
-    fn poll_timer(&self, cx: &mut Context<'_>) -> Poll<()> {
-        self.waker.register(cx.waker());
-        if self.expired.get() {
-            return Poll::Pending;
-        }
-
-        loop {
-            if self.sleep.poll_elapsed(cx).is_pending() {
-                return Poll::Pending;
-            }
-
-            let now = now();
-            let expire = self.expire.get() + self.dur;
-            if expire <= now {
-                self.expired.set(true);
-                self.changed.notify();
-                return Poll::Pending;
-            }
-
-            // Round a remaining sub-millisecond duration up so the timer re-arms.
+    fn on_timeout(&self) {
+        let now = now();
+        let expire = self.expire.get() + self.dur;
+        if expire <= now {
+            self.expired.set(true);
+            self.changed.notify();
+        } else {
             let millis: u32 = (expire - now).as_millis().try_into().unwrap_or(u32::MAX);
-            self.sleep.reset(Millis(millis.max(1)));
+            self.timer.reset(Millis(millis.max(1)));
         }
     }
 }
@@ -130,39 +114,26 @@ where
     /// Creates a keep-alive service with the maximum idle time `dur`.
     ///
     /// `f` creates the error returned once the service has been idle longer
-    /// than `dur`. A service-owned timer task is canceled on shutdown or drop.
+    /// than `dur`. The callback timer is canceled on shutdown or drop.
     pub fn new(dur: Millis, f: F) -> Self {
-        let shared = Rc::new(Shared {
-            expire: Cell::new(now()),
-            sleep: sleep(dur),
-            dur: time::Duration::from(dur),
-            expired: Cell::new(false),
-            changed: ReadyNotifier::new(),
-            waker: LocalWaker::new(),
-        });
-        let timer = shared.clone();
-        let task = crate::spawn(poll_fn(move |cx| timer.poll_timer(cx)));
-
         KeepAliveService {
             f,
-            shared,
-            task: Cell::new(Some(task)),
+            shared: Rc::new_cyclic(|weak: &Weak<Shared>| {
+                let weak = weak.clone();
+                Shared {
+                    dur: time::Duration::from(dur),
+                    expire: Cell::new(now()),
+                    expired: Cell::new(false),
+                    stopped: Cell::new(false),
+                    changed: ReadyNotifier::new(),
+                    timer: CallbackTimer::new(dur, move || {
+                        if let Some(shared) = weak.upgrade() {
+                            shared.on_timeout();
+                        }
+                    }),
+                }
+            }),
         }
-    }
-
-    fn stop(&self) {
-        if let Some(task) = self.task.take() {
-            task.cancel();
-        }
-    }
-}
-
-impl<F, E> Drop for KeepAliveService<F, E>
-where
-    F: Fn() -> E,
-{
-    fn drop(&mut self) {
-        self.stop();
     }
 }
 
@@ -205,15 +176,17 @@ where
         let previous = shared.expire.replace(now);
         let expired = shared.expired.replace(false);
         if expired || previous + shared.dur <= now {
-            shared.sleep.reset(shared.dur);
-            let _wake = OnDropFn::new(|| shared.waker.wake());
+            if !shared.stopped.get() {
+                shared.timer.reset(shared.dur.into());
+            }
             shared.changed.notify();
         }
         Ok(req)
     }
 
     async fn shutdown(&self, _: Ctx<'_, Self, St>) {
-        self.stop();
+        self.shared.stopped.set(true);
+        self.shared.timer.cancel();
     }
 }
 
@@ -224,7 +197,7 @@ mod tests {
     use ntex_service::{Pipeline, ReadyCallback, boxed, factory};
 
     use super::*;
-    use crate::{channel::oneshot, spawn};
+    use crate::{channel::oneshot, spawn, time::sleep};
 
     #[derive(Debug, PartialEq)]
     struct TestErr;
@@ -280,24 +253,17 @@ mod tests {
     #[ntex::test]
     async fn test_ka_sub_millis() {
         let svc = Rc::new(KeepAliveService::new(Millis(100), || TestErr));
+        let p = Pipeline::<usize, usize, TestErr>::new((), svc.clone()).bind();
+        svc.shared.timer.cancel();
 
         // less than millisecond is left before expiration
         svc.shared
             .expire
             .set(now().checked_sub(svc.shared.dur).unwrap() + time::Duration::from_micros(500));
-        svc.shared.sleep.elapse();
-
-        let p = Pipeline::<usize, usize, TestErr>::new((), svc.clone()).bind();
+        svc.shared.on_timeout();
         assert_eq!(p.ready().await, Ok(()));
-
-        // timer has to be re-armed, otherwise waker never gets registered
-        // and service readiness never resolves
-        assert!(
-            crate::future::lazy(|cx| svc.shared.poll_timer(cx))
-                .await
-                .is_pending()
-        );
-        assert!(!svc.shared.sleep.is_elapsed());
+        assert!(!svc.shared.expired.get());
+        assert!(!svc.shared.timer.is_elapsed());
     }
 
     fn notification(p: &Pipeline<usize, usize, TestErr>) -> oneshot::Receiver<()> {
@@ -324,6 +290,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        assert!(!first.is_ready());
+        assert!(!second.is_ready());
         assert_eq!(first.ready().await, Err(TestErr));
         assert_eq!(second.ready().await, Err(TestErr));
         assert_eq!(first.call(1).await, Err(TestErr));
@@ -333,19 +301,25 @@ mod tests {
     async fn call_extends_deadline_before_old_timer_is_processed() {
         let svc = Rc::new(KeepAliveService::new(Millis(250), || TestErr));
         let p = Pipeline::new((), svc.clone());
+        let notifications = Rc::new(Cell::new(0));
+        let count = notifications.clone();
+        p.on_notify(&ReadyCallback::new(move || count.set(count.get() + 1)));
         assert_eq!(p.ready().await, Ok(()));
-        svc.shared.sleep.elapse();
+        svc.shared.timer.reset(Millis::ZERO);
         assert_eq!(p.call(1).await, Ok(1));
-        sleep(Millis(25)).await;
-        assert_eq!(p.ready().await, Ok(()));
+        sleep(Millis(50)).await;
+        assert!(p.is_ready());
+        assert_eq!(notifications.get(), 0);
         assert!(!svc.shared.expired.get());
-        assert!(!svc.shared.sleep.is_elapsed());
+        assert!(!svc.shared.timer.is_elapsed());
 
         crate::time::timeout(Millis(1_000), notification(&p))
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(notifications.get(), 1);
         assert_eq!(p.ready().await, Err(TestErr));
+        assert_eq!(p.call(2).await, Err(TestErr));
     }
 
     struct Bypass<S>(S);
@@ -369,7 +343,7 @@ mod tests {
     async fn bypassed_call_rearms_an_expired_timer() {
         let svc = Rc::new(KeepAliveService::new(Millis(25), || TestErr));
         let p = Pipeline::new((), svc.clone());
-        let bypass = Pipeline::new((), Bypass(svc));
+        let bypass = Pipeline::new((), Bypass(svc.clone()));
         p.ready().await.unwrap();
         crate::time::timeout(Millis(1_000), notification(&p))
             .await
@@ -378,6 +352,7 @@ mod tests {
         assert_eq!(p.ready().await, Err(TestErr));
 
         assert_eq!(bypass.call(1).await, Ok(1));
+        assert!(!svc.shared.timer.is_elapsed());
         assert_eq!(p.ready().await, Ok(()));
         crate::time::timeout(Millis(1_000), notification(&p))
             .await
@@ -387,7 +362,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn timer_task_is_canceled_on_shutdown_and_drop() {
+    async fn timer_callback_is_canceled_on_shutdown_and_drop() {
         for shutdown in [false, true] {
             let svc = Rc::new(KeepAliveService::new(Millis(25), || TestErr));
             let state = Rc::downgrade(&svc.shared);
@@ -398,14 +373,33 @@ mod tests {
             p.ready().await.unwrap();
             if shutdown {
                 p.shutdown().await;
+                assert!(svc.shared.timer.is_elapsed());
                 sleep(Millis(75)).await;
                 assert_eq!(notifications.get(), 0);
+
+                let bypass = Pipeline::new((), Bypass(svc.clone()));
+                assert_eq!(bypass.call(1).await, Ok(1));
+                assert!(svc.shared.timer.is_elapsed());
+                let before = notifications.get();
+                sleep(Millis(75)).await;
+                assert_eq!(notifications.get(), before);
             }
+            let before = notifications.get();
             drop(p);
             drop(svc);
-            sleep(Millis(75)).await;
-            assert_eq!(notifications.get(), 0);
             assert!(state.upgrade().is_none());
+            sleep(Millis(75)).await;
+            assert_eq!(notifications.get(), before);
         }
+    }
+
+    #[ntex::test]
+    async fn test_ka_zero() {
+        let p = Pipeline::<usize, usize, TestErr>::new(
+            (),
+            KeepAliveService::new(Millis::ZERO, || TestErr),
+        );
+        assert_eq!(p.ready().await, Err(TestErr));
+        assert_eq!(p.call(1).await, Err(TestErr));
     }
 }

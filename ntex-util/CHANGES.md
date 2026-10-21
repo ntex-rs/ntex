@@ -8,8 +8,9 @@
   updates sender backpressure. Plain channels do not allocate a notifier.
 
 * `KeepAliveService` invalidates cached readiness when its idle timer expires.
-  Its local timer task is canceled on shutdown or drop; calls extend the deadline
-  and an explicit readiness bypass can restart an expired service.
+  Its callback timer is canceled on shutdown or drop and rearms extended deadlines
+  without waking readiness. Calls extend the deadline, and an explicit readiness
+  bypass can restart an expired service.
 
 * `BufferService` preserves queue/token cleanup when readiness callbacks panic
   and invalidates capacity before waking requests canceled during shutdown.
