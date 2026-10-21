@@ -1,6 +1,6 @@
 # Changes
 
-## [4.3.0] - Unreleased
+## [4.3.0] - 2026-10-21
 
 * Move items queued at a failed, unavailable or blocked worker to other workers,
   add `ServerMetrics::rescheduled`

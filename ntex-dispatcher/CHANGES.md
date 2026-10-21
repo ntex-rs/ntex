@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## [4.4.0] - 2026-10-21
 
 * Release in-flight call counts on cancellation, and cancel the dispatcher-held
   response when Stop is handed off to background shutdown, so a stale count

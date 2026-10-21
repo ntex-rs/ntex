@@ -1,6 +1,6 @@
 # Changes
 
-## [4.5.0] - 2026-10-21
+## [4.4.0] - 2026-10-21
 
 * Add `bstream::channel_with_notifier()` for notification-invalidated sender
   readiness. Watermark and terminal-state transitions, including receiver drop,
