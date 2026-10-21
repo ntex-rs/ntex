@@ -52,6 +52,11 @@ where
     /// Successful readiness is shared and reused until a subscribed
     /// [`crate::ReadyNotifier`] invalidates it. Calls do not consume it.
     /// Reusing valid readiness does not allocate a readiness future.
+    ///
+    /// The first caller that finds readiness invalid runs the shared check in its
+    /// own future, and other waiters wait for it. Like a held lock, a pending
+    /// future must be polled or dropped: keeping it alive without polling stalls
+    /// every other readiness waiter on this pipeline.
     pub async fn ready(&self, st: &St) -> Result<(), Err> {
         if self.is_ready() {
             Ok(())
