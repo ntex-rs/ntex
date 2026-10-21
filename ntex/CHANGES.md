@@ -1,6 +1,6 @@
 # Changes
 
-## [4.5.0] - Unreleased
+## [4.4.0] - 2026-10-21
 
 * Expose `service::ReadyCallback` and `on_notify` registration on `BindCtx`,
   pipelines, and bindings for observing explicit readiness notifications.
@@ -17,8 +17,6 @@
 * Add `tracker` feature, memory attribution of read buffers with
   `IoConfig::set_buf_tracker()`. Re-export `BytesTracker` and
   `BytesTrackerSnapshot` in `ntex::util`
-
-## [4.4.0] - 2026-10-19
 
 * Add `HttpServer::load_balancing()`. New connections go to the worker on the
   CPU that receives their packets (the RSS CPU on Windows, `SO_INCOMING_CPU`
