@@ -44,7 +44,8 @@
 //!   bucket, not to the time the driver woke up, so a late wakeup does not
 //!   delay later timers. Buckets that are overdue are processed at once.
 //!   Wakers are invoked in place while the wheel is held; timer operations
-//!   are not reentrant.
+//!   are not reentrant. Callback timers are queued separately and invoked
+//!   after releasing the wheel.
 //! * [`LowresTimerDriver`] invalidates the cached [`system_time()`] value
 //!   every 150 milliseconds.
 //!
@@ -58,11 +59,12 @@
 //! an older generation exit without touching the state.
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant, SystemTime};
-use std::{cell::Cell, cmp, future::Future, pin::Pin, rc::Rc, task, task::Poll};
+use std::{cell::Cell, cmp, future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
 
 use futures_timer::Delay;
 use slab::Slab;
 
+use super::callbacks::Callbacks;
 use crate::task::LocalWaker;
 
 /// Resolution of the wheel clock, a unit is `1 << UNITS` milliseconds.
@@ -213,11 +215,11 @@ bitflags::bitflags! {
 }
 
 thread_local! {
-    static TIMER: Rc<Timer> = Rc::new(Timer::new());
+    pub(super) static TIMER: Rc<Timer> = Rc::new(Timer::new());
 }
 
 /// Per-thread timer state, shared by the timer handles and the driver tasks.
-struct Timer {
+pub(super) struct Timer {
     /// Wheel clock in units, the expiry that was processed last.
     elapsed: Cell<u64>,
     /// Instant that corresponds to `elapsed`, the scheduled time of the last
@@ -227,7 +229,7 @@ struct Timer {
     next_expiry: Cell<u64>,
     flags: Cell<Flags>,
     /// Incremented on reset, drivers of an older generation are stale.
-    generation: Cell<u64>,
+    pub(super) generation: Cell<u64>,
     driver: LocalWaker,
     lowres_stime: Cell<Option<SystemTime>>,
     lowres_driver: LocalWaker,
@@ -236,14 +238,16 @@ struct Timer {
 }
 
 /// Timer storage.
-struct Wheel {
+pub(super) struct Wheel {
     /// Timer entries indexed by handle, slot 0 is reserved so handles are
     /// non-zero.
-    timers: Slab<TimerEntry>,
+    pub(super) timers: Slab<TimerEntry>,
     /// Handles of the timers stored in each bucket, `lvl * LVL_SIZE + offset`.
     buckets: Box<[Slab<usize>]>,
     /// Occupied buckets of each level, bit `n` is set if bucket `n` has timers.
     occupied: [u64; LVL_DEPTH as usize],
+    /// Allocated only for callbacks, keeping ordinary entries waker-sized.
+    pub(super) callbacks: Option<Box<Callbacks>>,
 }
 
 struct WheelGuard<'a> {
@@ -258,12 +262,13 @@ impl Drop for WheelGuard<'_> {
 }
 
 #[derive(Debug)]
-struct TimerEntry {
+pub(super) struct TimerEntry {
     /// Bucket index, `None` once the timer has elapsed.
-    bucket: Option<u16>,
+    pub(super) bucket: Option<u16>,
     /// Key of the entry in the bucket.
-    bucket_entry: usize,
-    task: Option<task::Waker>,
+    pub(super) bucket_entry: usize,
+    pub(super) callback: bool,
+    pub(super) task: Option<task::Waker>,
 }
 
 struct ExpiredTimers<'a> {
@@ -286,6 +291,7 @@ impl Timer {
         timers.insert(TimerEntry {
             bucket: None,
             bucket_entry: 0,
+            callback: false,
             task: None,
         });
 
@@ -302,11 +308,12 @@ impl Timer {
                 timers,
                 buckets: (0..WHEEL_SIZE).map(|_| Slab::new()).collect(),
                 occupied: [0; LVL_DEPTH as usize],
+                callbacks: None,
             }))),
         }
     }
 
-    fn with_wheel<F, R>(&self, f: F) -> R
+    pub(super) fn with_wheel<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Wheel) -> R,
     {
@@ -370,6 +377,7 @@ impl Timer {
                 w.timers.insert(TimerEntry {
                     bucket: None,
                     bucket_entry: 0,
+                    callback: false,
                     task: None,
                 })
             })
@@ -379,6 +387,7 @@ impl Timer {
                 let no = w.timers.insert(TimerEntry {
                     bucket: None,
                     bucket_entry: 0,
+                    callback: false,
                     task: None,
                 });
                 w.link(no, idx);
@@ -416,7 +425,7 @@ impl Timer {
     }
 
     /// Returns the bucket index and the bucket expiry for a delay starting now.
-    fn calc_bucket(self: &Rc<Self>, millis: u64) -> (usize, u64) {
+    pub(super) fn calc_bucket(self: &Rc<Self>, millis: u64) -> (usize, u64) {
         self.insert_flags(Flags::RUNNING);
 
         // The delay is measured from the wheel clock. The cached time is not
@@ -455,7 +464,7 @@ impl Timer {
     }
 
     /// Wakes the driver if the new bucket expires before the current deadline.
-    fn update_next_expiry(self: &Rc<Self>, expiry: u64) {
+    pub(super) fn update_next_expiry(self: &Rc<Self>, expiry: u64) {
         if expiry < self.next_expiry.get() {
             self.next_expiry.set(expiry);
             if self.flags.get().contains(Flags::DRIVER_STARTED) {
@@ -542,6 +551,7 @@ impl Timer {
                 timers,
                 buckets,
                 occupied,
+                callbacks,
             } = wheel;
             for bucket in buckets.iter_mut() {
                 for no in bucket.drain() {
@@ -549,6 +559,14 @@ impl Timer {
                 }
             }
             *occupied = [0; LVL_DEPTH as usize];
+            if let Some(callbacks) = callbacks {
+                callbacks.ready.clear();
+                for ticket in callbacks.entries.values() {
+                    if let Some(state) = ticket.state.upgrade() {
+                        state.pending.set(false);
+                    }
+                }
+            }
 
             self.next_expiry.set(u64::MAX);
             self.elapsed.set(0);
@@ -564,7 +582,7 @@ impl Wheel {
     }
 
     /// Stores the timer in bucket `idx`.
-    fn link(&mut self, hnd: usize, idx: usize) {
+    pub(super) fn link(&mut self, hnd: usize, idx: usize) {
         let entry = &mut self.timers[hnd];
         entry.bucket = Some(idx as u16);
         entry.bucket_entry = self.buckets[idx].insert(hnd);
@@ -576,7 +594,7 @@ impl Wheel {
     /// Removes the timer from its bucket and marks it as elapsed.
     ///
     /// Returns `false` if the timer has already elapsed.
-    fn unlink(&mut self, hnd: usize) -> bool {
+    pub(super) fn unlink(&mut self, hnd: usize) -> bool {
         let entry = &mut self.timers[hnd];
         if let Some(idx) = entry.bucket.take() {
             let idx = idx as usize;
@@ -593,14 +611,14 @@ impl Wheel {
     }
 
     /// Moves the timer to bucket `idx`.
-    fn relink(&mut self, hnd: usize, idx: usize) {
+    pub(super) fn relink(&mut self, hnd: usize, idx: usize) {
         if self.timers[hnd].bucket != Some(idx as u16) {
             self.unlink(hnd);
             self.link(hnd, idx);
         }
     }
 
-    /// Marks timers elapsed and wakes them in place.
+    /// Marks timers elapsed, waking tasks in place and queueing only callbacks.
     fn execute_expired_timers(&mut self, mut clk: u64) {
         for lvl in 0..LVL_DEPTH {
             let idx = ((clk & LVL_MASK) + lvl * LVL_SIZE) as usize;
@@ -615,7 +633,10 @@ impl Wheel {
                 for no in expired.entries.by_ref() {
                     let entry = &mut expired.timers[no];
                     entry.bucket = None;
-                    if let Some(task) = entry.task.take() {
+                    if entry.callback {
+                        let callbacks = self.callbacks.as_mut().unwrap();
+                        callbacks.ready.push(callbacks.entries[&no].clone());
+                    } else if let Some(task) = entry.task.take() {
                         task.wake();
                     }
                 }
@@ -691,8 +712,8 @@ impl Future for TimerDriver {
         }
         timer.driver.register(cx.waker());
 
-        let now = Instant::now();
-        
+        let mut now = Instant::now();
+
         loop {
             let expiry = timer.next_expiry.get();
             if expiry == u64::MAX {
@@ -721,9 +742,16 @@ impl Future for TimerDriver {
             timer.elapsed.set(expiry);
             timer.elapsed_time.set(Some(deadline));
 
-            let next = timer.with_wheel(|w| {
+            let (next, callbacks) = timer.with_wheel(|w| {
                 w.execute_expired_timers(expiry);
-                timer.next_pending_bucket(w)
+                let callbacks = w.callbacks.as_mut().and_then(|callbacks| {
+                    if callbacks.ready.is_empty() {
+                        None
+                    } else {
+                        Some(mem::take(&mut callbacks.ready))
+                    }
+                });
+                (timer.next_pending_bucket(w), callbacks)
             });
 
             if let Some(next) = next {
@@ -731,6 +759,27 @@ impl Future for TimerDriver {
             } else {
                 timer.next_expiry.set(u64::MAX);
                 timer.elapsed_time.set(None);
+            }
+
+            if let Some(mut callbacks) = callbacks {
+                for ticket in callbacks.drain(..) {
+                    if timer.generation.get() != this.generation {
+                        return Poll::Ready(());
+                    }
+                    if ticket.generation == this.generation
+                        && let Some(state) = ticket.state.upgrade()
+                        && state.arm.get() == ticket.arm
+                        && state.pending.replace(false)
+                    {
+                        (state.callback)();
+                    }
+                }
+                // A callback or its captures may have stopped this runtime.
+                if timer.generation.get() != this.generation {
+                    return Poll::Ready(());
+                }
+                timer.with_wheel(|wheel| wheel.callbacks.as_mut().unwrap().ready = callbacks);
+                now = Instant::now();
             }
         }
     }
@@ -794,13 +843,14 @@ impl Future for LowresTimerDriver {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Wake, Waker};
 
     use super::*;
-    use crate::time::{Millis, interval, sleep};
+    use crate::time::{CallbackTimer, Millis, interval, sleep};
 
     #[derive(Default)]
     struct InPlaceWaker {
@@ -841,6 +891,300 @@ mod tests {
             sleep: Delay::new(Duration::ZERO),
             armed: None,
         }
+    }
+
+    fn make_due(timer: &Timer) {
+        timer.elapsed_time.set(Some(
+            Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
+        ));
+    }
+
+    #[ntex::test]
+    async fn test_callback_timer() {
+        let calls = Rc::new(Cell::new(0));
+        let count = calls.clone();
+        let callback = crate::time::CallbackTimer::new(Millis::ZERO, move || {
+            count.set(count.get() + 1);
+        });
+        assert!(!callback.is_elapsed());
+        assert_eq!(calls.get(), 0);
+        callback.reset(Millis(10_000));
+        callback.cancel();
+        assert!(callback.is_elapsed());
+        sleep(Millis(50)).await;
+        assert_eq!(calls.get(), 0);
+
+        for expected in 1..=2 {
+            callback.reset(Millis::ZERO);
+            assert!(!callback.is_elapsed());
+            sleep(Millis(50)).await;
+            assert!(callback.is_elapsed());
+            assert_eq!(calls.get(), expected);
+        }
+    }
+
+    #[test]
+    fn test_callback_stale_tickets() {
+        let timer = timer_state();
+        let calls = Rc::new(Cell::new(0));
+        let count = calls.clone();
+        let cancelled = CallbackTimer::new(Millis(1), move || count.set(count.get() + 1));
+        let count = calls.clone();
+        let reset = CallbackTimer::new(Millis(1), move || count.set(count.get() + 1));
+        let capture = Rc::new(Cell::new(0));
+        let weak = Rc::downgrade(&capture);
+        let dropped = CallbackTimer::new(Millis(1), move || capture.set(1));
+        let old_slot = dropped.hnd;
+        timer.with_wheel(|wheel| {
+            for handle in [&cancelled, &reset, &dropped] {
+                wheel.relink(handle.hnd.get(), 3);
+            }
+            wheel.execute_expired_timers(3);
+        });
+        assert!(cancelled.is_elapsed());
+        assert!(reset.is_elapsed());
+        assert!(dropped.is_elapsed());
+        assert_eq!(calls.get(), 0);
+        cancelled.cancel();
+        reset.reset(Millis(10_000));
+        drop(dropped);
+        assert!(
+            weak.upgrade().is_none(),
+            "queued tickets must not retain captures"
+        );
+        let count = calls.clone();
+        let replacement = CallbackTimer::new(Millis(10_000), move || count.set(count.get() + 100));
+        assert_eq!(replacement.hnd, old_slot);
+
+        make_due(&timer);
+        let mut driver = timer_driver(&timer);
+        assert!(
+            Pin::new(&mut driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert_eq!(calls.get(), 0);
+        assert!(!reset.is_elapsed());
+        assert!(!replacement.is_elapsed());
+    }
+
+    #[test]
+    fn test_callback_self_rearm_and_cross_cancel() {
+        let timer = timer_state();
+        let calls = Rc::new(Cell::new(0));
+        let handles = Rc::new(RefCell::new(Vec::<CallbackTimer>::new()));
+        for index in 0..2 {
+            let count = calls.clone();
+            let weak = Rc::downgrade(&handles);
+            let callback = CallbackTimer::new(Millis(1), move || {
+                count.set(count.get() + 1);
+                let handles = weak.upgrade().unwrap();
+                let handles = handles.borrow();
+                assert!(handles[index].is_elapsed());
+                handles[1 - index].cancel();
+                handles[index].reset(Millis(10_000));
+            });
+            handles.borrow_mut().push(callback);
+        }
+        timer.with_wheel(|wheel| {
+            for handle in handles.borrow().iter() {
+                wheel.relink(handle.hnd.get(), 1);
+            }
+        });
+        make_due(&timer);
+        let mut driver = timer_driver(&timer);
+        assert!(
+            Pin::new(&mut driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            handles.borrow().iter().filter(|h| !h.is_elapsed()).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_callback_drop_during_invocation() {
+        struct Capture {
+            finished: Rc<Cell<bool>>,
+            drops: Rc<Cell<usize>>,
+        }
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                assert!(self.finished.get());
+                self.drops.set(self.drops.get() + 1);
+                drop(TimerHandle::new(0));
+            }
+        }
+
+        let timer = timer_state();
+        let handle = Rc::new(RefCell::new(None::<CallbackTimer>));
+        let finished = Rc::new(Cell::new(false));
+        let drops = Rc::new(Cell::new(0));
+        let capture = Capture {
+            finished: finished.clone(),
+            drops: drops.clone(),
+        };
+        let weak = Rc::downgrade(&handle);
+        *handle.borrow_mut() = Some(CallbackTimer::new(Millis(1), move || {
+            let _capture = &capture;
+            drop(weak.upgrade().unwrap().borrow_mut().take());
+            assert_eq!(capture.drops.get(), 0);
+            capture.finished.set(true);
+        }));
+        make_due(&timer);
+        let mut driver = timer_driver(&timer);
+        assert!(
+            Pin::new(&mut driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(handle.borrow().is_none());
+        assert!(finished.get());
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn test_callback_refreshes_time() {
+        let timer = timer_state();
+        let calls = Rc::new(Cell::new(0));
+        let handles = [1, 32].map(|millis| {
+            let calls = calls.clone();
+            CallbackTimer::new(Millis(millis), move || {
+                let previous = calls.replace(calls.get() + 1);
+                if previous == 0 {
+                    std::thread::sleep(Duration::from_millis(64));
+                }
+            })
+        });
+        timer.with_wheel(|wheel| {
+            wheel.relink(handles[0].hnd.get(), 1);
+            wheel.relink(handles[1].hnd.get(), 3);
+        });
+        timer.elapsed_time.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(32))
+                .unwrap(),
+        ));
+        let mut driver = timer_driver(&timer);
+        assert!(
+            Pin::new(&mut driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert_eq!(calls.get(), 2);
+        assert!(handles.iter().all(CallbackTimer::is_elapsed));
+    }
+
+    #[test]
+    fn test_callback_panic_cleanup() {
+        let timer = timer_state();
+        let callback = CallbackTimer::new(Millis(1), || panic!("callback"));
+        let later = CallbackTimer::new(Millis(10_000), || panic!("not due"));
+        let ordinary = TimerHandle::new(10_000);
+        make_due(&timer);
+        let mut driver = timer_driver(&timer);
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = Pin::new(&mut driver).poll(&mut Context::from_waker(Waker::noop()));
+            }))
+            .is_err()
+        );
+        drop(driver);
+        assert!(callback.is_elapsed());
+        assert!(later.is_elapsed());
+        assert!(ordinary.is_elapsed());
+        assert!(!later.state.pending.get());
+        timer.with_wheel(|wheel| {
+            assert!(wheel.buckets.iter().all(Slab::is_empty));
+            assert_eq!(wheel.occupied, [0; LVL_DEPTH as usize]);
+            assert!(wheel.callbacks.as_ref().unwrap().ready.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_callback_runtime_reset_during_delivery() {
+        let timer = timer_state();
+        let calls = Rc::new(Cell::new(0));
+        let new_calls = Rc::new(Cell::new(0));
+        let replacement = Rc::new(RefCell::new(None::<CallbackTimer>));
+        let handles = [0, 1].map(|_| {
+            let timer = timer.clone();
+            let calls = calls.clone();
+            let new_calls = new_calls.clone();
+            let replacement = replacement.clone();
+            CallbackTimer::new(Millis(1), move || {
+                calls.set(calls.get() + 1);
+                timer.reset();
+                timer.insert_flags(Flags::DRIVER_STARTED);
+                let new_calls = new_calls.clone();
+                *replacement.borrow_mut() = Some(CallbackTimer::new(Millis(1), move || {
+                    new_calls.set(new_calls.get() + 1);
+                }));
+            })
+        });
+        timer.with_wheel(|wheel| {
+            for handle in &handles {
+                wheel.relink(handle.hnd.get(), 1);
+            }
+        });
+        make_due(&timer);
+        let mut old_driver = timer_driver(&timer);
+        assert!(
+            Pin::new(&mut old_driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+        assert_eq!(calls.get(), 1);
+        assert!(handles.iter().all(CallbackTimer::is_elapsed));
+        drop(old_driver);
+        assert!(!replacement.borrow().as_ref().unwrap().is_elapsed());
+        make_due(&timer);
+        let mut driver = timer_driver(&timer);
+        assert!(
+            Pin::new(&mut driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert_eq!(new_calls.get(), 1);
+    }
+
+    #[test]
+    fn test_callback_reuse_in_next_system() {
+        std::thread::spawn(|| {
+            let calls = Rc::new(Cell::new(0));
+            let mut callback = None::<CallbackTimer>;
+            for expected in 1..=2 {
+                let calls = calls.clone();
+                callback = Some(
+                    ntex::rt::System::build()
+                        .build(ntex::rt::DefaultRuntime)
+                        .block_on(async move {
+                            let callback = if let Some(callback) = callback {
+                                assert!(callback.is_elapsed());
+                                sleep(Millis(50)).await;
+                                assert_eq!(calls.get(), expected - 1);
+                                callback.reset(Millis::ZERO);
+                                callback
+                            } else {
+                                let calls = calls.clone();
+                                CallbackTimer::new(Millis::ZERO, move || {
+                                    calls.set(calls.get() + 1);
+                                })
+                            };
+                            sleep(Millis(50)).await;
+                            assert_eq!(calls.get(), expected);
+                            callback.reset(Millis(10_000));
+                            callback
+                        }),
+                );
+                assert!(callback.as_ref().unwrap().is_elapsed());
+            }
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
@@ -893,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_refreshes_time_after_wake() {
+    fn test_dispatch_uses_one_time_sample_for_wakers() {
         let timer = timer_state();
         let handles = [TimerHandle::new(1), TimerHandle::new(32)];
         timer.with_wheel(|wheel| wheel.relink(handles[1].0.get(), 3));
@@ -920,7 +1264,15 @@ mod tests {
                 .poll(&mut Context::from_waker(Waker::noop()))
                 .is_pending()
         );
-        assert!(handles.iter().all(TimerHandle::is_elapsed));
+        assert!(handles[0].is_elapsed());
+        assert!(!handles[1].is_elapsed());
+        assert_eq!(task.wakes.load(Ordering::Relaxed), 1);
+        assert!(
+            Pin::new(&mut driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(handles[1].is_elapsed());
         assert_eq!(task.wakes.load(Ordering::Relaxed), 2);
     }
 
@@ -1050,6 +1402,7 @@ mod tests {
         TimerEntry {
             bucket: None,
             bucket_entry: 0,
+            callback: false,
             task: None,
         }
     }

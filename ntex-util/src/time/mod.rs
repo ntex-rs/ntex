@@ -6,9 +6,11 @@
 )]
 use std::{cmp, future::Future, future::poll_fn, pin::Pin, task, task::Poll};
 
+mod callbacks;
 mod types;
 mod wheel;
 
+pub use self::callbacks::CallbackTimer;
 pub use self::types::{Millis, Seconds};
 pub use self::wheel::{TimerHandle, now, system_time};
 
