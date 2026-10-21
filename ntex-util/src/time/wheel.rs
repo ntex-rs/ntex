@@ -43,6 +43,8 @@
 //!   the timers stored in it. The clock advances to the scheduled time of the
 //!   bucket, not to the time the driver woke up, so a late wakeup does not
 //!   delay later timers. Buckets that are overdue are processed at once.
+//!   Wakers are invoked in place while the wheel is held; timer operations
+//!   are not reentrant.
 //! * [`LowresTimerDriver`] invalidates the cached [`system_time()`] value
 //!   every 150 milliseconds.
 //!
@@ -139,6 +141,9 @@ pub fn system_time() -> SystemTime {
 ///
 /// Dropping the handle cancels the timer. A handle may be reset and reused
 /// after it has elapsed.
+///
+/// Timer operations are not reentrant. Registered wakers must not synchronously
+/// access the timer wheel when cloned, woken or dropped.
 pub struct TimerHandle(NonZeroUsize);
 
 impl TimerHandle {
@@ -166,11 +171,13 @@ impl TimerHandle {
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         TIMER.with(|t| {
             t.with_wheel(|w| {
-                let entry = &w.timers[self.0.get()];
+                let entry = &mut w.timers[self.0.get()];
                 if entry.bucket.is_none() {
                     Poll::Ready(())
                 } else {
-                    entry.task.register(cx.waker());
+                    if entry.task.as_ref().is_none_or(|w| !w.will_wake(cx.waker())) {
+                        entry.task = Some(cx.waker().clone());
+                    }
                     Poll::Pending
                 }
             })
@@ -239,13 +246,38 @@ struct Wheel {
     occupied: [u64; LVL_DEPTH as usize],
 }
 
+struct WheelGuard<'a> {
+    slot: &'a Cell<Option<Box<Wheel>>>,
+    wheel: Option<Box<Wheel>>,
+}
+
+impl Drop for WheelGuard<'_> {
+    fn drop(&mut self) {
+        self.slot.set(self.wheel.take());
+    }
+}
+
 #[derive(Debug)]
 struct TimerEntry {
     /// Bucket index, `None` once the timer has elapsed.
     bucket: Option<u16>,
     /// Key of the entry in the bucket.
     bucket_entry: usize,
-    task: LocalWaker,
+    task: Option<task::Waker>,
+}
+
+struct ExpiredTimers<'a> {
+    timers: &'a mut Slab<TimerEntry>,
+    entries: slab::Drain<'a, usize>,
+}
+
+impl Drop for ExpiredTimers<'_> {
+    fn drop(&mut self) {
+        // A panicking wake must not leave entries pointing into a drained bucket.
+        for no in self.entries.by_ref() {
+            self.timers[no].bucket = None;
+        }
+    }
 }
 
 impl Timer {
@@ -254,7 +286,7 @@ impl Timer {
         timers.insert(TimerEntry {
             bucket: None,
             bucket_entry: 0,
-            task: LocalWaker::new(),
+            task: None,
         });
 
         Timer {
@@ -278,10 +310,15 @@ impl Timer {
     where
         F: FnOnce(&mut Wheel) -> R,
     {
-        let mut wheel = self.wheel.take().unwrap();
-        let result = f(&mut wheel);
-        self.wheel.set(Some(wheel));
-        result
+        let mut guard = WheelGuard {
+            slot: &self.wheel,
+            wheel: Some(
+                self.wheel
+                    .take()
+                    .expect("timer wheel operations are not reentrant"),
+            ),
+        };
+        f(guard.wheel.as_deref_mut().unwrap())
     }
 
     fn insert_flags(&self, flags: Flags) -> Flags {
@@ -333,7 +370,7 @@ impl Timer {
                 w.timers.insert(TimerEntry {
                     bucket: None,
                     bucket_entry: 0,
-                    task: LocalWaker::new(),
+                    task: None,
                 })
             })
         } else {
@@ -342,7 +379,7 @@ impl Timer {
                 let no = w.timers.insert(TimerEntry {
                     bucket: None,
                     bucket_entry: 0,
-                    task: LocalWaker::new(),
+                    task: None,
                 });
                 w.link(no, idx);
                 no
@@ -370,8 +407,10 @@ impl Timer {
     /// Elapses the timer and wakes its task.
     fn remove_timer(&self, hnd: usize) {
         self.with_wheel(|w| {
-            if w.unlink(hnd) {
-                w.timers[hnd].task.wake();
+            if w.unlink(hnd)
+                && let Some(task) = w.timers[hnd].task.take()
+            {
+                task.wake();
             }
         });
     }
@@ -498,13 +537,12 @@ impl Timer {
     fn stop_wheel(&self) {
         self.remove_flags(Flags::DRIVER_STARTED);
 
-        // the wheel is in use if a driver is dropped from a timer operation
-        if let Some(mut wheel) = self.wheel.take() {
+        self.with_wheel(|wheel| {
             let Wheel {
                 timers,
                 buckets,
                 occupied,
-            } = &mut *wheel;
+            } = wheel;
             for bucket in buckets.iter_mut() {
                 for no in bucket.drain() {
                     timers[no].bucket = None;
@@ -515,8 +553,7 @@ impl Timer {
             self.next_expiry.set(u64::MAX);
             self.elapsed.set(0);
             self.elapsed_time.set(None);
-            self.wheel.set(Some(wheel));
-        }
+        });
     }
 }
 
@@ -563,7 +600,7 @@ impl Wheel {
         }
     }
 
-    /// Wakes the timers of the buckets that expire at `clk`.
+    /// Marks timers elapsed and wakes them in place.
     fn execute_expired_timers(&mut self, mut clk: u64) {
         for lvl in 0..LVL_DEPTH {
             let idx = ((clk & LVL_MASK) + lvl * LVL_SIZE) as usize;
@@ -571,10 +608,16 @@ impl Wheel {
             if !bucket.is_empty() {
                 let (lvl, bit) = Self::bucket_bit(idx);
                 self.occupied[lvl] &= !bit;
-                for no in bucket.drain() {
-                    let entry = &mut self.timers[no];
+                let mut expired = ExpiredTimers {
+                    timers: &mut self.timers,
+                    entries: bucket.drain(),
+                };
+                for no in expired.entries.by_ref() {
+                    let entry = &mut expired.timers[no];
                     entry.bucket = None;
-                    entry.task.wake();
+                    if let Some(task) = entry.task.take() {
+                        task.wake();
+                    }
                 }
             }
 
@@ -649,7 +692,7 @@ impl Future for TimerDriver {
         timer.driver.register(cx.waker());
 
         let now = Instant::now();
-
+        
         loop {
             let expiry = timer.next_expiry.get();
             if expiry == u64::MAX {
@@ -751,8 +794,182 @@ impl Future for LowresTimerDriver {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Wake, Waker};
+
     use super::*;
     use crate::time::{Millis, interval, sleep};
+
+    #[derive(Default)]
+    struct InPlaceWaker {
+        wakes: AtomicUsize,
+        delay: Duration,
+        panic_on_wake: bool,
+    }
+
+    impl Wake for InPlaceWaker {
+        fn wake(self: Arc<Self>) {
+            TIMER.with(|timer| {
+                let wheel = timer.wheel.take();
+                let held = wheel.is_none();
+                timer.wheel.set(wheel);
+                assert!(held, "waker must run in place while the wheel is held");
+            });
+            let previous = self.wakes.fetch_add(1, Ordering::Relaxed);
+            assert!(!self.panic_on_wake, "notification");
+            if previous == 0 && !self.delay.is_zero() {
+                std::thread::sleep(self.delay);
+            }
+        }
+    }
+
+    fn timer_state() -> Rc<Timer> {
+        TIMER.with(|timer| {
+            timer.reset();
+            // These tests drive expiry manually, without an executor.
+            timer.insert_flags(Flags::DRIVER_STARTED);
+            timer.clone()
+        })
+    }
+
+    fn timer_driver(timer: &Rc<Timer>) -> TimerDriver {
+        TimerDriver {
+            timer: timer.clone(),
+            generation: timer.generation.get(),
+            sleep: Delay::new(Duration::ZERO),
+            armed: None,
+        }
+    }
+
+    #[test]
+    fn test_wheel_access_restored_on_unwind() {
+        let timer = Timer::new();
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                timer.with_wheel(|wheel| {
+                    wheel.timers.insert(entry());
+                    panic!("wheel operation");
+                });
+            }))
+            .is_err()
+        );
+        timer.with_wheel(|wheel| assert_eq!(wheel.timers.len(), 2));
+    }
+
+    #[test]
+    fn test_wake_in_place() {
+        let timer = timer_state();
+        let task = Arc::new(InPlaceWaker::default());
+        let waker = Waker::from(task.clone());
+        let mut cx = Context::from_waker(&waker);
+        for reset in [false, true] {
+            let handle = TimerHandle::new(10_000);
+            assert!(handle.poll_elapsed(&mut cx).is_pending());
+            if reset {
+                handle.reset(0);
+            } else {
+                handle.elapse();
+            }
+            assert!(handle.is_elapsed());
+        }
+        let handles = [TimerHandle::new(1), TimerHandle::new(1)];
+        for handle in &handles {
+            assert!(handle.poll_elapsed(&mut cx).is_pending());
+        }
+        timer.elapsed_time.set(Some(
+            Instant::now().checked_sub(Duration::from_secs(20)).unwrap(),
+        ));
+        let mut driver = timer_driver(&timer);
+        assert!(
+            Pin::new(&mut driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(handles.iter().all(TimerHandle::is_elapsed));
+        assert_eq!(task.wakes.load(Ordering::Relaxed), 4);
+        assert_eq!(Arc::strong_count(&task), 2);
+    }
+
+    #[test]
+    fn test_dispatch_refreshes_time_after_wake() {
+        let timer = timer_state();
+        let handles = [TimerHandle::new(1), TimerHandle::new(32)];
+        timer.with_wheel(|wheel| wheel.relink(handles[1].0.get(), 3));
+        let task = Arc::new(InPlaceWaker {
+            delay: Duration::from_millis(64),
+            ..InPlaceWaker::default()
+        });
+        let waker = Waker::from(task.clone());
+        for handle in &handles {
+            assert!(
+                handle
+                    .poll_elapsed(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+        }
+        timer.elapsed_time.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(32))
+                .unwrap(),
+        ));
+        let mut driver = timer_driver(&timer);
+        assert!(
+            Pin::new(&mut driver)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert!(handles.iter().all(TimerHandle::is_elapsed));
+        assert_eq!(task.wakes.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_dispatch_panic_cleans_expired_bucket() {
+        let timer = timer_state();
+        let handles = [TimerHandle::new(1), TimerHandle::new(1)];
+        timer.with_wheel(|wheel| {
+            let bucket = wheel.timers[handles[0].0.get()].bucket.unwrap();
+            wheel.relink(handles[1].0.get(), usize::from(bucket));
+        });
+        let task = Arc::new(InPlaceWaker {
+            panic_on_wake: true,
+            ..InPlaceWaker::default()
+        });
+        let waker = Waker::from(task.clone());
+        for handle in &handles {
+            assert!(
+                handle
+                    .poll_elapsed(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+        }
+        timer.elapsed_time.set(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(64))
+                .unwrap(),
+        ));
+        let mut driver = timer_driver(&timer);
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = Pin::new(&mut driver).poll(&mut Context::from_waker(Waker::noop()));
+            }))
+            .is_err()
+        );
+        assert_eq!(task.wakes.load(Ordering::Relaxed), 1);
+        assert!(handles.iter().all(TimerHandle::is_elapsed));
+        timer.with_wheel(|wheel| {
+            assert!(wheel.buckets.iter().all(Slab::is_empty));
+            assert_eq!(wheel.occupied, [0; LVL_DEPTH as usize]);
+        });
+        for handle in &handles {
+            handle.reset(10_000);
+            assert!(!handle.is_elapsed());
+        }
+        drop(driver);
+        assert!(handles.iter().all(TimerHandle::is_elapsed));
+        assert!(!timer.flags.get().contains(Flags::DRIVER_STARTED));
+    }
 
     /// A handle dropped by a thread-local destructor after the wheel is
     /// destroyed must not panic.
@@ -833,7 +1050,7 @@ mod tests {
         TimerEntry {
             bucket: None,
             bucket_entry: 0,
-            task: LocalWaker::new(),
+            task: None,
         }
     }
 
