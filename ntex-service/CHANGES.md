@@ -2,6 +2,10 @@
 
 ## [5.3.0] - 2026-10-21
 
+* Reduce the initial readiness waiter reservation for small pipelines
+
+* Keep up to two readiness notification wakers inline to avoid wake-buffer allocations
+
 * Fix deadlock when a readiness check inside a service call waited for another binding's
   pipeline readiness check that was itself waiting for resources held by the call
 
