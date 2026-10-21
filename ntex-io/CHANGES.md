@@ -1,6 +1,6 @@
 # Changes
 
-## [4.5.0] - Unreleased
+## [4.5.0] - 2026-10-21
 
 * Add `tracker` feature and `IoConfig::set_buf_tracker()`, memory attribution
   of read buffers to a `BytesTracker`, per connection or shared by a configuration

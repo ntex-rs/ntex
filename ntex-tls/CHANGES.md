@@ -1,6 +1,6 @@
 # Changes
 
-## [4.4.0] - Unreleased
+## [4.4.0] - 2026-10-21
 
 * Subscribe TLS acceptors to the max handshake counter in `Service::bind`, so
   cached readiness is invalidated when the counter fills or frees a slot

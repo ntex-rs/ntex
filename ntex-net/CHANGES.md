@@ -1,7 +1,6 @@
 # Changes
 
-
-## [4.6.0] - Unreleased
+## [4.6.0] - 2026-10-21
 
 * Add `tracker` feature, enables `ntex-io/tracker`. io-uring charges a received ring page to
   the connection's read buffer tracker
