@@ -2,6 +2,9 @@
 
 ## [5.3.0] - 2026-10-21
 
+* Fix deadlock when a readiness check inside a service call waited for another binding's
+  pipeline readiness check that was itself waiting for resources held by the call
+
 * Reuse readiness observers across check retries, and avoid allocating and redundant self-wakes when waking pipeline readiness checks
 
 * Reuse readiness waiter buffers when waking queued readiness checks

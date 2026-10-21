@@ -384,7 +384,7 @@ where
             self.readiness
                 .ready(|| ctx.ready_generation(&self.s))
                 .await?;
-            self.s.call(req, ctx).await
+            self.s.call(req, ctx.into_call()).await
         })
     }
 
