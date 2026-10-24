@@ -1,5 +1,18 @@
 # Changes
 
+## [4.5.0] - Unreleased
+
+* Keep owned local wake handles in timer registrations and driver teardown,
+  preserving 32-byte timer entries on 64-bit targets and existing in-place
+  expiry delivery and callback handling
+
+* Store runtime-local wake handles in `task::LocalWaker`. Add `take_local()` to
+  extract the owned local handle; `take()` still returns a standard `Waker` without
+  cloning
+
+* Preserve the registered waker if cloning a replacement panics, while keeping
+  slot state consistent during reentrant clone, drop, and wake callbacks
+
 ## [4.4.0] - 2026-10-21
 
 * Add `bstream::channel_with_notifier()` for notification-invalidated sender

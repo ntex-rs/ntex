@@ -200,6 +200,96 @@ fn remote_wake() {
     });
 }
 
+#[test]
+fn local_waker_completion_and_remote_release() {
+    model(|| {
+        let rt = new_rt();
+        let (st, task) = pending(&rt);
+        let local = crate::LocalWaker::from(st.waker());
+        let remote = local.clone().into_waker();
+        let th = thread::spawn(move || {
+            let cloned = remote.clone();
+            let fallback = crate::LocalWaker::from_waker(&remote);
+            fallback.clone().wake();
+            drop(fallback);
+            drop(cloned);
+            remote.wake();
+        });
+        st.ready.store(true, Ordering::Release);
+        local.clone().wake();
+        drain(&rt);
+        assert_eq!(*join(task).unwrap(), 42);
+        local.clone().wake();
+        drop(st.waker.lock().unwrap().take());
+        th.join().unwrap();
+        drop(local);
+        assert_eq!(st.drops.load(Ordering::Relaxed), 1);
+        assert_freed(&rt);
+    });
+}
+
+#[test]
+fn local_waker_remote_cancellation() {
+    model(|| {
+        let rt = new_rt();
+        let (st, task) = pending(&rt);
+        let local = crate::LocalWaker::from(st.waker());
+        let remote = local.clone().into_waker();
+        let th = thread::spawn(move || {
+            let cloned = remote.clone();
+            remote.wake_by_ref();
+            task.cancel();
+            cloned.wake();
+            drop(remote);
+        });
+        local.clone().wake();
+        run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
+        local.wake_by_ref();
+        local.clone().wake();
+        drop(st.waker.lock().unwrap().take());
+        drop(local);
+        th.join().unwrap();
+        assert_eq!(st.drops.load(Ordering::Relaxed), 1);
+        assert_freed(&rt);
+    });
+}
+
+#[test]
+fn local_waker_remote_shutdown() {
+    model(|| {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let (st, task) = pending(&rt);
+        let local = crate::LocalWaker::from(st.waker.lock().unwrap().take().unwrap());
+        let remote = local.clone().into_waker();
+        let th = thread::spawn(move || {
+            let cloned = remote.clone();
+            remote.wake_by_ref();
+            cloned.wake();
+            remote
+        });
+        local.clone().wake();
+        drop(rt);
+        assert!(task.is_finished());
+        drop(task);
+        local.wake_by_ref();
+        local.clone().wake();
+        let remote = th.join().unwrap();
+        let converted = local.clone().into_waker();
+        let th = thread::spawn(move || {
+            let cloned = remote.clone();
+            drop(remote);
+            cloned.wake();
+            converted.wake();
+        });
+        drop(local.clone());
+        drop(local);
+        th.join().unwrap();
+        assert_eq!(st.drops.load(Ordering::Relaxed), 1);
+        assert!(queue.upgrade().is_none(), "task alive after shutdown");
+    });
+}
+
 /// A coalesced remote wake publishes the writes before it, the owner thread
 /// may have consumed the pending wake before the readiness is set.
 #[test]

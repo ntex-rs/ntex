@@ -1,12 +1,16 @@
 # Changes
 
-## [Unreleased]
+## [4.4.0] - Unreleased
 
 * Abort the process on a panic during shutdown while an earlier panic is unwinding or
   held to be resumed, instead of suppressing it or replacing the original panic
 
 * Unregister an arbiter and run its `on_shutdown` callbacks when its event loop panic
   unwinds through the runner, as for runners that return the panic as an error
+
+* Add `LocalWaker`, a thread-confined owned wake handle with native owner-thread
+  operations and a standard-waker fallback for other runtimes and wrapped
+  wakers.
 
 ## [4.3.0] - 2026-10-21
 

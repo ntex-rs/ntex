@@ -329,6 +329,47 @@ impl Drop for Awaiter {
 static WAKER_VTABLE: RawWakerVTable =
     RawWakerVTable::new(clone_waker, wake, wake_by_ref, drop_waker);
 
+/// Recognizes the supplied native waker on its owner thread.
+#[inline]
+pub(crate) fn is_local_waker(waker: &Waker) -> bool {
+    ptr::eq(waker.vtable(), &raw const WAKER_VTABLE) && is_owner(unsafe { task_ptr(waker.data()) })
+}
+
+/// Clones a native reference on its owner thread.
+///
+/// The caller must hold a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn clone_local_waker(ptr: *const ()) {
+    let h = unsafe { task_ptr(ptr) };
+    if header(h).state.get() & FINISHED == 0 {
+        inc_local(h);
+    } else {
+        inc_shared(h);
+    }
+}
+
+/// Wakes a native task on its owner thread, transferring a reference if owned.
+///
+/// The caller must hold a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn wake_local_waker(ptr: *const (), owned: bool) {
+    wake_local(unsafe { task_ptr(ptr) }, owned);
+}
+
+/// Releases a native reference on its owner thread.
+///
+/// The caller must own a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn drop_local_waker(ptr: *const ()) {
+    release_local(unsafe { task_ptr(ptr) });
+}
+
+/// Uses the thread-safe vtable, including when converting a local reference.
+#[inline]
+pub(crate) fn raw_waker(ptr: *const ()) -> RawWaker {
+    RawWaker::new(ptr, &WAKER_VTABLE)
+}
+
 /// Header of a task, the caller holds a reference for the lifetime.
 #[inline]
 fn header<'a>(h: NonNull<Header>) -> &'a Header {
@@ -351,16 +392,19 @@ unsafe fn task_ptr(ptr: *const ()) -> NonNull<Header> {
 /// otherwise a remote one.
 unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
     let h = unsafe { task_ptr(ptr) };
-    // the remote word counts the references of a finished task
-    if is_owner(h) && header(h).state.get() & FINISHED == 0 {
-        inc_local(h);
+    if is_owner(h) {
+        unsafe { clone_local_waker(ptr) };
     } else {
-        let prev = header(h).remote.fetch_add(R_REF, Ordering::Relaxed);
-        if delta(prev) > MAX_REFS {
-            abort();
-        }
+        inc_shared(h);
     }
-    RawWaker::new(ptr, &WAKER_VTABLE)
+    raw_waker(ptr)
+}
+
+fn inc_shared(h: NonNull<Header>) {
+    let prev = header(h).remote.fetch_add(R_REF, Ordering::Relaxed);
+    if delta(prev) > MAX_REFS {
+        abort();
+    }
 }
 
 unsafe fn wake(ptr: *const ()) {
