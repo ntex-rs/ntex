@@ -356,11 +356,11 @@ impl RunnableQueue {
     pub(super) fn shutdown(&self) {
         fn cleanup(f: impl Fn(), first_panic: &mut Option<Box<dyn std::any::Any + Send>>) {
             while let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f)) {
-                if first_panic.is_none() && !std::thread::panicking() {
-                    *first_panic = Some(payload);
-                } else {
-                    suppress_cleanup_panic(payload);
+                if first_panic.is_some() || std::thread::panicking() {
+                    std::mem::forget(payload);
+                    crate::abort_on_second_panic();
                 }
+                *first_panic = Some(payload);
             }
         }
 
@@ -414,31 +414,6 @@ impl fmt::Debug for RunnableQueue {
             .field("current", &self.current.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
-}
-
-#[cold]
-pub(super) fn suppress_cleanup_panic(payload: Box<dyn std::any::Any + Send>) {
-    fn discard(result: std::thread::Result<()>) {
-        if let Err(payload) = result {
-            // Do not recursively run arbitrary destructors after disposal or
-            // logging itself panics. Standard message payloads are safe to drop.
-            if payload.is::<&'static str>() || payload.is::<String>() {
-                drop(payload);
-            } else {
-                std::mem::forget(payload);
-            }
-        }
-    }
-
-    discard(std::panic::catch_unwind(|| {
-        log::error!(
-            target: LOG_TARGET,
-            "Panic during runtime cleanup suppressed to preserve the original panic"
-        );
-    }));
-    discard(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-        || drop(payload),
-    )));
 }
 
 pub(crate) struct RemotePermit<'a> {

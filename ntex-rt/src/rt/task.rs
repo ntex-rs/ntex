@@ -19,11 +19,10 @@
 //! queue and into the remote queue. The runtime also lists its unfinished
 //! tasks, it drops their futures when it is dropped.
 use std::cell::Cell;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, atomic::Ordering};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::{fmt, future::Future, marker::PhantomData, mem, mem::ManuallyDrop, pin::Pin};
-use std::{process::abort, ptr, ptr::NonNull, thread};
+use std::{process::abort, ptr, ptr::NonNull};
 
 use crate::handle::SpawnLocation;
 use crate::rt::{REPORTED, RunnableQueue, TaskStats, current_thread_id};
@@ -614,19 +613,9 @@ impl Drop for Completed {
         let Some(w) = self.awaiter.take() else {
             return;
         };
-        let detached = self.detached;
-        let notify = move || {
-            if !detached {
-                w.wake();
-            }
-        };
-        if thread::panicking() {
-            // a second panic would abort
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(notify)) {
-                super::suppress_cleanup_panic(payload);
-            }
-        } else {
-            notify();
+        // a panic of the waker while unwinding aborts the process
+        if !self.detached {
+            w.wake();
         }
     }
 }

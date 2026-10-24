@@ -16,7 +16,7 @@ use std::thread;
 mod queue;
 pub(crate) mod task;
 
-use self::queue::{CacheLine, RunnableQueue, suppress_cleanup_panic};
+use self::queue::{CacheLine, RunnableQueue};
 
 /// Log target of the scheduler, also used by its submodules.
 const LOG_TARGET: &str = module_path!();
@@ -73,8 +73,8 @@ pub(crate) fn current_thread_id() -> ThreadId {
 /// [`Handle`] to spawn tasks from other threads.
 ///
 /// Dropping the runtime cancels its tasks. If cleanup panics, shutdown finishes
-/// before the first panic is resumed. Secondary cleanup panics are logged and
-/// suppressed, including when the runtime is dropped during an existing unwind.
+/// before the panic is resumed. A second cleanup panic, or a cleanup panic
+/// while the runtime is dropped during an existing unwind, aborts the process.
 ///
 /// ```compile_fail
 /// fn assert_send<T: Send>() {}

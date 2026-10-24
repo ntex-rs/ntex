@@ -27,6 +27,10 @@ impl DriverType {
 }
 
 pub trait Runner: Send + Sync + 'static {
+    /// Runs the future to completion.
+    ///
+    /// A panic of the event loop may be returned as an error or may unwind,
+    /// both are handled the same way.
     fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>>;
 }
 
@@ -123,12 +127,21 @@ where
 
     ntex_error::set_backtrace_start_alt("ntex/ntex-rt/src/driver.rs", 0);
     // finalizes the thread's arbiter once its event loop has exited,
-    // including when the runner returns an error or lets a panic escape
-    let _finalize = FinalizeArbiter;
-    run.block_on(Box::pin(async move {
+    // including when the runner returns an error or a shutdown callback panics
+    let finalize = FinalizeArbiter;
+    let fut = Box::pin(async move {
         let r = fut.await;
         *result_inner.borrow_mut() = Some(r);
-    }))?;
+    });
+    // a panic escaping the runner is returned like a runner error, so the
+    // caller cleans up the same way for unwinding and catching runners
+    let res =
+        panic::catch_unwind(panic::AssertUnwindSafe(|| run.block_on(fut))).unwrap_or_else(Err);
+    if let Err(e) = res {
+        // the event loop panicked, a panic of `on_stop` aborts the process
+        crate::abort_on_panic(|| drop(finalize));
+        return Err(e);
+    }
 
     crate::arbiter::run_shutdown_callbacks();
     unsafe {
