@@ -7,6 +7,10 @@
 //! Use [`System::build()`] to configure a system, [`spawn()`] to start a local
 //! task, and [`spawn_blocking()`] for blocking work.
 //!
+//! [`LocalWaker`] owns a thread-confined wake handle. It specializes native
+//! task wakes on their owner thread and preserves standard waker behavior
+//! for other runtimes and wrapped wakers.
+//!
 //! Runtime backends are selected with Cargo features:
 //!
 //! - no runtime feature uses the native ntex runtime
@@ -26,6 +30,7 @@ mod busy;
 mod capture;
 mod driver;
 mod handle;
+mod local_waker;
 mod metrics;
 mod pool;
 pub mod signals;
@@ -46,6 +51,7 @@ pub mod rt_tokio;
 pub use self::arbiter::{Arbiter, get_item, remove_all_items, set_item, with_item};
 pub use self::builder::{Builder, SystemRunner};
 pub use self::driver::{BlockFuture, Driver, DriverType, Notify, PollResult, Runner};
+pub use self::local_waker::LocalWaker;
 pub use self::metrics::{HISTOGRAM_BUCKETS, Histogram, LatencyMetrics};
 pub use self::pool::{BlockingError, BlockingResult, PoolMetrics, ThreadPool, spawn_blocking};
 pub use self::rt::{Runtime, RuntimeBuilder};

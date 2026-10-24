@@ -89,6 +89,34 @@ when cross-thread work must be stoppable.
 [`JoinHandle`]: https://docs.ntex.rs/api/ntex/rt/struct.JoinHandle.html
 [`ntex::rt::spawn`]: https://docs.ntex.rs/api/ntex/rt/fn.spawn.html
 
+## Owner-thread wake handles
+
+[`ntex_rt::LocalWaker`] is an owned, thread-confined wake handle, not the
+notification slot named `ntex::task::LocalWaker`. Native ntex task wakers
+acquired on their owner thread use local operations without repeating the
+thread-identity check on every clone, wake, or drop. Timers, I/O waiters, and
+notification slots retain these handles internally.
+
+Acquisition from a borrowed standard waker still checks its representation
+and clones wake ownership. Retaining the handle amortizes that work;
+repeatedly acquiring and converting it is not a free optimization.
+`into_waker()` transfers ownership back to a thread-safe standard waker
+without cloning. Local handles cannot themselves cross threads.
+
+On 64-bit targets the handle, its `Option`, and the notification slot each
+occupy 16 bytes. Neither native nor fallback handles add a wrapper allocation,
+and the native task header does not grow. Arbitrary waker callbacks may still
+allocate, as may timer or I/O storage when it first grows.
+
+This is a hot-path optimization, not a guarantee of faster task scheduling or
+request handling. Same-waker registration still has representation-checking
+overhead. Tokio, Compio, and wrapped or custom wakers retain their original
+callbacks and may incur small additional dispatch costs. Completed native
+tasks still use shared atomic reference accounting, and mixed remote wakes
+still contend on shared task state.
+
+[`ntex_rt::LocalWaker`]: https://docs.ntex.rs/api/ntex_rt/struct.LocalWaker.html
+
 ## Timers and timeouts
 
 Use `ntex::time` instead of a backend-specific timer so the code works with

@@ -1,5 +1,10 @@
 # Changes
 
+## [4.6.0] - Unreleased
+
+* Store owned runtime-local wake handles in tagged I/O waiters, reusable wake
+  buffers, and the persistent write task without growing their storage.
+
 ## [4.5.0] - 2026-10-21
 
 * Add `tracker` feature and `IoConfig::set_buf_tracker()`, memory attribution

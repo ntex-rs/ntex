@@ -1,4 +1,4 @@
-//! Allocation counts of filter chain conversions.
+//! Allocation counts of filter chain conversions and local waiter operations.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::{cell::Cell, io};
 
@@ -89,4 +89,42 @@ async fn filter_chain_conversions_allocate_only_the_new_filter() {
     let (io, n) = allocs(|| io.boxed());
     assert_eq!(n, 1, "boxed");
     drop(io);
+}
+
+#[ntex::test]
+async fn local_waiter_reuse_and_delivery_do_not_allocate() {
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct Wrapped(Waker);
+
+    impl Wake for Wrapped {
+        fn wake(self: Arc<Self>) {
+            self.0.wake_by_ref();
+        }
+    }
+
+    let io = Io::new(Transport, SharedCfg::new("SRV"));
+    let waiter = io.waiter(7);
+    std::future::poll_fn(|cx| {
+        let wrapped = Waker::from(Arc::new(Wrapped(cx.waker().clone())));
+        let cycle = || {
+            let mut native = Context::from_waker(cx.waker());
+            let mut fallback = Context::from_waker(&wrapped);
+            assert!(waiter.poll_ready(&mut native).is_pending());
+            assert!(waiter.poll_ready(&mut native).is_pending());
+            assert!(waiter.poll_ready(&mut fallback).is_pending());
+            io.wake(7);
+            assert!(waiter.poll_ready(&mut fallback).is_ready());
+            assert!(waiter.poll_ready(&mut fallback).is_pending());
+            assert!(waiter.poll_ready(&mut native).is_pending());
+            io.wake(7);
+            assert!(waiter.poll_ready(&mut native).is_ready());
+        };
+        cycle();
+        let ((), count) = allocs(cycle);
+        assert_eq!(count, 0, "warmed-up registration, replacement and wake");
+        Poll::Ready(())
+    })
+    .await;
 }

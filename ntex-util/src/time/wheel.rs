@@ -57,6 +57,10 @@
 //! is also reset once the arbiter storage of the stopped system is cleared,
 //! so that the next runtime on the thread starts its own drivers. Drivers of
 //! an older generation exit without touching the state.
+//!
+//! Registrations retain owned [`ntex_rt::LocalWaker`] handles, specializing
+//! native owner-thread wakes without allocating wrappers or growing entries.
+//! Standard wakers are still accepted at polling boundaries.
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant, SystemTime};
 use std::{cell::Cell, cmp, future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
@@ -178,7 +182,7 @@ impl TimerHandle {
                     Poll::Ready(())
                 } else {
                     if entry.task.as_ref().is_none_or(|w| !w.will_wake(cx.waker())) {
-                        entry.task = Some(cx.waker().clone());
+                        entry.task = Some(ntex_rt::LocalWaker::from_waker(cx.waker()));
                     }
                     Poll::Pending
                 }
@@ -268,8 +272,11 @@ pub(super) struct TimerEntry {
     /// Key of the entry in the bucket.
     pub(super) bucket_entry: usize,
     pub(super) callback: bool,
-    pub(super) task: Option<task::Waker>,
+    pub(super) task: Option<ntex_rt::LocalWaker>,
 }
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(mem::size_of::<TimerEntry>() == 32);
 
 struct ExpiredTimers<'a> {
     timers: &'a mut Slab<TimerEntry>,
@@ -537,8 +544,8 @@ impl Timer {
         self.generation.set(self.generation.get().wrapping_add(1));
         self.stop_wheel();
         self.stop_lowres();
-        self.driver.take();
-        self.lowres_driver.take();
+        self.driver.take_local();
+        self.lowres_driver.take_local();
     }
 
     /// Marks all timers as elapsed and resets the wheel, called when the timer
@@ -847,7 +854,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::task::{Context, Wake, Waker};
+    use std::task::{Context, RawWaker, RawWakerVTable, Wake, Waker};
 
     use super::*;
     use crate::future::OnDropFn;
@@ -898,6 +905,259 @@ mod tests {
         timer.elapsed_time.set(Some(
             Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
         ));
+    }
+
+    #[derive(Debug)]
+    struct NoopNotify;
+
+    impl ntex_rt::Notify for NoopNotify {
+        fn notify(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_local_waker_registration() {
+        struct Registration {
+            inner: Waker,
+            clones: AtomicUsize,
+            panic_on_clone: AtomicBool,
+        }
+
+        // Keep clone identity stable without relying on generic vtable deduplication.
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(
+            |data| unsafe {
+                let state = &*data.cast::<Registration>();
+                assert!(!state.panic_on_clone.load(Ordering::Relaxed), "clone");
+                state.clones.fetch_add(1, Ordering::Relaxed);
+                Arc::increment_strong_count(data.cast::<Registration>());
+                RawWaker::new(data, &VTABLE)
+            },
+            |data| unsafe {
+                Arc::from_raw(data.cast::<Registration>())
+                    .inner
+                    .wake_by_ref();
+            },
+            |data| unsafe {
+                (*data.cast::<Registration>()).inner.wake_by_ref();
+            },
+            |data| unsafe {
+                drop(Arc::from_raw(data.cast::<Registration>()));
+            },
+        );
+
+        let wrap = |task: &Arc<InPlaceWaker>| {
+            let state = Arc::new(Registration {
+                inner: Waker::from(task.clone()),
+                clones: AtomicUsize::new(0),
+                panic_on_clone: AtomicBool::new(false),
+            });
+            let waker = unsafe {
+                Waker::from_raw(RawWaker::new(Arc::into_raw(state.clone()).cast(), &VTABLE))
+            };
+            (state, waker)
+        };
+
+        let timer = timer_state();
+        let handle = TimerHandle::new(10_000);
+        let old_task = Arc::new(InPlaceWaker::default());
+        let new_task = Arc::new(InPlaceWaker::default());
+        let (old, old_waker) = wrap(&old_task);
+        let (new, new_waker) = wrap(&new_task);
+        let mut old_cx = Context::from_waker(&old_waker);
+        let mut new_cx = Context::from_waker(&new_waker);
+
+        assert!(handle.poll_elapsed(&mut old_cx).is_pending());
+        handle.reset(20_000);
+        assert!(handle.poll_elapsed(&mut old_cx).is_pending());
+        assert_eq!(old.clones.load(Ordering::Relaxed), 1);
+        assert_eq!(Arc::strong_count(&old), 3);
+
+        new.panic_on_clone.store(true, Ordering::Relaxed);
+        assert!(catch_unwind(AssertUnwindSafe(|| handle.poll_elapsed(&mut new_cx))).is_err());
+        timer.with_wheel(|wheel| {
+            assert!(
+                wheel.timers[handle.0.get()]
+                    .task
+                    .as_ref()
+                    .unwrap()
+                    .will_wake(&old_waker)
+            );
+        });
+        assert_eq!(Arc::strong_count(&old), 3);
+        assert_eq!(Arc::strong_count(&new), 2);
+
+        new.panic_on_clone.store(false, Ordering::Relaxed);
+        assert!(handle.poll_elapsed(&mut new_cx).is_pending());
+        assert!(handle.poll_elapsed(&mut new_cx).is_pending());
+        assert_eq!(new.clones.load(Ordering::Relaxed), 1);
+        assert_eq!(Arc::strong_count(&old), 2);
+        assert_eq!(Arc::strong_count(&new), 3);
+
+        timer.with_wheel(|wheel| {
+            wheel.relink(handle.0.get(), 3);
+            wheel.execute_expired_timers(3);
+        });
+        assert!(handle.poll_elapsed(&mut new_cx).is_ready());
+        assert_eq!(new.clones.load(Ordering::Relaxed), 1);
+        assert_eq!(new_task.wakes.load(Ordering::Relaxed), 1);
+        assert_eq!(old_task.wakes.load(Ordering::Relaxed), 0);
+        assert_eq!(Arc::strong_count(&new), 2);
+
+        handle.reset(10_000);
+        assert!(handle.poll_elapsed(&mut old_cx).is_pending());
+        handle.reset(0);
+        assert!(handle.is_elapsed());
+        assert_eq!(old_task.wakes.load(Ordering::Relaxed), 1);
+        assert_eq!(Arc::strong_count(&old), 2);
+
+        handle.reset(10_000);
+        assert!(handle.poll_elapsed(&mut old_cx).is_pending());
+        drop(handle);
+        assert_eq!(old_task.wakes.load(Ordering::Relaxed), 1);
+        assert_eq!(old.clones.load(Ordering::Relaxed), 3);
+        assert_eq!(Arc::strong_count(&old), 2);
+    }
+
+    #[test]
+    fn test_local_waker_native_replacement() {
+        let timer = timer_state();
+        let rt = ntex_rt::Runtime::new(Box::new(NoopNotify));
+        let handle = Rc::new(TimerHandle::new(10_000));
+        let first_waker = Rc::new(Cell::new(None));
+        let (first_handle, saved) = (handle.clone(), first_waker.clone());
+        let first = rt.spawn(std::future::poll_fn(move |cx| {
+            saved.set(Some(cx.waker().clone()));
+            first_handle.poll_elapsed(cx)
+        }));
+        rt.poll();
+
+        let second_handle = handle.clone();
+        let second = rt.spawn(std::future::poll_fn(move |cx| {
+            second_handle.poll_elapsed(cx)
+        }));
+        rt.poll();
+        timer.with_wheel(|wheel| {
+            wheel.relink(handle.0.get(), 3);
+            wheel.execute_expired_timers(3);
+        });
+        rt.poll();
+        assert!(!first.is_finished());
+        assert!(second.is_finished());
+
+        handle.reset(10_000);
+        first_waker.take().unwrap().wake();
+        rt.poll();
+        assert!(!first.is_finished());
+        handle.reset(0);
+        rt.poll();
+        assert!(first.is_finished());
+        assert_eq!(Rc::strong_count(&handle), 1);
+        drop(rt);
+        first_waker.take().unwrap().wake();
+    }
+
+    #[test]
+    fn test_local_waker_runtime_shutdown() {
+        for reuse in [false, true] {
+            let timer = timer_state();
+            let rt = ntex_rt::Runtime::new(Box::new(NoopNotify));
+            let handle = Rc::new(TimerHandle::new(10_000));
+            let (task_timer, task_handle) = (timer.clone(), handle.clone());
+            let task = rt.spawn(std::future::poll_fn(move |cx| {
+                task_timer.driver.register(cx.waker());
+                task_timer.lowres_driver.register(cx.waker());
+                task_handle.poll_elapsed(cx)
+            }));
+            rt.poll();
+            drop(rt);
+            assert!(task.is_finished());
+            assert_eq!(Rc::strong_count(&handle), 1);
+            drop(task);
+
+            timer.reset();
+            assert!(handle.is_elapsed());
+            assert!(!timer.driver.is_set());
+            assert!(!timer.lowres_driver.is_set());
+            timer.with_wheel(|wheel| {
+                assert!(wheel.timers[handle.0.get()].task.is_some());
+            });
+
+            if reuse {
+                timer.insert_flags(Flags::DRIVER_STARTED);
+                handle.reset(10_000);
+                let rt = ntex_rt::Runtime::new(Box::new(NoopNotify));
+                let task_handle = handle.clone();
+                let task = rt.spawn(std::future::poll_fn(move |cx| task_handle.poll_elapsed(cx)));
+                rt.poll();
+                assert!(!task.is_finished());
+                handle.elapse();
+                rt.poll();
+                assert!(task.is_finished());
+                assert_eq!(Rc::strong_count(&handle), 1);
+            }
+            drop(handle);
+            timer.with_wheel(|wheel| assert_eq!(wheel.timers.len(), 1));
+        }
+    }
+
+    #[test]
+    fn test_local_waker_in_next_system() {
+        struct Wrapped {
+            inner: Waker,
+            wakes: Arc<AtomicUsize>,
+        }
+
+        impl Wake for Wrapped {
+            fn wake(self: Arc<Self>) {
+                self.wakes.fetch_add(1, Ordering::Relaxed);
+                self.inner.wake_by_ref();
+            }
+        }
+
+        std::thread::spawn(|| {
+            let mut handle = None::<TimerHandle>;
+            for wrapped in [false, true, false] {
+                let notifications = Arc::new(AtomicUsize::new(0));
+                let count = notifications.clone();
+                handle = Some(
+                    ntex::rt::System::build()
+                        .build(ntex::rt::DefaultRuntime)
+                        .block_on(async move {
+                            let handle = if let Some(handle) = handle {
+                                assert!(handle.is_elapsed());
+                                handle.reset(10_000);
+                                handle
+                            } else {
+                                TimerHandle::new(10_000)
+                            };
+                            std::future::poll_fn(|cx| {
+                                let waker = if wrapped {
+                                    Waker::from(Arc::new(Wrapped {
+                                        inner: cx.waker().clone(),
+                                        wakes: count.clone(),
+                                    }))
+                                } else {
+                                    cx.waker().clone()
+                                };
+                                let cx = &mut Context::from_waker(&waker);
+                                assert!(handle.poll_elapsed(cx).is_pending());
+                                handle.reset(0);
+                                assert!(handle.poll_elapsed(cx).is_ready());
+                                handle.reset(10_000);
+                                assert!(handle.poll_elapsed(cx).is_pending());
+                                Poll::Ready(())
+                            })
+                            .await;
+                            handle
+                        }),
+                );
+                assert!(handle.as_ref().unwrap().is_elapsed());
+                assert_eq!(notifications.load(Ordering::Relaxed), usize::from(wrapped));
+            }
+        })
+        .join()
+        .unwrap();
     }
 
     #[ntex::test]
@@ -1551,6 +1811,11 @@ mod tests {
                 .build(ntex::rt::DefaultRuntime)
                 .block_on(async {
                     let hnd = TimerHandle::new(1000);
+                    std::future::poll_fn(|cx| {
+                        assert!(hnd.poll_elapsed(cx).is_pending());
+                        Poll::Ready(())
+                    })
+                    .await;
                     HOLDER.with(|h| *h.borrow_mut() = Some(hnd));
                 });
         })
