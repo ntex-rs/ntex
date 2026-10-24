@@ -1460,6 +1460,139 @@ fn remote_wake_variants() {
 }
 
 #[test]
+fn local_waker_scheduling_and_orphan_cleanup() {
+    use crate::LocalWaker;
+
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Pending));
+    one_local(&rt).run();
+    task.detach();
+
+    let waker = p.waker();
+    let mut first = LocalWaker::from_waker(&waker);
+    let second = LocalWaker::from(waker);
+    first.clone_from(&second);
+    first.wake_by_ref();
+    second.clone().wake();
+    one_local(&rt).run();
+    p.check(2, 0, 0);
+    assert_idle(&rt);
+    assert!(second.will_wake(&p.waker()));
+
+    // Conversion transfers the reference to a real thread-safe waker.
+    let remote = first.into_waker();
+    on_thread(move || remote.wake());
+    one_remote(&rt).unwrap().run();
+    p.check(3, 0, 0);
+    drop(p.waker());
+    assert_idle(&rt);
+    drop(second);
+    one_local(&rt).run();
+    p.check(3, 1, 0);
+    assert_freed(&rt);
+}
+
+#[test]
+fn local_waker_foreign_thread_capture() {
+    use crate::LocalWaker;
+
+    let rt = new_rt();
+    let p = Probe::default();
+    let task = spawn(&rt, p.future(Res::Pending));
+    one_local(&rt).run();
+    let waker = p.waker();
+    let waker = on_thread(move || {
+        let borrowed = LocalWaker::from_waker(&waker);
+        let owned = LocalWaker::from(waker);
+        borrowed.wake_by_ref();
+        owned.clone().wake();
+        drop(borrowed);
+        owned.into_waker()
+    });
+    one_remote(&rt).unwrap().run();
+    p.check(2, 0, 0);
+    drop(p.waker());
+    task.cancel();
+    one_local(&rt).run();
+    // The foreign-thread fallback also remains usable after shutdown.
+    let queue = Arc::downgrade(&rt.queue);
+    drop(rt);
+    on_thread(move || {
+        let local = LocalWaker::from(waker);
+        local.clone().wake();
+        local.wake();
+    });
+    p.check(2, 1, 0);
+    assert!(queue.upgrade().is_none());
+}
+
+#[test]
+fn local_waker_completion_and_shutdown() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use crate::LocalWaker;
+
+    for result in [Res::Pending, Res::Ready, Res::Panic] {
+        let rt = new_rt();
+        let queue = Arc::downgrade(&rt.queue);
+        let slot = Rc::new(RefCell::new(None));
+        let saved = slot.clone();
+        let ready = Rc::new(Cell::new(false));
+        let complete = ready.clone();
+        let drops = Counter::default();
+        let token = drops.token();
+        let owner = thread::current().id();
+        let hook = OnDrop(Some(move || {
+            assert_eq!(thread::current().id(), owner);
+            drop(token);
+        }));
+        let mut task = spawn(&rt, async move {
+            let _hook = hook;
+            poll_fn(move |cx| {
+                if !complete.get() {
+                    *saved.borrow_mut() = Some(LocalWaker::from_waker(cx.waker()));
+                    return Poll::Pending;
+                }
+                assert_ne!(result, Res::Panic, "task panic");
+                Poll::Ready(Rc::new(42))
+            })
+            .await
+        });
+        one_local(&rt).run();
+        let local = slot.borrow_mut().take().unwrap();
+        if result != Res::Pending {
+            ready.set(true);
+            local.wake_by_ref();
+            let ran = catch_unwind(AssertUnwindSafe(|| one_local(&rt).run()));
+            assert_eq!(ran.is_err(), result == Res::Panic);
+            if result == Res::Ready {
+                let Poll::Ready(Some(value)) = join(&mut task) else {
+                    panic!("missing output");
+                };
+                assert_eq!(*value, 42);
+            }
+        }
+        drop(rt);
+        drop(task);
+        assert_eq!(drops.get(), 1);
+        local.wake_by_ref();
+        local.clone().wake();
+        // Acquiring another local handle after completion uses shared counts.
+        let standard = local.clone().into_waker();
+        LocalWaker::from_waker(&standard).wake();
+        LocalWaker::from(standard).wake();
+        let remote = local.into_waker();
+        on_thread(move || {
+            remote.clone().wake();
+            drop(remote);
+        });
+        assert!(queue.upgrade().is_none(), "task alive");
+    }
+}
+
+#[test]
 fn drop_last_waker() {
     let rt = new_rt();
     for remote in [false, true] {

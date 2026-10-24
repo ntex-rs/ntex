@@ -3,6 +3,7 @@ use std::io;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
+use ntex_rt::LocalWaker;
 use ntex_service::state::{RequestState, State};
 use ntex_util::time::{Seconds, Sleep};
 
@@ -118,12 +119,12 @@ impl Extensions {
     /// across wakes, a nested wake allocates its own.
     fn wake_with<F>(&self, f: F)
     where
-        F: FnOnce(&mut Waiters, &mut Vec<Waker>),
+        F: FnOnce(&mut Waiters, &mut Vec<LocalWaker>),
     {
         thread_local! {
             // boxed, so taking and returning the buffer moves a single pointer
             #[allow(clippy::box_collection)]
-            static WAKERS: Cell<Option<Box<Vec<Waker>>>> = const { Cell::new(None) };
+            static WAKERS: Cell<Option<Box<Vec<LocalWaker>>>> = const { Cell::new(None) };
         }
 
         let Some(mut waiters) = self.waiters.take() else {
@@ -137,7 +138,7 @@ impl Extensions {
         f(&mut waiters, &mut wakers);
         self.waiters.set(Some(waiters));
 
-        wakers.drain(..).for_each(Waker::wake);
+        wakers.drain(..).for_each(LocalWaker::wake);
         if wakers.capacity() <= MAX_SPARE_WAKERS {
             let _ = WAKERS.try_with(|spare| spare.set(Some(wakers)));
         }
@@ -244,11 +245,223 @@ pub(crate) fn write_timed_out() -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    use std::task::Wake;
+
     use ntex_bytes::BytePageSize;
     use ntex_service::cfg::SharedCfg;
 
     use super::*;
     use crate::{Sealed, buf::Stack, filter::NullFilter, testing::IoTest};
+
+    #[derive(Debug)]
+    struct NoopNotify;
+
+    impl ntex_rt::Notify for NoopNotify {
+        fn notify(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct Wrapped {
+        inner: Waker,
+        notifications: Arc<AtomicUsize>,
+    }
+
+    impl Wake for Wrapped {
+        fn wake(self: Arc<Self>) {
+            self.notifications.fetch_add(1, Ordering::Relaxed);
+            self.inner.wake_by_ref();
+        }
+    }
+
+    #[test]
+    fn local_waiters_deliver_and_release_native_handles() {
+        let rt = ntex_rt::Runtime::new(Box::new(NoopNotify));
+        let ext = Rc::new(Extensions::default());
+        let slots = [7, 7, crate::waiters::TAG_WRITE].map(|tag| Rc::new(WaiterEntry::new(tag)));
+        let sources = slots.each_ref().map(|_| Rc::new(Cell::new(None)));
+        let tasks: Vec<_> = slots
+            .iter()
+            .zip(&sources)
+            .map(|(slot, source)| {
+                let (ext, slot, source) = (ext.clone(), slot.clone(), source.clone());
+                rt.spawn(std::future::poll_fn(move |cx| {
+                    source.set(Some(cx.waker().clone()));
+                    ext.poll_waker(&slot, cx.waker())
+                }))
+            })
+            .collect();
+        rt.poll();
+        assert_eq!(ext.wakers_len(), 3);
+
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let wrapped = Waker::from(Arc::new(Wrapped {
+            inner: sources[0].take().unwrap(),
+            notifications: notifications.clone(),
+        }));
+        ext.register_waker(&slots[0], &wrapped);
+        drop(wrapped);
+        ext.wake(7);
+        assert_eq!(notifications.load(Ordering::Relaxed), 1);
+        assert_eq!(ext.wakers_len(), 1);
+        rt.poll();
+        assert!(tasks[0].is_finished());
+        assert!(tasks[1].is_finished());
+        assert!(!tasks[2].is_finished());
+        assert!(slots[0].id.get().is_none());
+        assert!(slots[1].id.get().is_none());
+
+        ext.remove_waker(&slots[2]);
+        ext.wake_all();
+        rt.poll();
+        assert!(!tasks[2].is_finished());
+        assert_eq!(ext.wakers_len(), 0);
+        sources[2].take().unwrap().wake();
+        rt.poll();
+        assert_eq!(ext.wakers_len(), 1);
+
+        for source in sources {
+            drop(source.take());
+        }
+        drop(rt);
+        for task in &tasks {
+            assert!(task.is_finished());
+        }
+        drop(tasks);
+        assert_eq!(Rc::strong_count(&ext), 1);
+        ext.wake_all();
+        assert_eq!(ext.wakers_len(), 0);
+    }
+
+    #[test]
+    fn local_waiter_wake_unwind_releases_native_handles() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        thread_local! {
+            static ON_WAKE: Cell<Option<Box<dyn FnOnce()>>> = Cell::new(None);
+        }
+        struct Reenter;
+
+        impl Wake for Reenter {
+            fn wake(self: Arc<Self>) {
+                ON_WAKE.with(Cell::take).unwrap()();
+            }
+        }
+
+        let rt = ntex_rt::Runtime::new(Box::new(NoopNotify));
+        let ext = Rc::new(Extensions::default());
+        let slot = Rc::new(WaiterEntry::new(7));
+        let nested = Rc::new(WaiterEntry::new(8));
+        let (task_ext, task_slot) = (ext.clone(), slot.clone());
+        rt.spawn(std::future::poll_fn(move |cx| {
+            task_ext.register_waker(&task_slot, cx.waker());
+            Poll::<()>::Pending
+        }))
+        .detach();
+        rt.poll();
+
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let wrapped = Waker::from(Arc::new(Wrapped {
+            inner: Waker::noop().clone(),
+            notifications: notifications.clone(),
+        }));
+        let (callback_ext, callback_nested) = (ext.clone(), nested.clone());
+        ON_WAKE.set(Some(Box::new(move || {
+            assert_eq!(callback_ext.wakers_len(), 0);
+            callback_ext.register_waker(&callback_nested, &wrapped);
+            panic!("wake");
+        })));
+        // The newest waiter wakes first; unwinding drops the extracted native handle.
+        ext.register_waker(&WaiterEntry::new(7), &Waker::from(Arc::new(Reenter)));
+        assert!(catch_unwind(AssertUnwindSafe(|| ext.wake(7))).is_err());
+        assert_eq!(ext.wakers_len(), 1);
+        rt.poll();
+        assert_eq!(Rc::strong_count(&slot), 1, "orphaned task was not released");
+        ext.remove_waker(&slot);
+        assert_eq!(ext.wakers_len(), 1);
+        ext.wake(8);
+        assert_eq!(notifications.load(Ordering::Relaxed), 1);
+        assert_eq!(ext.wakers_len(), 0);
+        assert!(ext.poll_waker(&nested, Waker::noop()).is_ready());
+        assert!(ext.poll_waker(&nested, Waker::noop()).is_pending());
+        ext.wake_all();
+        assert_eq!(ext.wakers_len(), 0);
+    }
+
+    #[test]
+    fn local_registrations_across_runtime_shutdown() {
+        use std::future::poll_fn;
+
+        for wrapped in [false, true] {
+            let notifications = Arc::new(AtomicUsize::new(0));
+            let count = notifications.clone();
+            let registrations = ntex::rt::System::build()
+                .build(ntex::rt::DefaultRuntime)
+                .block_on(async move {
+                    let registrations = Rc::new((
+                        ntex_util::task::LocalWaker::new(),
+                        Sleep::new(Seconds(60).into()),
+                        Extensions::default(),
+                        WaiterEntry::new(7),
+                    ));
+                    let polls = Rc::new(Cell::new(0));
+                    let (saved, task_polls) = (registrations.clone(), polls.clone());
+                    let _task = ntex_rt::spawn(poll_fn(move |cx| {
+                        let waker = if wrapped {
+                            Waker::from(Arc::new(Wrapped {
+                                inner: cx.waker().clone(),
+                                notifications: count.clone(),
+                            }))
+                        } else {
+                            cx.waker().clone()
+                        };
+                        saved.0.register(&waker);
+                        if saved.1.is_elapsed() {
+                            saved.1.reset(Seconds(60));
+                        }
+                        assert!(
+                            saved
+                                .1
+                                .poll_elapsed(&mut Context::from_waker(&waker))
+                                .is_pending()
+                        );
+                        saved.2.register_waker(&saved.3, &waker);
+                        task_polls.set(task_polls.get() + 1);
+                        Poll::<()>::Pending
+                    }));
+                    for expected in 1..=4 {
+                        while polls.get() < expected {
+                            ntex_util::task::yield_to().await;
+                        }
+                        assert_eq!(polls.get(), expected);
+                        match expected {
+                            1 => {
+                                let standard = registrations.0.take().unwrap();
+                                std::thread::spawn(move || standard.wake()).join().unwrap();
+                            }
+                            2 => registrations.1.elapse(),
+                            3 => registrations.2.wake(7),
+                            _ => {}
+                        }
+                    }
+                    registrations
+                });
+            assert_eq!(
+                Rc::strong_count(&registrations),
+                1,
+                "future survived shutdown"
+            );
+            assert!(registrations.1.is_elapsed());
+            assert!(registrations.0.wake_checked());
+            registrations.2.wake_all();
+            assert_eq!(registrations.2.wakers_len(), 0);
+            assert_eq!(
+                notifications.load(Ordering::Relaxed),
+                if wrapped { 5 } else { 0 }
+            );
+        }
+    }
 
     #[ntex::test]
     async fn test_null_filter() {

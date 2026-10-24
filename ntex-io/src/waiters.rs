@@ -1,6 +1,9 @@
-//! Tagged waker lists stored in a slab.
+//! Owner-thread tagged waker lists stored in a slab.
+//!
+//! Registration accepts standard wakers and retains owned local wake handles.
 use std::{borrow::Cow, cell::Cell, pin::Pin, task::Context, task::Poll, task::Waker};
 
+use ntex_rt::LocalWaker;
 use ntex_util::HashMap;
 
 use crate::{IoRef, utils::Extensions};
@@ -53,11 +56,14 @@ impl WaiterEntry {
 }
 
 struct Entry {
-    waker: Option<Waker>,
+    waker: Option<LocalWaker>,
     prev: u16,
     next: u16,
     generation: u16,
 }
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<Entry>() == 24);
 
 /// Wakers grouped by tag.
 ///
@@ -95,7 +101,7 @@ impl Waiters {
             let idx = u16::try_from(self.entries.len()).expect("too many wakers");
             assert!(idx != NONE, "too many wakers");
             self.entries.push(Entry {
-                waker: Some(waker.clone()),
+                waker: Some(LocalWaker::from_waker(waker)),
                 generation: 0,
                 prev: NONE,
                 next: head,
@@ -105,7 +111,7 @@ impl Waiters {
             let idx = self.free;
             let entry = &mut self.entries[idx as usize];
             self.free = entry.next;
-            entry.waker = Some(waker.clone());
+            entry.waker = Some(LocalWaker::from_waker(waker));
             entry.prev = NONE;
             entry.next = head;
             idx
@@ -126,12 +132,13 @@ impl Waiters {
     /// Returns `None` if the entry is woken or removed, otherwise the
     /// replaced waker unless it wakes the same task.
     #[allow(clippy::option_option)]
-    pub(crate) fn update(&mut self, id: WaiterId, waker: &Waker) -> Option<Option<Waker>> {
+    #[inline]
+    pub(crate) fn update(&mut self, id: WaiterId, waker: &Waker) -> Option<Option<LocalWaker>> {
         let w = self.get(id)?.waker.as_mut()?;
         if w.will_wake(waker) {
             Some(None)
         } else {
-            Some(Some(std::mem::replace(w, waker.clone())))
+            Some(Some(std::mem::replace(w, LocalWaker::from_waker(waker))))
         }
     }
 
@@ -140,7 +147,7 @@ impl Waiters {
     ///
     /// The tag must be the one the entry is registered with, otherwise
     /// the tag lists are corrupted.
-    pub(crate) fn remove(&mut self, id: WaiterId, tag: usize) -> Option<Waker> {
+    pub(crate) fn remove(&mut self, id: WaiterId, tag: usize) -> Option<LocalWaker> {
         let entry = self.get(id)?;
         let (prev, next) = (entry.prev, entry.next);
         if prev != NONE {
@@ -157,14 +164,14 @@ impl Waiters {
     }
 
     /// Removes all entries and moves their wakers to `out`.
-    pub(crate) fn take_all(&mut self, out: &mut Vec<Waker>) {
+    pub(crate) fn take_all(&mut self, out: &mut Vec<LocalWaker>) {
         while let Some(&tag) = self.tags.keys().next() {
             self.take(tag, out);
         }
     }
 
     /// Removes all entries of the tag and moves their wakers to `out`.
-    pub(crate) fn take(&mut self, tag: usize, out: &mut Vec<Waker>) {
+    pub(crate) fn take(&mut self, tag: usize, out: &mut Vec<LocalWaker>) {
         let Some(mut idx) = self.tags.remove(&tag) else {
             return;
         };
@@ -180,14 +187,14 @@ impl Waiters {
     fn wake_all(&mut self) {
         let mut wakers = Vec::new();
         self.take_all(&mut wakers);
-        wakers.into_iter().for_each(Waker::wake);
+        wakers.into_iter().for_each(LocalWaker::wake);
     }
 
     #[cfg(test)]
     fn wake(&mut self, tag: usize) {
         let mut wakers = Vec::new();
         self.take(tag, &mut wakers);
-        wakers.into_iter().for_each(Waker::wake);
+        wakers.into_iter().for_each(LocalWaker::wake);
     }
 
     #[cfg(test)]
@@ -209,7 +216,7 @@ impl Waiters {
     }
 
     /// Moves the slot to the free list, the caller unlinks it from the tag list.
-    fn release(&mut self, idx: u16) -> Option<Waker> {
+    fn release(&mut self, idx: u16) -> Option<LocalWaker> {
         let entry = &mut self.entries[idx as usize];
         entry.generation = entry.generation.wrapping_add(1);
         entry.prev = NONE;
@@ -470,6 +477,37 @@ mod tests {
         wakers.wake(0);
         assert_eq!((count(&c1), count(&c2)), (0, 1));
         assert!(wakers.update(id, &w1).is_none());
+    }
+
+    #[test]
+    fn local_handles_keep_reuse_and_wake_order() {
+        use std::task::{RawWaker, RawWakerVTable};
+
+        struct Ordered(usize, Arc<std::sync::Mutex<Vec<usize>>>);
+
+        impl Wake for Ordered {
+            fn wake(self: Arc<Self>) {
+                self.1.lock().unwrap().push(self.0);
+            }
+        }
+
+        // Generic waker clones need not retain the original vtable address.
+        static VTABLE: RawWakerVTable =
+            RawWakerVTable::new(|data| RawWaker::new(data, &VTABLE), |_| {}, |_| {}, |_| {});
+        let noop = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+        let mut wakers = Waiters::new();
+        let first = wakers.register(7, &noop);
+        assert!(wakers.update(first, &noop).unwrap().is_none());
+
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        for idx in 1..=2 {
+            wakers.register(7, &Waker::from(Arc::new(Ordered(idx, order.clone()))));
+        }
+        let replacement = Waker::from(Arc::new(Ordered(3, order.clone())));
+        drop(wakers.update(first, &replacement).unwrap().unwrap());
+        wakers.wake(7);
+        assert_eq!(*order.lock().unwrap(), [2, 1, 3]);
+        assert!(wakers.update(first, &noop).is_none());
     }
 
     #[test]

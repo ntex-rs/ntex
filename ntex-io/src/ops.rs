@@ -1,10 +1,10 @@
 #![allow(clippy::cast_possible_truncation)]
 use std::collections::{BTreeMap, VecDeque};
-use std::task::{Poll, Waker};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 use std::{cell::Cell, cell::RefCell, mem, num::NonZeroUsize, ops, rc::Rc};
 
-use ntex_rt::Arbiter;
+use ntex_rt::{Arbiter, LocalWaker};
 use ntex_util::time::{Millis, Seconds, now, sleep};
 use ntex_util::{HashSet, spawn_detached};
 use slab::Slab;
@@ -351,12 +351,15 @@ pub(crate) struct Iops {
     ///
     /// The task lives as long as the manager, waking it is cheaper than
     /// spawning a task for every batch.
-    waker: Option<Waker>,
+    waker: Option<LocalWaker>,
     /// Id of the last spawned task, a dropped task that has been replaced
     /// must not clear the waker of its successor.
     task: u64,
     pub(crate) ops: Vec<Id>,
 }
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(mem::size_of::<Iops>() == 56);
 
 impl Iops {
     pub(crate) fn schedule_write(id: Id) {
@@ -388,22 +391,25 @@ impl Iops {
 
         impl Drop for Guard {
             fn drop(&mut self) {
-                let _ = MANAGER.try_with(|cell| {
+                let waker = MANAGER.try_with(|cell| {
                     if let Ok(mut mgr) = cell.try_borrow_mut()
                         && let Some(mgr) = mgr.as_mut()
                         && mgr.iops.task == self.0
                     {
-                        mgr.iops.waker = None;
                         mgr.iops.running = false;
+                        mgr.iops.waker.take()
+                    } else {
+                        None
                     }
                 });
+                drop(waker);
             }
         }
 
         let _guard = Guard(id);
         std::future::poll_fn(|cx| {
             Iops::run();
-            IoManager::with(|mgr| {
+            let replaced = IoManager::with(|mgr| {
                 if mgr.iops.task == id
                     && !mgr
                         .iops
@@ -411,9 +417,12 @@ impl Iops {
                         .as_ref()
                         .is_some_and(|w| w.will_wake(cx.waker()))
                 {
-                    mgr.iops.waker = Some(cx.waker().clone());
+                    mgr.iops.waker.replace(LocalWaker::from_waker(cx.waker()))
+                } else {
+                    None
                 }
             });
+            drop(replaced);
             Poll::<()>::Pending
         })
         .await;
@@ -538,6 +547,92 @@ mod tests {
 
     fn iops_state() -> (bool, u64, bool) {
         IoManager::with(|mgr| (mgr.iops.running, mgr.iops.task, mgr.iops.waker.is_some()))
+    }
+
+    #[ntex::test]
+    async fn local_write_task_replacement_and_cleanup() {
+        use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+        use std::task::{Context, Wake, Waker};
+
+        struct Probe {
+            notifications: Arc<AtomicUsize>,
+            drops: Arc<AtomicUsize>,
+            registered_on_drop: bool,
+        }
+
+        impl Wake for Probe {
+            fn wake(self: Arc<Self>) {
+                self.notifications.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                assert_eq!(iops_state(), (false, 1, self.registered_on_drop));
+                self.drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        IoManager::with(|mgr| mgr.iops.task = 1);
+        let mut task = Box::pin(Iops::task(1));
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let probe = |registered_on_drop| {
+            Waker::from(Arc::new(Probe {
+                notifications: notifications.clone(),
+                drops: drops.clone(),
+                registered_on_drop,
+            }))
+        };
+        let waker = probe(true);
+        assert!(
+            task.as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        drop(waker);
+        Iops::schedule_write(Id(None));
+        assert_eq!(notifications.load(Ordering::Relaxed), 1);
+
+        std::future::poll_fn(|cx| {
+            assert!(task.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+
+        let waker = probe(false);
+        assert!(
+            task.as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        drop(waker);
+        Iops::schedule_write(Id(None));
+        assert_eq!(notifications.load(Ordering::Relaxed), 2);
+        drop(task);
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+        assert_eq!(iops_state(), (false, 1, false));
+
+        IoManager::with(|mgr| mgr.iops.task = 2);
+        let mut old = Box::pin(Iops::task(2));
+        assert!(
+            old.as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        IoManager::with(|mgr| mgr.iops.task = 3);
+        let mut new = Box::pin(Iops::task(3));
+        std::future::poll_fn(|cx| {
+            assert!(new.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        Iops::schedule_write(Id(None));
+        drop(old);
+        assert_eq!(iops_state(), (true, 3, true));
+        drop(new);
+        assert_eq!(iops_state(), (false, 3, false));
     }
 
     /// Write batches of later turns are run by the same task, a runtime that
