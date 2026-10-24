@@ -346,9 +346,13 @@ impl Drop for SystemGuard {
             // while the thread unwinds, stop arbiters from another thread
             let list = self.0.take_arbiters();
             if !list.is_empty() {
-                let _ = std::thread::Builder::new()
+                let stopped = std::thread::Builder::new()
                     .spawn(move || list.into_iter().for_each(|arb| arb.stop()))
                     .map(std::thread::JoinHandle::join);
+                if let Ok(Err(payload)) = stopped {
+                    std::mem::forget(payload);
+                    crate::abort_on_second_panic();
+                }
             }
         } else {
             self.0.stop_arbiters();

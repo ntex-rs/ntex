@@ -1,5 +1,13 @@
 # Changes
 
+## [Unreleased]
+
+* Abort the process on a panic during shutdown while an earlier panic is unwinding or
+  held to be resumed, instead of suppressing it or replacing the original panic
+
+* Unregister an arbiter and run its `on_shutdown` callbacks when its event loop panic
+  unwinds through the runner, as for runners that return the panic as an error
+
 ## [4.3.0] - 2026-10-21
 
 * Replace `async-task` with a custom task implementation

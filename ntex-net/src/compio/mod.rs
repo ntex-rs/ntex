@@ -95,8 +95,16 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
     if let Err(payload) = result {
         ntex_rt::stop_busy(Instant::now());
         ntex_rt::set_poll_start(None);
-        // pending tasks are dropped after the active unwind has ended
-        drop(rt);
+        // pending tasks are dropped after the active unwind has ended,
+        // a second panic aborts the process
+        if let Err(second) = panic::catch_unwind(AssertUnwindSafe(|| drop(rt))) {
+            std::mem::forget(second);
+            std::mem::forget(payload);
+            let _ = panic::catch_unwind(|| {
+                log::error!("Panic during shutdown after an earlier panic; aborting");
+            });
+            std::process::abort();
+        }
         panic::resume_unwind(payload);
     }
 }

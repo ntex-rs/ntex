@@ -1,5 +1,9 @@
 # Changes
 
+## [4.7.0] - Unreleased
+
+* compio: abort the process if dropping the runtime panics after the event loop panicked
+
 ## [4.6.0] - 2026-10-21
 
 * Add `tracker` feature, enables `ntex-io/tracker`. io-uring charges a received ring page to

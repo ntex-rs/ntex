@@ -183,12 +183,19 @@ impl Arbiter {
                     let _ = stop_rx.await;
                 });
 
-                // unregister arbiter
-                sys2.unregister_arbiter(Id(id));
-                // skipped by `block_on` if the event loop panicked
-                run_shutdown_callbacks();
-                unsafe {
-                    remove_all_items();
+                let cleanup = || {
+                    // unregister arbiter
+                    sys2.unregister_arbiter(Id(id));
+                    // skipped by `block_on` if the event loop panicked
+                    run_shutdown_callbacks();
+                    unsafe {
+                        remove_all_items();
+                    }
+                };
+                if result.is_err() {
+                    crate::abort_on_panic(cleanup);
+                } else {
+                    cleanup();
                 }
 
                 if let Err(e) = result {
@@ -316,7 +323,8 @@ impl Arbiter {
     /// another callback runs in the same shutdown.
     ///
     /// If the thread is exiting and its thread-local storage has already been
-    /// destroyed, `f` is dropped without running.
+    /// destroyed, `f` is dropped without running. If `f` panics after the
+    /// event loop panicked, the process is aborted.
     pub fn on_shutdown<F>(f: F)
     where
         F: FnOnce() + 'static,
@@ -327,6 +335,8 @@ impl Arbiter {
 
     #[must_use]
     /// Adds a callback to run after the arbiter stops.
+    ///
+    /// If `f` panics after the event loop panicked, the process is aborted.
     pub fn on_stop<F>(self, f: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
@@ -345,13 +355,9 @@ impl Arbiter {
     pub(crate) fn finalize(&self) {
         self.0.running.store(false, Ordering::Relaxed);
         let on_stop = mem::take(&mut *self.0.on_stop.lock());
+        // a panic while unwinding aborts the process
         for f in on_stop {
-            if thread::panicking() {
-                // a second panic while unwinding would abort the process
-                let _ = panic::catch_unwind(panic::AssertUnwindSafe(f));
-            } else {
-                f();
-            }
+            f();
         }
     }
 
@@ -686,27 +692,88 @@ mod tests {
             }
         }
 
-        System::new("arb-panic", CatchRunner).block_on(async {
-            let sys = System::current();
-            let mut arb = Arbiter::with_name("panics".to_string());
-            let (tx, rx) = oneshot::channel();
-            arb.handle()
-                .spawn(async move {
-                    Arbiter::on_shutdown(move || {
-                        let _ = tx.send(());
-                    });
-                    panic!("arbiter boom");
-                })
-                .detach();
+        fn check(runner: impl crate::Runner) {
+            System::new("arb-panic", runner).block_on(async {
+                let sys = System::current();
+                let mut arb = Arbiter::with_name("panics".to_string());
+                let (tx, rx) = oneshot::channel();
+                arb.handle()
+                    .spawn(async move {
+                        Arbiter::on_shutdown(move || {
+                            let _ = tx.send(());
+                        });
+                        panic!("arbiter boom");
+                    })
+                    .detach();
 
-            // the panic of the event loop is returned by `join`
-            let err = arb.join().unwrap_err();
-            assert_eq!(err.downcast_ref::<&str>(), Some(&"arbiter boom"));
-            // the arbiter is unregistered and its shutdown callbacks ran
-            assert!(rx.recv().is_ok());
-            assert!(!arb.is_running());
-            sys.list_arbiters(|arbs| assert!(!arbs.contains(&arb)));
-        });
+                // the panic of the event loop is returned by `join`
+                let err = arb.join().unwrap_err();
+                assert_eq!(err.downcast_ref::<&str>(), Some(&"arbiter boom"));
+                // the arbiter is unregistered and its shutdown callbacks ran
+                assert!(rx.recv().is_ok());
+                assert!(!arb.is_running());
+                sys.list_arbiters(|arbs| assert!(!arbs.contains(&arb)));
+            });
+        }
+
+        check(CatchRunner);
+        // the panic unwinds through the runner
+        check(TestRunner);
+    }
+
+    #[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
+    #[test]
+    #[cfg_attr(miri, ignore = "spawns a process")]
+    fn panicking_arbiter_cleanup_aborts() {
+        const CHILD: &str = "NTEX_RT_ARBITER_CLEANUP_CHILD";
+
+        struct CatchRunner;
+
+        impl crate::Runner for CatchRunner {
+            fn block_on(
+                &self,
+                fut: crate::BlockFuture,
+            ) -> Result<(), Box<dyn std::any::Any + Send>> {
+                panic::catch_unwind(panic::AssertUnwindSafe(|| TestRunner.block_on(fut)))?
+            }
+        }
+
+        if let Ok(case) = std::env::var(CHILD) {
+            System::new("arb-panic", CatchRunner).block_on(async move {
+                let mut arb = Arbiter::with_name("panics".to_string());
+                let on_stop = case == "on_stop";
+                arb.handle()
+                    .spawn(async move {
+                        if on_stop {
+                            let _ = Arbiter::current().on_stop(|| panic!("cleanup panic"));
+                        } else {
+                            Arbiter::on_shutdown(|| panic!("cleanup panic"));
+                        }
+                        panic!("arbiter boom");
+                    })
+                    .detach();
+                let _ = arb.join();
+            });
+            return;
+        }
+
+        for case in ["on_stop", "on_shutdown"] {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "arbiter::tests::panicking_arbiter_cleanup_aborts",
+                    "--exact",
+                ])
+                .args(["--nocapture", "--test-threads=1"])
+                .env(CHILD, case)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "{case}: {stderr}");
+            // a normal test failure exits with 101, an abort does not
+            assert_ne!(out.status.code(), Some(101), "{case}: {stderr}");
+            assert!(stderr.contains("arbiter boom"), "{case}: {stderr}");
+            assert!(stderr.contains("cleanup panic"), "{case}: {stderr}");
+        }
     }
 
     #[test]

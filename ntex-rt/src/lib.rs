@@ -62,3 +62,32 @@ pub use self::rt_compio::*;
 pub use self::rt_default::*;
 
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
+
+/// Runs `f` while an earlier panic is pending, the process aborts if `f`
+/// panics.
+pub(crate) fn abort_on_panic<R>(f: impl FnOnce() -> R) -> R {
+    struct Abort;
+
+    impl Drop for Abort {
+        fn drop(&mut self) {
+            abort_on_second_panic();
+        }
+    }
+
+    let guard = Abort;
+    let result = f();
+    std::mem::forget(guard);
+    result
+}
+
+/// Aborts the process on a panic raised while an earlier panic is unwinding
+/// or held to be resumed.
+#[cold]
+pub(crate) fn abort_on_second_panic() -> ! {
+    if let Err(payload) = std::panic::catch_unwind(|| {
+        log::error!("Panic during shutdown after an earlier panic; aborting");
+    }) {
+        std::mem::forget(payload);
+    }
+    std::process::abort();
+}
