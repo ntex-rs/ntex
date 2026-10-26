@@ -907,6 +907,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    #[cfg(feature = "ws")]
     #[test]
     fn test_handshake_error() {
         use crate::ws::error::HandshakeError;

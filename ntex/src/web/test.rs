@@ -846,7 +846,7 @@ fn start_server(cfg: TestServerConfig, factory: AppFactory) -> TestServer {
     thread::sleep(Millis(25).into());
 
     let cfg = cfg.client_cfg.clone().unwrap_or_else(|| {
-        SharedCfg::new("TEST-CLIENT")
+        let cfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(Millis(90_000)))
             .add(ntex_tls::TlsConfig::new().set_handshake_timeout(Seconds(5)))
             .add(
@@ -858,13 +858,14 @@ fn start_server(cfg: TestServerConfig, factory: AppFactory) -> TestServer {
                 ClientConfig::new()
                     .set_response_timeout(Seconds(30))
                     .set_response_payload_timeout(Seconds(30)),
-            )
-            .add(
-                WsClientConfig::new()
-                    .set_address(addr)
-                    .set_handshake_timeout(Seconds(60)),
-            )
-            .build()
+            );
+        #[cfg(feature = "ws")]
+        let cfg = cfg.add(
+            WsClientConfig::new()
+                .set_address(addr)
+                .set_handshake_timeout(Seconds(60)),
+        );
+        cfg.build()
     });
 
     let client = {
@@ -889,6 +890,7 @@ fn start_server(cfg: TestServerConfig, factory: AppFactory) -> TestServer {
 
     TestServer {
         id,
+        #[cfg(feature = "ws")]
         cfg,
         addr,
         client,
@@ -1038,6 +1040,7 @@ impl TestServerConfig {
 /// Test server controller
 pub struct TestServer {
     id: Uuid,
+    #[cfg(feature = "ws")]
     cfg: SharedCfg,
     addr: net::SocketAddr,
     client: Client,
