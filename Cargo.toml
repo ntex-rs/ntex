@@ -82,6 +82,7 @@ coo-kie = { version = "0.18", package = "cookie" }
 bitflags = "2"
 cfg-if = "1.0.0"
 crossbeam-channel = "0.5.8"
+crossbeam-queue = "0.3.12"
 ctrlc = "3.4"
 derive_more = "2.0.1"
 encoding_rs = "0.8"

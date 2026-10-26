@@ -616,11 +616,9 @@ mod tests {
     #[ntex::test]
     async fn runtime_restart() {
         let busy = |a: &Arbiter| {
-            a.handle()
-                .spawn(async {
-                    std::thread::sleep(Duration::from_millis(20));
-                })
-                .detach();
+            a.handle().spawn(async {
+                std::thread::sleep(Duration::from_millis(20));
+            });
         };
 
         let m = Metrics::new(1);

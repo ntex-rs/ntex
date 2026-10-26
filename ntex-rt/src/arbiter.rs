@@ -1,6 +1,6 @@
 #![allow(clippy::missing_panics_doc)]
 use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
-use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, rc::Rc, thread};
+use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, rc::Rc, thread};
 
 use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
@@ -18,8 +18,6 @@ pub(super) static COUNT: AtomicUsize = AtomicUsize::new(99);
 
 pub(super) enum ArbiterCommand {
     Stop,
-    #[allow(dead_code)]
-    Execute(Pin<Box<dyn Future<Output = ()> + Send>>),
 }
 
 /// An asynchronous execution environment running on one OS thread.
@@ -219,10 +217,10 @@ impl Arbiter {
         on_stop: OnCloseStorage,
     ) -> Self {
         #[cfg(feature = "tokio")]
-        let hnd = { Handle::new(sender.clone()) };
+        let hnd = { Handle::new() };
 
         #[cfg(feature = "compio")]
-        let hnd = { Handle::new(sender.clone()) };
+        let hnd = { Handle::new() };
 
         #[cfg(all(not(feature = "compio"), not(feature = "tokio")))]
         let hnd = { Handle::current() };
@@ -391,20 +389,12 @@ pub(crate) struct ArbiterController {
 impl ArbiterController {
     pub(super) async fn run(mut self, sys: System) {
         self.sys = Some(sys);
-        loop {
-            match self.rx.recv().await {
-                Ok(ArbiterCommand::Stop) => {
-                    // the system arbiter has no `stop`, `System::stop()`
-                    // runs its callbacks
-                    if let Some(stop) = self.stop.take() {
-                        run_shutdown_callbacks();
-                        let _ = stop.send(0);
-                    }
-                }
-                Ok(ArbiterCommand::Execute(fut)) => {
-                    crate::spawn_detached(fut);
-                }
-                Err(_) => break,
+        while let Ok(ArbiterCommand::Stop) = self.rx.recv().await {
+            // the system arbiter has no `stop`, `System::stop()`
+            // runs its callbacks
+            if let Some(stop) = self.stop.take() {
+                run_shutdown_callbacks();
+                let _ = stop.send(0);
             }
         }
     }
@@ -521,6 +511,14 @@ mod tests {
     #[derive(Clone, Default)]
     struct Value(usize);
 
+    struct DropTx(Option<oneshot::Sender<thread::ThreadId>>);
+
+    impl Drop for DropTx {
+        fn drop(&mut self) {
+            let _ = self.0.take().unwrap().send(thread::current().id());
+        }
+    }
+
     #[test]
     #[should_panic(expected = "Arbiter is not running")]
     fn current_without_arbiter() {
@@ -543,11 +541,9 @@ mod tests {
 
             // `init` ran on the arbiter's thread
             let (tx, rx) = oneshot::async_channel();
-            arb.handle()
-                .spawn(async move {
-                    let _ = tx.send(INIT.with(std::cell::Cell::get));
-                })
-                .detach();
+            arb.handle().spawn(async move {
+                let _ = tx.send(INIT.with(std::cell::Cell::get));
+            });
             assert!(rx.await.unwrap());
             assert!(!INIT.with(std::cell::Cell::get));
 
@@ -581,15 +577,13 @@ mod tests {
             // shutdown callbacks run on the arbiter's thread
             let (reg_tx, reg_rx) = oneshot::async_channel();
             let (tx, rx) = oneshot::channel();
-            arb.handle()
-                .spawn(async move {
-                    let name = Arbiter::current().name().to_string();
-                    Arbiter::on_shutdown(move || {
-                        let _ = tx.send(name);
-                    });
-                    let _ = reg_tx.send(());
-                })
-                .detach();
+            arb.handle().spawn(async move {
+                let name = Arbiter::current().name().to_string();
+                Arbiter::on_shutdown(move || {
+                    let _ = tx.send(name);
+                });
+                let _ = reg_tx.send(());
+            });
             reg_rx.await.unwrap();
 
             arb.stop();
@@ -607,24 +601,203 @@ mod tests {
     }
 
     #[test]
-    fn handle_spawn_cancel_before_run() {
-        System::new("cancel-before", TestRunner).block_on(async {
-            let executed = Arc::new(AtomicUsize::new(0));
-            let executed2 = executed.clone();
-            let hnd = Handle::current();
-            hnd.spawn(async move {
-                executed2.fetch_add(1, Ordering::Relaxed);
-            })
-            .cancel();
-            // commands run in order, the cancelled one was processed first
-            hnd.spawn(async {}).await.unwrap();
-            hnd.spawn(async {}).await.unwrap();
-            assert_eq!(executed.load(Ordering::Relaxed), 0);
+    fn local_handles_survive_runtime_shutdown() {
+        struct Local {
+            owner: thread::ThreadId,
+            drops: Rc<Cell<usize>>,
+        }
+        impl Drop for Local {
+            fn drop(&mut self) {
+                assert_eq!(thread::current().id(), self.owner);
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+
+        for consume in [false, true] {
+            let drops = Rc::new(Cell::new(0));
+            let value = Local {
+                owner: thread::current().id(),
+                drops: drops.clone(),
+            };
+            let guard = Local {
+                owner: thread::current().id(),
+                drops: drops.clone(),
+            };
+            let handles = Rc::new(Cell::new(None));
+            let slot = handles.clone();
+            crate::Runner::block_on(
+                &TestRunner,
+                Box::pin(async move {
+                    let completed = crate::spawn(async move { value });
+                    let cancelled = crate::spawn(async move {
+                        let _guard = guard;
+                        std::future::pending::<()>().await;
+                    });
+                    std::future::poll_fn(|cx| {
+                        if completed.is_finished() {
+                            std::task::Poll::Ready(())
+                        } else {
+                            cx.waker().wake_by_ref();
+                            std::task::Poll::Pending
+                        }
+                    })
+                    .await;
+                    slot.set(Some((completed, cancelled)));
+                }),
+            )
+            .unwrap();
+            let (completed, mut cancelled) = handles.take().unwrap();
+            assert!(completed.is_finished());
+            assert!(cancelled.is_finished());
+            assert_eq!(drops.get(), 1);
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(matches!(
+                std::pin::Pin::new(&mut cancelled).poll(&mut cx),
+                std::task::Poll::Ready(Err(_))
+            ));
+            drop(cancelled);
+            if consume {
+                let mut completed = completed;
+                let std::task::Poll::Ready(Ok(value)) =
+                    std::pin::Pin::new(&mut completed).poll(&mut cx)
+                else {
+                    panic!("completed local result lost during shutdown");
+                };
+                drop(completed);
+                assert_eq!(drops.get(), 1);
+                drop(value);
+            } else {
+                completed.cancel();
+            }
+            assert_eq!(drops.get(), 2);
+        }
+    }
+
+    #[test]
+    fn detached_remote_output_is_owner_local() {
+        struct Output {
+            owner: thread::ThreadId,
+            done: Option<oneshot::Sender<()>>,
+            _local: Rc<()>,
+        }
+        impl Drop for Output {
+            fn drop(&mut self) {
+                assert_eq!(thread::current().id(), self.owner);
+                let _ = self.done.take().unwrap().send(());
+            }
+        }
+        // The closure's return type verifies that detached spawning returns ().
+        fn submit(f: impl FnOnce()) {
+            f();
+        }
+
+        System::new("remote-output", TestRunner).block_on(async {
+            let mut arb = Arbiter::new();
+            let (tx, rx) = oneshot::async_channel();
+            let caller = thread::current().id();
+            let future = async move {
+                let owner = thread::current().id();
+                assert_ne!(owner, caller);
+                Output {
+                    owner,
+                    done: Some(tx),
+                    _local: Rc::new(()),
+                }
+            };
+            submit(|| arb.handle().spawn_detached(future));
+            rx.await.unwrap();
+            arb.stop();
+            arb.join().unwrap();
         });
     }
 
     #[test]
-    fn handle_spawn_cancel_while_running() {
+    fn remote_join_handle() {
+        System::new("remote-results", TestRunner).block_on(async {
+            let mut arb = Arbiter::new();
+            let task: crate::RemoteJoinHandle<_> =
+                arb.handle().spawn(async { thread::current().id() });
+            let id = task.await.unwrap();
+            assert_ne!(id, thread::current().id());
+
+            // spawns from one producer run in order on the arbiter thread
+            let order = Arc::new(Mutex::new(Vec::new()));
+            for i in 0..100 {
+                let order = order.clone();
+                arb.handle().spawn_detached(async move {
+                    order.lock().push((i, thread::current().id()));
+                });
+            }
+            arb.handle().spawn(async {}).await.unwrap();
+            let order = std::mem::take(&mut *order.lock());
+            assert_eq!(order.len(), 100);
+            assert!(
+                order
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (n, t))| i == *n && *t == id)
+            );
+
+            // a cancelled remote task is dropped on the arbiter thread
+            let (tx, rx) = oneshot::async_channel();
+            let guard = DropTx(Some(tx));
+            let task = arb.handle().spawn(async move {
+                let _guard = guard;
+                std::future::pending::<()>().await;
+            });
+            assert!(!task.is_finished());
+            task.cancel();
+            assert_eq!(rx.await.unwrap(), id);
+
+            // the owner spawns locally
+            let local: crate::JoinHandle<_> = crate::spawn(async { Rc::new(42) });
+            assert_eq!(*local.await.unwrap(), 42);
+            let task: crate::RemoteJoinHandle<_> =
+                Handle::current().spawn(async { thread::current().id() });
+            assert_eq!(task.await.unwrap(), thread::current().id());
+
+            let (tx, rx) = oneshot::async_channel();
+            let guard = DropTx(Some(tx));
+            Handle::current()
+                .spawn(async move {
+                    let _guard = guard;
+                    std::future::pending::<()>().await;
+                })
+                .cancel();
+            assert_eq!(rx.await.unwrap(), thread::current().id());
+
+            for detach in [false, true] {
+                let (start, ready) = oneshot::async_channel();
+                let (done, completed) = oneshot::async_channel();
+                let task = Handle::current().spawn(async move {
+                    ready.await.unwrap();
+                    let _ = done.send(());
+                });
+                if detach {
+                    task.detach();
+                } else {
+                    drop(task);
+                }
+                start.send(()).unwrap();
+                completed.await.unwrap();
+            }
+
+            let (start, ready) = oneshot::async_channel();
+            let (done, completed) = oneshot::async_channel();
+            let task = arb.handle().spawn(async move {
+                ready.await.unwrap();
+                let _ = done.send(());
+            });
+            drop(task);
+            start.send(()).unwrap();
+            completed.await.unwrap();
+            arb.stop();
+            arb.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn handle_spawn_shutdown_while_running() {
         struct Token(Option<oneshot::Sender<()>>);
         impl Drop for Token {
             fn drop(&mut self) {
@@ -632,20 +805,22 @@ mod tests {
             }
         }
 
-        System::new("cancel-running", TestRunner).block_on(async {
+        System::new("shutdown-running", TestRunner).block_on(async {
             let mut arb = Arbiter::new();
             let resumed = Arc::new(AtomicBool::new(false));
             let resumed2 = resumed.clone();
             let (started_tx, started_rx) = oneshot::async_channel();
             let (drop_tx, drop_rx) = oneshot::async_channel();
-            let hnd = arb.handle().spawn(async move {
+            let task = arb.handle().spawn(async move {
                 let _token = Token(Some(drop_tx));
                 let _ = started_tx.send(());
                 std::future::pending::<()>().await;
                 resumed2.store(true, Ordering::Relaxed);
             });
             started_rx.await.unwrap();
-            hnd.cancel();
+            arb.stop();
+            arb.join().unwrap();
+            assert!(task.await.is_err());
             // the future is dropped on the arbiter thread
             let mut drop_rx = std::pin::pin!(drop_rx);
             let mut timeout =
@@ -654,7 +829,7 @@ mod tests {
                 if drop_rx.as_mut().poll(cx).is_ready() {
                     std::task::Poll::Ready(())
                 } else if timeout.as_mut().poll(cx).is_ready() {
-                    panic!("cancelled task is not dropped");
+                    panic!("shutdown task is not dropped");
                 } else {
                     std::task::Poll::Pending
                 }
@@ -662,17 +837,9 @@ mod tests {
             .await;
             assert!(!resumed.load(Ordering::Relaxed));
 
-            // detached tasks keep running
-            let (tx, rx) = oneshot::async_channel();
-            arb.handle()
-                .spawn(async move {
-                    let _ = tx.send(());
-                })
-                .detach();
-            rx.await.unwrap();
-
-            arb.stop();
-            arb.join().unwrap();
+            // Rejected submissions close the result channel without running.
+            let task = arb.handle().spawn(async { panic!("rejected task polled") });
+            assert!(task.await.is_err());
         });
     }
 
@@ -697,18 +864,17 @@ mod tests {
                 let sys = System::current();
                 let mut arb = Arbiter::with_name("panics".to_string());
                 let (tx, rx) = oneshot::channel();
-                arb.handle()
-                    .spawn(async move {
-                        Arbiter::on_shutdown(move || {
-                            let _ = tx.send(());
-                        });
-                        panic!("arbiter boom");
-                    })
-                    .detach();
+                let task = arb.handle().spawn(async move {
+                    Arbiter::on_shutdown(move || {
+                        let _ = tx.send(());
+                    });
+                    panic!("arbiter boom");
+                });
 
                 // the panic of the event loop is returned by `join`
                 let err = arb.join().unwrap_err();
                 assert_eq!(err.downcast_ref::<&str>(), Some(&"arbiter boom"));
+                assert!(task.await.is_err());
                 // the arbiter is unregistered and its shutdown callbacks ran
                 assert!(rx.recv().is_ok());
                 assert!(!arb.is_running());
@@ -742,16 +908,14 @@ mod tests {
             System::new("arb-panic", CatchRunner).block_on(async move {
                 let mut arb = Arbiter::with_name("panics".to_string());
                 let on_stop = case == "on_stop";
-                arb.handle()
-                    .spawn(async move {
-                        if on_stop {
-                            let _ = Arbiter::current().on_stop(|| panic!("cleanup panic"));
-                        } else {
-                            Arbiter::on_shutdown(|| panic!("cleanup panic"));
-                        }
-                        panic!("arbiter boom");
-                    })
-                    .detach();
+                arb.handle().spawn(async move {
+                    if on_stop {
+                        let _ = Arbiter::current().on_stop(|| panic!("cleanup panic"));
+                    } else {
+                        Arbiter::on_shutdown(|| panic!("cleanup panic"));
+                    }
+                    panic!("arbiter boom");
+                });
                 let _ = arb.join();
             });
             return;

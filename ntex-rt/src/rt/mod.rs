@@ -7,16 +7,14 @@ use std::{future::Future, io, marker::PhantomData, panic::Location};
 use std::{pin::Pin, rc::Rc, sync::Arc};
 
 use crate::driver::{Driver, Notify, PollResult};
-use crate::handle::{JoinHandle, SpawnLocation};
+use crate::handle::{JoinHandle, RemoteJoinHandle, SpawnLocation};
 use crate::metrics::Histogram;
-
-#[cfg(not(ntex_loom))]
-use std::thread;
+use crate::remote::{Job, RemoteJoin, Runner};
 
 mod queue;
 pub(crate) mod task;
 
-use self::queue::{CacheLine, RunnableQueue};
+use self::queue::RunnableQueue;
 
 /// Log target of the scheduler, also used by its submodules.
 const LOG_TARGET: &str = module_path!();
@@ -26,34 +24,55 @@ pub(crate) const REPORTED: u32 = 1 << 31;
 
 /// Self-wake bookkeeping of a task, used on the runtime thread only.
 pub(crate) trait TaskStats: Copy {
+    /// Returns the task's spawn location for diagnostics.
     fn location(self) -> SpawnLocation;
     /// Consecutive self-wakes, `REPORTED` marks a reported streak.
     fn self_wakes(self) -> u32;
+    /// Stores the self-wake count and its `REPORTED` marker.
     fn set_self_wakes(self, wakes: u32);
     /// Start of the self-wake streak, milliseconds since the runtime epoch.
     fn streak_start(self) -> u32;
+    /// Records the streak's start in milliseconds since the runtime epoch.
     fn set_streak_start(self, start: u32);
 }
 
 scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
 
+/// Index of a thread that owns a runtime, never reused within the process.
 #[cfg(not(ntex_loom))]
-pub(crate) type ThreadId = thread::ThreadId;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ThreadId(std::num::NonZeroU16);
 
 // loom threads share the OS thread, and its thread locals
 #[cfg(ntex_loom)]
 pub(crate) type ThreadId = loom::thread::ThreadId;
 
+/// The last issued thread index.
+#[cfg(not(ntex_loom))]
+static THREAD_INDEX: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
 #[cfg(not(ntex_loom))]
 thread_local!(static THREAD_ID: Cell<Option<ThreadId>> = const { Cell::new(None) });
 
-/// Returns the cached id of the current thread.
+/// Returns the index of the current thread, assigning one on first use.
+///
+/// Only threads that own a runtime call this, indexes are limited to
+/// `u16::MAX` per process and the process aborts when they run out.
 #[cfg(not(ntex_loom))]
 #[inline]
 pub(crate) fn current_thread_id() -> ThreadId {
+    /// Assigns a never-reused index on the thread's first use.
     #[cold]
     fn initialize(slot: &Cell<Option<ThreadId>>) -> ThreadId {
-        let id = thread::current().id();
+        let id = THREAD_INDEX
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .ok()
+            .and_then(|n| std::num::NonZeroU16::new(n + 1))
+            .unwrap_or_else(|| {
+                log::error!(target: LOG_TARGET, "Thread indexes are exhausted, {} runtime-owning threads per process", u16::MAX);
+                std::process::abort()
+            });
+        let id = ThreadId(id);
         slot.set(Some(id));
         id
     }
@@ -61,9 +80,29 @@ pub(crate) fn current_thread_id() -> ThreadId {
     THREAD_ID.with(|slot| slot.get().unwrap_or_else(|| initialize(slot)))
 }
 
+/// Returns the index of the current thread without assigning one.
+#[cfg(not(ntex_loom))]
+#[inline]
+pub(crate) fn try_current_thread_id() -> Option<ThreadId> {
+    THREAD_ID.with(Cell::get)
+}
+
+/// Sets the last issued thread index, to test exhaustion.
+#[cfg(all(test, not(ntex_loom)))]
+pub(crate) fn set_thread_index(last: u16) {
+    THREAD_INDEX.store(last, Ordering::Relaxed);
+}
+
+/// Returns the current logical Loom thread's identity.
 #[cfg(ntex_loom)]
 pub(crate) fn current_thread_id() -> ThreadId {
     loom::thread::current().id()
+}
+
+/// Returns the current logical Loom thread's identity.
+#[cfg(ntex_loom)]
+pub(crate) fn try_current_thread_id() -> Option<ThreadId> {
+    Some(loom::thread::current().id())
 }
 
 #[derive(Debug)]
@@ -75,6 +114,9 @@ pub(crate) fn current_thread_id() -> ThreadId {
 /// Dropping the runtime cancels its tasks. If cleanup panics, shutdown finishes
 /// before the panic is resumed. A second cleanup panic, or a cleanup panic
 /// while the runtime is dropped during an existing unwind, aborts the process.
+///
+/// A process can create at most 65,535 runtimes, and at most 65,535 threads can
+/// create one. Neither is reused, and the process aborts when either runs out.
 ///
 /// ```compile_fail
 /// fn assert_send<T: Send>() {}
@@ -98,11 +140,14 @@ impl Runtime {
         RuntimeBuilder::new()
     }
 
+    /// Creates the owner-thread queue and registers its remote wake endpoint.
     #[allow(clippy::arc_with_non_send_sync)]
     fn with_builder(builder: &RuntimeBuilder, handle: Box<dyn Notify>) -> Self {
+        let queue = Arc::new(RunnableQueue::new(builder, handle));
+        task::wake::register(&queue);
         Self {
             stop: Cell::new(false),
-            queue: Arc::new(RunnableQueue::new(builder, handle)),
+            queue,
             _not_send: PhantomData,
         }
     }
@@ -113,6 +158,7 @@ impl Runtime {
     ///
     /// Panics if no runtime is active on the current thread.
     pub fn with_current<T, F: FnOnce(&Self) -> T>(f: F) -> T {
+        /// Reports an operation that requires an active runtime.
         #[cold]
         fn not_in_neon_runtime() -> ! {
             panic!("not in a neon runtime")
@@ -172,7 +218,7 @@ impl Runtime {
         future: F,
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
-        unsafe { self.queue.spawn::<_, true>(future, location) }
+        unsafe { self.queue.spawn(future, location) }
     }
 
     /// Spawns a new asynchronous task without a [`JoinHandle`].
@@ -329,6 +375,7 @@ impl Runtime {
     /// running task and its runtime until the inner future completes.
     #[track_caller]
     pub fn block_on<F: Future>(&self, future: F, driver: &dyn Driver) -> F::Output {
+        /// Rejects blocking from within an already active runtime.
         #[cold]
         #[track_caller]
         fn nested_block_on() -> ! {
@@ -384,6 +431,7 @@ impl Runtime {
 struct BlockOnSlot<F>(Rc<RefCell<Option<Pin<Box<F>>>>>);
 
 impl<F> Drop for BlockOnSlot<F> {
+    /// Removes the borrowing future before the `block_on` scope ends.
     fn drop(&mut self) {
         let fut = self.0.borrow_mut().take();
         drop(fut);
@@ -391,6 +439,7 @@ impl<F> Drop for BlockOnSlot<F> {
 }
 
 impl Drop for Runtime {
+    /// Cancels outstanding tasks with this runtime active during cleanup.
     fn drop(&mut self) {
         CURRENT_RUNTIME.set(self, || {
             self.queue.shutdown();
@@ -477,29 +526,43 @@ impl Handle {
         Some(self.queue.poll_histogram.snapshot())
     }
 
-    /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
+    /// Spawns a task on the handle's runtime and returns a [`RemoteJoinHandle`].
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.
     ///
-    /// The output is moved to the thread that awaits the [`JoinHandle`], so
-    /// it must be `Send`. Use [`Runtime::spawn`] for non-`Send` outputs.
+    /// On the runtime thread the task is spawned directly. From other threads
+    /// the future and output must be `Send`, the future is polled and dropped
+    /// on the runtime thread and its output is returned through the handle.
+    /// The handle is neither `Send` nor `Sync`, dropping it detaches the task.
     ///
-    /// ```compile_fail
-    /// # fn check(hnd: ntex_rt::Handle) {
-    /// let _ = hnd.spawn(async { std::rc::Rc::new(()) });
+    /// ```no_run
+    /// # async fn check(hnd: ntex_rt::Handle) {
+    /// let task = hnd.spawn(async { 42 });
+    /// assert_eq!(task.await.unwrap(), 42);
     /// # }
     /// ```
     #[track_caller]
-    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    pub fn spawn<F>(&self, future: F) -> RemoteJoinHandle<F::Output>
     where
         F: Future + Send + 'static,
-        F::Output: Send,
+        F::Output: Send + 'static,
     {
-        unsafe { self.queue.spawn::<_, false>(future, Location::caller()) }
+        let location = Location::caller();
+        if Some(self.queue.id) == try_current_thread_id() {
+            RemoteJoinHandle::local(unsafe { self.queue.spawn(future, location) })
+        } else {
+            let job = Job::new(future, true);
+            let join = RemoteJoin::new(job.clone());
+            // a rejected submission closes the job on this thread
+            unsafe {
+                self.queue.spawn_detached::<_, false>(Runner(job), location);
+            }
+            RemoteJoinHandle::remote(join)
+        }
     }
 
-    /// Spawns a new asynchronous task without a [`JoinHandle`].
+    /// Spawns a new asynchronous task without a join handle.
     ///
     /// The output is dropped on the runtime thread when the task completes,
     /// so it does not have to be `Send`.
@@ -516,6 +579,7 @@ impl Handle {
 }
 
 impl Clone for Handle {
+    /// Shares the runtime's queue without creating another runtime.
     fn clone(&self) -> Self {
         Self {
             queue: self.queue.clone(),
@@ -532,6 +596,7 @@ pub struct RuntimeBuilder {
 }
 
 impl Default for RuntimeBuilder {
+    /// Uses the default scheduler budgets and self-wake thresholds.
     fn default() -> Self {
         Self::new()
     }
