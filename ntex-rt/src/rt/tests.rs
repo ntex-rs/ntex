@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::{Mutex, mpsc};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc, thread};
 
@@ -240,7 +241,7 @@ fn remote_schedule_notifies_once() {
         let hnd = rt.handle();
         std::thread::spawn(move || {
             for _ in 0..n {
-                hnd.spawn(async {}).detach();
+                hnd.spawn(async {});
             }
         })
         .join()
@@ -249,12 +250,13 @@ fn remote_schedule_notifies_once() {
 
     spawn(100);
     assert_eq!(cnt.load(Ordering::Relaxed), 1);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    while rt.poll() == PollResult::PollAgain {}
 
     // `poll` clears the flag
     spawn(100);
     assert_eq!(cnt.load(Ordering::Relaxed), 2);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    while rt.poll() == PollResult::PollAgain {}
+    assert_eq!(cnt.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -291,8 +293,7 @@ fn remote_schedule_no_lost_wakeup() {
                     let cnt = cnt.clone();
                     hnd.spawn(async move {
                         cnt.fetch_add(1, Ordering::Relaxed);
-                    })
-                    .detach();
+                    });
                 }
             })
         })
@@ -340,8 +341,7 @@ fn local_task_woken_by_remote_task() {
     std::thread::spawn(move || {
         hnd.spawn(async move {
             waker.lock().unwrap().clone().unwrap().wake();
-        })
-        .detach();
+        });
     })
     .join()
     .unwrap();
@@ -374,7 +374,8 @@ fn runtime_spawn_skips_owner_lookup() {
     block_on_thread(unchecked).unwrap();
     assert!(borrowed.get());
     assert!(detached.get());
-    assert_eq!(Arc::strong_count(&rt.queue), 1, "tasks freed");
+    drain(&rt);
+    assert_eq!(rt.queue.task_count(), 0, "task allocations retained");
 }
 
 #[test]
@@ -420,14 +421,14 @@ fn event_interval() {
             let cnt = cnt2.clone();
             hnd.spawn(async move {
                 cnt.fetch_add(1, Ordering::Relaxed);
-            })
-            .detach();
+            });
         }
     })
     .join()
     .unwrap();
     assert_eq!(rt.poll(), PollResult::PollAgain);
     assert_eq!(cnt.load(Ordering::Relaxed), 129);
+    // Untouched tasks reclaim directly instead of consuming the FIFO budget.
     assert_eq!(rt.poll(), PollResult::Pending);
     assert_eq!(cnt.load(Ordering::Relaxed), 130);
 }
@@ -607,8 +608,7 @@ fn current_task() {
     let line = line!() + 1;
     hnd.spawn(async move {
         tx.send(hnd2.current_task()).unwrap();
-    })
-    .detach();
+    });
     spawned_tx.send(()).unwrap();
     th.join().unwrap();
     let task = rx.recv().unwrap().unwrap();
@@ -917,7 +917,7 @@ fn reentrant_self_wake_logger() {
         });
         assert_eq!(polls.get(), ready_at);
         assert_eq!(rt.self_wake_count(), u64::from(ready_at - 1));
-        assert_eq!(Arc::strong_count(&rt.queue), 1, "task freed");
+        assert_eq!(rt.queue.task_count(), 0, "task allocation retained");
     }
 }
 
@@ -1009,14 +1009,11 @@ fn remote_wakers() {
     .unwrap();
     poll_until(&rt, || polls.load(Ordering::SeqCst) == 3);
 
-    // joined on another thread while the runtime polls
+    // The standard waker crosses threads; the join remains local.
     let w = slot.lock().unwrap().take().unwrap();
-    let th = thread::spawn(move || {
-        w.wake();
-        block_on_thread(h)
-    });
-    poll_until(&rt, || th.is_finished());
-    assert_eq!(th.join().unwrap().unwrap(), 4);
+    thread::spawn(move || w.wake()).join().unwrap();
+    poll_until(&rt, || h.is_finished());
+    assert_eq!(block_on_thread(h).unwrap(), 4);
 }
 
 #[test]
@@ -1046,14 +1043,12 @@ fn remote_wakers_stress() {
             })
         })
         .collect();
-    let joiner = thread::spawn(move || block_on_thread(h));
-
-    poll_until(&rt, || joiner.is_finished());
+    poll_until(&rt, || h.is_finished());
     stop.store(true, Ordering::SeqCst);
     for th in wakers {
         th.join().unwrap();
     }
-    assert_eq!(joiner.join().unwrap().unwrap(), POLLS);
+    assert_eq!(block_on_thread(h).unwrap(), POLLS);
     assert_eq!(polls.load(Ordering::SeqCst), POLLS);
     poll_until(&rt, || true);
 }
@@ -1089,20 +1084,28 @@ fn last_waker_drops_future() {
 }
 
 #[test]
-fn remote_cancel() {
+fn local_cancel_after_remote_wake() {
     let rt = Runtime::new(Box::new(NoopNotify));
     let dropped = Arc::new(AtomicBool::new(false));
     let flag = DropFlag(dropped.clone());
     let polled = Rc::new(Cell::new(false));
     let polled2 = polled.clone();
+    let slot = Slot::default();
+    let slot2 = slot.clone();
     let h = rt.spawn(async move {
         let _flag = flag;
         polled2.set(true);
-        poll_fn(|_| Poll::<()>::Pending).await;
+        poll_fn(|cx| {
+            *slot2.lock().unwrap() = Some(cx.waker().clone());
+            Poll::<()>::Pending
+        })
+        .await;
     });
     poll_until(&rt, || polled.get());
 
-    thread::spawn(move || h.cancel()).join().unwrap();
+    let w = slot.lock().unwrap().take().unwrap();
+    thread::spawn(move || w.wake()).join().unwrap();
+    h.cancel();
     poll_until(&rt, || dropped.load(Ordering::SeqCst));
 }
 
@@ -1171,8 +1174,7 @@ fn drop_runtime_with_tasks() {
     thread::spawn(move || {
         hnd.spawn(async move {
             let _flag = flag;
-        })
-        .detach();
+        });
     })
     .join()
     .unwrap();
@@ -1410,45 +1412,167 @@ async fn yield_once() {
 }
 
 #[test]
-fn remote_join_race() {
+fn remote_join_result_race() {
     const N: usize = iters(2000, 50);
 
     let rt = Runtime::new(Box::new(NoopNotify));
-    let (tx, rx) = std::sync::mpsc::channel::<JoinHandle<usize>>();
+    let handle = rt.handle();
     let done = Counter::default();
     let done2 = done.clone();
     let th = thread::spawn(move || {
-        for (i, h) in rx.into_iter().enumerate() {
+        for i in 0..N {
+            // completes while the joining thread registers its waker
+            let h = handle.spawn(async move {
+                for _ in 0..i % 4 {
+                    yield_once().await;
+                }
+                i
+            });
             assert_eq!(block_on_thread(h).unwrap(), i);
             done2.inc();
         }
     });
-    for i in 0..N {
-        // completes while the joining thread registers its waker
-        let h = rt.spawn(async move {
-            for _ in 0..i % 4 {
-                yield_once().await;
-            }
-            i
-        });
-        tx.send(h).unwrap();
-        poll_until(&rt, || done.get() == i + 1);
-    }
-    drop(tx);
+    poll_until(&rt, || done.get() == N);
     th.join().unwrap();
+}
+
+#[test]
+fn remote_join_result_reclamation() {
+    for path in 0..3 {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let out = Counter::default();
+        let value = out.token();
+        let handle = rt.handle();
+        let (spawned_tx, spawned) = mpsc::channel();
+        let (stopped, stopped_rx) = mpsc::channel::<()>();
+        let th = thread::spawn(move || {
+            let mut task = Some(handle.spawn(async move { value }));
+            drop(handle);
+            if path == 0 {
+                drop(task.take());
+            }
+            spawned_tx.send(()).unwrap();
+            stopped_rx.recv().unwrap();
+            if let Some(task) = task {
+                if path == 1 {
+                    drop(task);
+                } else {
+                    drop(block_on_thread(task).unwrap());
+                }
+            }
+        });
+        spawned.recv().unwrap();
+        drain(&rt);
+        if path != 0 {
+            assert_eq!(out.get(), 0);
+        }
+        assert_eq!(rt.queue.task_count(), 0);
+        drop(rt);
+        stopped.send(()).unwrap();
+        th.join().unwrap();
+        assert_eq!(out.get(), 1);
+    }
+}
+
+#[test]
+fn remote_join_cancel() {
+    // cancelled while queued, the future is dropped on the owner unpolled
+    let rt = Runtime::new(Box::new(NoopNotify));
+    let owner = thread::current().id();
+    let polled = Arc::new(AtomicBool::new(false));
+    let dropped_on = Arc::new(Mutex::new(None));
+    let handle = rt.handle();
+    let (polled2, dropped2) = (polled.clone(), dropped_on.clone());
+    thread::spawn(move || {
+        let guard = DropThread(dropped2);
+        let h = handle.spawn(async move {
+            let _guard = guard;
+            polled2.store(true, Ordering::SeqCst);
+        });
+        assert!(!h.is_finished());
+        h.cancel();
+    })
+    .join()
+    .unwrap();
+    drain(&rt);
+    assert!(!polled.load(Ordering::SeqCst));
+    assert_eq!(*dropped_on.lock().unwrap(), Some(owner));
+
+    // cancelled while running
+    let dropped_on = Arc::new(Mutex::new(None));
+    let handle = rt.handle();
+    let dropped2 = dropped_on.clone();
+    let (started_tx, started) = mpsc::channel();
+    let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+    let th = thread::spawn(move || {
+        let guard = DropThread(dropped2);
+        let h = handle.spawn(async move {
+            let _guard = guard;
+            started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        cancel_rx.recv().unwrap();
+        h.cancel();
+    });
+    poll_until(&rt, || started.try_recv().is_ok());
+    assert!(dropped_on.lock().unwrap().is_none());
+    cancel_tx.send(()).unwrap();
+    th.join().unwrap();
+    poll_until(&rt, || dropped_on.lock().unwrap().is_some());
+    assert_eq!(*dropped_on.lock().unwrap(), Some(owner));
+}
+
+#[test]
+fn remote_join_is_finished() {
+    let rt = Runtime::new(Box::new(NoopNotify));
+    let handle = rt.handle();
+    let (spawned_tx, spawned) = mpsc::channel();
+    let (ran, ran_rx) = mpsc::channel::<()>();
+    let th = thread::spawn(move || {
+        let h = handle.spawn(async { 7 });
+        assert!(!h.is_finished());
+        spawned_tx.send(()).unwrap();
+        ran_rx.recv().unwrap();
+        assert!(h.is_finished());
+        assert_eq!(block_on_thread(h).unwrap(), 7);
+    });
+    spawned.recv().unwrap();
+    drain(&rt);
+    ran.send(()).unwrap();
+    th.join().unwrap();
+}
+
+#[test]
+fn local_handle_spawn() {
+    let rt = Runtime::new(Box::new(NoopNotify));
+    let handle = rt.handle();
+    let h = handle.spawn(async { thread::current().id() });
+    // spawned directly on the owner, not through the wake queue
+    assert!(rt.queue.wake_queue.is_empty());
+    assert!(!rt.queue.local_queue.is_empty());
+    poll_until(&rt, || h.is_finished());
+    assert_eq!(block_on_thread(h).unwrap(), thread::current().id());
+}
+
+struct DropThread(Arc<Mutex<Option<thread::ThreadId>>>);
+
+impl Drop for DropThread {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap() = Some(thread::current().id());
+    }
 }
 
 #[test]
 fn unconsumed_output_dropped() {
     let rt = Runtime::new(Box::new(NoopNotify));
-    for remote in [false, true] {
+    for cancel in [false, true] {
         let out = Counter::default();
         let tok = out.token();
         let h = rt.spawn(async move { tok });
         poll_until(&rt, || h.is_finished());
         assert_eq!(out.get(), 0);
-        if remote {
-            thread::spawn(move || drop(h)).join().unwrap();
+        if cancel {
+            h.cancel();
         } else {
             drop(h);
         }
@@ -1476,7 +1600,7 @@ fn unconsumed_output_dropped() {
 }
 
 #[test]
-fn remote_cancel_before_run() {
+fn remote_shutdown_before_run() {
     let rt = Runtime::new(Box::new(NoopNotify));
     let dropped = Arc::new(AtomicBool::new(false));
     let polled = Arc::new(AtomicBool::new(false));
@@ -1487,12 +1611,12 @@ fn remote_cancel_before_run() {
         hnd.spawn(async move {
             let _flag = flag;
             polled2.store(true, Ordering::SeqCst);
-        })
-        .cancel();
+        });
     })
     .join()
     .unwrap();
-    poll_until(&rt, || dropped.load(Ordering::SeqCst));
+    drop(rt);
+    assert!(dropped.load(Ordering::SeqCst));
     assert!(!polled.load(Ordering::SeqCst));
 }
 
@@ -1526,10 +1650,10 @@ fn cancel_complete_race() {
 
         let w = slot.lock().unwrap().take().unwrap();
         let t1 = thread::spawn(move || w.wake());
-        let t2 = thread::spawn(move || h.cancel());
-        poll_until(&rt, || t1.is_finished() && t2.is_finished());
+        rt.poll();
+        h.cancel();
+        poll_until(&rt, || t1.is_finished());
         t1.join().unwrap();
-        t2.join().unwrap();
         // the output is dropped once, whichever side wins
         poll_until(&rt, || {
             dropped.load(Ordering::SeqCst) && created.get() == out.get()
@@ -1586,10 +1710,9 @@ fn unclaimed_output_with_own_waker() {
         let h = rt.spawn(poll_fn(move |cx| {
             Poll::Ready((cx.waker().clone(), flag.take().unwrap()))
         }));
-        let remote_drop = |h| thread::spawn(move || drop(h)).join().unwrap();
         match case {
             0 => h.detach(),
-            1 => remote_drop(h),
+            1 => drop(h),
             2 => {
                 drain(&rt);
                 h.detach();
@@ -1600,7 +1723,7 @@ fn unclaimed_output_with_own_waker() {
             }
             _ => {
                 drain(&rt);
-                remote_drop(h);
+                drop(h);
             }
         }
         drain(&rt);
@@ -1624,11 +1747,9 @@ impl Drop for ReDrop {
         }
         drop(self.other.take());
         let flag = DropFlag(self.spawned.clone());
-        self.hnd
-            .spawn(async move {
-                let _flag = flag;
-            })
-            .detach();
+        self.hnd.spawn(async move {
+            let _flag = flag;
+        });
         self.dropped.store(true, Ordering::SeqCst);
     }
 }
@@ -1671,7 +1792,9 @@ fn reentrant_drop() {
             drop(rt);
         } else {
             h.cancel();
-            poll_until(&rt, || spawned.load(Ordering::SeqCst));
+            poll_until(&rt, || {
+                spawned.load(Ordering::SeqCst) && other_dropped.load(Ordering::SeqCst)
+            });
         }
         assert!(dropped.load(Ordering::SeqCst));
         assert!(other_dropped.load(Ordering::SeqCst));
@@ -1757,9 +1880,11 @@ impl Hook {
     unsafe fn clone(p: *const ()) -> RawWaker {
         let hook = unsafe { &*p.cast::<Hook>() };
         hook.refs.set(hook.refs.get() + 1);
+        let cloned = unsafe { Waker::from_raw(RawWaker::new(p, &Self::VTABLE)) };
         if let Some(f) = hook.on_clone.take() {
             f();
         }
+        std::mem::forget(cloned);
         RawWaker::new(p, &Self::VTABLE)
     }
 
@@ -1818,11 +1943,44 @@ fn join_completes_in_waker_callback() {
     }
 }
 
+#[test]
+fn join_completion_survives_waker_clone_panic() {
+    let rt = Runtime::new(Box::new(NoopNotify));
+    CURRENT_RUNTIME.set(&rt, || {
+        let mut task = rt.spawn(async { Rc::new(42) });
+        assert!(
+            Pin::new(&mut task)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        let dropped = Arc::new(AtomicBool::new(false));
+        let flag = DropFlag(dropped.clone());
+        let waker = Hook::waker(
+            Some(Box::new(|| {
+                Runtime::with_current(drain);
+                panic!("clone after completion");
+            })),
+            Some(Box::new(move || drop(flag))),
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Pin::new(&mut task).poll(&mut Context::from_waker(&waker))
+        }));
+        assert!(result.is_err());
+        assert!(task.is_finished());
+        assert_eq!(*block_on_thread(task).unwrap(), 42);
+        drop(waker);
+        assert!(dropped.load(Ordering::SeqCst));
+        drain(&rt);
+        assert_eq!(rt.queue.task_count(), 0);
+    });
+}
+
 #[cfg(ntex_loom)]
 #[test]
 fn task_loom_reentrant_lifecycle() {
     loom::model(|| {
         join_completes_in_waker_callback();
+        join_completion_survives_waker_clone_panic();
         reentrant_poll_in_drop();
     });
 }
@@ -1902,7 +2060,7 @@ fn join_waker_replaced() {
     }
 
     let rt = Runtime::new(Box::new(NoopNotify));
-    for remote in [false, true] {
+    {
         let slot = Slot::default();
         let polls = Arc::new(AtomicUsize::new(0));
         let mut h = rt.spawn(wait_polls(slot.clone(), polls.clone(), 2));
@@ -1910,17 +2068,8 @@ fn join_waker_replaced() {
 
         let a = Arc::new(CountWaker::default());
         let b = Arc::new(CountWaker::default());
-        let (a2, b2) = (a.clone(), b.clone());
-        let poll_both = move |mut h| {
-            assert!(poll_with(&mut h, &a2).is_pending());
-            assert!(poll_with(&mut h, &b2).is_pending());
-            h
-        };
-        h = if remote {
-            thread::spawn(move || poll_both(h)).join().unwrap()
-        } else {
-            poll_both(h)
-        };
+        assert!(poll_with(&mut h, &a).is_pending());
+        assert!(poll_with(&mut h, &b).is_pending());
 
         slot.lock().unwrap().take().unwrap().wake();
         poll_until(&rt, || b.0.load(Ordering::SeqCst) == 1);

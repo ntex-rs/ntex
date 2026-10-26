@@ -1,6 +1,7 @@
 //! Loom models of the task protocol between the owner thread and other
-//! threads: the remote word, the remote queue, the join handle awaiter and
-//! the output hand-off, scheduler shutdown and parked-driver notifications.
+//! threads: owner-accounted references, detached submissions, local joins,
+//! scheduler shutdown and parked-driver notifications. The command FIFO uses
+//! a Loom mutex here; these models do not explore Crossbeam's internals.
 //!
 //! `RUSTFLAGS="--cfg ntex_loom" cargo test --release -p ntex-rt --lib task_loom`
 use std::sync::Mutex;
@@ -104,7 +105,7 @@ fn new_rt() -> Runtime {
 }
 
 fn spawn<F: Future>(rt: &Runtime, f: F) -> Task<F::Output> {
-    unsafe { task::spawn::<_, true>(f, &rt.queue, Location::caller()) }
+    unsafe { task::spawn(f, &rt.queue, Location::caller()) }
 }
 
 /// Runs queued tasks until both queues are empty.
@@ -114,15 +115,11 @@ fn drain(rt: &Runtime) {
             r.run();
             continue;
         }
-        match rt.queue.remote_queue.pop() {
-            Ok(Some(r)) => {
-                if let Some(r) = r.into_runnable() {
-                    r.run();
-                }
-            }
-            Ok(None) => return,
-            // a producer is between its swap and its link
-            Err(_) => thread::yield_now(),
+        let Some(wake) = rt.queue.wake_queue.pop() else {
+            return;
+        };
+        if let Some(r) = wake.into_runnable(&rt.queue) {
+            r.run();
         }
     }
 }
@@ -158,8 +155,8 @@ fn join<T>(mut task: Task<T>) -> Option<T> {
 fn assert_freed(rt: &Runtime) {
     drain(rt);
     assert!(rt.queue.local_queue.is_empty(), "local queue");
-    assert!(rt.queue.remote_queue.is_empty(), "remote queue");
-    assert_eq!(Arc::strong_count(&rt.queue), 1, "tasks alive");
+    assert!(rt.queue.wake_queue.is_empty(), "wake queue");
+    assert_eq!(rt.queue.task_count(), 0, "task allocations retained");
 }
 
 /// Spawns a pending task and polls it once.
@@ -201,6 +198,262 @@ fn remote_wake() {
 }
 
 #[test]
+fn consuming_wake_races_last_local_interest() {
+    model(|| {
+        let rt = new_rt();
+        let (st, task) = pending(&rt);
+        let waker = st.waker.lock().unwrap().take().unwrap();
+        let local = crate::LocalWaker::from_waker(&waker);
+        drop(task);
+        let state = st.clone();
+        let producer = thread::spawn(move || {
+            state.ready.store(true, Ordering::Relaxed);
+            waker.wake();
+        });
+        drop(local);
+        run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
+        producer.join().unwrap();
+        assert_eq!(st.polls.load(Ordering::Relaxed), 2);
+        assert_freed(&rt);
+    });
+}
+
+#[test]
+fn remote_acquisition_precedes_owner_return_and_release() {
+    model(|| {
+        let rt = new_rt();
+        let (state, task) = pending(&rt);
+        let source = state.waker.lock().unwrap().take().unwrap();
+        let producer = thread::spawn(move || {
+            let cloned = source.clone();
+            (source, cloned)
+        });
+        drop(task);
+        drain(&rt);
+        let (source, cloned) = producer.join().unwrap();
+        drop((source, cloned));
+        assert_freed(&rt);
+        assert_eq!(state.drops.load(Ordering::Relaxed), 1);
+    });
+}
+
+#[test]
+fn first_remote_publication_races_completed_owner_release() {
+    model(|| {
+        for operation in 0..3 {
+            let rt = new_rt();
+            let mut task = spawn(
+                &rt,
+                std::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())),
+            );
+            drain(&rt);
+            let Poll::Ready(Some(waker)) = task.poll_join(&Context::from_waker(Waker::noop()))
+            else {
+                panic!("missing completed waker");
+            };
+            let producer = thread::spawn(move || match operation {
+                0 => {
+                    let cloned = waker.clone();
+                    (Some(waker), Some(cloned))
+                }
+                1 => {
+                    waker.wake_by_ref();
+                    (Some(waker), None)
+                }
+                _ => {
+                    waker.wake();
+                    (None, None)
+                }
+            });
+            drop(task);
+            drain(&rt);
+            let returned = producer.join().unwrap();
+            drop(returned);
+            assert_freed(&rt);
+        }
+    });
+}
+
+#[test]
+fn owner_release_follows_pending_remote_releases() {
+    model(|| {
+        let rt = new_rt();
+        let (state, task) = pending(&rt);
+        let source = state.waker.lock().unwrap().take().unwrap();
+        let first = source.clone();
+        let second = source.clone();
+        drop(task);
+        drain(&rt);
+        let producer = thread::spawn(move || {
+            drop((first, second));
+            let cloned = source.clone();
+            (source, cloned)
+        });
+        let (source, cloned) = producer.join().unwrap();
+        drop(source);
+        drain(&rt);
+        assert_eq!(state.drops.load(Ordering::Relaxed), 0);
+        drop(cloned);
+        assert_freed(&rt);
+        assert_eq!(state.drops.load(Ordering::Relaxed), 1);
+    });
+}
+
+#[test]
+fn clone_racing_unregister_leaves_no_driver_reference() {
+    model(|| {
+        let rt = new_rt();
+        let (state, task) = pending(&rt);
+        let source = state.waker.lock().unwrap().take().unwrap();
+        let queue = Arc::downgrade(&rt.queue);
+        let native = source.vtable();
+        let producer = thread::spawn(move || {
+            let cloned = source.clone();
+            source.wake();
+            cloned
+        });
+        drop(rt);
+        let late = producer.join().unwrap();
+        assert!(!std::ptr::eq(late.clone().vtable(), native));
+        late.wake();
+        drop(task);
+        assert_eq!(state.drops.load(Ordering::Relaxed), 1);
+        assert!(queue.upgrade().is_none());
+    });
+}
+
+#[test]
+fn cached_remote_clone_races_shutdown() {
+    model(|| {
+        let rt = new_rt();
+        let (state, task) = pending(&rt);
+        let source = state.waker.lock().unwrap().take().unwrap();
+        let queue = Arc::downgrade(&rt.queue);
+        let native = source.vtable();
+        let (primed, ready) = loom::sync::mpsc::channel();
+        let producer = thread::spawn(move || {
+            drop(source.clone());
+            primed.send(()).unwrap();
+            let cloned = source.clone();
+            source.wake();
+            cloned
+        });
+        ready.recv().unwrap();
+        drop(rt);
+        let late = producer.join().unwrap();
+        assert!(!std::ptr::eq(late.clone().vtable(), native));
+        late.wake();
+        drop(task);
+        assert_eq!(state.drops.load(Ordering::Relaxed), 1);
+        assert!(queue.upgrade().is_none());
+    });
+}
+
+#[test]
+fn cached_owner_endpoint_is_invalidated_independently() {
+    model(|| {
+        let first = new_rt();
+        let second = new_rt();
+        let (first_state, first_task) = pending(&first);
+        let (second_state, second_task) = pending(&second);
+        let first_waker = first_state.waker.lock().unwrap().take().unwrap();
+        let second_waker = second_state.waker.lock().unwrap().take().unwrap();
+        let native = first_waker.vtable();
+        let first_local = crate::LocalWaker::from(first_waker);
+        let second_local = crate::LocalWaker::from(second_waker);
+        drop(first_local.clone().into_waker());
+        drop(second_local.clone().into_waker());
+        let remote = second_local.clone().into_waker();
+        let remote = thread::spawn(move || {
+            drop(remote.clone());
+            remote
+        })
+        .join()
+        .unwrap();
+        assert!(!second.queue.wake_queue.is_empty());
+        drop(remote);
+        drain(&first);
+        drain(&second);
+        drop(first);
+        assert!(std::ptr::eq(
+            second_local.clone().into_waker().vtable(),
+            native
+        ));
+        assert!(!std::ptr::eq(
+            first_local.clone().into_waker().vtable(),
+            native
+        ));
+        drop(second);
+        assert!(!std::ptr::eq(
+            second_local.clone().into_waker().vtable(),
+            native
+        ));
+        drop((first_local, first_task, second_local, second_task));
+        assert_eq!(first_state.drops.load(Ordering::Relaxed), 1);
+        assert_eq!(second_state.drops.load(Ordering::Relaxed), 1);
+    });
+}
+
+#[test]
+fn coalesced_wake_publishes_after_queue_push() {
+    struct Data(loom::cell::UnsafeCell<usize>);
+    unsafe impl Sync for Data {}
+
+    model(|| {
+        let rt = new_rt();
+        let data = Arc::new(Data(loom::cell::UnsafeCell::new(0)));
+        let written = Arc::new(AtomicBool::new(false));
+        let consumed = Arc::new(AtomicBool::new(false));
+        let slot = Arc::new(Mutex::new(None));
+        let (s, value) = (slot.clone(), data.clone());
+        let mut first = true;
+        let mut task = spawn(
+            &rt,
+            std::future::poll_fn(move |cx| {
+                if first {
+                    first = false;
+                    *s.lock().unwrap() = Some(cx.waker().clone());
+                    Poll::Pending
+                } else {
+                    Poll::Ready(value.0.with(|p| unsafe { *p }))
+                }
+            }),
+        );
+        drain(&rt);
+        let waker = slot.lock().unwrap().take().unwrap();
+        let waker = thread::spawn(move || {
+            waker.wake_by_ref();
+            waker
+        })
+        .join()
+        .unwrap();
+        let (w, c) = (written.clone(), consumed.clone());
+        let producer = thread::spawn(move || {
+            data.0.with_mut(|p| unsafe { *p = 42 });
+            waker.wake_by_ref();
+            // No synchronization through this flag: the wake must publish data.
+            w.store(true, Ordering::Relaxed);
+            while !c.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            drop(waker);
+        });
+        while !written.load(Ordering::Relaxed) {
+            thread::yield_now();
+        }
+        drain(&rt);
+        assert_eq!(
+            task.poll_join(&Context::from_waker(Waker::noop())),
+            Poll::Ready(Some(42))
+        );
+        consumed.store(true, Ordering::Release);
+        producer.join().unwrap();
+        drop(task);
+        assert_freed(&rt);
+    });
+}
+
+#[test]
 fn local_waker_completion_and_remote_release() {
     model(|| {
         let rt = new_rt();
@@ -229,7 +482,7 @@ fn local_waker_completion_and_remote_release() {
 }
 
 #[test]
-fn local_waker_remote_cancellation() {
+fn local_cancellation_with_remote_wakers() {
     model(|| {
         let rt = new_rt();
         let (st, task) = pending(&rt);
@@ -238,11 +491,11 @@ fn local_waker_remote_cancellation() {
         let th = thread::spawn(move || {
             let cloned = remote.clone();
             remote.wake_by_ref();
-            task.cancel();
             cloned.wake();
             drop(remote);
         });
         local.clone().wake();
+        task.cancel();
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
         local.wake_by_ref();
         local.clone().wake();
@@ -346,39 +599,40 @@ fn two_producers() {
     });
 }
 
-/// The join handle on another thread registers while the owner thread
-/// completes the task, and reads the output the owner thread wrote.
+/// A local join reads a result published after remote task submission.
 #[test]
-fn remote_join() {
+fn local_join_with_remote_submission() {
     model(|| {
         let rt = new_rt();
         let st = Arc::new(State::default());
         st.ready.store(true, Ordering::Relaxed);
         let task = spawn(&rt, Fut(st.clone()));
-        let th = thread::spawn(move || *join(task).unwrap());
+        let handle = rt.handle();
+        let th = thread::spawn(move || handle.spawn(async {}));
         drain(&rt);
-        assert_eq!(th.join().unwrap(), 42);
+        assert_eq!(*join(task).unwrap(), 42);
+        th.join().unwrap();
         assert_freed(&rt);
         assert_eq!(st.drops.load(Ordering::Relaxed), 1);
     });
 }
 
-/// The join handle on another thread registers and is dropped before a
-/// remote wake completes the task, the awaiter is dropped without a wake.
+/// Detaching locally drops the awaiter while a remote wake completes the task.
 #[test]
-fn remote_detached_awaiter() {
+fn local_detached_awaiter_remote_wake() {
     model(|| {
         let rt = new_rt();
         let (st, mut task) = pending(&rt);
         let (st2, w) = (st.clone(), st.waker());
         let flag = Arc::new(Flag::default());
         let waker = Waker::from(flag.clone());
+        assert!(task.poll_join(&Context::from_waker(&waker)).is_pending());
         let th = thread::spawn(move || {
-            assert!(task.poll_join(&Context::from_waker(&waker)).is_pending());
-            drop(task);
             st2.ready.store(true, Ordering::Release);
             w.wake();
         });
+        drop(task);
+        drop(waker);
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
         th.join().unwrap();
         drop(st.waker.lock().unwrap().take());
@@ -388,10 +642,9 @@ fn remote_detached_awaiter() {
     });
 }
 
-/// The join handle on another thread registers while a remote wake
-/// completes the task.
+/// A remote wake completes a task with a local join.
 #[test]
-fn remote_join_and_wake() {
+fn local_join_and_remote_wake() {
     model(|| {
         let rt = new_rt();
         let (st, task) = pending(&rt);
@@ -400,27 +653,26 @@ fn remote_join_and_wake() {
             st2.ready.store(true, Ordering::Release);
             w.wake();
         });
-        let joiner = thread::spawn(move || *join(task).unwrap());
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
         waker.join().unwrap();
-        assert_eq!(joiner.join().unwrap(), 42);
+        assert_eq!(*join(task).unwrap(), 42);
         drop(st.waker.lock().unwrap().take());
         assert_freed(&rt);
     });
 }
 
-/// Another thread cancels the task while it is woken and run.
+/// Local cancellation races a remote wake.
 #[test]
-fn remote_cancel() {
+fn local_cancel_remote_wake() {
     model(|| {
         let rt = new_rt();
         let (st, task) = pending(&rt);
         let w = st.waker();
         let th = thread::spawn(move || {
             w.wake_by_ref();
-            task.cancel();
             drop(w);
         });
+        task.cancel();
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
         th.join().unwrap();
         drop(st.waker.lock().unwrap().take());
@@ -450,9 +702,8 @@ fn remote_release() {
     });
 }
 
-/// A remote `wake_by_ref` queues the task without a queue reference while
-/// the owner thread completes the task and drops the runtime, the waker
-/// keeps the queue alive.
+/// A remote `wake_by_ref` races completion and runtime destruction. Retaining
+/// the standard waker must not retain the runtime's driver.
 #[test]
 fn remote_wake_by_ref_shutdown() {
     model(|| {
@@ -507,20 +758,19 @@ fn completed_output_release() {
     });
 }
 
-/// A task spawned from another thread is run and joined there.
+/// A task spawned from another thread discards its output on the owner.
 #[test]
 fn remote_spawn() {
     model(|| {
         let rt = new_rt();
         let st = Arc::new(State::default());
         st.ready.store(true, Ordering::Relaxed);
-        let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
+        let (handle, fut) = (rt.handle(), Fut(st.clone()));
         let th = thread::spawn(move || {
-            let task = unsafe { task::spawn::<_, false>(fut, &q, Location::caller()) };
-            *join(task).unwrap()
+            handle.spawn(fut);
         });
         run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
-        assert_eq!(th.join().unwrap(), 42);
+        th.join().unwrap();
         assert_freed(&rt);
     });
 }
@@ -534,10 +784,9 @@ impl Drop for Out {
     }
 }
 
-/// The join handle is dropped on another thread while the owner thread
-/// completes the task, the output is dropped once.
+/// A local detach races remote wake publication; the output is dropped once.
 #[test]
-fn remote_detach() {
+fn local_detach_remote_wake() {
     model(|| {
         let rt = new_rt();
         let st = Arc::new(State::default());
@@ -548,8 +797,9 @@ fn remote_detach() {
         });
         drain(&rt);
         st.ready.store(true, Ordering::Release);
-        st.waker().wake();
-        let th = thread::spawn(move || drop(task));
+        let waker = st.waker();
+        let th = thread::spawn(move || waker.wake());
+        drop(task);
         drain(&rt);
         th.join().unwrap();
         drop(st.waker.lock().unwrap().take());
@@ -619,7 +869,7 @@ fn parked_remote_submissions() {
         st.ready.store(true, Ordering::Relaxed);
         let (handle, st2) = (rt.handle(), st.clone());
         let th = thread::spawn(move || {
-            handle.spawn(Fut(st2.clone())).detach();
+            handle.spawn(Fut(st2.clone()));
             handle.spawn_detached(Fut(st2));
         });
         run_parked(&rt, &park, || st.drops.load(Ordering::Relaxed) == 2);
@@ -735,12 +985,12 @@ fn spawn_shutdown(detached: bool) {
             let st = Arc::new(State::default());
             let threads: Vec<_> = (0..producers)
                 .map(|_| {
-                    let (q, fut) = (rt.queue.clone(), Fut(st.clone()));
-                    thread::spawn(move || unsafe {
+                    let (handle, fut) = (rt.handle(), Fut(st.clone()));
+                    thread::spawn(move || {
                         if detached {
-                            task::spawn_detached::<_, false>(fut, &q, Location::caller());
+                            handle.spawn_detached(fut);
                         } else {
-                            drop(task::spawn::<_, false>(fut, &q, Location::caller()));
+                            handle.spawn(fut);
                         }
                     })
                 })
@@ -762,7 +1012,7 @@ fn spawn_shutdown(detached: bool) {
     }
 }
 
-/// Joined spawning racing shutdown must reclaim its future and queue.
+/// Fire-and-forget spawning racing shutdown reclaims its future and queue.
 #[test]
 fn remote_spawn_shutdown() {
     spawn_shutdown(false);
@@ -811,7 +1061,7 @@ fn shutdown_with_blocked_notification() {
                 let (handle, fut) = (rt.handle(), Fut(st.clone()));
                 thread::spawn(move || {
                     if path == 1 {
-                        drop(handle.spawn(fut));
+                        handle.spawn(fut);
                     } else {
                         handle.spawn_detached(fut);
                     }
@@ -864,18 +1114,16 @@ fn remote_signal_shutdown() {
             });
             drain(&rt);
             let w = st.waker.lock().unwrap().take().unwrap();
-            let th = thread::spawn(move || {
-                match action {
-                    0 => drop(w),
-                    1 => w.wake(),
-                    _ => w.wake_by_ref(),
-                }
-                if action == 3 {
-                    task.cancel();
-                } else {
-                    drop(task);
-                }
+            let th = thread::spawn(move || match action {
+                0 => drop(w),
+                1 => w.wake(),
+                _ => w.wake_by_ref(),
             });
+            if action == 3 {
+                task.cancel();
+            } else {
+                drop(task);
+            }
             drop(rt);
             th.join().unwrap();
             assert_eq!(st.drops.load(Ordering::Relaxed), 1);

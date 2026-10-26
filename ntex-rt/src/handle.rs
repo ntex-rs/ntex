@@ -1,49 +1,37 @@
 use std::{fmt, panic::Location, pin::Pin, task::Context, task::Poll, task::ready};
 
+use crate::remote::RemoteJoin;
+
 type Task<T> = crate::rt::task::Task<T>;
 
 /// The location a task was spawned at.
 pub(crate) type SpawnLocation = &'static Location<'static>;
 
+/// A local task handle. It is neither `Send` nor `Sync`.
+///
+/// Returned by [`crate::spawn()`] and [`crate::Runtime::spawn()`]. Dropping
+/// the handle detaches the task.
 #[derive(Debug)]
-/// A spawned task.
 pub struct JoinHandle<T> {
-    task: Option<Task<T>>,
+    task: Task<T>,
 }
 
 impl<T> JoinHandle<T> {
     pub(crate) fn new(task: Task<T>) -> Self {
-        JoinHandle { task: Some(task) }
+        JoinHandle { task }
     }
 
     /// Cancels the task.
-    pub fn cancel(mut self) {
-        if let Some(t) = self.task.take() {
-            t.cancel();
-        }
+    pub fn cancel(self) {
+        self.task.cancel();
     }
 
     /// Detaches the task so it continues running independently.
-    pub fn detach(mut self) {
-        if let Some(t) = self.task.take() {
-            t.detach();
-        }
-    }
+    pub fn detach(self) {}
 
     /// Returns `true` if the task has finished.
     pub fn is_finished(&self) -> bool {
-        match &self.task {
-            Some(fut) => fut.is_finished(),
-            None => true,
-        }
-    }
-}
-
-impl<T> Drop for JoinHandle<T> {
-    fn drop(&mut self) {
-        if let Some(fut) = self.task.take() {
-            fut.detach();
-        }
+        self.task.is_finished()
     }
 }
 
@@ -51,9 +39,66 @@ impl<T> Future for JoinHandle<T> {
     type Output = Result<T, JoinError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(match self.task.as_mut() {
-            Some(fut) => ready!(fut.poll_join(cx)).ok_or(JoinError),
-            None => Err(JoinError),
+        self.task.poll_join(cx).map(|out| out.ok_or(JoinError))
+    }
+}
+
+/// A task handle returned by [`crate::Handle::spawn()`].
+///
+/// It is neither `Send` nor `Sync` and stays on the calling thread.
+/// Submissions on the runtime thread retain the local spawn fast path.
+/// Dropping the handle detaches the task.
+#[derive(Debug)]
+pub struct RemoteJoinHandle<T> {
+    inner: Inner<T>,
+}
+
+#[derive(Debug)]
+enum Inner<T> {
+    Local(JoinHandle<T>),
+    Remote(RemoteJoin<T>),
+}
+
+impl<T> RemoteJoinHandle<T> {
+    pub(crate) fn local(task: JoinHandle<T>) -> Self {
+        Self {
+            inner: Inner::Local(task),
+        }
+    }
+
+    pub(crate) fn remote(join: RemoteJoin<T>) -> Self {
+        Self {
+            inner: Inner::Remote(join),
+        }
+    }
+
+    /// Cancels the task, dropping its future on the runtime thread.
+    pub fn cancel(self) {
+        match self.inner {
+            Inner::Local(t) => t.cancel(),
+            Inner::Remote(t) => t.cancel(),
+        }
+    }
+
+    /// Detaches the task so it continues running independently.
+    pub fn detach(self) {}
+
+    /// Returns `true` if the task has finished.
+    pub fn is_finished(&self) -> bool {
+        match &self.inner {
+            Inner::Local(t) => t.is_finished(),
+            Inner::Remote(t) => t.is_finished(),
+        }
+    }
+}
+
+impl<T> Future for RemoteJoinHandle<T> {
+    type Output = Result<T, JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(match &mut self.inner {
+            Inner::Local(t) => ready!(Pin::new(t).poll(cx)),
+            Inner::Remote(t) => ready!(t.poll_join(cx)).ok_or(JoinError),
         })
     }
 }
@@ -78,6 +123,7 @@ mod tests {
 
     #[test]
     fn join_handle() {
+        assert_eq!(size_of::<crate::JoinHandle<usize>>(), size_of::<usize>());
         System::new("test", TestRunner).block_on(async {
             let hnd = crate::spawn(pending::<()>());
             assert!(!hnd.is_finished());

@@ -430,11 +430,9 @@ mod tests {
             .build(TestRunner)
             .block_on(async {
                 let mut arb = Arbiter::new();
-                let (tx, rx) = oneshot::channel();
                 let line = line!() + 1;
-                arb.handle().spawn(async move {
+                let done = arb.handle().spawn(async move {
                     std::thread::sleep(Duration::from_millis(800));
-                    let _ = tx.send(());
                 });
 
                 let stalled = || arb.latency().unwrap().stalled;
@@ -453,7 +451,7 @@ mod tests {
                     let task = task.unwrap();
                     assert_eq!((task.file(), task.line()), (file!(), line));
                 }
-                rx.await.unwrap();
+                done.await.unwrap();
 
                 for _ in 0..400 {
                     if !stalled() {

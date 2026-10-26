@@ -36,6 +36,7 @@ atomic-waker = { workspace = true }
 async-channel = { workspace = true }
 backtrace = { workspace = true }
 crossbeam-channel = { workspace = true }
+crossbeam-queue = { workspace = true }
 foldhash = { workspace = true }
 futures-timer = { workspace = true }
 libc = { workspace = true }

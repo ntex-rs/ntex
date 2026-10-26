@@ -1,6 +1,7 @@
 use std::{fmt, future::Future, time::Instant};
 
-pub use crate::{handle::JoinHandle, rt::Handle, rt::Runtime};
+pub use crate::handle::{JoinHandle, RemoteJoinHandle};
+pub use crate::{rt::Handle, rt::Runtime};
 
 #[derive(Debug, Copy, Clone)]
 pub struct JoinError;

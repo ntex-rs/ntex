@@ -298,7 +298,7 @@ impl Accept {
                 info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
 
                 let notify = self.notify.clone();
-                System::current().handle().spawn(async move {
+                System::current().handle().spawn_detached(async move {
                     sleep(ERR_SLEEP_TIMEOUT).await;
                     notify.send(AcceptorCommand::Timer);
                 });
@@ -457,7 +457,7 @@ impl Accept {
                         info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
 
                         let notify = self.notify.clone();
-                        System::current().handle().spawn(async move {
+                        System::current().handle().spawn_detached(async move {
                             sleep(ERR_SLEEP_TIMEOUT).await;
                             notify.send(AcceptorCommand::Timer);
                         });

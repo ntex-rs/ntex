@@ -6,30 +6,24 @@ use ntex::time::{Millis, sleep};
 
 #[ntex::test]
 async fn test_join_handle() {
-    fn __assert_send<Fut, T>(f: Fut) -> Fut
-    where
-        Fut: Future<Output = T> + Send,
-    {
-        f
-    }
-
     let hnd = rt::Handle::current();
-    let f = rt::spawn(async { "test" });
-    let f = __assert_send(f);
-    let (tx, rx) = oneshot::channel();
+    let f: rt::JoinHandle<_> = rt::spawn(async { std::rc::Rc::new("test") });
+    assert_eq!(*f.await.unwrap(), "test");
+    let local: rt::RemoteJoinHandle<_> = hnd.spawn(async { "local" });
+    assert_eq!(local.await.unwrap(), "local");
+    let (tx, rx) = oneshot::async_channel();
 
-    thread::spawn(move || {
+    let thread = thread::spawn(move || {
         let runner = crate::System::build().build(ntex::rt::DefaultRuntime);
-        let result = runner.block_on(f).unwrap();
-        assert_eq!(result, "test");
-
-        let runner = crate::System::build().build(ntex::rt::DefaultRuntime);
-        let result = runner.block_on(hnd.spawn(async { "test2" })).unwrap();
+        // submitted to the test's arbiter, joined on this thread
+        let remote: rt::RemoteJoinHandle<_> = hnd.spawn(async { "test2" });
+        let result = runner.block_on(remote).unwrap();
         let _ = tx.send(result);
     });
 
     let result = rx.await.unwrap();
     assert_eq!(result, "test2");
+    thread.join().unwrap();
 
     assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
 }
@@ -51,33 +45,32 @@ fn test_async() {
     let sys = rx.recv().unwrap();
     let id = sys.id();
     let (tx, rx) = mpsc::channel();
-    sys.handle().spawn(async move {
+    sys.handle().spawn_detached(async move {
         let _ = tx.send(System::current().id());
     });
     let id2 = rx.recv().unwrap();
     assert_eq!(id, id2);
 
     let (tx, rx) = mpsc::channel();
-    sys.handle().spawn(async move {
+    sys.handle().spawn_detached(async move {
         let _ = tx.send(System::current().id());
     });
     let id2 = rx.recv().unwrap();
     assert_eq!(id, id2);
 
     let (tx, rx) = mpsc::channel();
-    sys.arbiter().handle().spawn(async move {
+    sys.arbiter().handle().spawn_detached(async move {
         let _ = tx.send(System::current().id());
     });
     let id2 = rx.recv().unwrap();
     assert_eq!(id, id2);
 
-    let id2 = s
-        .block_on(sys.handle().spawn(async { System::current().id() }))
-        .unwrap();
+    let task = sys.handle().spawn(async { System::current().id() });
+    let id2 = s.block_on(task).unwrap();
     assert_eq!(id, id2);
 
     let (tx, rx) = mpsc::channel();
-    sys.handle().spawn(Box::pin(async move {
+    sys.handle().spawn_detached(Box::pin(async move {
         let _ = tx.send(System::current().id());
     }));
     let id2 = rx.recv().unwrap();
@@ -118,19 +111,18 @@ fn test_block_on() {
     let sys = rx.recv().unwrap();
     let id = sys.id();
     let (tx, rx) = mpsc::channel();
-    sys.arbiter().handle().spawn(async move {
+    sys.arbiter().handle().spawn_detached(async move {
         let _ = tx.send(System::current().id());
     });
     let id2 = rx.recv().unwrap();
     assert_eq!(id, id2);
 
-    let id2 = s
-        .block_on(sys.handle().spawn(async { System::current().id() }))
-        .unwrap();
+    let task = sys.handle().spawn(async { System::current().id() });
+    let id2 = s.block_on(task).unwrap();
     assert_eq!(id, id2);
 
     let (tx, rx) = mpsc::channel();
-    sys.handle().spawn(async move {
+    sys.handle().spawn_detached(async move {
         ntex::time::sleep(std::time::Duration::from_millis(100)).await;
         System::list_arbiter_pings(|_, recs| tx.send(recs.clone()).unwrap());
     });
@@ -160,13 +152,11 @@ fn test_spawn_api() {
         assert!(hnd.is_finished());
 
         let hnd = crate::Handle::current();
-        let res = hnd
-            .spawn(async {
-                sleep(Millis(25)).await;
-                1
-            })
-            .await
-            .unwrap();
+        let task = hnd.spawn(async move {
+            sleep(Millis(25)).await;
+            1
+        });
+        let res = task.await.unwrap();
         assert_eq!(res, 1);
     });
 }
@@ -224,16 +214,14 @@ fn test_on_shutdown_arbiter() {
     System::new("test", ntex::rt::DefaultRuntime).block_on(async {
         let (tx, rx) = oneshot::channel();
         let mut arb = Arbiter::new();
-        arb.handle()
-            .spawn(async move {
+        let registered = arb.handle().spawn(async move {
+            Arbiter::on_shutdown(move || {
                 Arbiter::on_shutdown(move || {
-                    Arbiter::on_shutdown(move || {
-                        let _ = tx.send(Arbiter::current().is_running());
-                    });
+                    let _ = tx.send(Arbiter::current().is_running());
                 });
-            })
-            .await
-            .unwrap();
+            });
+        });
+        registered.await.unwrap();
 
         arb.stop();
         assert!(
@@ -281,11 +269,10 @@ async fn system_storage() {
     assert_eq!(val, 10);
 
     let arb = Arbiter::new();
-    let val2 = arb
+    let task = arb
         .handle()
-        .spawn(async { System::current().get_value::<usize>(|| 11) })
-        .await
-        .unwrap();
+        .spawn(async { System::current().get_value::<usize>(|| 11) });
+    let val2 = task.await.unwrap();
     assert_eq!(val2, 10);
 }
 

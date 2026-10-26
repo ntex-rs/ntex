@@ -7,6 +7,58 @@
 //! Use [`System::build()`] to configure a system, [`spawn()`] to start a local
 //! task, and [`spawn_blocking()`] for blocking work.
 //!
+//! Local [`JoinHandle`]s are neither `Send` nor `Sync`, even for `Send` outputs:
+//!
+//! ```compile_fail
+//! fn send<T: Send>() {}
+//! send::<ntex_rt::JoinHandle<usize>>();
+//! ```
+//!
+//! ```compile_fail
+//! fn sync<T: Sync>() {}
+//! sync::<ntex_rt::JoinHandle<usize>>();
+//! ```
+//!
+//! [`Handle::spawn()`] submits a `Send` future to the handle's runtime and
+//! returns a [`RemoteJoinHandle`] for the calling thread. On the runtime's own thread
+//! the task is spawned directly. From other threads the future and later its
+//! `Send` output share one allocation, which is passed to the runtime thread:
+//!
+//! ```no_run
+//! # async fn example(handle: ntex_rt::Handle) {
+//! let task = handle.spawn(async { 42 });
+//! assert_eq!(task.await.unwrap(), 42);
+//! # }
+//! ```
+//!
+//! Dropping the handle detaches the task, [`RemoteJoinHandle::cancel()`] cancels it.
+//! A submitted future is polled and dropped on the runtime thread; shutdown or
+//! cancellation before producing a result yields [`JoinError`]. No task is
+//! guaranteed to finish. Rejected submissions are never polled and their
+//! futures may be dropped on the submitting thread.
+//!
+//! Use [`Handle::spawn_detached()`] for fire-and-forget work. Its output need
+//! not be `Send` and is discarded on the owner.
+//!
+//! Remote join handles also remain on their calling thread, even when the
+//! submission uses the runtime's local fast path:
+//!
+//! ```compile_fail
+//! fn send<T: Send>() {}
+//! send::<ntex_rt::RemoteJoinHandle<usize>>();
+//! ```
+//!
+//! ```compile_fail
+//! fn sync<T: Sync>() {}
+//! sync::<ntex_rt::RemoteJoinHandle<usize>>();
+//! ```
+//!
+//! ```compile_fail
+//! # fn example(handle: ntex_rt::Handle) {
+//! handle.spawn(async { std::rc::Rc::new(42) });
+//! # }
+//! ```
+//!
 //! [`LocalWaker`] owns a thread-confined wake handle. It specializes native
 //! task wakes on their owner thread and preserves standard waker behavior
 //! for other runtimes and wrapped wakers.
@@ -33,6 +85,7 @@ mod handle;
 mod local_waker;
 mod metrics;
 mod pool;
+mod remote;
 pub mod signals;
 mod system;
 mod task;

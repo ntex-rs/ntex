@@ -137,7 +137,7 @@ impl<T> Worker<T> {
             // the arbiter is stopped even if the service panics, runtimes
             // that catch task panics keep the arbiter running otherwise
             WorkerSlot::set_current(metrics.clone());
-            let _ = spawn(async move {
+            let task = spawn(async move {
                 match ServiceRunner::create(&n, cfg, reqs, s_rx, a_tx, metrics).await {
                     Ok(wrk) => {
                         log::debug!("Server instance has been created in {n:?}");
@@ -147,9 +147,11 @@ impl<T> Worker<T> {
                         log::error!("Cannot start worker {n:?}");
                     }
                 }
-            })
-            .await;
-            Arbiter::current().stop();
+            });
+            ntex_rt::spawn_detached(async move {
+                let _ = task.await;
+                Arbiter::current().stop();
+            });
         });
 
         worker

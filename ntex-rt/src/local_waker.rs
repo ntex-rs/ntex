@@ -12,8 +12,8 @@ const _: () = assert!(align_of::<RawWakerVTable>() > 1);
 
 /// An owned wake handle that can only be used on the thread that acquired it.
 ///
-/// Native ntex task wakers acquired on their owner thread use local operations
-/// without repeating the thread check. Other wakers retain their standard
+/// Native ntex task wakers acquired on their registered owner thread use local operations
+/// without repeating the thread check or registry lookup. Other wakers retain their standard
 /// behavior, including wakers from Tokio, Compio, and custom wrappers.
 ///
 /// Cloning this handle clones wake ownership; it does not create an empty
@@ -63,10 +63,9 @@ impl LocalWaker {
     /// Clones a standard waker into a thread-confined wake handle.
     #[inline]
     pub fn from_waker(waker: &Waker) -> Self {
-        if task::is_local_waker(waker) {
-            // Recognition checked both the vtable and the current thread.
-            unsafe { task::clone_local_waker(waker.data()) };
-            Self::native(waker.data())
+        if let Some(ptr) = task::local_waker_ptr(waker) {
+            unsafe { task::clone_local_waker(ptr) };
+            Self::native(ptr)
         } else {
             Self::fallback(waker.clone())
         }
@@ -102,13 +101,17 @@ impl LocalWaker {
         self.borrowed_waker().will_wake(waker)
     }
 
-    /// Converts this handle into a thread-safe standard waker without cloning.
+    /// Consumes this handle to produce a thread-safe standard waker.
+    ///
+    /// Native conversion acquires standard-waker ownership before releasing the local reference.
     #[inline]
     pub fn into_waker(self) -> Waker {
         let this = ManuallyDrop::new(self);
-        // Transfer the owned reference using the thread-safe native vtable
-        // or the original foreign vtable, never local-only callbacks.
-        unsafe { Waker::from_raw(this.raw_waker()) }
+        if this.is_native() {
+            unsafe { task::into_waker(this.data) }
+        } else {
+            unsafe { Waker::from_raw(this.raw_waker()) }
+        }
     }
 
     fn native(data: *const ()) -> Self {
@@ -150,11 +153,13 @@ impl LocalWaker {
 }
 
 impl From<Waker> for LocalWaker {
-    /// Takes ownership of a standard waker without cloning it.
+    /// Consumes a standard waker to acquire thread-confined wake ownership.
     #[inline]
     fn from(waker: Waker) -> Self {
-        if task::is_local_waker(&waker) {
-            Self::native(ManuallyDrop::new(waker).data())
+        if let Some(ptr) = task::local_waker_ptr(&waker) {
+            unsafe { task::clone_local_waker(ptr) };
+            drop(waker);
+            Self::native(ptr)
         } else {
             Self::fallback(waker)
         }

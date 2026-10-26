@@ -376,7 +376,7 @@ mod tests {
         ext.register_waker(&WaiterEntry::new(7), &Waker::from(Arc::new(Reenter)));
         assert!(catch_unwind(AssertUnwindSafe(|| ext.wake(7))).is_err());
         assert_eq!(ext.wakers_len(), 1);
-        rt.poll();
+        while rt.poll() == ntex_rt::PollResult::PollAgain {}
         assert_eq!(Rc::strong_count(&slot), 1, "orphaned task was not released");
         ext.remove_waker(&slot);
         assert_eq!(ext.wakers_len(), 1);

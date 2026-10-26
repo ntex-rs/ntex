@@ -1,45 +1,50 @@
 //! Task type of the neon runtime.
 //!
 //! A task is polled only on the thread of its runtime, the owner thread.
-//! Wakers and the join handle may be used on any thread.
+//! Wakers retain this allocation, but only the owner updates their references.
 //!
-//! The owner thread keeps the task state and the reference count in plain
-//! cells. Other threads update the `remote` word: flags plus a signed
-//! reference count delta. A remote thread that needs the owner thread to act,
-//! wake or cancel the task, or release a reference, queues the task on the
-//! runtime remote queue once (`R_QUEUED`), the owner thread merges the remote
-//! word when it pops the task. A running task is freed on the owner thread
-//! only, once the local count and the delta are both zero.
+//! The owner keeps task state, join results and all reference counts in plain
+//! cells. Remote submissions transfer one unpolled, detached task to the owner.
+//! Remote wakers set a sticky publication flag and publish typed FIFO operations
+//! without touching owner-only task state.
 //!
-//! On completion the owner thread moves the local count to the remote word.
-//! The future and the output of a finished task are dropped, the last
-//! reference frees it on any thread, also after the runtime is dropped.
+//! The local runtime queue is intrusive, a task links itself into it. Remote
+//! submissions share the FIFO of remote wake operations. The runtime also lists
+//! its unfinished tasks, it drops their futures when it is dropped. The list is
+//! non-owning.
 //!
-//! The runtime queues are intrusive, a task links itself into the local
-//! queue and into the remote queue. The runtime also lists its unfinished
-//! tasks, it drops their futures when it is dropped.
+//! `TaskCore` is pinned. Its header, awaiter and future/output storage are
+//! owner-only after submission. Immutable routing selects a runtime endpoint;
+//! remote wakers never read the header. Shutdown closes that endpoint and ignores
+//! late standard-waker operations, permanently retaining their storage. The queue
+//! pointer may dangle afterward; owner cleanup resolves liveness by runtime ID.
 use std::cell::Cell;
+use std::marker::{PhantomData, PhantomPinned};
 use std::sync::{Arc, atomic::Ordering};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-use std::{fmt, future::Future, marker::PhantomData, mem, mem::ManuallyDrop, pin::Pin};
+use std::{fmt, future::Future, mem, mem::ManuallyDrop, pin::Pin};
 use std::{process::abort, ptr, ptr::NonNull};
 
 use crate::handle::SpawnLocation;
-use crate::rt::{REPORTED, RunnableQueue, TaskStats, current_thread_id};
+use crate::rt::{REPORTED, RunnableQueue, TaskStats, try_current_thread_id};
 
-#[cfg(not(ntex_loom))]
-use std::sync::atomic::{AtomicPtr, AtomicU32};
+#[path = "task_wake.rs"]
+pub(super) mod wake;
+pub(crate) use wake::{WakeEntry, WakeQueue};
 
 #[cfg(ntex_loom)]
-use loom::sync::atomic::{AtomicPtr, AtomicU32};
+use loom::sync::atomic::AtomicBool;
+#[cfg(not(ntex_loom))]
+use std::sync::atomic::AtomicBool;
 
-/// A cell shared between threads, loom tracks its accesses under `ntex_loom`.
+/// Owner-only storage after submission; Loom also tracks transfer and reentrancy.
 struct SharedCell<T>(
     #[cfg(not(ntex_loom))] std::cell::UnsafeCell<T>,
     #[cfg(ntex_loom)] loom::cell::UnsafeCell<T>,
 );
 
 impl<T> SharedCell<T> {
+    /// Creates owner-local storage, tracked by Loom when enabled.
     fn new(v: T) -> Self {
         #[cfg(not(ntex_loom))]
         return Self(std::cell::UnsafeCell::new(v));
@@ -59,45 +64,20 @@ impl<T> SharedCell<T> {
 
 // owner-thread state
 /// Queued in the local queue, or woken while running.
-const SCHEDULED: u32 = 1;
-const RUNNING: u32 = 1 << 1;
+const SCHEDULED: u8 = 1;
+const RUNNING: u8 = 1 << 1;
 /// The future is dropped.
-const FINISHED: u32 = 1 << 2;
+const FINISHED: u8 = 1 << 2;
 /// Cancel requested, the runner drops the future.
-const CLOSE: u32 = 1 << 3;
+const CLOSE: u8 = 1 << 3;
 /// The self-wake streak is reported.
-const WAKES_REPORTED: u32 = 1 << 4;
+const WAKES_REPORTED: u8 = 1 << 4;
 /// No join handle, the output is dropped on completion.
-const DETACHED: u32 = 1 << 5;
+const DETACHED: u8 = 1 << 5;
 /// In the task list of the runtime.
-const LISTED: u32 = 1 << 6;
-/// The state keeps the self-wake count above the flags.
-const WAKES_SHIFT: u32 = 8;
+const LISTED: u8 = 1 << 6;
 /// The self-wake count saturates at this value.
-pub(crate) const MAX_SELF_WAKES: u32 = u32::MAX >> WAKES_SHIFT;
-
-// remote word
-/// Queued in the remote queue, the queue holds a reference.
-const R_QUEUED: u32 = 1;
-/// Woken from another thread.
-const R_WOKEN: u32 = 1 << 1;
-/// Cancelled from another thread.
-const R_CANCEL: u32 = 1 << 2;
-/// The future is dropped, set by the owner thread.
-const R_FINISHED: u32 = 1 << 3;
-/// A join handle on another thread is writing the awaiter.
-const R_REGISTERING: u32 = 1 << 4;
-/// The join handle is dropped on another thread before completion.
-const R_DETACHED: u32 = 1 << 5;
-/// The reference count delta is stored above the flags.
-const R_SHIFT: u32 = 6;
-/// One reference of the delta.
-const R_REF: u32 = 1 << R_SHIFT;
-/// Mask of the remote flags.
-const R_FLAGS: u32 = R_REF - 1;
-/// Half of the delta range, racing increments stay in range until one of
-/// them aborts.
-const MAX_REFS: i32 = i32::MAX >> (R_SHIFT + 1);
+pub(crate) const MAX_SELF_WAKES: u32 = u16::MAX as u32;
 
 /// Functions of a task that depend on the future type.
 struct VTable {
@@ -110,39 +90,52 @@ struct VTable {
     dealloc: unsafe fn(NonNull<Header>),
 }
 
-/// Link of the remote queue.
-struct Link {
-    next: AtomicPtr<Link>,
-}
-
+/// Owner-only header, initialized before transferring an unpolled submission.
 #[repr(C)]
 struct Header {
-    /// Remote queue link, the first field, a link pointer is a header pointer.
-    link: Link,
-    /// Local queue link.
-    next: Cell<*mut Header>,
-    /// Task list links.
-    list_prev: Cell<*mut Header>,
-    list_next: Cell<*mut Header>,
     vtable: &'static VTable,
-    /// Queues of the runtime, its id is the owner thread.
-    queue: Arc<RunnableQueue>,
+    /// Owner-only; may dangle after shutdown, retaining no queue storage or driver.
+    queue: NonNull<RunnableQueue>,
     /// Where the task is spawned, for logs and stats.
     location: SpawnLocation,
     /// Waker of the join handle.
     awaiter: Awaiter,
-    /// `R_*` flags and the reference count delta of other threads.
-    remote: AtomicU32,
-    /// Flags and the self-wake count.
-    state: Cell<u32>,
-    /// Local reference count, moved to the remote word on completion.
-    refs: Cell<u32>,
-    /// Start of the self-wake streak, milliseconds since the runtime epoch.
-    streak_start: Cell<u32>,
 }
 
-#[cfg(all(target_pointer_width = "64", not(ntex_loom)))]
-const _: () = assert!(mem::size_of::<Header>() == 80);
+/// Type-erased prefix of the pinned core. Execution fields are owner-only.
+///
+/// Fields packed without padding keep the core at 80 bytes. Fields used by wakes,
+/// runs and releases fill the first 64 bytes; the task list links, used only on
+/// spawn, completion and shutdown, come last.
+#[repr(C)]
+struct Core {
+    header: Header,
+    /// Local queue link.
+    next: Cell<*mut Header>,
+    /// Owner-only references from runnables, joins and wake handles.
+    refs: Cell<u32>,
+    /// Flags.
+    state: Cell<u8>,
+    /// Set before any remote waker publication; never cleared, even after draining.
+    remote_touched: AtomicBool,
+    routing: wake::Routing,
+    /// Consecutive self-wakes, saturating at `MAX_SELF_WAKES`.
+    self_wakes: Cell<u16>,
+    /// Start of the self-wake streak, milliseconds since the runtime epoch.
+    streak_start: Cell<u32>,
+    /// Non-owning task list links.
+    list_prev: Cell<*mut Header>,
+    list_next: Cell<*mut Header>,
+    _pin: PhantomPinned,
+}
+
+#[cfg(all(not(ntex_loom), target_pointer_width = "64"))]
+const _: () = {
+    assert!(mem::size_of::<Header>() == 40);
+    assert!(mem::size_of::<wake::Routing>() == 4);
+    assert!(mem::size_of::<Core>() == 80);
+    assert!(mem::offset_of!(Core, list_prev) == 64);
+};
 
 enum Stage<F: Future> {
     /// The future, pinned in place.
@@ -154,12 +147,14 @@ enum Stage<F: Future> {
     Consumed,
 }
 
-/// Allocation of a task, the header is the first field, a header pointer is
-/// a task pointer.
+/// Pinned allocation of a task. Both prefixes start at offset zero, so the
+/// header pointer also identifies the core and its allocation.
 #[repr(C)]
-struct RawTask<F: Future> {
-    header: Header,
+struct TaskCore<F: Future> {
+    core: Core,
     stage: SharedCell<Stage<F>>,
+    #[cfg(test)]
+    _allocation: Arc<()>,
 }
 
 /// Functions of the vtable for the future type `F`.
@@ -177,9 +172,15 @@ impl<F: Future> Fns<F> {
     /// Gives `f` the stage, `h` must be a task of the future type `F`.
     #[inline]
     unsafe fn with_stage<R>(h: NonNull<Header>, f: impl FnOnce(*mut Stage<F>) -> R) -> R {
-        unsafe { (*h.cast::<RawTask<F>>().as_ptr()).stage.with_mut(f) }
+        unsafe { (*h.cast::<TaskCore<F>>().as_ptr()).stage.with_mut(f) }
     }
 
+    /// Polls the pinned future and stores its output, returning whether it completed.
+    ///
+    /// # Safety
+    ///
+    /// `h` must identify a live task of type `F` on its owner thread, with its
+    /// stage in `Running` and no overlapping access to the future.
     unsafe fn poll(h: NonNull<Header>, cx: &mut Context<'_>) -> bool {
         unsafe {
             let polled = Self::with_stage(h, |stage| {
@@ -199,11 +200,18 @@ impl<F: Future> Fns<F> {
         }
     }
 
+    /// Drops the pinned future in place and marks its stage consumed, even on panic.
+    ///
+    /// # Safety
+    ///
+    /// `h` must identify a live task of type `F` on its owner thread, with no
+    /// overlapping access to its stage.
     unsafe fn drop_future(h: NonNull<Header>) {
         // the future is pinned, it is dropped in place
         struct Guard<F: Future>(*mut Stage<F>);
 
         impl<F: Future> Drop for Guard<F> {
+            /// Leaves no initialized stage behind after its destructor runs or panics.
             fn drop(&mut self) {
                 unsafe { ptr::write(self.0, Stage::Consumed) };
             }
@@ -217,12 +225,24 @@ impl<F: Future> Fns<F> {
         }
     }
 
+    /// Moves a stored result into the caller's typed output slot.
+    ///
+    /// # Safety
+    ///
+    /// `h` must identify a live task of type `F` on its owner thread.
+    /// `out` must exclusively point to an initialized `Option<F::Output>`.
     unsafe fn take_output(h: NonNull<Header>, out: *mut ()) {
         if let Some(v) = unsafe { Self::take_output_value(h) } {
             unsafe { *out.cast::<Option<F::Output>>() = Some(v) };
         }
     }
 
+    /// Takes and drops any stored result, leaving the stage consumed.
+    ///
+    /// # Safety
+    ///
+    /// `h` must identify a live task of type `F` on its owner thread, with no
+    /// overlapping access to its stage.
     unsafe fn drop_output(h: NonNull<Header>) {
         drop(unsafe { Self::take_output_value(h) });
     }
@@ -244,27 +264,17 @@ impl<F: Future> Fns<F> {
 
     /// Frees the task, drops a left future, output and awaiter.
     unsafe fn dealloc(h: NonNull<Header>) {
-        drop(unsafe { Box::from_raw(h.cast::<RawTask<F>>().as_ptr()) });
+        drop(unsafe { Box::from_raw(h.cast::<TaskCore<F>>().as_ptr()) });
     }
 }
 
-/// Reference count delta of the remote word.
-#[inline]
-fn delta(word: u32) -> i32 {
-    word.cast_signed() >> R_SHIFT
-}
-
 /// Waker of the join handle.
-///
-/// Null, an ntex task waker as its task pointer, or a boxed waker tagged
-/// with `BOXED`.
-struct Awaiter(SharedCell<*mut ()>);
-
-const BOXED: usize = 1;
+struct Awaiter(SharedCell<Option<crate::LocalWaker>>);
 
 impl Awaiter {
+    /// Creates an empty owner-local join notification slot.
     fn new() -> Self {
-        Self(SharedCell::new(ptr::null_mut()))
+        Self(SharedCell::new(None))
     }
 
     /// Takes the stored waker.
@@ -272,16 +282,8 @@ impl Awaiter {
     /// # Safety
     ///
     /// The caller should have exclusive access to the awaiter.
-    unsafe fn take(&self) -> Option<Waker> {
-        let p = self.0.with_mut(|p| unsafe { p.replace(ptr::null_mut()) });
-        if p.is_null() {
-            None
-        } else if p.addr() & BOXED != 0 {
-            let w = unsafe { Box::from_raw(p.map_addr(|a| a & !BOXED).cast::<Waker>()) };
-            Some(*w)
-        } else {
-            Some(unsafe { Waker::from_raw(RawWaker::new(p, &WAKER_VTABLE)) })
-        }
+    unsafe fn take(&self) -> Option<crate::LocalWaker> {
+        self.0.with_mut(|p| unsafe { (*p).take() })
     }
 
     /// Stores `waker`, returns the replaced waker.
@@ -293,46 +295,44 @@ impl Awaiter {
     /// # Safety
     ///
     /// The caller should have exclusive access to the awaiter.
-    unsafe fn register(&self, waker: &Waker) -> Option<Waker> {
-        let cur = self.0.with_mut(|p| unsafe { *p });
-        // a waker that wakes the stored waker is kept
-        let new = if ptr::eq(waker.vtable(), &raw const WAKER_VTABLE) {
-            if ptr::eq(cur, waker.data()) {
-                return None;
-            }
-            // the stored pointer owns the cloned reference
-            ManuallyDrop::new(waker.clone()).data().cast_mut()
-        } else {
-            if cur.addr() & BOXED != 0
-                && unsafe { &*cur.map_addr(|a| a & !BOXED).cast::<Waker>() }.will_wake(waker)
-            {
-                return None;
-            }
-            Box::into_raw(Box::new(waker.clone()))
-                .cast::<()>()
-                .map_addr(|a| a | BOXED)
-        };
-        // the clone may have completed the task and taken the awaiter
-        let old = unsafe { self.take() };
-        self.0.with_mut(|p| unsafe { *p = new });
-        old
+    unsafe fn register(&self, waker: &Waker) -> Option<crate::LocalWaker> {
+        if self.0.with_mut(|p| unsafe {
+            (*p).as_ref()
+                .is_some_and(|current| current.will_wake(waker))
+        }) {
+            return None;
+        }
+        // Clone outside the cell access: a custom callback can complete the task.
+        let new = crate::LocalWaker::from_waker(waker);
+        self.0.with_mut(|p| unsafe { (*p).replace(new) })
     }
 }
 
 impl Drop for Awaiter {
+    /// Releases a stored join waker after removing it from the slot.
     fn drop(&mut self) {
         drop(unsafe { self.take() });
     }
 }
 
-/// Waker of a task, the data pointer is the header and owns a reference.
-static WAKER_VTABLE: RawWakerVTable =
-    RawWakerVTable::new(clone_waker, wake, wake_by_ref, drop_waker);
+/// Standard wakers own owner-accounted references to the task allocation.
+static WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
+    wake::clone_waker,
+    wake::wake,
+    wake::wake_by_ref,
+    wake::drop_waker,
+);
 
-/// Recognizes the supplied native waker on its owner thread.
+/// Checks routing once, for a direct owner-local handle.
 #[inline]
-pub(crate) fn is_local_waker(waker: &Waker) -> bool {
-    ptr::eq(waker.vtable(), &raw const WAKER_VTABLE) && is_owner(unsafe { task_ptr(waker.data()) })
+pub(crate) fn local_waker_ptr(waker: &Waker) -> Option<*const ()> {
+    if ptr::eq(waker.vtable(), &raw const WAKER_VTABLE)
+        && unsafe { wake::active_owner(waker.data()) }
+    {
+        Some(waker.data())
+    } else {
+        None
+    }
 }
 
 /// Clones a native reference on its owner thread.
@@ -340,12 +340,7 @@ pub(crate) fn is_local_waker(waker: &Waker) -> bool {
 /// The caller must hold a native task reference and be on its owner thread.
 #[inline]
 pub(crate) unsafe fn clone_local_waker(ptr: *const ()) {
-    let h = unsafe { task_ptr(ptr) };
-    if header(h).state.get() & FINISHED == 0 {
-        inc_local(h);
-    } else {
-        inc_shared(h);
-    }
+    inc_local(unsafe { task_ptr(ptr) });
 }
 
 /// Wakes a native task on its owner thread, transferring a reference if owned.
@@ -364,10 +359,18 @@ pub(crate) unsafe fn drop_local_waker(ptr: *const ()) {
     release_local(unsafe { task_ptr(ptr) });
 }
 
-/// Uses the thread-safe vtable, including when converting a local reference.
+/// Borrows a task reference; the raw pointer retains allocation provenance.
 #[inline]
 pub(crate) fn raw_waker(ptr: *const ()) -> RawWaker {
     RawWaker::new(ptr, &WAKER_VTABLE)
+}
+
+/// Acquire thread-safe ownership before releasing the local reference.
+pub(crate) unsafe fn into_waker(ptr: *const ()) -> Waker {
+    let raw = ManuallyDrop::new(unsafe { Waker::from_raw(raw_waker(ptr)) });
+    let waker = (*raw).clone();
+    unsafe { drop_local_waker(ptr) };
+    waker
 }
 
 /// Header of a task, the caller holds a reference for the lifetime.
@@ -376,10 +379,42 @@ fn header<'a>(h: NonNull<Header>) -> &'a Header {
     unsafe { h.as_ref() }
 }
 
+/// The caller is on the owner thread and holds a task reference for the lifetime.
+#[inline]
+fn core<'a>(h: NonNull<Header>) -> &'a Core {
+    unsafe { h.cast::<Core>().as_ref() }
+}
+
 /// Returns `true` on the owner thread of the task.
 #[inline]
 fn is_owner(h: NonNull<Header>) -> bool {
-    header(h).queue.id == current_thread_id()
+    Some(unsafe { (*h.cast::<Core>().as_ptr()).routing.owner }) == try_current_thread_id()
+}
+
+/// Borrows the live future's queue, or a completed task's still-registered endpoint.
+///
+/// The caller must establish liveness independently of the pointer. Completed-task
+/// callers check registration and use the borrow only for callback-free operations.
+fn owner_queue<'a>(h: NonNull<Header>) -> &'a RunnableQueue {
+    unsafe { header(h).queue.as_ref() }
+}
+
+/// Borrows a live owner endpoint for callback-free inspection or publication.
+fn live_owner_queue<'a>(h: NonNull<Header>) -> Option<&'a RunnableQueue> {
+    if core(h).state.get() & FINISHED == 0 || unsafe { wake::active_owner(h.as_ptr().cast()) } {
+        Some(owner_queue(h))
+    } else {
+        None
+    }
+}
+
+/// Checks for FIFO commands that an owner release must not overtake.
+fn has_pending_commands(h: NonNull<Header>) -> bool {
+    if let Some(queue) = live_owner_queue(h) {
+        !queue.wake_queue.is_empty()
+    } else {
+        wake::retain_owner_queue(h).is_some_and(|queue| !queue.wake_queue.is_empty())
+    }
 }
 
 /// Task of a waker data pointer.
@@ -388,76 +423,28 @@ unsafe fn task_ptr(ptr: *const ()) -> NonNull<Header> {
     unsafe { NonNull::new_unchecked(ptr.cast_mut().cast::<Header>()) }
 }
 
-/// Adds a reference, a local one on the owner thread before completion,
-/// otherwise a remote one.
-unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
-    let h = unsafe { task_ptr(ptr) };
-    if is_owner(h) {
-        unsafe { clone_local_waker(ptr) };
-    } else {
-        inc_shared(h);
-    }
-    raw_waker(ptr)
-}
-
-fn inc_shared(h: NonNull<Header>) {
-    let prev = header(h).remote.fetch_add(R_REF, Ordering::Relaxed);
-    if delta(prev) > MAX_REFS {
-        abort();
-    }
-}
-
-unsafe fn wake(ptr: *const ()) {
-    wake_any(unsafe { task_ptr(ptr) }, true);
-}
-
-unsafe fn wake_by_ref(ptr: *const ()) {
-    wake_any(unsafe { task_ptr(ptr) }, false);
-}
-
-unsafe fn drop_waker(ptr: *const ()) {
-    release(unsafe { task_ptr(ptr) });
-}
-
-/// Wakes the task on any thread, `owned` passes a reference.
-fn wake_any(h: NonNull<Header>, owned: bool) {
-    if is_owner(h) {
-        wake_local(h, owned);
-    } else {
-        remote_signal(h, R_WOKEN, owned);
-    }
-}
-
 /// Adds a local reference on the owner thread, aborts on overflow.
+#[inline]
 fn inc_local(h: NonNull<Header>) {
-    let refs = &header(h).refs;
+    let refs = &core(h).refs;
     match refs.get().checked_add(1) {
         Some(n) => refs.set(n),
         None => abort(),
     }
 }
 
-/// Releases a reference on any thread.
-fn release(h: NonNull<Header>) {
-    if is_owner(h) {
-        release_local(h);
-    } else {
-        remote_signal(h, 0, true);
-    }
-}
-
 /// Wakes the task on the owner thread, `owned` passes a reference.
 fn wake_local(h: NonNull<Header>, owned: bool) {
-    let hdr = header(h);
-    let state = hdr.state.get();
+    let local = core(h);
+    let state = local.state.get();
     if state & (SCHEDULED | FINISHED) == 0 {
-        hdr.state.set(state | SCHEDULED);
+        local.state.set(state | SCHEDULED);
         // a running task is queued by the runner after the poll
         if state & RUNNING == 0 {
             if !owned {
                 inc_local(h);
             }
-            hdr.queue.schedule_local(Runnable(h));
+            owner_queue(h).schedule_local(Runnable(h));
             return;
         }
     }
@@ -466,137 +453,54 @@ fn wake_local(h: NonNull<Header>, owned: bool) {
     }
 }
 
-/// Sets `flags` in the remote word from another thread, and queues the task
-/// unless it is queued. `owned` passes a reference.
-fn remote_signal(h: NonNull<Header>, flags: u32, owned: bool) {
-    let remote = &header(h).remote;
-    let mut permit = None;
-    let mut cur = remote.load(Ordering::Relaxed);
-    loop {
-        if cur & R_FINISHED != 0 {
-            // nothing to run, the owner thread may be gone
-            drop(permit);
-            if owned {
-                release_shared(h);
-            }
-            return;
-        }
-        if delta(cur).abs() > MAX_REFS {
-            abort();
-        }
-        let set = flags & !cur;
-        // a wake that finds its flags set still writes the word, a plain
-        // return would not publish the writes before the wake, and the owner
-        // may have taken the pending wake since the load
-        let (new, push) = if cur & R_QUEUED != 0 {
-            if owned {
-                ((cur | set).wrapping_sub(R_REF), false)
-            } else {
-                (cur | set, false)
-            }
-        } else if owned && set == 0 && delta(cur) > 0 {
-            // a live task has local references outside of `last_ref`, which
-            // re-reads the delta, so this is not the last reference
-            (cur.wrapping_sub(R_REF), false)
-        } else if owned {
-            // the reference passes to the queue. A plain drop may be the last
-            // reference, only the owner thread can tell. Such drops are rare,
-            // wakers sent to other threads end with a wake, so the queue push
-            // and notify of a drop are kept
-            (cur | set | R_QUEUED, true)
-        } else if set != 0 {
-            ((cur | set | R_QUEUED).wrapping_add(R_REF), true)
-        } else {
-            (cur, false)
-        };
-        if push && permit.is_none() {
-            permit = header(h).queue.admit(owned);
-            if permit.is_none() {
-                // Shutdown owns cleanup of unfinished tasks. Release the
-                // caller's reference without reserving an unconsumable entry.
-                if owned {
-                    let prev = remote.fetch_sub(R_REF, Ordering::AcqRel);
-                    if prev & R_FINISHED != 0 && delta(prev) == 1 {
-                        unsafe { (header(h).vtable.dealloc)(h) };
-                    }
-                }
-                return;
-            }
-        }
-        match remote.compare_exchange_weak(cur, new, Ordering::AcqRel, Ordering::Relaxed) {
-            Ok(_) if push => break,
-            Ok(_) => return,
-            Err(v) => cur = v,
-        }
+/// Releases a reference on the owner thread.
+#[inline]
+fn release_local(h: NonNull<Header>) {
+    // An unaccounted reference returning from a remote clone observes its sticky
+    // store through the transfer. Otherwise a publisher's counted source keeps
+    // this from being the final reference. Consuming a command also acquires its
+    // preceding store. Thus an untouched task can release without FIFO ordering.
+    if core(h).remote_touched.load(Ordering::Acquire) {
+        release_touched(h);
+    } else {
+        release_local_ordered(h);
     }
-    permit.unwrap().schedule(Remote(h));
 }
 
-/// Releases a reference on the owner thread.
-fn release_local(h: NonNull<Header>) {
-    let hdr = header(h);
-    if hdr.state.get() & FINISHED != 0 {
-        release_shared(h);
-        return;
+/// Orders remotely touched releases without expanding the untouched fast path.
+#[inline(never)]
+fn release_touched(h: NonNull<Header>) {
+    if !has_pending_commands(h) && core(h).refs.get() > 1 {
+        release_local_ordered(h);
+    } else {
+        wake::defer_release(h);
     }
-    let refs = hdr.refs.get() - 1;
-    hdr.refs.set(refs);
+}
+
+/// A queued final release must not enqueue itself again.
+#[inline]
+fn release_local_ordered(h: NonNull<Header>) {
+    let local = core(h);
+    let refs = local.refs.get().checked_sub(1).unwrap();
+    local.refs.set(refs);
     if refs == 0 {
         last_ref(h);
     }
 }
 
-/// The local count of an unfinished task dropped to zero, on the owner
-/// thread.
-///
-/// The references of other threads become the local count. Without them
-/// nothing can wake the task, its future is dropped.
+/// The ordered owner count reached zero: reclaim storage or cancel an orphan.
 #[cold]
 fn last_ref(h: NonNull<Header>) {
-    let hdr = header(h);
-    // references cloned on other threads are counted in the remote delta
-    let mut cur = hdr.remote.load(Ordering::Acquire);
-    loop {
-        let delta = delta(cur);
-        if delta == 0 {
-            break;
-        }
-        // the flags stay, the delta moves to the local count
-        match hdr.remote.compare_exchange_weak(
-            cur,
-            cur & R_FLAGS,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => {
-                // the local count is zero, the delta is the reference count
-                hdr.refs
-                    .set(u32::try_from(delta).unwrap_or_else(|_| abort()));
-                return;
-            }
-            Err(v) => cur = v,
-        }
-    }
-
-    // a finished task is released by `release_shared`
-    let state = hdr.state.get();
-    debug_assert_eq!(state & FINISHED, 0);
-    // nothing can wake the task, the runner drops the future
-    hdr.refs.set(1);
-    hdr.state.set(state | SCHEDULED | CLOSE);
-    hdr.queue.schedule_local(Runnable(h));
-}
-
-/// Releases a reference of a finished task on any thread.
-///
-/// The remote word counts the references of a finished task, the last
-/// reference frees it on the thread that releases it, the owner thread may
-/// be gone. The future and the output are dropped, the rest is `Send`.
-fn release_shared(h: NonNull<Header>) {
-    let prev = header(h).remote.fetch_sub(R_REF, Ordering::AcqRel);
-    if delta(prev) == 1 {
+    let local = core(h);
+    let state = local.state.get();
+    if state & FINISHED != 0 {
         unsafe { (header(h).vtable.dealloc)(h) };
+        return;
     }
+    // nothing can wake the task, the runner drops the future
+    local.refs.set(1);
+    local.state.set(state | SCHEDULED | CLOSE);
+    owner_queue(h).schedule_local(Runnable(h));
 }
 
 /// Drops the future on the owner thread, completes the task and releases
@@ -606,9 +510,10 @@ fn close(h: NonNull<Header>) {
     struct Finish(NonNull<Header>);
 
     impl Drop for Finish {
+        /// Publishes cancellation, releases the close reference, and notifies the join.
         fn drop(&mut self) {
-            let hdr = header(self.0);
-            finish(self.0, hdr.state.get() & !(RUNNING | SCHEDULED | CLOSE));
+            let local = core(self.0);
+            finish(self.0, local.state.get() & !(RUNNING | SCHEDULED | CLOSE));
             // the future is dropped, there is no output
             let completed = complete(self.0);
             release_local(self.0);
@@ -618,19 +523,18 @@ fn close(h: NonNull<Header>) {
 
     // the destructor of the future may wake the task and poll the runtime,
     // a running task is only marked as scheduled
-    let hdr = header(h);
-    hdr.state.set(hdr.state.get() | RUNNING);
+    let local = core(h);
+    local.state.set(local.state.get() | RUNNING);
     let finish = Finish(h);
     unsafe { (header(finish.0).vtable.drop_future)(finish.0) };
 }
 
 /// Sets `state` with `FINISHED` on the owner thread, the task leaves the task
 /// list.
-fn finish(h: NonNull<Header>, state: u32) {
-    let hdr = header(h);
-    hdr.state.set((state | FINISHED) & !LISTED);
+fn finish(h: NonNull<Header>, state: u8) {
+    core(h).state.set((state | FINISHED) & !LISTED);
     if state & LISTED != 0 {
-        hdr.queue.tasks.remove(h);
+        owner_queue(h).tasks.remove(h);
     }
 }
 
@@ -642,7 +546,7 @@ fn finish(h: NonNull<Header>, state: u32) {
 struct Completed {
     /// The join handle is dropped, the output has no owner.
     detached: bool,
-    awaiter: Option<Waker>,
+    awaiter: Option<crate::LocalWaker>,
 }
 
 impl Completed {
@@ -653,6 +557,7 @@ impl Completed {
 }
 
 impl Drop for Completed {
+    /// Wakes an attached join's awaiter or releases a detached join's stale waker.
     fn drop(&mut self) {
         let Some(w) = self.awaiter.take() else {
             return;
@@ -666,65 +571,9 @@ impl Drop for Completed {
 
 /// Publishes completion and takes the awaiter, on the owner thread.
 fn complete(h: NonNull<Header>) -> Completed {
-    let hdr = header(h);
-    // the local count moves to the remote word, before any waker callback
-    let refs = hdr.refs.replace(0);
-    if refs > MAX_REFS.cast_unsigned() {
-        abort();
-    }
-    // `R_FINISHED` is not set, the addition sets it
-    let prev = hdr
-        .remote
-        .fetch_add((refs << R_SHIFT) | R_FINISHED, Ordering::AcqRel);
-    // a join handle dropped on another thread leaves its awaiter
-    let detached = hdr.state.get() & DETACHED != 0 || prev & R_DETACHED != 0;
-    // a registering join handle sees `R_FINISHED` and handles the awaiter
-    let awaiter = if prev & R_REGISTERING == 0 {
-        unsafe { hdr.awaiter.take() }
-    } else {
-        None
-    };
-    Completed { detached, awaiter }
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Completions through `finish_unshared` on this thread.
-    pub(crate) static UNSHARED_FINISHES: Cell<usize> = const { Cell::new(0) };
-}
-
-/// Completes a task that has no references but the run reference, on the
-/// owner thread. Drops the output and frees the task.
-///
-/// No join handle, waker or queue refers to the task, nothing can observe
-/// or reference it, so the completion is not published.
-fn finish_unshared(h: NonNull<Header>) {
-    // frees the task even if a waker callback or the output drop panics
-    struct Dealloc(NonNull<Header>);
-
-    impl Drop for Dealloc {
-        fn drop(&mut self) {
-            unsafe { (header(self.0).vtable.dealloc)(self.0) };
-        }
-    }
-
-    #[cfg(test)]
-    UNSHARED_FINISHES.with(|n| n.set(n.get() + 1));
-    let task = Dealloc(h);
-    let hdr = header(task.0);
-    debug_assert_ne!(hdr.state.get() & DETACHED, 0);
-    // the join handle is dropped, the free drops a left awaiter
-    unsafe { (hdr.vtable.drop_output)(task.0) };
-}
-
-/// Clears `R_REGISTERING` if cloning the join waker unwinds. The stored
-/// awaiter is unchanged, a completion meanwhile skipped it and the free
-/// drops it.
-struct Registering<'a>(&'a AtomicU32);
-
-impl Drop for Registering<'_> {
-    fn drop(&mut self) {
-        self.0.fetch_and(!R_REGISTERING, Ordering::AcqRel);
+    Completed {
+        detached: core(h).state.get() & DETACHED != 0,
+        awaiter: unsafe { header(h).awaiter.take() },
     }
 }
 
@@ -733,15 +582,9 @@ impl Drop for Registering<'_> {
 struct Release(NonNull<Header>);
 
 impl Drop for Release {
+    /// Releases the caller's reference even if dropping its output panics.
     fn drop(&mut self) {
-        let h = self.0;
-        let cur = header(h).remote.load(Ordering::Acquire);
-        debug_assert_ne!(cur & R_FINISHED, 0);
-        if delta(cur) == 1 {
-            unsafe { (header(h).vtable.dealloc)(h) };
-        } else {
-            release_shared(h);
-        }
+        release_local(self.0);
     }
 }
 
@@ -759,26 +602,17 @@ fn drop_output(h: NonNull<Header>) {
 ///
 /// # Safety
 ///
-/// The caller should ensure the captured lifetime is long enough, and that
-/// a future spawned on another thread is `Send`.
-/// If `LOCAL` is true, the caller must be on the runtime thread.
-pub(crate) unsafe fn spawn<F: Future, const LOCAL: bool>(
+/// The caller must be on the runtime thread and ensure the captured lifetime
+/// is long enough.
+pub(crate) unsafe fn spawn<F: Future>(
     future: F,
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) -> Task<F::Output> {
-    match unsafe { create::<_, LOCAL>(future, queue, location, false) } {
+    match unsafe { create::<_, true>(future, queue, location, false) } {
         Ok(h) => Task { h, _t: PhantomData },
         Err(future) => {
-            // finished without an output, the remote word counts the join handle
-            let h = alloc::<F>(
-                Stage::Consumed,
-                queue,
-                location,
-                FINISHED,
-                R_REF | R_FINISHED,
-                0,
-            );
+            let h = alloc::<F>(Stage::Consumed, queue, location, FINISHED, 1);
             let task = Task { h, _t: PhantomData };
             cancel_closed(future, location);
             task
@@ -790,7 +624,8 @@ pub(crate) unsafe fn spawn<F: Future, const LOCAL: bool>(
 ///
 /// # Safety
 ///
-/// Same as [`spawn`].
+/// The captured lifetime must be long enough. If `LOCAL` is true the caller
+/// must be on the runtime thread; otherwise the future must be `Send`.
 pub(crate) unsafe fn spawn_detached<F: Future, const LOCAL: bool>(
     future: F,
     queue: &Arc<RunnableQueue>,
@@ -817,7 +652,7 @@ unsafe fn create<F: Future, const LOCAL: bool>(
     location: SpawnLocation,
     detached: bool,
 ) -> Result<NonNull<Header>, F> {
-    let local = LOCAL || queue.id == current_thread_id();
+    let local = LOCAL || Some(queue.id) == try_current_thread_id();
     // a remote push reserves its queue entry before the task exists
     let permit = if local {
         if queue.is_closed() {
@@ -834,9 +669,7 @@ unsafe fn create<F: Future, const LOCAL: bool>(
         Stage::Running(future),
         queue,
         location,
-        // a task spawned on another thread is listed on its first merge
-        if local { SCHEDULED | LISTED } else { 0 } | if detached { DETACHED } else { 0 },
-        if local { 0 } else { R_QUEUED | R_WOKEN },
+        SCHEDULED | if local { LISTED } else { 0 } | if detached { DETACHED } else { 0 },
         // the queue and the join handle
         if detached { 1 } else { 2 },
     );
@@ -854,42 +687,47 @@ unsafe fn create<F: Future, const LOCAL: bool>(
     Ok(h)
 }
 
-/// Allocates a task with the owner-thread `flags`, the `remote` word and the
-/// local count `refs`.
+/// Allocates a task with owner-thread flags and reference count.
 fn alloc<F: Future>(
     stage: Stage<F>,
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
-    flags: u32,
-    remote: u32,
+    flags: u8,
     refs: u32,
 ) -> NonNull<Header> {
-    let raw = Box::new(RawTask {
-        header: Header {
-            link: Link {
-                next: AtomicPtr::new(ptr::null_mut()),
+    let raw = Box::new(TaskCore {
+        core: Core {
+            header: Header {
+                vtable: &Fns::<F>::VTABLE,
+                queue: NonNull::from(queue.as_ref()),
+                location,
+                awaiter: Awaiter::new(),
             },
             next: Cell::new(ptr::null_mut()),
+            refs: Cell::new(refs),
+            state: Cell::new(flags),
+            remote_touched: AtomicBool::new(false),
+            routing: wake::Routing {
+                runtime: queue.runtime_id,
+                owner: queue.id,
+            },
+            self_wakes: Cell::new(0),
+            streak_start: Cell::new(0),
             list_prev: Cell::new(ptr::null_mut()),
             list_next: Cell::new(ptr::null_mut()),
-            vtable: &Fns::<F>::VTABLE,
-            queue: queue.clone(),
-            location,
-            awaiter: Awaiter::new(),
-            remote: AtomicU32::new(remote),
-            state: Cell::new(flags),
-            refs: Cell::new(refs),
-            streak_start: Cell::new(0),
+            _pin: PhantomPinned,
         },
         stage: SharedCell::new(stage),
+        #[cfg(test)]
+        _allocation: queue.task_allocations.clone(),
     });
-    NonNull::from(Box::leak(raw)).cast::<Header>()
+    // Transfer the stable allocation to intrusive ownership before it is polled.
+    // The vtable drops the future in place and reclaims the allocation.
+    NonNull::from(Box::leak(raw)).cast()
 }
 
-/// A task in the local queue, owns a reference.
+/// An owner-thread-only task in the local queue, owns a reference.
 pub(crate) struct Runnable(NonNull<Header>);
-
-unsafe impl Send for Runnable {}
 
 /// Returns the self-wake bookkeeping of a task.
 pub(crate) fn task_ref(task: &Runnable) -> TaskRef {
@@ -902,11 +740,13 @@ impl Runnable {
         struct Guard(NonNull<Header>);
 
         impl Drop for Guard {
+            /// Cancels and completes the task when its poll unwinds.
             fn drop(&mut self) {
                 // the poll panicked
-                let hdr = header(self.0);
-                hdr.state
-                    .set(hdr.state.get() & !(RUNNING | SCHEDULED | CLOSE));
+                let local = core(self.0);
+                local
+                    .state
+                    .set(local.state.get() & !(RUNNING | SCHEDULED | CLOSE));
                 close(self.0);
             }
         }
@@ -915,33 +755,28 @@ impl Runnable {
         debug_assert!(is_owner(self.0), "task polled off its runtime thread");
         let h = ManuallyDrop::new(self).0;
         let hdr = header(h);
+        let local = core(h);
 
-        let state = hdr.state.get() & !SCHEDULED;
+        let state = local.state.get() & !SCHEDULED;
         if state & (CLOSE | FINISHED) != 0 {
             discard(h, state);
             return false;
         }
-        hdr.state.set(state | RUNNING);
+        local.state.set(state | RUNNING);
 
-        // the waker borrows the run reference
-        let waker = ManuallyDrop::new(unsafe {
-            Waker::from_raw(RawWaker::new(h.as_ptr().cast(), &WAKER_VTABLE))
-        });
+        // The run reference protects the borrowed poll waker. Its final release
+        // waits behind any acquisitions published by another thread.
+        let waker = ManuallyDrop::new(unsafe { Waker::from_raw(raw_waker(h.as_ptr().cast())) });
         let mut cx = Context::from_waker(&waker);
         // a panic of the poll drops the future and completes the task
         let guard = Guard(h);
         let ready = unsafe { (hdr.vtable.poll)(h, &mut cx) };
         mem::forget(guard);
 
-        let state = hdr.state.get() & !RUNNING;
+        let state = local.state.get() & !RUNNING;
         // `SCHEDULED` here is a wake during the poll
         if ready {
             finish(h, state & !(SCHEDULED | CLOSE));
-            // only the run reference is left, nothing observes the completion
-            if hdr.refs.get() == 1 && hdr.remote.load(Ordering::Acquire) == 0 {
-                finish_unshared(h);
-                return false;
-            }
             let completed = complete(h);
             // nothing takes the output of a detached task
             if completed.detached {
@@ -955,10 +790,10 @@ impl Runnable {
             discard(h, state);
             return false;
         }
-        hdr.state.set(state);
+        local.state.set(state);
         if state & SCHEDULED != 0 {
             // the run reference passes to the queue
-            hdr.queue.schedule_local(Runnable(h));
+            owner_queue(h).schedule_local(Runnable(h));
             return true;
         }
         release_local(h);
@@ -967,9 +802,10 @@ impl Runnable {
 }
 
 impl Drop for Runnable {
+    /// Discards the run reference on the owner, or reports an off-owner leak.
     fn drop(&mut self) {
         if is_owner(self.0) {
-            discard(self.0, header(self.0).state.get());
+            discard(self.0, core(self.0).state.get());
         } else {
             leaked(self.0);
         }
@@ -978,8 +814,8 @@ impl Drop for Runnable {
 
 /// Unqueues a task without polling it on the owner thread, drops the future
 /// of an unfinished task and releases the run reference.
-fn discard(h: NonNull<Header>, state: u32) {
-    header(h).state.set(state & !SCHEDULED);
+fn discard(h: NonNull<Header>, state: u8) {
+    core(h).state.set(state & !SCHEDULED);
     if state & FINISHED == 0 {
         close(h);
     } else {
@@ -997,6 +833,7 @@ fn leaked(h: NonNull<Header>) {
 }
 
 impl fmt::Debug for Runnable {
+    /// Formats the runnable's spawn location while its task reference is held.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Runnable")
             .field("location", &header(self.0).location)
@@ -1004,63 +841,29 @@ impl fmt::Debug for Runnable {
     }
 }
 
-/// A task in the remote queue, owns a reference.
+/// An unpolled, detached `Send` future submitted to its owner, owns a reference.
 pub(crate) struct Remote(NonNull<Header>);
 
 unsafe impl Send for Remote {}
 
 impl Remote {
-    /// Merges remote updates on the owner thread, returns the task if it
-    /// should run.
-    pub(crate) fn into_runnable(self) -> Option<Runnable> {
+    /// Activates a submission on the owner thread.
+    pub(crate) fn into_runnable(self) -> Runnable {
         debug_assert!(is_owner(self.0), "task merged off its runtime thread");
         let h = ManuallyDrop::new(self).0;
-        let hdr = header(h);
-
-        if hdr.state.get() & FINISHED != 0 {
-            // queued before completion, the remote word counts the queue
-            // reference. The flags are left set, nothing reads them once
-            // `R_FINISHED` is set
-            release_shared(h);
-            return None;
-        }
-        // takes the delta and the requests, keeps the flags of the join handle
-        let cur = hdr
-            .remote
-            .fetch_and(R_FINISHED | R_REGISTERING | R_DETACHED, Ordering::AcqRel);
-        // the references of other threads join the local count
-        let refs = i64::from(hdr.refs.get()) + i64::from(delta(cur));
-        hdr.refs
-            .set(u32::try_from(refs).unwrap_or_else(|_| abort()));
-
-        let mut state = hdr.state.get();
-        if state & LISTED == 0 {
-            // the first merge of a task spawned on another thread
-            state |= LISTED;
-            hdr.state.set(state);
-            hdr.queue.tasks.push(h);
-        }
-        if cur & R_CANCEL != 0 && state & FINISHED == 0 {
-            state |= CLOSE;
-            hdr.state.set(state);
-        }
-        if cur & (R_WOKEN | R_CANCEL) != 0 && state & (SCHEDULED | FINISHED) == 0 {
-            hdr.state.set(state | SCHEDULED);
-            if state & RUNNING == 0 {
-                // the queue reference passes to the runnable
-                return Some(Runnable(h));
-            }
-            // a running task is queued by the runner after the poll
-        }
-        release_local(h);
-        None
+        let local = core(h);
+        debug_assert_eq!(local.state.get(), SCHEDULED | DETACHED);
+        local.state.set(local.state.get() | LISTED);
+        owner_queue(h).tasks.push(h);
+        Runnable(h)
     }
 }
 
 impl Drop for Remote {
+    /// Cancels an accepted submission on the owner, or reports an off-owner leak.
     fn drop(&mut self) {
         if is_owner(self.0) {
-            // merges the updates, a task that should run is dropped unpolled
+            // Activate the accepted submission, then drop its future unpolled.
             drop(Remote(self.0).into_runnable());
         } else {
             leaked(self.0);
@@ -1069,6 +872,7 @@ impl Drop for Remote {
 }
 
 impl fmt::Debug for Remote {
+    /// Identifies a remote submission without accessing its owner-only task state.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Remote").finish()
     }
@@ -1079,30 +883,41 @@ impl fmt::Debug for Remote {
 pub(crate) struct TaskRef(NonNull<Header>);
 
 impl TaskStats for TaskRef {
+    /// Returns the spawn location while the task allocation remains alive.
     fn location(self) -> SpawnLocation {
         header(self.0).location
     }
 
+    /// Returns the self-wake count with its reported marker.
     fn self_wakes(self) -> u32 {
-        let state = header(self.0).state.get();
-        let reported = if state & WAKES_REPORTED != 0 { REPORTED } else { 0 };
-        (state >> WAKES_SHIFT) | reported
+        let local = core(self.0);
+        let reported = if local.state.get() & WAKES_REPORTED != 0 {
+            REPORTED
+        } else {
+            0
+        };
+        u32::from(local.self_wakes.get()) | reported
     }
 
+    /// Stores a bounded self-wake count and reported marker without changing other flags.
     fn set_self_wakes(self, wakes: u32) {
-        let hdr = header(self.0);
+        let local = core(self.0);
         let count = (wakes & !REPORTED).min(MAX_SELF_WAKES);
         let reported = if wakes & REPORTED != 0 { WAKES_REPORTED } else { 0 };
-        let flags = hdr.state.get() & ((1 << WAKES_SHIFT) - 1) & !WAKES_REPORTED;
-        hdr.state.set(flags | reported | (count << WAKES_SHIFT));
+        local
+            .state
+            .set((local.state.get() & !WAKES_REPORTED) | reported);
+        local.self_wakes.set(count as u16);
     }
 
+    /// Returns the owner's cached start timestamp for the current self-wake streak.
     fn streak_start(self) -> u32 {
-        header(self.0).streak_start.get()
+        core(self.0).streak_start.get()
     }
 
+    /// Stores the streak's start timestamp on the owner thread.
     fn set_streak_start(self, start: u32) {
-        header(self.0).streak_start.set(start);
+        core(self.0).streak_start.set(start);
     }
 }
 
@@ -1113,6 +928,7 @@ pub(crate) struct LocalQueue {
 }
 
 impl LocalQueue {
+    /// Creates an empty owner-thread runnable FIFO.
     pub(crate) const fn new() -> Self {
         Self {
             head: Cell::new(ptr::null_mut()),
@@ -1123,19 +939,18 @@ impl LocalQueue {
     /// Appends a task, the queue takes its reference.
     pub(crate) fn push(&self, task: Runnable) {
         let h = ManuallyDrop::new(task).0;
-        header(h).next.set(ptr::null_mut());
-        let tail = self.tail.replace(h.as_ptr());
-        if tail.is_null() {
-            self.head.set(h.as_ptr());
+        core(h).next.set(ptr::null_mut());
+        if let Some(tail) = NonNull::new(self.tail.replace(h.as_ptr())) {
+            core(tail).next.set(h.as_ptr());
         } else {
-            unsafe { (*tail).next.set(h.as_ptr()) };
+            self.head.set(h.as_ptr());
         }
     }
 
     /// Pops the first task, its reference passes to the caller.
     pub(crate) fn pop(&self) -> Option<Runnable> {
         let h = NonNull::new(self.head.get())?;
-        let next = header(h).next.get();
+        let next = core(h).next.get();
         self.head.set(next);
         if next.is_null() {
             self.tail.set(ptr::null_mut());
@@ -1143,19 +958,20 @@ impl LocalQueue {
         Some(Runnable(h))
     }
 
+    /// Returns whether the owner-thread FIFO contains no runnables.
     pub(crate) fn is_empty(&self) -> bool {
         self.head.get().is_null()
     }
 }
 
 impl fmt::Debug for LocalQueue {
+    /// Identifies the queue without traversing its intrusive task links.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalQueue").finish_non_exhaustive()
     }
 }
 
-/// Intrusive list of the unfinished tasks of a runtime, used on the owner
-/// thread only.
+/// Intrusive list of unfinished tasks, used on the owner thread.
 ///
 /// A task waiting on a waker is in no queue, the runtime drops its future
 /// through the list when it is dropped. The list holds no references.
@@ -1164,6 +980,7 @@ pub(crate) struct TaskList {
 }
 
 impl TaskList {
+    /// Creates an empty, non-owning list of unfinished tasks.
     pub(crate) const fn new() -> Self {
         Self {
             head: Cell::new(ptr::null_mut()),
@@ -1172,26 +989,26 @@ impl TaskList {
 
     /// Inserts an unlisted task at the head.
     fn push(&self, h: NonNull<Header>) {
-        let hdr = header(h);
+        let local = core(h);
         let head = self.head.replace(h.as_ptr());
-        hdr.list_prev.set(ptr::null_mut());
-        hdr.list_next.set(head);
-        if !head.is_null() {
-            unsafe { (*head).list_prev.set(h.as_ptr()) };
+        local.list_prev.set(ptr::null_mut());
+        local.list_next.set(head);
+        if let Some(head) = NonNull::new(head) {
+            core(head).list_prev.set(h.as_ptr());
         }
     }
 
     /// Unlinks a listed task, the caller clears `LISTED`.
     fn remove(&self, h: NonNull<Header>) {
-        let hdr = header(h);
-        let (prev, next) = (hdr.list_prev.get(), hdr.list_next.get());
-        if prev.is_null() {
-            self.head.set(next);
+        let local = core(h);
+        let (prev, next) = (local.list_prev.get(), local.list_next.get());
+        if let Some(prev) = NonNull::new(prev) {
+            core(prev).list_next.set(next);
         } else {
-            unsafe { (*prev).list_next.set(next) };
+            self.head.set(next);
         }
-        if !next.is_null() {
-            unsafe { (*next).list_prev.set(prev) };
+        if let Some(next) = NonNull::new(next) {
+            core(next).list_prev.set(prev);
         }
     }
 
@@ -1201,11 +1018,12 @@ impl TaskList {
         let Some(h) = NonNull::new(self.head.get()) else {
             return false;
         };
-        let hdr = header(h);
-        let state = hdr.state.get();
+        let local = core(h);
+        let state = local.state.get();
         if state & RUNNING != 0 {
-            // polled or dropped up the stack, it is left to its runner
-            hdr.state.set(state & !LISTED);
+            // Retire now, but let its active runner drop the pinned future.
+            // A pending self-wake must not reschedule it after shutdown.
+            local.state.set((state | CLOSE) & !LISTED);
             self.remove(h);
         } else {
             // a reference for `close`, a queued task is finished when popped
@@ -1217,112 +1035,9 @@ impl TaskList {
 }
 
 impl fmt::Debug for TaskList {
+    /// Identifies the task list without traversing its non-owning links.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TaskList").finish_non_exhaustive()
-    }
-}
-
-/// A push to the remote queue is in progress.
-#[derive(Debug)]
-pub(crate) struct Busy;
-
-/// Intrusive MPSC queue of tasks woken on other threads.
-///
-/// Any thread pushes, the owner thread pops. Dmitry Vyukov's queue: a
-/// producer swaps the tail and then links the previous tail to the task, the
-/// consumer sees a swapped but unlinked tail as `Busy`. The stub keeps
-/// the queue non-empty, so the consumer never pops the last link that a
-/// producer may still write to.
-#[repr(C)]
-pub(crate) struct RemoteQueue {
-    /// Producer end, the last pushed link.
-    tail: AtomicPtr<Link>,
-    // Keep head updates off the producer's cache line.
-    _consumer: [super::CacheLine; 0],
-    /// Consumer end.
-    head: Cell<*mut Link>,
-    /// Link of no task, owned by the queue.
-    stub: NonNull<Link>,
-}
-
-impl RemoteQueue {
-    pub(crate) fn new() -> Self {
-        let stub = NonNull::from(Box::leak(Box::new(Link {
-            next: AtomicPtr::new(ptr::null_mut()),
-        })));
-        Self {
-            tail: AtomicPtr::new(stub.as_ptr()),
-            _consumer: [],
-            head: Cell::new(stub.as_ptr()),
-            stub,
-        }
-    }
-
-    /// Pushes a task on any thread, the queue takes its reference.
-    pub(crate) fn push(&self, task: Remote) {
-        // the header starts with the link
-        unsafe { self.push_link(ManuallyDrop::new(task).0.cast::<Link>().as_ptr()) };
-    }
-
-    /// Appends `link`. Until the previous tail is linked the consumer sees
-    /// the queue as `Busy`.
-    unsafe fn push_link(&self, link: *mut Link) {
-        unsafe { (*link).next.store(ptr::null_mut(), Ordering::Relaxed) };
-        let prev = self.tail.swap(link, Ordering::AcqRel);
-        unsafe { (*prev).next.store(link, Ordering::Release) };
-    }
-
-    /// Pops a task on the owner thread, its reference passes to the caller.
-    pub(crate) fn pop(&self) -> Result<Option<Remote>, Busy> {
-        let stub = self.stub.as_ptr();
-        let mut head = self.head.get();
-        let mut next = unsafe { (*head).next.load(Ordering::Acquire) };
-        if head == stub {
-            // the stub is no task, skip it
-            if next.is_null() {
-                return if self.tail.load(Ordering::Acquire) == stub {
-                    Ok(None)
-                } else {
-                    Err(Busy)
-                };
-            }
-            self.head.set(next);
-            head = next;
-            next = unsafe { (*head).next.load(Ordering::Acquire) };
-        }
-        if next.is_null() {
-            // `head` is the last link, re-queue the stub behind it
-            if self.tail.load(Ordering::Acquire) != head {
-                return Err(Busy);
-            }
-            unsafe { self.push_link(stub) };
-            next = unsafe { (*head).next.load(Ordering::Acquire) };
-            if next.is_null() {
-                return Err(Busy);
-            }
-        }
-        self.head.set(next);
-        Ok(Some(Remote(unsafe {
-            NonNull::new_unchecked(head.cast::<Header>())
-        })))
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        let stub = self.stub.as_ptr();
-        self.head.get() == stub && self.tail.load(Ordering::Acquire) == stub
-    }
-}
-
-impl Drop for RemoteQueue {
-    fn drop(&mut self) {
-        // queued tasks keep the runtime queue alive, the queue is empty
-        drop(unsafe { Box::from_raw(self.stub.as_ptr()) });
-    }
-}
-
-impl fmt::Debug for RemoteQueue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RemoteQueue").finish_non_exhaustive()
     }
 }
 
@@ -1332,76 +1047,32 @@ pub(crate) struct Task<T> {
     _t: PhantomData<T>,
 }
 
-unsafe impl<T: Send> Send for Task<T> {}
-unsafe impl<T: Send> Sync for Task<T> {}
 impl<T> Unpin for Task<T> {}
 
 impl<T> Task<T> {
     /// Returns `true` once the future is dropped, with or without an output.
     pub(crate) fn is_finished(&self) -> bool {
-        if is_owner(self.h) {
-            header(self.h).state.get() & FINISHED != 0
-        } else {
-            header(self.h).remote.load(Ordering::Acquire) & R_FINISHED != 0
-        }
+        core(self.h).state.get() & FINISHED != 0
     }
 
     /// Cancels the task and drops the join handle, the owner thread drops
     /// the future. The output of a finished task is dropped.
     pub(crate) fn cancel(self) {
         let h = ManuallyDrop::new(self).h;
-        if is_owner(h) {
-            detach_local(h, true);
-        } else {
-            detach_remote(h, R_CANCEL);
-        }
-    }
-
-    /// Drops the join handle, the task keeps running.
-    pub(crate) fn detach(self) {
-        drop(self);
+        detach_local(h, true);
     }
 
     /// Polls the task output, `None` if the task was cancelled or panicked.
     pub(crate) fn poll_join(&mut self, cx: &Context<'_>) -> Poll<Option<T>> {
         let hdr = header(self.h);
-        if is_owner(self.h) {
-            if hdr.state.get() & FINISHED == 0 {
-                // the waker callbacks may poll the runtime and complete the task
-                drop(unsafe { hdr.awaiter.register(cx.waker()) });
-                if hdr.state.get() & FINISHED == 0 {
-                    return Poll::Pending;
-                }
-                // completed by a waker callback, nothing waits any more
-                drop(unsafe { hdr.awaiter.take() });
+        let local = core(self.h);
+        if local.state.get() & FINISHED == 0 {
+            // The waker callbacks may poll the runtime and complete the task.
+            drop(unsafe { hdr.awaiter.register(cx.waker()) });
+            if local.state.get() & FINISHED == 0 {
+                return Poll::Pending;
             }
-        } else {
-            // `R_REGISTERING` keeps the owner thread off the awaiter while it
-            // is written
-            let mut cur = hdr.remote.load(Ordering::Acquire);
-            while cur & R_FINISHED == 0 {
-                if let Err(v) = hdr.remote.compare_exchange_weak(
-                    cur,
-                    cur | R_REGISTERING,
-                    Ordering::Acquire,
-                    Ordering::Acquire,
-                ) {
-                    cur = v;
-                    continue;
-                }
-                let guard = Registering(&hdr.remote);
-                let old = unsafe { hdr.awaiter.register(cx.waker()) };
-                mem::forget(guard);
-                let prev = hdr.remote.fetch_and(!R_REGISTERING, Ordering::AcqRel);
-                // dropped outside of the registration, it may wait for the owner thread
-                drop(old);
-                if prev & R_FINISHED == 0 {
-                    return Poll::Pending;
-                }
-                // completed while registering, the owner thread skipped the awaiter
-                drop(unsafe { hdr.awaiter.take() });
-                break;
-            }
+            drop(unsafe { hdr.awaiter.take() });
         }
         Poll::Ready(self.take_output())
     }
@@ -1415,20 +1086,17 @@ impl<T> Task<T> {
 }
 
 impl<T> Drop for Task<T> {
+    /// Detaches the local join and releases its reference without requesting cancellation.
     fn drop(&mut self) {
-        if is_owner(self.h) {
-            detach_local(self.h, false);
-        } else {
-            // the owner thread drops the awaiter on completion
-            detach_remote(self.h, 0);
-        }
+        detach_local(self.h, false);
     }
 }
 
 /// Drops a join handle on the owner thread, `cancel` also drops the future.
 fn detach_local(h: NonNull<Header>, cancel: bool) {
     let hdr = header(h);
-    let state = hdr.state.get();
+    let local = core(h);
+    let state = local.state.get();
     if state & FINISHED != 0 {
         drop_output(h);
         return;
@@ -1440,51 +1108,18 @@ fn detach_local(h: NonNull<Header>, cancel: bool) {
     // still complete
     let state = state | DETACHED | if cancel { CLOSE } else { 0 };
     if cancel && state & (SCHEDULED | RUNNING) == 0 {
-        hdr.state.set(state | SCHEDULED);
+        local.state.set(state | SCHEDULED);
         // the handle reference passes to the queue
-        hdr.queue.schedule_local(Runnable(h));
+        owner_queue(h).schedule_local(Runnable(h));
     } else {
-        hdr.state.set(state);
+        local.state.set(state);
         release_local(h);
     }
     drop(awaiter);
 }
 
-/// Drops a join handle on another thread, sets `flags` like
-/// [`remote_signal`].
-///
-/// The output of a finished task is dropped on this thread, a `Task<T>` on
-/// another thread implies `T: Send`. Otherwise the owner thread drops it on
-/// completion.
-fn detach_remote(h: NonNull<Header>, flags: u32) {
-    let remote = &header(h).remote;
-    let mut cur = remote.load(Ordering::Acquire);
-    loop {
-        if cur & R_FINISHED != 0 {
-            drop_output(h);
-            return;
-        }
-        if delta(cur).abs() > MAX_REFS {
-            abort();
-        }
-        // `R_DETACHED` tells the owner thread to drop the output. The fast
-        // path of `remote_signal`, this is not the last reference
-        let release = flags == 0 && (cur & R_QUEUED != 0 || delta(cur) > 0);
-        let new = if release {
-            (cur | R_DETACHED).wrapping_sub(R_REF)
-        } else {
-            cur | R_DETACHED
-        };
-        match remote.compare_exchange_weak(cur, new, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) if release => return,
-            Ok(_) => break,
-            Err(v) => cur = v,
-        }
-    }
-    remote_signal(h, flags, true);
-}
-
 impl<T> fmt::Debug for Task<T> {
+    /// Formats the joined task's spawn location while its reference is held.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Task")
             .field("location", &header(self.h).location)
@@ -1492,10 +1127,16 @@ impl<T> fmt::Debug for Task<T> {
     }
 }
 
+#[cfg(all(test, not(ntex_loom)))]
+#[path = "task_core_tests.rs"]
+mod core_tests;
+
 #[cfg(all(test, ntex_loom))]
 #[test]
 #[should_panic(expected = "currently writing to cell")]
 fn task_loom_shared_cell_access() {
+    use loom::sync::atomic::Ordering;
+
     struct Shared(SharedCell<usize>);
 
     // Deliberately allow conflicting accesses to verify the tracking scope.

@@ -83,10 +83,10 @@ pub(crate) struct AtomicHistogram {
 
 impl AtomicHistogram {
     fn bucket(d: Duration) -> usize {
-        let us = u64::try_from(d.as_micros()).unwrap_or(u64::MAX);
-        if us < FIRST_BUCKET_US {
+        if d < Duration::from_micros(FIRST_BUCKET_US) {
             0
         } else {
+            let us = u64::try_from(d.as_micros()).unwrap_or(u64::MAX);
             // 16µs..32µs is bucket 1
             let idx = (63 - us.leading_zeros() as usize) - 3;
             idx.min(HISTOGRAM_BUCKETS - 1)

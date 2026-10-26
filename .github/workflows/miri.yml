@@ -53,11 +53,30 @@ jobs:
         # Run all of your tests inside of Miri interpreter
         run: cargo miri test -p ntex-io -- --test "miri_"
 
-      - name: Run Miri (ntex-rt runtime task)
-        # the runtime and task tests, stress tests run fewer iterations
+      - name: Run Miri (ntex-rt core reclamation)
+        # Keep leak detection for serviced-runtime reclamation and owner releases.
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-many-seeds=0..8
+        run: >-
+          cargo miri test -p ntex-rt --lib -- "rt::task::core_tests"
+          --skip completed_wakers_retain_storage_but_not_the_driver
+          --skip unregistered_clones_and_native_awaiters_are_inert
+
+      - name: Run Miri (ntex-rt runtime task)
+        # Shutdown intentionally retains allocations with outstanding standard wakers.
+        # Normal reclamation is checked above and by explicit allocation assertions.
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-many-seeds=0..8
         run: cargo miri test -p ntex-rt --lib -- "rt::"
+
+      - name: Run Miri (ntex-rt join and local wake handles)
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-many-seeds=0..8
+        run: |
+          cargo miri test -p ntex-rt --lib -- local_waker::tests
+          cargo miri test -p ntex-rt --lib -- local_handles_survive_runtime_shutdown
+          cargo miri test -p ntex-rt --lib -- remote_join_result_
+          cargo miri test -p ntex-rt --lib -- remote::tests
 
       - name: Run loom (ntex-rt runtime task)
         env:

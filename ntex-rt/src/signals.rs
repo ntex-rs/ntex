@@ -51,7 +51,7 @@ pub enum PanicSource {
 /// again after each notification to continue receiving signals.
 pub fn signal() -> oneshot::AsyncReceiver<Arc<[Signal]>> {
     let (tx, rx) = oneshot::async_channel();
-    System::current().handle().spawn(async move {
+    System::current().handle().spawn_detached(async move {
         HANDLERS.with(|handlers| {
             handlers.borrow_mut().push(tx);
         });

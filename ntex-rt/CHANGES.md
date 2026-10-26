@@ -2,6 +2,9 @@
 
 ## [4.4.0] - Unreleased
 
+* Retire a running task during reentrant shutdown and cancel it after its poll,
+  rather than registering it again or leaving a self-wake queued after shutdown
+
 * Abort the process on a panic during shutdown while an earlier panic is unwinding or
   held to be resumed, instead of suppressing it or replacing the original panic
 
