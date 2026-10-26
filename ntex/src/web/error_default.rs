@@ -6,7 +6,9 @@ use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
 
 use crate::client;
-use crate::http::{self, StatusCode, header};
+#[cfg(feature = "ws")]
+use crate::http::header;
+use crate::http::{self, StatusCode};
 use crate::util::timeout::TimeoutError;
 #[cfg(feature = "ws")]
 use crate::ws::error::HandshakeError;
