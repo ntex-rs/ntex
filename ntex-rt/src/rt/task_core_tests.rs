@@ -1161,6 +1161,7 @@ fn completed_wakers_retain_storage_but_not_the_driver() {
 }
 
 #[test]
+#[allow(clippy::waker_clone_wake)]
 fn segqueue_publishes_all_producers_writes() {
     let rt = runtime();
     let threads = if cfg!(miri) { 2 } else { 8 };
