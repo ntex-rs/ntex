@@ -3,11 +3,12 @@ use std::time::{Duration, Instant};
 use std::{fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc, sync::Arc};
 
 use crate::arbiter::Arbiter;
+use crate::metrics::Histogram;
 use crate::remote::{Job, RemoteJoin, Spawner};
 
 /// Returns the current time.
 ///
-/// tokio does not expose the start of a runtime turn, this is
+/// Tokio does not expose the start of a runtime turn, so this is
 /// [`Instant::now()`].
 #[inline]
 pub fn now() -> Instant {
@@ -15,14 +16,16 @@ pub fn now() -> Instant {
 }
 
 #[inline]
-/// Spawn a future on the current thread.
+/// Spawns a future on the current Tokio local task set and returns its join handle.
 ///
-/// This does not create a new Arbiter or Arbiter address,
-/// it is simply a helper for spawning futures on the current thread.
+/// The future and output need not be `Send`. Registered task callbacks are
+/// applied. Dropping the handle detaches the task; the local task set must keep
+/// being driven for it to make progress. An ntex system is not required.
 ///
 /// # Panics
 ///
-/// This function panics if ntex system is not running.
+/// Panics outside a Tokio context that supports local spawning, such as a
+/// [`LocalSet`](tok_io::task::LocalSet).
 pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
 where
     F: Future + 'static,
@@ -33,12 +36,14 @@ where
 #[inline]
 /// Spawns a future on the current thread without a join handle.
 ///
-/// The output is dropped when the task completes. Unlike dropping the
-/// [`JoinHandle`] returned by [`spawn()`], this does not allocate a handle.
+/// Like [`spawn()`], this applies registered task callbacks and supports
+/// non-`Send` futures and outputs. The output is discarded when the task
+/// completes. No ntex join handle is returned.
 ///
 /// # Panics
 ///
-/// This function panics if ntex system is not running.
+/// Panics outside a Tokio context that supports local spawning, such as a
+/// [`LocalSet`](tok_io::task::LocalSet).
 pub fn spawn_detached<F>(f: F)
 where
     F: Future + 'static,
@@ -46,6 +51,9 @@ where
     drop(tok_io::task::spawn_local(crate::task::wrap(f)));
 }
 
+/// Error returned when a Tokio-backed task ends without an output.
+///
+/// Cancellation and task panics are reported without preserving their cause.
 #[derive(Debug, Copy, Clone)]
 pub struct JoinError;
 
@@ -60,6 +68,7 @@ impl std::error::Error for JoinError {}
 /// A local task handle. It is neither `Send` nor `Sync`.
 ///
 /// Returned by [`spawn()`]. Dropping the handle detaches the task.
+/// Awaiting it returns the task output or [`JoinError`] on cancellation or panic.
 #[derive(Debug)]
 pub struct JoinHandle<T> {
     task: Option<tok_io::task::JoinHandle<T>>,
@@ -74,7 +83,10 @@ impl<T> JoinHandle<T> {
         }
     }
 
-    /// Cancels the task.
+    /// Requests cancellation and discards the result without waiting for cleanup.
+    ///
+    /// A running poll is not interrupted; the local task set must make progress
+    /// for cancellation of a pending task to finish.
     pub fn cancel(mut self) {
         if let Some(t) = self.task.take() {
             t.abort();
@@ -84,7 +96,7 @@ impl<T> JoinHandle<T> {
     /// Detaches the task to let it keep running in the background.
     pub fn detach(self) {}
 
-    /// Returns true if the current task is finished.
+    /// Returns `true` if the task completed, panicked, or finished cancellation.
     pub fn is_finished(&self) -> bool {
         match &self.task {
             Some(t) => t.is_finished(),
@@ -109,6 +121,8 @@ impl<T> Future for JoinHandle<T> {
 /// It is neither `Send` nor `Sync` and stays on the calling thread.
 /// Submissions on the runtime thread retain the local spawn fast path.
 /// Dropping the handle detaches the task.
+/// Awaiting it returns the output or [`JoinError`] if the task ended without
+/// one, including when submission was rejected during shutdown.
 #[derive(Debug)]
 pub struct RemoteJoinHandle<T> {
     inner: Inner<T>,
@@ -133,7 +147,10 @@ impl<T> RemoteJoinHandle<T> {
         }
     }
 
-    /// Cancels the task, dropping its future on the runtime thread.
+    /// Requests cancellation and discards the result without waiting for cleanup.
+    ///
+    /// Accepted futures are dropped on the runtime thread. A running poll is
+    /// not interrupted, and the runtime must make progress to finish cancellation.
     pub fn cancel(self) {
         match self.inner {
             Inner::Local(t) => t.cancel(),
@@ -144,7 +161,7 @@ impl<T> RemoteJoinHandle<T> {
     /// Detaches the task to let it keep running in the background.
     pub fn detach(self) {}
 
-    /// Returns true if the current task is finished.
+    /// Returns `true` if the task completed or ended without an output.
     pub fn is_finished(&self) -> bool {
         match &self.inner {
             Inner::Local(t) => t.is_finished(),
@@ -165,7 +182,9 @@ impl<T> Future for RemoteJoinHandle<T> {
 }
 
 #[derive(Clone, Debug)]
-/// Handle to the runtime.
+/// A thread-safe handle for submitting work to a Tokio-backed arbiter.
+///
+/// Clones share the same target arbiter; they do not create another runtime.
 pub struct Handle {
     spawner: Arc<Spawner>,
     rt: Option<tok_io::runtime::Handle>,
@@ -184,19 +203,27 @@ impl Handle {
         }
     }
 
+    /// Returns a handle to the current arbiter's runtime.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no arbiter is installed on the current thread. A Tokio runtime
+    /// context alone is not sufficient.
     pub fn current() -> Self {
         Arbiter::current().handle().clone()
     }
 
     #[inline]
-    /// Wake up runtime.
+    /// Compatibility hook that does nothing on the Tokio backend.
+    ///
+    /// Task submission and task wakers notify Tokio automatically.
     pub fn notify(&self) {}
 
     /// Returns the total time the runtime has been busy.
     ///
-    /// Reports tokio's `worker_total_busy_duration`, which excludes time spent
+    /// Reports Tokio's `worker_total_busy_duration`, which excludes time spent
     /// handling driver events. Returns `None` if the arbiter does not run on a
-    /// current-thread tokio runtime.
+    /// current-thread Tokio runtime.
     pub fn busy_duration(&self) -> Option<Duration> {
         self.rt
             .as_ref()
@@ -205,12 +232,12 @@ impl Handle {
 
     /// Returns how long the current runtime turn has been running.
     ///
-    /// tokio does not expose runtime turns, always returns `None`.
+    /// Tokio does not expose runtime turns; always returns `None`.
     pub fn current_turn(&self) -> Option<Duration> {
         None
     }
 
-    /// Returns the number of runtime polls, not available on tokio.
+    /// Returns the number of runtime polls, not available on Tokio.
     ///
     /// Always returns `None`, the method exists for compatibility with the
     /// other runtime backends.
@@ -219,7 +246,7 @@ impl Handle {
     }
 
     /// Returns the number of runtime polls that left scheduled tasks, not
-    /// available on tokio.
+    /// available on Tokio.
     ///
     /// Always returns `None`, the method exists for compatibility with the
     /// other runtime backends.
@@ -228,38 +255,47 @@ impl Handle {
     }
 
     /// Returns the number of times a task woke itself while it was polled, not
-    /// available on tokio.
+    /// available on Tokio.
     ///
     /// Always returns `None`, the method exists for compatibility with the
-    /// neon runtime.
+    /// native runtime.
     pub fn self_wake_count(&self) -> Option<u64> {
         None
     }
 
     /// Returns the spawn location of the task the runtime is polling, not
-    /// available on tokio.
+    /// available on Tokio.
     ///
     /// Always returns `None`, the method exists for compatibility with the
-    /// neon runtime.
+    /// native runtime.
     pub fn current_task(&self) -> Option<&'static std::panic::Location<'static>> {
         None
     }
 
-    /// Returns the histogram of runtime poll durations, not available on tokio.
+    /// Returns the histogram of runtime poll durations, not available on Tokio.
     ///
     /// Always returns `None`, the method exists for compatibility with the
     /// other runtime backends.
-    pub fn poll_histogram(&self) -> Option<crate::Histogram> {
+    pub fn poll_histogram(&self) -> Option<Histogram> {
         None
     }
 
     /// Spawns a task on the handle's runtime and returns a [`RemoteJoinHandle`].
     ///
     /// There is no guarantee that a spawned task will execute to completion.
-    /// On the runtime thread the task is spawned directly. From other threads
-    /// the future and output must be `Send`, the future is polled and dropped
-    /// on the runtime thread and its output is returned through the handle.
-    /// The handle is neither `Send` nor `Sync`, dropping it detaches the task.
+    /// Both the future and output must be `Send`, even when submitted on the
+    /// runtime thread, which uses the local spawn fast path. Accepted futures
+    /// are polled and dropped on the runtime thread, with the output transferred
+    /// through the join handle. Rejected submissions are never polled and their
+    /// futures may be dropped on the submitting thread.
+    ///
+    /// The returned join handle is neither `Send` nor `Sync`; dropping it
+    /// detaches the task.
+    ///
+    /// # Panics
+    ///
+    /// Panics on the owner thread if there is no Tokio context supporting
+    /// local spawning. Submissions from other threads do not require one.
     pub fn spawn<F>(&self, future: F) -> RemoteJoinHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -279,6 +315,13 @@ impl Handle {
     ///
     /// The output is dropped on the runtime thread when the task completes,
     /// so it does not have to be `Send`.
+    /// The future must be `Send`, even on the owner thread. Rejected submissions
+    /// are never polled and their futures may be dropped on the submitting thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics on the owner thread if there is no Tokio context supporting
+    /// local spawning. Submissions from other threads do not require one.
     pub fn spawn_detached<F>(&self, future: F)
     where
         F: Future + Send + 'static,

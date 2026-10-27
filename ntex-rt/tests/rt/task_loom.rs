@@ -176,7 +176,12 @@ fn model(f: impl Fn() + Sync + Send + 'static) {
     b.check(f);
 }
 
-/// A remote wake is not lost while the owner thread runs the task.
+/// STATEMENT: A remote wake is not lost while the owner thread services a pending task.
+///
+/// HOW:
+/// - Poll once, then set readiness and consume a cloned waker on a modeled producer thread.
+/// - Run the owner until completion, join the result as 42, and release the saved waker.
+/// - Check one future drop, empty queues, and zero task allocations.
 #[test]
 fn remote_wake() {
     model(|| {
@@ -197,6 +202,12 @@ fn remote_wake() {
     });
 }
 
+/// STATEMENT: A remote consuming wake survives release of the final local interest.
+///
+/// HOW:
+/// - Detach a pending task while retaining its standard waker and a local wrapper.
+/// - Race remote readiness plus consuming wake against dropping the local wrapper.
+/// - Run until destruction and check exactly two polls and full task reclamation.
 #[test]
 fn consuming_wake_races_last_local_interest() {
     model(|| {
@@ -218,6 +229,12 @@ fn consuming_wake_races_last_local_interest() {
     });
 }
 
+/// STATEMENT: Remote clone acquisition remains ordered when source and clone return to the owner.
+///
+/// HOW:
+/// - Clone a pending task's waker on a producer while the owner drops its task handle and drains.
+/// - Return both wakers, drop them on the owner, and service their remaining FIFO commands.
+/// - Check exactly one future drop and no retained task allocations or queue entries.
 #[test]
 fn remote_acquisition_precedes_owner_return_and_release() {
     model(|| {
@@ -237,6 +254,12 @@ fn remote_acquisition_precedes_owner_return_and_release() {
     });
 }
 
+/// STATEMENT: First remote clone or wake publication safely races owner release of a completed task.
+///
+/// HOW:
+/// - Complete a task returning its waker, then remotely clone, wake by reference, or consume that waker.
+/// - Drop the completed handle and drain concurrently with each producer operation.
+/// - Join the producer, release returned references, and check empty queues and zero allocations.
 #[test]
 fn first_remote_publication_races_completed_owner_release() {
     model(|| {
@@ -274,6 +297,12 @@ fn first_remote_publication_races_completed_owner_release() {
     });
 }
 
+/// STATEMENT: Owner release cannot overtake remote releases followed by acquisition of another clone.
+///
+/// HOW:
+/// - Detach a pending task, then remotely drop two wakers and clone the surviving source.
+/// - Return source and clone; drop the source on the owner and drain, checking the future stays live.
+/// - Drop the last clone and check one future destruction and complete reclamation.
 #[test]
 fn owner_release_follows_pending_remote_releases() {
     model(|| {
@@ -299,6 +328,12 @@ fn owner_release_follows_pending_remote_releases() {
     });
 }
 
+/// STATEMENT: A remote clone racing endpoint unregister leaves inert late clones and no retained driver.
+///
+/// HOW:
+/// - Race remote clone plus consuming wake against dropping the pending task's runtime.
+/// - Check cloning the returned late waker no longer uses the native vtable and exercise its wake.
+/// - Drop the task handle and check one future destruction and an expired queue weak reference.
 #[test]
 fn clone_racing_unregister_leaves_no_driver_reference() {
     model(|| {
@@ -322,6 +357,12 @@ fn clone_racing_unregister_leaves_no_driver_reference() {
     });
 }
 
+/// STATEMENT: A primed remote endpoint cache cannot keep native cloning or the driver alive after shutdown.
+///
+/// HOW:
+/// - Prime a producer's endpoint cache with clone/drop and signal the owner before another clone and wake.
+/// - Shut down concurrently, then check a clone of the returned waker uses a non-native vtable.
+/// - Consume that waker, drop the task, and check one future drop and queue expiration.
 #[test]
 fn cached_remote_clone_races_shutdown() {
     model(|| {
@@ -349,6 +390,13 @@ fn cached_remote_clone_races_shutdown() {
     });
 }
 
+/// STATEMENT: Shutting down one cached owner endpoint does not invalidate another live runtime's wakers.
+///
+/// HOW:
+/// - Prime local routes for two runtimes and remotely clone/drop a waker belonging to the second.
+/// - Drain both, destroy the first, and compare converted local-waker vtables with the native vtable.
+/// - Check only the first becomes inert until the second shuts down, then release all handles.
+/// - Check each pending future is destroyed exactly once.
 #[test]
 fn cached_owner_endpoint_is_invalidated_independently() {
     model(|| {
@@ -394,6 +442,12 @@ fn cached_owner_endpoint_is_invalidated_independently() {
     });
 }
 
+/// STATEMENT: A coalesced wake publishes writes made after an earlier wake was already queued.
+///
+/// HOW:
+/// - Queue an initial remote wake for a pending task without draining it.
+/// - Write 42 through a Loom-tracked cell, wake again, and signal only through a relaxed flag.
+/// - Drain and check the joined task reads 42 before releasing the producer and checking reclamation.
 #[test]
 fn coalesced_wake_publishes_after_queue_push() {
     struct Data(loom::cell::UnsafeCell<usize>);
@@ -453,6 +507,12 @@ fn coalesced_wake_publishes_after_queue_push() {
     });
 }
 
+/// STATEMENT: Local completion safely overlaps remote standard-waker and fallback-wrapper operations.
+///
+/// HOW:
+/// - Save a local wrapper and send a converted clone to a producer that clones, wraps, wakes, and drops it.
+/// - Set readiness, wake locally, drain, and join the result as 42 while remote operations race.
+/// - Exercise a stale local wake, release all wakers, and check one future drop and full reclamation.
 #[test]
 fn local_waker_completion_and_remote_release() {
     model(|| {
@@ -481,6 +541,12 @@ fn local_waker_completion_and_remote_release() {
     });
 }
 
+/// STATEMENT: Local cancellation wins safely over concurrent local and remote waker operations.
+///
+/// HOW:
+/// - Retain a local wrapper while a producer clones, wakes, and releases a converted standard waker.
+/// - Wake locally, cancel the task, and run until its future drops.
+/// - Exercise stale local wakes, release every waker, and check one drop with no retained allocations.
 #[test]
 fn local_cancellation_with_remote_wakers() {
     model(|| {
@@ -507,6 +573,12 @@ fn local_cancellation_with_remote_wakers() {
     });
 }
 
+/// STATEMENT: Local and converted remote wakers remain safe across shutdown without retaining the queue.
+///
+/// HOW:
+/// - Race remote clone/wake operations with a local wake and runtime destruction.
+/// - Check the local handle finishes, then exercise stale local wakes and convert another wrapper.
+/// - Release local handles while workers wake the remote survivors; check one future drop and queue expiration.
 #[test]
 fn local_waker_remote_shutdown() {
     model(|| {
@@ -543,8 +615,12 @@ fn local_waker_remote_shutdown() {
     });
 }
 
-/// A coalesced remote wake publishes the writes before it, the owner thread
-/// may have consumed the pending wake before the readiness is set.
+/// STATEMENT: A second remote wake publishes readiness even if the owner consumed the first wake.
+///
+/// HOW:
+/// - Have a producer wake, publish readiness, and wake again while the owner drains concurrently.
+/// - Join the producer, drain again, and save the task's finished state before cancellation cleanup.
+/// - Check completion was observed and all references and queue entries are reclaimed.
 #[test]
 fn coalesced_remote_wake() {
     model(|| {
@@ -569,7 +645,12 @@ fn coalesced_remote_wake() {
     });
 }
 
-/// Two threads wake two tasks, the remote queue has two producers.
+/// STATEMENT: Two independent wake producers can complete separate tasks through the shared remote queue.
+///
+/// HOW:
+/// - Poll two tasks pending, then set readiness and consume each waker on a separate producer thread.
+/// - Run until both handles finish and join both producers.
+/// - Release handles and saved wakers; check one drop per future and no retained allocations.
 #[test]
 fn two_producers() {
     model(|| {
@@ -599,7 +680,12 @@ fn two_producers() {
     });
 }
 
-/// A local join reads a result published after remote task submission.
+/// STATEMENT: A local join and concurrent remote submission both progress without retaining task storage.
+///
+/// HOW:
+/// - Spawn a ready local future while a producer submits an unrelated ready task through a runtime handle.
+/// - Drain and join the local result as 42, then join the producer and drain any remaining submission.
+/// - Check one local future drop, empty queues, and zero task allocations.
 #[test]
 fn local_join_with_remote_submission() {
     model(|| {
@@ -617,7 +703,12 @@ fn local_join_with_remote_submission() {
     });
 }
 
-/// Detaching locally drops the awaiter while a remote wake completes the task.
+/// STATEMENT: Local detachment releases a registered join awaiter without waking it during remote completion.
+///
+/// HOW:
+/// - Register a flag waker on a pending join while a producer publishes readiness and consumes a task waker.
+/// - Drop the task handle and external awaiter waker, then run until the future drops.
+/// - Join the producer and clean up; check the awaiter flag stays false and only its test reference remains.
 #[test]
 fn local_detached_awaiter_remote_wake() {
     model(|| {
@@ -642,7 +733,12 @@ fn local_detached_awaiter_remote_wake() {
     });
 }
 
-/// A remote wake completes a task with a local join.
+/// STATEMENT: A locally retained join receives the result of a task completed by a remote wake.
+///
+/// HOW:
+/// - Poll pending, then publish readiness and consume a cloned waker on a producer thread.
+/// - Run until the future drops, join the producer, and check the local join result is 42.
+/// - Release the saved waker and check empty queues and zero task allocations.
 #[test]
 fn local_join_and_remote_wake() {
     model(|| {
@@ -661,7 +757,12 @@ fn local_join_and_remote_wake() {
     });
 }
 
-/// Local cancellation races a remote wake.
+/// STATEMENT: Local cancellation racing a remote borrowed wake destroys the future without excess polling.
+///
+/// HOW:
+/// - Wake and release a cloned standard waker remotely while cancelling its pending task locally.
+/// - Run until destruction, join the producer, and release the saved waker.
+/// - Check full reclamation and at most two total future polls.
 #[test]
 fn local_cancel_remote_wake() {
     model(|| {
@@ -681,7 +782,12 @@ fn local_cancel_remote_wake() {
     });
 }
 
-/// The last references are released on both threads at once.
+/// STATEMENT: Concurrent owner-handle and remote-waker release reclaim a detached pending task.
+///
+/// HOW:
+/// - Move the saved waker to a producer that publishes readiness, wakes by reference, and drops it.
+/// - Drop the task handle concurrently and service the owner until the future drops.
+/// - Join the producer, release any saved waker, and check no queue entries or allocations remain.
 #[test]
 fn remote_release() {
     model(|| {
@@ -702,8 +808,12 @@ fn remote_release() {
     });
 }
 
-/// A remote `wake_by_ref` races completion and runtime destruction. Retaining
-/// the standard waker must not retain the runtime's driver.
+/// STATEMENT: Completion and shutdown tolerate a remote borrowed wake and late standard-waker release.
+///
+/// HOW:
+/// - Detach a pending task and remotely publish readiness and wake by reference while retaining the waker.
+/// - Run until its future drops, then destroy the runtime before joining the producer and releasing that waker.
+/// - Check the queue weak reference expires rather than retaining the runtime driver.
 #[test]
 fn remote_wake_by_ref_shutdown() {
     model(|| {
@@ -725,8 +835,12 @@ fn remote_wake_by_ref_shutdown() {
     });
 }
 
-/// A completed output is released while another thread clones and drops
-/// the remaining waker, after the runtime is gone.
+/// STATEMENT: Post-shutdown output release safely races remote clone/drop of its surviving task waker.
+///
+/// HOW:
+/// - Complete a task with a counted output, retain its standard waker, and destroy the runtime.
+/// - Drop the local handle while a producer clones and drops that waker.
+/// - Check one future drop, one output drop, and expiration of the queue weak reference.
 #[test]
 fn completed_output_release() {
     model(|| {
@@ -758,7 +872,12 @@ fn completed_output_release() {
     });
 }
 
-/// A task spawned from another thread discards its output on the owner.
+/// STATEMENT: A remote fire-and-forget submission discards its result and releases owner task storage.
+///
+/// HOW:
+/// - Submit a ready future through a producer's runtime handle without retaining its join handle.
+/// - Run the owner until the future drops, then join the producer.
+/// - Drain and check empty queues and zero task allocations.
 #[test]
 fn remote_spawn() {
     model(|| {
@@ -784,7 +903,12 @@ impl Drop for Out {
     }
 }
 
-/// A local detach races remote wake publication; the output is dropped once.
+/// STATEMENT: Local detachment racing remote wake publication drops the completed output exactly once.
+///
+/// HOW:
+/// - Poll a counted-output task pending, publish readiness, and consume its waker on a producer.
+/// - Drop the local handle while draining the owner, then join the producer and release the saved waker.
+/// - Drain remaining work, check full reclamation, and require exactly one output destruction.
 #[test]
 fn local_detach_remote_wake() {
     model(|| {
@@ -808,8 +932,12 @@ fn local_detach_remote_wake() {
     });
 }
 
-/// A detached task spawned from another thread, the owner thread may free
-/// it as soon as it is queued.
+/// STATEMENT: Remote detached publication tolerates immediate owner completion and reclamation.
+///
+/// HOW:
+/// - Publish a ready future with a counted output through the low-level detached spawn path on a producer.
+/// - Run the owner until the output drops while publication may still be returning.
+/// - Join the producer and check one future drop, empty queues, and zero task allocations.
 #[test]
 fn remote_spawn_detached() {
     model(|| {
@@ -834,7 +962,12 @@ fn remote_spawn_detached() {
     });
 }
 
-/// A remote wake must resume the driver, including between poll and park.
+/// STATEMENT: A remote wake resumes a parked driver even when notification falls between poll and wait.
+///
+/// HOW:
+/// - Mark the runtime awake, poll a task pending once, then remotely publish readiness and consume its waker.
+/// - Service it with the notification-dependent parked driver rather than a spinning drain loop.
+/// - Join the result as 42, release saved references, and check one future drop and complete reclamation.
 #[test]
 fn parked_remote_wake() {
     model(|| {
@@ -859,7 +992,12 @@ fn parked_remote_wake() {
     });
 }
 
-/// Submissions may coalesce or straddle the notification reset and drain.
+/// STATEMENT: Coalesced or reset-straddling remote submissions both wake a parked driver.
+///
+/// HOW:
+/// - Submit one ordinary and one detached ready future from the same modeled producer.
+/// - Use the parked driver until both futures drop, then join the producer.
+/// - Check exactly two polls and no retained task allocations or queue entries.
 #[test]
 fn parked_remote_submissions() {
     model(|| {
@@ -879,7 +1017,12 @@ fn parked_remote_submissions() {
     });
 }
 
-/// Independent producers race the same notification flag.
+/// STATEMENT: Independent producers sharing a notification flag cannot strand a parked driver's tasks.
+///
+/// HOW:
+/// - Submit one detached ready future from each of two modeled producer threads.
+/// - Run the parked driver until both futures drop and join both producers.
+/// - Check exactly two polls, empty queues, and zero task allocations.
 #[test]
 fn parked_two_producers() {
     model(|| {
@@ -902,7 +1045,12 @@ fn parked_two_producers() {
     });
 }
 
-/// A failed notification must not strand subsequent coalesced submissions.
+/// STATEMENT: An interrupted notification is retried without stranding later coalesced submissions.
+///
+/// HOW:
+/// - Make the first notification return `Interrupted`, then forward later attempts to the parked notifier.
+/// - Model one or two producers with one or two submissions and run the notification-dependent driver.
+/// - Check every submitted future is polled and dropped once and all task storage is reclaimed.
 #[test]
 fn parked_failed_notification() {
     #[derive(Debug)]
@@ -952,7 +1100,12 @@ fn parked_failed_notification() {
     }
 }
 
-/// The final remote release must not publish after shutdown's last drain.
+/// STATEMENT: Final remote wake/reference release cannot leave a queue retained past shutdown's last drain.
+///
+/// HOW:
+/// - Detach a pending task while a producer publishes readiness, wakes by reference, and drops its last waker.
+/// - Run until the future drops, destroy the runtime, and join the producer.
+/// - Check the queue weak reference has expired after that final remote release.
 #[test]
 fn remote_release_shutdown() {
     model(|| {
@@ -1012,19 +1165,32 @@ fn spawn_shutdown(detached: bool) {
     }
 }
 
-/// Fire-and-forget spawning racing shutdown reclaims its future and queue.
+/// STATEMENT: Fire-and-forget remote spawning racing shutdown reclaims every future and its queue.
+///
+/// HOW:
+/// - Use `spawn_shutdown(false)` to race one or two ordinary remote submissions against runtime drop.
+/// - Join all producers and check one future destruction per submission and an expired queue weak reference.
 #[test]
 fn remote_spawn_shutdown() {
     spawn_shutdown(false);
 }
 
-/// Detached spawning has no join handle to participate in cleanup.
+/// STATEMENT: Remote detached spawning racing shutdown reclaims futures without join-handle cleanup.
+///
+/// HOW:
+/// - Use `spawn_shutdown(true)` to race one or two detached submissions against runtime drop.
+/// - Join every producer and check each future drops and the queue weak reference expires.
 #[test]
 fn remote_spawn_detached_shutdown() {
     spawn_shutdown(true);
 }
 
-/// A notifier can wait for shutdown without holding a publication permit.
+/// STATEMENT: A blocked notifier does not hold a publication permit that prevents shutdown.
+///
+/// HOW:
+/// - Model remote wake, ordinary spawn, and detached spawn with an interrupted then blocking notifier.
+/// - Wait for notifier entry, destroy the runtime, and check one future drop while the notifier retains the queue.
+/// - Release and join the notifier thread, then check the queue weak reference expires.
 #[test]
 fn shutdown_with_blocked_notification() {
     #[derive(Debug)]
@@ -1084,7 +1250,12 @@ fn shutdown_with_blocked_notification() {
     }
 }
 
-/// Wake, release and join cancellation racing shutdown keep destruction local.
+/// STATEMENT: Remote wake/release and local handle cancellation racing shutdown keep future destruction local.
+///
+/// HOW:
+/// - Poll a future carrying an owner-only drop guard and move its saved waker to a modeled producer.
+/// - Vary remote drop, consuming wake, or borrowed wake while locally dropping or cancelling the handle.
+/// - Destroy the runtime, join the producer, and check one owner-thread future drop and queue expiration.
 #[test]
 fn remote_signal_shutdown() {
     struct OwnerDrop {

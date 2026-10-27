@@ -224,6 +224,11 @@ fn on_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     thread::spawn(f).join().unwrap()
 }
 
+/// STATEMENT: `Runnable` cannot be sent away from its owner thread.
+///
+/// HOW:
+/// - Resolve a trait method whose implementations would be ambiguous if `Runnable` implemented `Send`.
+/// - Require that expression to compile without selecting a `Send` implementation.
 #[test]
 fn runnable_is_owner_local() {
     trait AmbiguousIfSend<A> {
@@ -236,6 +241,12 @@ fn runnable_is_owner_local() {
     let _ = <Runnable as AmbiguousIfSend<_>>::check;
 }
 
+/// STATEMENT: Dropping a queued runnable closes its task without polling the future.
+///
+/// HOW:
+/// - Spawn a ready probe and drop its sole local runnable while retaining the task handle.
+/// - Check zero polls, one future drop, no output, and a finished handle.
+/// - Drop the handle and check empty queues and zero task allocations.
 #[test]
 fn drop_and_detach() {
     let rt = new_rt();
@@ -248,6 +259,11 @@ fn drop_and_detach() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Dropping a task handle leaves queued work alive until its runnable is released.
+///
+/// HOW:
+/// - Spawn a ready probe and drop its handle; check the future has not been polled or dropped.
+/// - Drop the queued runnable and check one unpolled future drop and no retained allocations.
 #[test]
 fn detach_and_drop() {
     let rt = new_rt();
@@ -259,6 +275,11 @@ fn detach_and_drop() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: A detached ready task runs once and immediately destroys its unclaimed output.
+///
+/// HOW:
+/// - Drop the ready probe's task handle and run its sole local runnable to completion.
+/// - Release the saved waker and check one poll, one future drop, one output drop, and no allocations.
 #[test]
 fn detach_and_run() {
     let rt = new_rt();
@@ -270,6 +291,11 @@ fn detach_and_run() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: A completed task retains its output until its task handle is dropped.
+///
+/// HOW:
+/// - Run a ready probe and release its waker; check one future drop but no output drop.
+/// - Drop the handle and check exactly one output drop and complete allocation reclamation.
 #[test]
 fn run_and_detach() {
     let rt = new_rt();
@@ -283,6 +309,11 @@ fn run_and_detach() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Cancelling queued work defers future destruction to the runner without polling it.
+///
+/// HOW:
+/// - Cancel a ready probe before running it and check all probe counters remain zero.
+/// - Run the queued cancellation and check one future drop, no output, and no allocations.
 #[test]
 fn cancel_and_run() {
     let rt = new_rt();
@@ -295,6 +326,11 @@ fn cancel_and_run() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Cancelling a completed task destroys its stored output and releases the allocation.
+///
+/// HOW:
+/// - Run a ready probe, release its saved waker, then cancel its handle.
+/// - Check exactly one poll, future drop, and output drop, with empty queues and no allocations.
 #[test]
 fn run_and_cancel() {
     let rt = new_rt();
@@ -307,6 +343,11 @@ fn run_and_cancel() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Dropping or cancelling a finished handle releases its output despite a surviving waker.
+///
+/// HOW:
+/// - Complete a ready probe while retaining its saved waker and check the output is still live.
+/// - Drop or cancel the handle, check one output drop, then release the waker and check reclamation.
 #[test]
 fn drop_finished() {
     for cancel in [false, true] {
@@ -327,6 +368,12 @@ fn drop_finished() {
     }
 }
 
+/// STATEMENT: Handle drop permits queued completion, while cancellation skips the remaining future.
+///
+/// HOW:
+/// - Run a task through its initial yield, then hold its queued runnable.
+/// - Drop or cancel its handle before running again and compare probe poll and output-drop counts.
+/// - Release any saved waker and check both paths free the future and task allocation.
 #[test]
 fn drop_and_complete() {
     for cancel in [false, true] {
@@ -355,6 +402,12 @@ fn drop_and_complete() {
     }
 }
 
+/// STATEMENT: Detached submissions clean up both completed and unrun futures without a join handle.
+///
+/// HOW:
+/// - Submit ready probes locally and remotely, run once, and check future and output destruction.
+/// - Release their wakers and check reclamation; separately drop an unrun detached runnable.
+/// - Check that final case drops its future without polling or producing output.
 #[test]
 fn spawn_detached() {
     for remote in [false, true] {
@@ -386,6 +439,11 @@ fn spawn_detached() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: A panic in spawn notification aborts rather than unwinding with published work.
+///
+/// HOW:
+/// - Run local and remote detached submissions with a panicking notifier in child processes.
+/// - Check failing exits distinct from test-panic code 101 and the spawn-notification diagnostic.
 #[test]
 #[cfg_attr(miri, ignore = "spawns a process")]
 fn spawn_notify_panic_aborts() {
@@ -425,6 +483,12 @@ fn spawn_notify_panic_aborts() {
         assert!(stderr.contains("spawn notification"), "{case}: {stderr}");
     }
 }
+/// STATEMENT: Unshared completion releases outputs and storage without waking detached awaiters.
+///
+/// HOW:
+/// - Complete detached tasks without saved wakers and check immediate output destruction.
+/// - Register then drop join handles; check awaiter references release and no awaiter is woken.
+/// - Catch a detached output's drop panic and still require empty queues and zero task allocations.
 #[test]
 fn finish_unshared() {
     struct PanicOnDrop;
@@ -506,6 +570,12 @@ fn finish_unshared() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Untouched local completion reclaims directly, while remote clones retain storage safely.
+///
+/// HOW:
+/// - Complete an unshared detached task and check zero allocations and an empty wake FIFO immediately.
+/// - Complete tasks retained by a join handle or owner waker, then release those references.
+/// - Clone a pending task's waker remotely, complete it locally, release the clone, and check reclamation.
 #[test]
 fn untouched_completion_reclaims_without_fifo_service() {
     let rt = new_rt();
@@ -558,6 +628,12 @@ fn untouched_completion_reclaims_without_fifo_service() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Dropping or cancelling a local join handle releases its awaiter without notification.
+///
+/// HOW:
+/// - Register a counting awaiter after a task yields, then drop or cancel its handle.
+/// - Check the awaiter's reference count falls immediately and its wake count stays zero.
+/// - Run the held runnable and check completion versus cancellation counters and full reclamation.
 #[test]
 fn detached_awaiter() {
     // the owner thread drops the awaiter with the join handle
@@ -593,6 +669,11 @@ fn detached_awaiter() {
     }
 }
 
+/// STATEMENT: Pending cancellation runs cleanup once, and later wakes of the closed task are inert.
+///
+/// HOW:
+/// - Poll a pending probe, cancel it, and check destruction waits until its cancellation runnable runs.
+/// - Exercise borrowed and consuming wakes afterward; check no runnable appears and release storage.
 #[test]
 fn cancel_pending() {
     let rt = new_rt();
@@ -613,6 +694,12 @@ fn cancel_pending() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Local wakes coalesce until a runnable runs, and the last interest drop schedules cleanup.
+///
+/// HOW:
+/// - Wake a pending task repeatedly before and after removing its runnable; check only one run is queued.
+/// - Perform three further wake/run cycles and check five polls with a still-pending join.
+/// - Drop the handle and last saved waker, run cleanup, and check one future drop and no allocations.
 #[test]
 fn schedule() {
     let rt = new_rt();
@@ -648,6 +735,12 @@ fn schedule() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Multiple self-wakes during one poll create only one subsequent runnable.
+///
+/// HOW:
+/// - Detach a future that calls borrowed and consuming wakes in each of its first two polls.
+/// - Run exactly three sole local runnables and check two requeues followed by completion.
+/// - Check three polls and no remaining task allocations.
 #[test]
 fn self_wake_during_run() {
     let rt = new_rt();
@@ -674,6 +767,12 @@ fn self_wake_during_run() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: A task's join result is consumed once; subsequent joins return no output.
+///
+/// HOW:
+/// - Check a ready probe's join is pending before running, then returns `Some` after completion.
+/// - Check a second join returns `None` and probe counters show one output destruction.
+/// - Drop the handle and saved waker and check reclamation.
 #[test]
 fn join_twice() {
     let rt = new_rt();
@@ -690,6 +789,12 @@ fn join_twice() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Replacing a join waker releases the old one, and cancellation drops the new one silently.
+///
+/// HOW:
+/// - Register two counting awaiters around a pending task's first run and inspect their reference counts.
+/// - Cancel the handle, check the second awaiter is released, and run cleanup.
+/// - Check neither awaiter was woken and release the probe waker to verify reclamation.
 #[test]
 fn join_waker_replaced() {
     let rt = new_rt();
@@ -718,6 +823,12 @@ fn join_waker_replaced() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: A native task waker registered as a join awaiter schedules its parent on completion.
+///
+/// HOW:
+/// - Spawn an inner ready probe and an outer task polling the inner join.
+/// - Run the outer before the inner, then run the sole outer runnable created by completion.
+/// - Check successful join delivery, exact probe drops, and allocation reclamation.
 #[test]
 fn join_by_task_waker() {
     // a task joining another task registers an ntex waker
@@ -751,6 +862,12 @@ fn join_by_task_waker() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Local and remote wakes of completed tasks do not rerun them or retain their outputs.
+///
+/// HOW:
+/// - Complete a probe, drop its handle, and retain only its saved waker.
+/// - Exercise borrowed, cloned consuming, and final consuming wakes locally and remotely.
+/// - Check probe counters stay at one poll and one drop each, and the allocation is freed.
 #[test]
 fn wake_completed() {
     let rt = new_rt();
@@ -780,6 +897,11 @@ fn wake_completed() {
     }
 }
 
+/// STATEMENT: A waker of a cancelled and destroyed future is inert on either thread.
+///
+/// HOW:
+/// - Poll and cancel a pending probe, then run its cleanup and check one future destruction.
+/// - Consume the surviving waker locally or remotely and check no extra polls, output, or allocations.
 #[test]
 fn wake_dropped() {
     let rt = new_rt();
@@ -801,6 +923,11 @@ fn wake_dropped() {
     }
 }
 
+/// STATEMENT: Standard wakers surviving completion and shutdown retain storage, not the runtime driver.
+///
+/// HOW:
+/// - Complete a probe, retain two wakers, drop its handle and runtime, and check the queue weak ref expires.
+/// - Release or wake those wakers remotely and check exact probe drops and continued queue expiration.
 #[test]
 fn release_after_shutdown() {
     // Standard wake survivors retain task storage, not the runtime driver.
@@ -828,6 +955,12 @@ fn release_after_shutdown() {
     }
 }
 
+/// STATEMENT: Post-shutdown output release is safe even when its own final task waker drops and it panics.
+///
+/// HOW:
+/// - Complete a task whose output holds its own waker and an optional panicking destructor.
+/// - Drop the runtime, then drop or cancel the handle while catching any output panic.
+/// - Check panic behavior matches the case, one token drops, and the driver queue remains released.
 #[test]
 fn release_output_after_shutdown() {
     struct Output {
@@ -878,6 +1011,12 @@ fn release_output_after_shutdown() {
     }
 }
 
+/// STATEMENT: Shutdown releases a stale remote wake for a task already completed by a local wake.
+///
+/// HOW:
+/// - Queue a remote wake of a pending task, wake it locally, and complete its local runnable.
+/// - Drop its handle and runtime; check the queue weak reference expires despite the queued entry.
+/// - Drop the surviving waker remotely and check the queue stays gone.
 #[test]
 fn queued_then_finished() {
     // queued from another thread, then completed by a local wake
@@ -913,6 +1052,12 @@ fn queued_then_finished() {
     assert!(queue.upgrade().is_none(), "task alive");
 }
 
+/// STATEMENT: Shutdown destroys pending futures despite surviving handles and standard wakers.
+///
+/// HOW:
+/// - Vary local versus remote submission, handle detachment, and local or remote waker drop or wake.
+/// - Poll once, shut down, and check one future drop plus finished, empty joins for surviving handles.
+/// - Release the remaining waker and check the driver queue is not retained.
 #[test]
 fn shutdown_drops_pending() {
     // Shutdown drops pending futures despite surviving standard wakers.
@@ -958,6 +1103,12 @@ fn shutdown_drops_pending() {
     }
 }
 
+/// STATEMENT: Shutdown cleans reentrantly woken and newly submitted futures even if a destructor panics.
+///
+/// HOW:
+/// - Poll a future whose destructor wakes another pending task and submits an additional probe.
+/// - Drop the runtime with and without a destructor panic and check the expected unwind result.
+/// - Check the existing task drops once, the new task drops unpolled, handles finish, and the queue frees.
 #[test]
 fn shutdown_drop_wakes_and_spawns() {
     // a dropped future wakes a pending task and spawns a task, the runtime
@@ -989,6 +1140,12 @@ fn shutdown_drop_wakes_and_spawns() {
     }
 }
 
+/// STATEMENT: A single cleanup panic does not stop shutdown from draining every task source.
+///
+/// HOW:
+/// - Populate local queued work, the pending list, or remote submissions with three drop-tracked futures.
+/// - Make one destructor panic, catch its payload, and check all three destructors run on the owner.
+/// - Check shutdown closes admission, finishes joins, rejects later local and remote spawns, and frees the queue.
 #[test]
 fn shutdown_continues_after_panics() {
     // Local queue, pending task list, and remote queue cleanup.
@@ -1048,6 +1205,12 @@ fn shutdown_continues_after_panics() {
     }
 }
 
+/// STATEMENT: A shutdown join-notification panic still cleans other futures and finishes their handles.
+///
+/// HOW:
+/// - Register a panicking completion waker and queue two drop-tracked pending futures.
+/// - Catch runtime-drop's completion panic and check two future drops and one wake callback.
+/// - Check both joins finish without output and the queue frees after dropping the handles.
 #[test]
 fn shutdown_completion_panics() {
     struct PanicWake {
@@ -1117,6 +1280,11 @@ fn shutdown_completion_panics() {
     }
 }
 
+/// STATEMENT: A second panic during task cleanup or notification aborts instead of resuming unwinding.
+///
+/// HOW:
+/// - Run child cases for double cleanup, existing unwind, completion wake/drop, poll wake, and output drop.
+/// - Check every child fails with a non-101 exit and emits the second-panic diagnostic.
 #[test]
 #[cfg_attr(miri, ignore = "spawns a process")]
 fn shutdown_second_panic_aborts() {
@@ -1212,6 +1380,12 @@ fn shutdown_second_panic_aborts() {
     }
 }
 
+/// STATEMENT: Shutdown waits for already-admitted publication even after a local cleanup panic.
+///
+/// HOW:
+/// - Hold a remote entry outside the FIFO with an admission permit and queue a panicking local future.
+/// - Publish that entry only after shutdown closes admission, while catching the runtime-drop panic.
+/// - Check the original panic payload, both future drops, a finished empty local join, and queue release.
 #[test]
 fn shutdown_panic_waits_for_admitted_publication() {
     use std::sync::mpsc;
@@ -1266,6 +1440,12 @@ fn shutdown_panic_waits_for_admitted_publication() {
     assert!(queue.upgrade().is_none(), "task alive");
 }
 
+/// STATEMENT: Shutdown does not wait on a blocked notifier, which retains its queue until returning.
+///
+/// HOW:
+/// - Block a notifier after an interrupted attempt during remote wake, spawn, or detached spawn.
+/// - Drop the runtime while notification is blocked and check one future drop with no extra polling.
+/// - Check the queue stays alive until releasing and joining the notifier thread, then expires.
 #[test]
 fn shutdown_with_blocked_notification() {
     use std::sync::mpsc;
@@ -1350,6 +1530,12 @@ fn shutdown_with_blocked_notification() {
     }
 }
 
+/// STATEMENT: Submissions after shutdown are destroyed unpolled and any local handle is already closed.
+///
+/// HOW:
+/// - Retain the queue past runtime drop and try local joined, local detached, and remote detached spawns.
+/// - Check zero polls, one future drop, and no output for each submission.
+/// - Check any returned handle finishes with no result and the queue is released.
 #[test]
 fn spawn_after_shutdown() {
     // a task spawned after the runtime is dropped is cancelled, its future
@@ -1386,6 +1572,13 @@ fn spawn_after_shutdown() {
     }
 }
 
+/// STATEMENT: Remote wake variants coalesce, merge with local scheduling, and avoid unnecessary runs.
+///
+/// HOW:
+/// - Mix remote borrowed and consuming wakes; check one remote runnable and one additional poll.
+/// - Drop a non-final clone remotely and check both queues remain idle.
+/// - Combine a local wake with a remote wake, check only the local runnable runs, then release all interest.
+/// - Run orphan cleanup and check exact poll/drop counts and no allocations.
 #[test]
 fn remote_wake_variants() {
     let rt = new_rt();
@@ -1428,6 +1621,12 @@ fn remote_wake_variants() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: `LocalWaker` coalesces local wakes, converts to a remote waker, and owns cleanup interest.
+///
+/// HOW:
+/// - Detach a pending task and exercise borrowed/owned conversion, `clone_from`, and coalesced local wakes.
+/// - Check `will_wake`, convert one handle to `Waker`, wake remotely, and verify one further poll.
+/// - Drop the saved standard waker then the last local waker; run cleanup and check reclamation.
 #[test]
 fn local_waker_scheduling_and_orphan_cleanup() {
     use crate::LocalWaker;
@@ -1462,6 +1661,12 @@ fn local_waker_scheduling_and_orphan_cleanup() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Foreign-thread `LocalWaker` capture uses a working fallback that is inert after shutdown.
+///
+/// HOW:
+/// - Create borrowed and owned local wrappers on a worker and exercise both wake forms and conversion.
+/// - Merge the single remote runnable, check the second poll, cancel, and run cleanup.
+/// - Shut down and exercise fallback clones and consuming wakes remotely; check the driver queue expires.
 #[test]
 fn local_waker_foreign_thread_capture() {
     use crate::LocalWaker;
@@ -1496,6 +1701,12 @@ fn local_waker_foreign_thread_capture() {
     assert!(queue.upgrade().is_none());
 }
 
+/// STATEMENT: `LocalWaker` remains safe after completion, panic, or shutdown without retaining the driver.
+///
+/// HOW:
+/// - Save a local waker from an owner-bound future and vary pending shutdown, ready completion, and panic.
+/// - Check expected panic behavior, the ready `Rc` result, and exactly one owner-thread future drop.
+/// - After shutdown, exercise local wakes, standard conversions, and remote releases; check queue expiration.
 #[test]
 fn local_waker_completion_and_shutdown() {
     use std::cell::{Cell, RefCell};
@@ -1561,6 +1772,12 @@ fn local_waker_completion_and_shutdown() {
     }
 }
 
+/// STATEMENT: Dropping a detached pending task's final waker schedules destruction, not another poll.
+///
+/// HOW:
+/// - Poll and detach a probe, then drop its saved waker locally or remotely.
+/// - Merge any remote release, run the sole cleanup runnable, and check one poll and one future drop.
+/// - Require empty queues and zero task allocations.
 #[test]
 fn drop_last_waker() {
     let rt = new_rt();
@@ -1585,6 +1802,12 @@ fn drop_last_waker() {
     }
 }
 
+/// STATEMENT: Releasing the last task handle without any waker schedules pending-future cleanup.
+///
+/// HOW:
+/// - Poll a pending probe, release its saved waker, and check the runtime is idle.
+/// - Drop or cancel the remaining task handle and run the sole cleanup runnable.
+/// - Check the future was polled once, dropped once, and its allocation freed.
 #[test]
 fn drop_last_task() {
     let rt = new_rt();
@@ -1607,6 +1830,12 @@ fn drop_last_task() {
     }
 }
 
+/// STATEMENT: Merging a remote wake during a running poll preserves one follow-up local run.
+///
+/// HOW:
+/// - Wake the task remotely inside its first poll and consume the FIFO entry reentrantly.
+/// - Check that merge produces no immediate runnable, then run the next local runnable to completion.
+/// - Check exactly two polls, a successful join, and no remaining allocations.
 #[test]
 fn remote_wake_merged_while_running() {
     let rt = new_rt();
@@ -1636,6 +1865,12 @@ fn remote_wake_merged_while_running() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Remote submission activates through the wake queue and releases its detached result.
+///
+/// HOW:
+/// - Spawn a ready probe remotely and drop its remote join handle.
+/// - Check the local queue is empty, activate the sole remote runnable, and run it once.
+/// - Check one poll and one future/output drop, then release the saved waker and verify reclamation.
 #[test]
 fn remote_spawn() {
     let rt = new_rt();
@@ -1651,6 +1886,11 @@ fn remote_spawn() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Shutdown destroys a remote submission before activation without polling it.
+///
+/// HOW:
+/// - Remotely spawn and detach a ready probe, retain the queue, and drop the runtime without running work.
+/// - Check zero polls, one future drop, no output, and zero remaining task allocations.
 #[test]
 fn remote_spawn_shutdown() {
     let rt = new_rt();
@@ -1708,6 +1948,12 @@ async fn yield_now() {
     .await;
 }
 
+/// STATEMENT: A remote wake during poll queues remotely and is discarded if that poll panics.
+///
+/// HOW:
+/// - Pause pending and panicking probe polls at a barrier and consume their wakers on another thread.
+/// - Check the owner local queue stays empty and panic status matches the future's result mode.
+/// - Merge the wake; rerun only the pending future, then check one final future drop and reclamation.
 #[test]
 fn wake_during_run() {
     for res in [Res::Pending, Res::Panic] {
@@ -1737,6 +1983,11 @@ fn wake_during_run() {
     }
 }
 
+/// STATEMENT: A poll panic closes the join without output and makes saved wakers inert.
+///
+/// HOW:
+/// - Catch a probe's poll panic and check one poll, one future drop, and a finished empty join.
+/// - Consume the saved waker, check no new work appears, and release the handle to verify reclamation.
 #[test]
 fn panic_and_join() {
     let rt = new_rt();
@@ -1754,6 +2005,12 @@ fn panic_and_join() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: A panicking completion waker cannot lose the result or leak the run reference.
+///
+/// HOW:
+/// - Register a panicking join waker and catch its panic while running a ready probe.
+/// - Retrieve the result anyway, check exact future/output drops, and release all references.
+/// - Require empty queues and zero task allocations.
 #[test]
 fn panicking_completion_waker() {
     struct PanicWake;
@@ -1776,6 +2033,12 @@ fn panicking_completion_waker() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: A panic dropping a detached awaiter leaves queued completion and output cleanup intact.
+///
+/// HOW:
+/// - Register a waker that panics on drop and must never be woken, leaving its last reference in the handle.
+/// - Catch the panic from dropping the task handle, then run the detached task.
+/// - Check its output drops once and all task storage is freed.
 #[test]
 fn panicking_detached_awaiter_drop() {
     struct PanicDrop;
@@ -1808,6 +2071,12 @@ fn panic_clone_waker() -> Waker {
     unsafe { Waker::from_raw(std::task::RawWaker::new(std::ptr::null(), &PANIC)) }
 }
 
+/// STATEMENT: A join-waker clone panic preserves the previously registered awaiter.
+///
+/// HOW:
+/// - Register a counting waker, then catch a replacement waker's clone panic.
+/// - Poll again with the original waker, run the ready task, and check that awaiter is notified once.
+/// - Retrieve the output and release the handle and saved task waker to check reclamation.
 #[test]
 fn panicking_local_registration() {
     let rt = new_rt();
@@ -1831,6 +2100,12 @@ fn panicking_local_registration() {
     assert_freed(&rt);
 }
 
+/// STATEMENT: Shutdown merges local and remote references without retaining the runnable queue.
+///
+/// HOW:
+/// - Poll and detach a pending probe, clone its waker remotely, and issue remote and local wakes.
+/// - Release the remaining waker, retain the queue, and drop the runtime.
+/// - Check one poll and one future drop, and only the retained queue reference remains.
 #[test]
 fn runtime_drop_merges_remote_refs() {
     let rt = new_rt();
@@ -1940,7 +2215,13 @@ fn run_until_done(rt: &Runtime, done: impl Fn() -> bool) {
     }
 }
 
-/// Remote threads submit tasks and operate wakers while joins stay local.
+/// STATEMENT: Mixed local joins, remote detached submissions, and concurrent wakes reclaim every task.
+///
+/// HOW:
+/// - Spawn half the futures locally and half on workers that vary remote wake and clone/drop operations.
+/// - Cancel or detach local handles, service bounded turns, and wait for every worker to finish.
+/// - Release stored wakers and drain; check all futures drop and output drops match outputs created.
+/// - Require empty queues and zero allocations after every round.
 ///
 /// `NTEX_RAW_STRESS=<rounds>` runs more rounds.
 #[test]
@@ -2020,6 +2301,11 @@ fn stress() {
     }
 }
 
+/// STATEMENT: Remote waker operations and submissions do not allocate an owner thread index.
+///
+/// HOW:
+/// - Move a task waker and runtime handle to a fresh thread and exercise wakes, clones, and both spawn forms.
+/// - Check `try_current_thread_id` remains `None`, then release the task and runtime.
 #[test]
 #[cfg(not(ntex_loom))]
 fn remote_use_assigns_no_thread_index() {
@@ -2042,6 +2328,12 @@ fn remote_use_assigns_no_thread_index() {
     drop(rt);
 }
 
+/// STATEMENT: Runtime and owner-thread identifier exhaustion aborts instead of reusing an ID.
+///
+/// HOW:
+/// - In child processes, set each index just below `u16::MAX` and issue the final valid ID.
+/// - Attempt one more allocation, using a fresh thread for owner-thread exhaustion.
+/// - Check a non-101 failure, the final-ID marker, and absence of the post-exhaustion marker.
 #[test]
 #[cfg(not(ntex_loom))]
 #[cfg_attr(miri, ignore = "spawns a process")]

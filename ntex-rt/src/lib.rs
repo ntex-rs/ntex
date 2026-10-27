@@ -7,17 +7,7 @@
 //! Use [`System::build()`] to configure a system, [`spawn()`] to start a local
 //! task, and [`spawn_blocking()`] for blocking work.
 //!
-//! Local [`JoinHandle`]s are neither `Send` nor `Sync`, even for `Send` outputs:
-//!
-//! ```compile_fail
-//! fn send<T: Send>() {}
-//! send::<ntex_rt::JoinHandle<usize>>();
-//! ```
-//!
-//! ```compile_fail
-//! fn sync<T: Sync>() {}
-//! sync::<ntex_rt::JoinHandle<usize>>();
-//! ```
+//! Local [`JoinHandle`]s are neither `Send` nor `Sync`, even for `Send` outputs.
 //!
 //! [`Handle::spawn()`] submits a `Send` future to the handle's runtime and
 //! returns a [`RemoteJoinHandle`] for the calling thread. On the runtime's own thread
@@ -33,7 +23,7 @@
 //!
 //! Dropping the handle detaches the task, [`RemoteJoinHandle::cancel()`] cancels it.
 //! A submitted future is polled and dropped on the runtime thread; shutdown or
-//! cancellation before producing a result yields [`JoinError`]. No task is
+//! cancellation before producing a result yields a join error. No task is
 //! guaranteed to finish. Rejected submissions are never polled and their
 //! futures may be dropped on the submitting thread.
 //!
@@ -41,17 +31,8 @@
 //! not be `Send` and is discarded on the owner.
 //!
 //! Remote join handles also remain on their calling thread, even when the
-//! submission uses the runtime's local fast path:
-//!
-//! ```compile_fail
-//! fn send<T: Send>() {}
-//! send::<ntex_rt::RemoteJoinHandle<usize>>();
-//! ```
-//!
-//! ```compile_fail
-//! fn sync<T: Sync>() {}
-//! sync::<ntex_rt::RemoteJoinHandle<usize>>();
-//! ```
+//! submission uses the runtime's local fast path. Both the submitted future
+//! and its output must be `Send`:
 //!
 //! ```compile_fail
 //! # fn example(handle: ntex_rt::Handle) {
@@ -68,6 +49,19 @@
 //! - no runtime feature uses the native ntex runtime
 //! - `tokio` uses the Tokio-based runtime adapter
 //! - `compio` uses the Compio-based runtime adapter
+//!
+//! The `tokio` and `compio` features are mutually exclusive. The [`rt`] module
+//! always exposes the native scheduler, including [`Runtime`] and
+//! [`RuntimeBuilder`], independently of which adapter supplies the
+//! crate-level spawning functions and [`Handle`].
+//!
+//! A [`Runner`] supplies the event loop used by [`SystemRunner`] and arbiter
+//! threads. Building a system only stores its configuration; execution begins
+//! when the returned system runner is driven.
+//!
+//! Native event-loop integrations implement [`Driver`] and use [`PollResult`]
+//! from [`Runtime::poll`] to decide whether to wait, poll again, or stop.
+//! Runtime, arbiter, and blocking pool metric types are grouped in [`metrics`].
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::missing_errors_doc,
@@ -83,9 +77,10 @@ mod capture;
 mod driver;
 mod handle;
 mod local_waker;
-mod metrics;
+pub mod metrics;
 mod pool;
 mod remote;
+pub mod rt;
 pub mod signals;
 mod system;
 mod task;
@@ -93,11 +88,10 @@ mod task;
 mod testing;
 mod watchdog;
 
-mod rt;
-pub mod rt_default;
-
+#[doc(hidden)]
 #[cfg(feature = "compio")]
 pub mod rt_compio;
+#[doc(hidden)]
 #[cfg(feature = "tokio")]
 pub mod rt_tokio;
 
@@ -105,10 +99,9 @@ pub use self::arbiter::{Arbiter, get_item, remove_all_items, set_item, with_item
 pub use self::builder::{Builder, SystemRunner};
 pub use self::driver::{BlockFuture, Driver, DriverType, Notify, PollResult, Runner};
 pub use self::local_waker::LocalWaker;
-pub use self::metrics::{HISTOGRAM_BUCKETS, Histogram, LatencyMetrics};
-pub use self::pool::{BlockingError, BlockingResult, PoolMetrics, ThreadPool, spawn_blocking};
+pub use self::pool::{BlockingError, BlockingResult, ThreadPool, spawn_blocking};
 pub use self::rt::{Runtime, RuntimeBuilder};
-pub use self::system::{Id, PingRecord, System};
+pub use self::system::{Id, System};
 pub use self::task::{task_callbacks, task_opt_callbacks};
 
 #[cfg(feature = "tokio")]
@@ -118,7 +111,7 @@ pub use self::rt_tokio::*;
 pub use self::rt_compio::*;
 
 #[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
-pub use self::rt_default::*;
+pub use self::rt::{Handle, JoinError, JoinHandle, RemoteJoinHandle, now, spawn, spawn_detached};
 
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
 

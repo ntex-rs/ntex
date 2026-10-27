@@ -1,8 +1,17 @@
+//! Runtime, arbiter, and blocking thread pool metrics.
+//!
+//! Use [`Histogram`] for duration distributions, [`LatencyMetrics`] for arbiter
+//! scheduling latency, [`PoolMetrics`] for blocking pool activity, and
+//! [`PingRecord`] for arbiter ping results.
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures_timer::Delay;
+
+pub use crate::pool::PoolMetrics;
+pub use crate::system::PingRecord;
 
 /// Number of [`Histogram`] buckets.
 pub const HISTOGRAM_BUCKETS: usize = 16;
@@ -18,6 +27,8 @@ const FIRST_BUCKET_US: u64 = 16;
 ///
 /// Counts are totals since the histogram was created, the distribution over an
 /// interval is the [`delta`](Self::delta) of two snapshots.
+/// Buckets are sampled independently, so a concurrent snapshot need not
+/// represent one instant in time. Counts and arithmetic wrap on overflow.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Histogram {
     buckets: [u64; HISTOGRAM_BUCKETS],
@@ -54,6 +65,9 @@ impl Histogram {
     }
 
     /// Returns the counts recorded since the `prev` snapshot.
+    ///
+    /// `prev` should be an earlier snapshot of the same histogram. Subtraction
+    /// wraps to account for counter overflow rather than saturating at zero.
     #[must_use]
     pub fn delta(&self, prev: &Histogram) -> Histogram {
         let mut buckets = self.buckets;
@@ -113,12 +127,14 @@ impl AtomicHistogram {
 /// The arbiter runs a task that sleeps for `interval` and records how late it
 /// wakes up. Lateness includes the time the runtime spent running other tasks
 /// and handling driver events, and the timer's own wake-up latency.
+/// Fields are sampled independently and may be slightly inconsistent during
+/// concurrent updates.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LatencyMetrics {
     /// Sampling interval.
     pub interval: Duration,
-    /// Lateness of the most recent sample.
+    /// Lateness of the most recent sample, or zero before the first sample.
     pub last: Duration,
     /// Lateness of all samples.
     pub histogram: Histogram,
@@ -132,7 +148,10 @@ pub struct LatencyMetrics {
     /// than `interval` plus the
     /// [`ping_threshold`](crate::Builder::ping_threshold).
     pub stalls: u64,
-    /// Total duration of finished stalls.
+    /// Total lateness accumulated by recovered stalls.
+    ///
+    /// Each recovery contributes the gap between samples minus the sampling
+    /// interval. A stall still in progress is not included.
     pub stall_duration: Duration,
     /// Whether the arbiter is currently stalled.
     pub stalled: bool,
@@ -266,99 +285,5 @@ pub(crate) fn start_latency_sampler(stats: &Arc<LatencyStats>, interval_ms: usiz
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn histogram_buckets() {
-        let bucket = |us| AtomicHistogram::bucket(Duration::from_micros(us));
-        assert_eq!(bucket(0), 0);
-        assert_eq!(bucket(15), 0);
-        assert_eq!(bucket(16), 1);
-        assert_eq!(bucket(31), 1);
-        assert_eq!(bucket(32), 2);
-        assert_eq!(bucket(262_143), 14);
-        assert_eq!(bucket(262_144), 15);
-        assert_eq!(AtomicHistogram::bucket(Duration::MAX), 15);
-
-        for i in 0..HISTOGRAM_BUCKETS {
-            let (lower, upper) = Histogram::bucket_range(i);
-            assert_eq!(AtomicHistogram::bucket(lower), i);
-            if let Some(upper) = upper {
-                assert_eq!(AtomicHistogram::bucket(upper), i + 1);
-                assert_eq!(
-                    AtomicHistogram::bucket(upper.checked_sub(Duration::from_nanos(1)).unwrap()),
-                    i
-                );
-            }
-        }
-        assert_eq!(Histogram::bucket_range(15).1, None);
-    }
-
-    #[test]
-    fn histogram_delta() {
-        let h = AtomicHistogram::default();
-        h.record(Duration::from_micros(1));
-        let prev = h.snapshot();
-        h.record(Duration::from_micros(1));
-        h.record(Duration::from_millis(1));
-        let cur = h.snapshot();
-        assert_eq!(cur.count(), 3);
-
-        let delta = cur.delta(&prev);
-        assert_eq!(delta.count(), 2);
-        assert_eq!(delta.buckets()[0], 1);
-        assert_eq!(
-            delta.buckets()[AtomicHistogram::bucket(Duration::from_millis(1))],
-            1
-        );
-        assert_eq!(prev.merge(&delta), cur);
-    }
-
-    #[test]
-    fn latency_stats() {
-        let stats = LatencyStats::default();
-        assert_eq!(stats.metrics(), None);
-
-        stats.interval.store(100, Ordering::Relaxed);
-        let m = stats.metrics().unwrap();
-        assert_eq!((m.last_sample, m.histogram.count()), (None, 0));
-
-        let now = Instant::now();
-        stats.record(Duration::from_millis(2), now);
-        let m = stats.metrics().unwrap();
-        assert_eq!(m.interval, Duration::from_nanos(100));
-        assert_eq!(m.last, Duration::from_millis(2));
-        assert_eq!(m.last_sample, Some(now));
-        assert_eq!(m.histogram.count(), 1);
-    }
-
-    #[test]
-    fn stall_check() {
-        let ms = Duration::from_millis;
-        let threshold = ms(20);
-        let stats = LatencyStats::default();
-        let t0 = Instant::now();
-        assert_eq!(stats.check(t0 + ms(100), threshold), Stall::None);
-
-        stats.base.set(t0).unwrap();
-        stats.interval.store(as_nanos(ms(10)), Ordering::Relaxed);
-        assert_eq!(stats.check(t0 + ms(30), threshold), Stall::None);
-        assert_eq!(stats.check(t0 + ms(31), threshold), Stall::Started(ms(31)));
-        assert_eq!(stats.check(t0 + ms(50), threshold), Stall::None);
-        let m = stats.metrics().unwrap();
-        assert_eq!((m.stalls, m.stall_duration, m.stalled), (1, ms(0), true));
-
-        stats.record(ms(90), t0 + ms(100));
-        assert_eq!(
-            stats.check(t0 + ms(101), threshold),
-            Stall::Recovered(ms(90))
-        );
-        assert_eq!(stats.check(t0 + ms(120), threshold), Stall::None);
-        let m = stats.metrics().unwrap();
-        assert_eq!((m.stalls, m.stall_duration, m.stalled), (1, ms(90), false));
-
-        assert_eq!(stats.check(t0 + ms(131), threshold), Stall::Started(ms(31)));
-        assert_eq!(stats.metrics().unwrap().stalls, 2);
-    }
-}
+#[path = "../tests/unit/metrics.rs"]
+mod tests;

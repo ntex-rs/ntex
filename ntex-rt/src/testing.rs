@@ -7,7 +7,8 @@ use crate::{BlockFuture, Runner};
 mod busy {
     use std::io;
 
-    use crate::{Driver, Notify, PollResult, Runtime};
+    use crate::rt::Runtime;
+    use crate::{Driver, Notify, PollResult};
 
     #[derive(Debug)]
     pub(super) struct NoopNotify;
@@ -52,7 +53,7 @@ impl Runner for TestRunner {
         compio_runtime::Runtime::new().unwrap().block_on(fut);
 
         #[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
-        crate::Runtime::new(Box::new(busy::NoopNotify)).block_on(fut, &busy::BusyDriver);
+        crate::rt::Runtime::new(Box::new(busy::NoopNotify)).block_on(fut, &busy::BusyDriver);
 
         Ok(())
     }

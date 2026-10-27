@@ -108,18 +108,18 @@ pub fn set_stopping(stopping: bool) {
     STOPPING.with(|s| s.set(stopping));
 }
 
-/// Spawn a future on the current thread.
+/// Spawns a future on the current Compio runtime and returns its join handle.
 ///
-/// This does not create a new Arbiter
-/// or Arbiter address, it is simply a helper for spawning futures on the current
-/// thread.
-///
-/// # Panics
-///
-/// This function panics if ntex system is not running.
+/// The future and output need not be `Send`. Registered task callbacks are
+/// applied. Dropping the handle detaches the task; the runtime must keep being
+/// driven for it to make progress. An ntex system is not required.
 ///
 /// If the runtime is shutting down, the future is dropped without running and
 /// the returned handle resolves to [`JoinError`].
+///
+/// # Panics
+///
+/// Panics if no Compio runtime is active when a task must be spawned.
 #[inline]
 pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
 where
@@ -136,14 +136,14 @@ where
 #[inline]
 /// Spawns a future on the current thread without a join handle.
 ///
-/// The output is dropped when the task completes. Unlike dropping the
-/// [`JoinHandle`] returned by [`spawn()`], this does not allocate a handle.
+/// Like [`spawn()`], this applies registered task callbacks and supports
+/// non-`Send` futures and outputs. The output is discarded on completion, and no
+/// ntex join handle is returned. If the runtime is shutting down, the future
+/// is dropped without running.
 ///
 /// # Panics
 ///
-/// This function panics if ntex system is not running.
-///
-/// If the runtime is shutting down, the future is dropped without running.
+/// Panics if no Compio runtime is active when a task must be spawned.
 pub fn spawn_detached<F>(f: F)
 where
     F: Future + 'static,
@@ -155,6 +155,10 @@ where
     compio_runtime::spawn(crate::task::wrap(f)).detach();
 }
 
+/// Error returned when a Compio-backed task ends without an output.
+///
+/// Cancellation, task panics, and rejected submissions during shutdown are
+/// reported without preserving their cause.
 #[derive(Debug, Copy, Clone)]
 pub struct JoinError;
 
@@ -169,6 +173,7 @@ impl std::error::Error for JoinError {}
 /// A local task handle. It is neither `Send` nor `Sync`.
 ///
 /// Returned by [`spawn()`]. Dropping the handle detaches the task.
+/// Awaiting it returns the task output or [`JoinError`] if the task ends without one.
 #[derive(Debug)]
 pub struct JoinHandle<T> {
     task: Option<compio_runtime::JoinHandle<T>>,
@@ -183,7 +188,10 @@ impl<T> JoinHandle<T> {
         }
     }
 
-    /// Cancels the task.
+    /// Requests cancellation and discards the result without waiting for cleanup.
+    ///
+    /// A running poll is not interrupted; the runtime must make progress to
+    /// finish cancellation of a pending task.
     pub fn cancel(mut self) {
         if let Some(t) = self.task.take() {
             drop(t.cancel());
@@ -193,7 +201,7 @@ impl<T> JoinHandle<T> {
     /// Detaches the task to let it keep running in the background.
     pub fn detach(self) {}
 
-    /// Returns true if the current task is finished.
+    /// Returns `true` if the task has finished or was rejected during shutdown.
     pub fn is_finished(&self) -> bool {
         match &self.task {
             Some(t) => t.is_finished(),
@@ -226,6 +234,8 @@ impl<T> Future for JoinHandle<T> {
 /// It is neither `Send` nor `Sync` and stays on the calling thread.
 /// Submissions on the runtime thread retain the local spawn fast path.
 /// Dropping the handle detaches the task.
+/// Awaiting it returns the output or [`JoinError`] if the task ends without one,
+/// including when submission was rejected during shutdown.
 #[derive(Debug)]
 pub struct RemoteJoinHandle<T> {
     inner: Inner<T>,
@@ -250,7 +260,10 @@ impl<T> RemoteJoinHandle<T> {
         }
     }
 
-    /// Cancels the task, dropping its future on the runtime thread.
+    /// Requests cancellation and discards the result without waiting for cleanup.
+    ///
+    /// Accepted futures are dropped on the runtime thread. A running poll is
+    /// not interrupted, and the runtime must make progress to finish cancellation.
     pub fn cancel(self) {
         match self.inner {
             Inner::Local(t) => t.cancel(),
@@ -261,7 +274,7 @@ impl<T> RemoteJoinHandle<T> {
     /// Detaches the task to let it keep running in the background.
     pub fn detach(self) {}
 
-    /// Returns true if the current task is finished.
+    /// Returns `true` if the task completed or ended without an output.
     pub fn is_finished(&self) -> bool {
         match &self.inner {
             Inner::Local(t) => t.is_finished(),
@@ -281,6 +294,9 @@ impl<T> Future for RemoteJoinHandle<T> {
     }
 }
 
+/// A thread-safe handle for submitting work to a Compio-backed arbiter.
+///
+/// Clones share the same target arbiter and its metrics.
 #[derive(Clone, Debug)]
 pub struct Handle {
     spawner: Arc<Spawner>,
@@ -297,10 +313,19 @@ impl Handle {
         }
     }
 
+    /// Returns a handle to the current arbiter's runtime.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no arbiter is installed on the current thread. A Compio runtime
+    /// context alone is not sufficient.
     pub fn current() -> Self {
         Arbiter::current().handle().clone()
     }
 
+    /// Compatibility hook that does nothing on the Compio backend.
+    ///
+    /// Task submission and task wakers notify Compio automatically.
     pub fn notify(&self) {}
 
     /// Returns the total time the runtime has been busy.
@@ -337,19 +362,19 @@ impl Handle {
     }
 
     /// Returns the number of times a task woke itself while it was polled, not
-    /// available on compio.
+    /// available on Compio.
     ///
     /// Always returns `None`, the method exists for compatibility with the
-    /// neon runtime.
+    /// native runtime.
     pub fn self_wake_count(&self) -> Option<u64> {
         None
     }
 
     /// Returns the spawn location of the task the runtime is polling, not
-    /// available on compio.
+    /// available on Compio.
     ///
     /// Always returns `None`, the method exists for compatibility with the
-    /// neon runtime.
+    /// native runtime.
     pub fn current_task(&self) -> Option<&'static std::panic::Location<'static>> {
         None
     }
@@ -364,10 +389,19 @@ impl Handle {
     /// Spawns a task on the handle's runtime and returns a [`RemoteJoinHandle`].
     ///
     /// There is no guarantee that a spawned task will execute to completion.
-    /// On the runtime thread the task is spawned directly. From other threads
-    /// the future and output must be `Send`, the future is polled and dropped
-    /// on the runtime thread and its output is returned through the handle.
-    /// The handle is neither `Send` nor `Sync`, dropping it detaches the task.
+    /// Both the future and output must be `Send`, even when submitted on the
+    /// runtime thread, which uses the local spawn fast path. Accepted futures
+    /// are polled and dropped on the runtime thread, with the output transferred
+    /// through the join handle. Rejected submissions are never polled and their
+    /// futures may be dropped on the submitting thread.
+    ///
+    /// The returned join handle is neither `Send` nor `Sync`; dropping it
+    /// detaches the task.
+    ///
+    /// # Panics
+    ///
+    /// Panics on the owner thread if local spawning needs a runtime and no
+    /// Compio runtime is active. Other threads do not require a runtime.
     pub fn spawn<F>(&self, future: F) -> RemoteJoinHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -387,6 +421,13 @@ impl Handle {
     ///
     /// The output is dropped on the runtime thread when the task completes,
     /// so it does not have to be `Send`.
+    /// The future must be `Send`, even on the owner thread. Rejected submissions
+    /// are never polled and their futures may be dropped on the submitting thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics on the owner thread if local spawning needs a runtime and no
+    /// Compio runtime is active. Other threads do not require a runtime.
     pub fn spawn_detached<F>(&self, future: F)
     where
         F: Future + Send + 'static,
