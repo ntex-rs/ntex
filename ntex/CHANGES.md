@@ -1,5 +1,9 @@
 # Changes
 
+## [4.4.1] - 2026-10-27
+
+* Fix builds with the ws feature disabled - #1153
+
 ## [4.4.0] - 2026-10-21
 
 * Expose `service::ReadyCallback` and `on_notify` registration on `BindCtx`,

@@ -1,6 +1,6 @@
 # Changes
 
-## [4.6.0] - Unreleased
+## [4.6.0] - 2026-10-27
 
 * Store owned runtime-local wake handles in tagged I/O waiters, reusable wake
   buffers, and the persistent write task without growing their storage.

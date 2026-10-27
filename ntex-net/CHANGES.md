@@ -1,6 +1,6 @@
 # Changes
 
-## [4.7.0] - Unreleased
+## [4.7.0] - 2026-10-17
 
 * compio: abort the process if dropping the runtime panics after the event loop panicked
 
