@@ -1,6 +1,6 @@
 # Changes
 
-## [4.5.0] - Unreleased
+## [4.5.0] - 2026-10-27
 
 * Keep owned local wake handles in timer registrations and driver teardown,
   preserving 32-byte timer entries on 64-bit targets and existing in-place
