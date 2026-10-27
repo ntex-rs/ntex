@@ -33,23 +33,17 @@ pub(super) mod wake;
 pub(crate) use wake::{WakeEntry, WakeQueue};
 
 #[cfg(ntex_loom)]
-use loom::sync::atomic::AtomicBool;
+use loom::{cell::UnsafeCell, sync::atomic::AtomicBool};
 #[cfg(not(ntex_loom))]
-use std::sync::atomic::AtomicBool;
+use std::{cell::UnsafeCell, sync::atomic::AtomicBool};
 
 /// Owner-only storage after submission; Loom also tracks transfer and reentrancy.
-struct SharedCell<T>(
-    #[cfg(not(ntex_loom))] std::cell::UnsafeCell<T>,
-    #[cfg(ntex_loom)] loom::cell::UnsafeCell<T>,
-);
+struct SharedCell<T>(UnsafeCell<T>);
 
 impl<T> SharedCell<T> {
     /// Creates owner-local storage, tracked by Loom when enabled.
     fn new(v: T) -> Self {
-        #[cfg(not(ntex_loom))]
-        return Self(std::cell::UnsafeCell::new(v));
-        #[cfg(ntex_loom)]
-        return Self(loom::cell::UnsafeCell::new(v));
+        Self(UnsafeCell::new(v))
     }
 
     /// The pointer must only be accessed within the closure.
@@ -318,8 +312,8 @@ impl Drop for Awaiter {
 /// Standard wakers own owner-accounted references to the task allocation.
 static WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
     wake::clone_waker,
-    wake::wake,
-    wake::wake_by_ref,
+    wake::wake::<true>,
+    wake::wake::<false>,
     wake::drop_waker,
 );
 
@@ -433,22 +427,27 @@ fn inc_local(h: NonNull<Header>) {
     }
 }
 
-/// Wakes the task on the owner thread, `owned` passes a reference.
-fn wake_local(h: NonNull<Header>, owned: bool) {
+/// Marks a wake on the owner, returning whether it needs a new queue reference.
+#[inline]
+fn mark_scheduled(h: NonNull<Header>) -> bool {
     let local = core(h);
     let state = local.state.get();
-    if state & (SCHEDULED | FINISHED) == 0 {
-        local.state.set(state | SCHEDULED);
-        // a running task is queued by the runner after the poll
-        if state & RUNNING == 0 {
-            if !owned {
-                inc_local(h);
-            }
-            owner_queue(h).schedule_local(Runnable(h));
-            return;
-        }
+    if state & (SCHEDULED | FINISHED) != 0 {
+        return false;
     }
-    if owned {
+    local.state.set(state | SCHEDULED);
+    // A running task is queued by the runner after the poll.
+    state & RUNNING == 0
+}
+
+/// Wakes the task on the owner thread, `owned` passes a reference.
+fn wake_local(h: NonNull<Header>, owned: bool) {
+    if mark_scheduled(h) {
+        if !owned {
+            inc_local(h);
+        }
+        owner_queue(h).schedule_local(Runnable(h));
+    } else if owned {
         release_local(h);
     }
 }
@@ -512,12 +511,10 @@ fn close(h: NonNull<Header>) {
     impl Drop for Finish {
         /// Publishes cancellation, releases the close reference, and notifies the join.
         fn drop(&mut self) {
-            let local = core(self.0);
-            finish(self.0, local.state.get() & !(RUNNING | SCHEDULED | CLOSE));
             // the future is dropped, there is no output
             let completed = complete(self.0);
             release_local(self.0);
-            completed.notify();
+            drop(completed);
         }
     }
 
@@ -529,15 +526,6 @@ fn close(h: NonNull<Header>) {
     unsafe { (header(finish.0).vtable.drop_future)(finish.0) };
 }
 
-/// Sets `state` with `FINISHED` on the owner thread, the task leaves the task
-/// list.
-fn finish(h: NonNull<Header>, state: u8) {
-    core(h).state.set((state | FINISHED) & !LISTED);
-    if state & LISTED != 0 {
-        owner_queue(h).tasks.remove(h);
-    }
-}
-
 /// Completion of a task, the awaiter is notified once the caller releases
 /// its reference, so a panicking waker does not skip the cleanup.
 ///
@@ -547,13 +535,6 @@ struct Completed {
     /// The join handle is dropped, the output has no owner.
     detached: bool,
     awaiter: Option<crate::LocalWaker>,
-}
-
-impl Completed {
-    /// Wakes the awaiter, the awaiter of a dropped join handle is dropped.
-    fn notify(self) {
-        drop(self);
-    }
 }
 
 impl Drop for Completed {
@@ -569,10 +550,18 @@ impl Drop for Completed {
     }
 }
 
-/// Publishes completion and takes the awaiter, on the owner thread.
+/// Marks the task finished, unlinks it, and takes the awaiter on the owner thread.
 fn complete(h: NonNull<Header>) -> Completed {
+    let local = core(h);
+    let state = local.state.get();
+    local
+        .state
+        .set((state | FINISHED) & !(RUNNING | SCHEDULED | CLOSE | LISTED));
+    if state & LISTED != 0 {
+        owner_queue(h).tasks.remove(h);
+    }
     Completed {
-        detached: core(h).state.get() & DETACHED != 0,
+        detached: state & DETACHED != 0,
         awaiter: unsafe { header(h).awaiter.take() },
     }
 }
@@ -773,20 +762,13 @@ impl Runnable {
         let ready = unsafe { (hdr.vtable.poll)(h, &mut cx) };
         mem::forget(guard);
 
+        if ready {
+            finish_ready(h);
+            return false;
+        }
         let state = local.state.get() & !RUNNING;
         // `SCHEDULED` here is a wake during the poll
-        if ready {
-            finish(h, state & !(SCHEDULED | CLOSE));
-            let completed = complete(h);
-            // nothing takes the output of a detached task
-            if completed.detached {
-                drop_output(h);
-            } else {
-                release_local(h);
-            }
-            completed.notify();
-            return false;
-        } else if state & CLOSE != 0 {
+        if state & CLOSE != 0 {
             discard(h, state);
             return false;
         }
@@ -810,6 +792,19 @@ impl Drop for Runnable {
             leaked(self.0);
         }
     }
+}
+
+/// Completes a ready poll without expanding the pending-poll path.
+#[inline(never)]
+fn finish_ready(h: NonNull<Header>) {
+    let completed = complete(h);
+    // nothing takes the output of a detached task
+    if completed.detached {
+        drop_output(h);
+    } else {
+        release_local(h);
+    }
+    drop(completed);
 }
 
 /// Unqueues a task without polling it on the owner thread, drops the future
@@ -1074,14 +1069,9 @@ impl<T> Task<T> {
             }
             drop(unsafe { hdr.awaiter.take() });
         }
-        Poll::Ready(self.take_output())
-    }
-
-    /// Takes the output, `None` if the task produced none.
-    fn take_output(&mut self) -> Option<T> {
         let mut out = None;
         unsafe { (header(self.h).vtable.take_output)(self.h, (&raw mut out).cast()) };
-        out
+        Poll::Ready(out)
     }
 }
 

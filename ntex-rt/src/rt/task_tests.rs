@@ -1167,10 +1167,9 @@ fn shutdown_second_panic_aborts() {
                 if dropped {
                     let _drop = OnDrop(Some(|| drop(task)));
                     panic!("first panic");
-                } else {
-                    drop(rt);
-                    drop(task);
                 }
+                drop(rt);
+                drop(task);
             }
             // the awaiter is notified while unwinding from the poll
             "poll-wake" => {

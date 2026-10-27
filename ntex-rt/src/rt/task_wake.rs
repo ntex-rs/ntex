@@ -6,9 +6,9 @@ use std::{
 };
 
 use super::{
-    Arc, Core, FINISHED, Header, ManuallyDrop, NonNull, Ordering, RUNNING, RawWaker, Remote,
-    Runnable, RunnableQueue, SCHEDULED, Waker, abort, core, inc_local, live_owner_queue, raw_waker,
-    release_local, release_local_ordered, task_ptr, wake_local,
+    Arc, Core, Header, ManuallyDrop, NonNull, Ordering, RawWaker, Remote, Runnable, RunnableQueue,
+    Waker, abort, core, inc_local, live_owner_queue, mark_scheduled, raw_waker, release_local,
+    release_local_ordered, task_ptr, wake_local,
 };
 use crate::rt::{ThreadId, try_current_thread_id};
 
@@ -366,20 +366,11 @@ impl WakeEntry {
             Operation::Release => release_local_ordered(h),
             Operation::Wake | Operation::WakeAndRelease => {
                 queue.acquire_wakes();
-                let local = core(h);
-                let state = local.state.get();
-                let runnable = if state & (SCHEDULED | FINISHED) == 0 {
-                    local.state.set(state | SCHEDULED);
-                    if state & RUNNING == 0 {
-                        // Establish scheduling ownership before consuming the waker.
-                        inc_local(h);
-                        Some(Runnable(h))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                let runnable = mark_scheduled(h).then(|| {
+                    // Establish scheduling ownership before consuming the waker.
+                    inc_local(h);
+                    Runnable(h)
+                });
                 if matches!(op, Operation::WakeAndRelease) {
                     release_local_ordered(h);
                 }
@@ -437,41 +428,31 @@ pub(super) unsafe fn clone_waker(data: *const ()) -> RawWaker {
     }
 }
 
-/// Wakes a task and consumes a standard-waker reference; closed endpoints are ignored.
+/// Wakes a task, consuming the standard-waker reference if `OWNED`.
+/// Closed endpoints are ignored.
 ///
 /// # Safety
 ///
-/// `data` must belong to an owned native standard waker whose reference is consumed.
-pub(super) unsafe fn wake(data: *const ()) {
+/// `data` must belong to a live native standard waker, owned if `OWNED`.
+/// A borrowed poll waker is also valid when `OWNED` is false.
+pub(super) unsafe fn wake<const OWNED: bool>(data: *const ()) {
     let h = unsafe { task_ptr(data) };
     match unsafe { owner(data) } {
-        // The reference passes to the queue, nothing touches the task after
-        // scheduling, which may notify a driver that reenters shutdown.
-        Owner::Active => wake_local(h, true),
+        // Scheduling may notify a driver that reenters shutdown.
+        // Nothing may touch the task afterward.
+        Owner::Active => wake_local(h, OWNED),
         Owner::Closed => {}
         Owner::Remote => {
             publish(
                 unsafe { routing(data) }.runtime,
-                WakeEntry::new(h, Operation::WakeAndRelease),
-            );
-        }
-    }
-}
-
-/// Wakes a task without consuming its standard-waker reference.
-///
-/// # Safety
-///
-/// `data` must belong to a live native standard waker or a protected borrowed poll waker.
-pub(super) unsafe fn wake_by_ref(data: *const ()) {
-    let h = unsafe { task_ptr(data) };
-    match unsafe { owner(data) } {
-        Owner::Active => wake_local(h, false),
-        Owner::Closed => {}
-        Owner::Remote => {
-            publish(
-                unsafe { routing(data) }.runtime,
-                WakeEntry::new(h, Operation::Wake),
+                WakeEntry::new(
+                    h,
+                    if OWNED {
+                        Operation::WakeAndRelease
+                    } else {
+                        Operation::Wake
+                    },
+                ),
             );
         }
     }
