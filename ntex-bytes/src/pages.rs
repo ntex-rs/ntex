@@ -1541,18 +1541,14 @@ mod tests {
         let p = pages.freeze();
         assert_eq!(p, b"123");
 
-        let data = rand::rng()
-            .sample_iter(&rand::distr::Alphanumeric)
-            .take(65_536)
-            .map(char::from)
-            .collect::<String>();
+        let data = b"0123456789abcdef".repeat(4096);
 
         let mut pages = BytePages::default();
         #[allow(deprecated)]
-        pages.with_bytes_mut(|buf| buf.extend_from_slice(data.as_bytes()));
+        pages.with_bytes_mut(|buf| buf.extend_from_slice(&data));
         assert_eq!(pages.len(), 65_536);
         let p = pages.freeze();
-        assert_eq!(p, data.as_bytes());
+        assert_eq!(p, data[..]);
 
         // into bytes
         let page = BytePage::from(Bytes::copy_from_slice(b"123"));

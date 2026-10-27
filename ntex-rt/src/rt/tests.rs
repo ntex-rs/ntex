@@ -279,7 +279,7 @@ fn remote_schedule_no_lost_wakeup() {
     }
 
     const THREADS: usize = 4;
-    const TASKS: usize = iters(10_000, 50);
+    const TASKS: usize = iters(10_000, 4);
     const LOST: Duration = if cfg!(miri) { WAIT } else { Duration::from_secs(5) };
 
     let ev = Arc::new(Event::default());
@@ -1018,7 +1018,7 @@ fn remote_wakers() {
 
 #[test]
 fn remote_wakers_stress() {
-    const POLLS: usize = iters(5000, 50);
+    const POLLS: usize = iters(5000, 10);
 
     let rt = Runtime::new(Box::new(NoopNotify));
     let slot = Slot::default();

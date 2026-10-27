@@ -126,6 +126,45 @@ fn owned_wakes_transfer_references_without_fifo_releases() {
 }
 
 #[test]
+fn unshared_releases_skip_pending_fifo() {
+    let rt = runtime();
+    let slot = Rc::new(RefCell::new(None));
+    let saved = slot.clone();
+    let task = spawn(
+        &rt,
+        poll_fn(move |cx| {
+            *saved.borrow_mut() = Some(crate::LocalWaker::from_waker(cx.waker()));
+            Poll::<()>::Pending
+        }),
+    );
+    drain(&rt);
+    // A queued remote acquisition orders the releases of standard wakers.
+    let waker = slot.borrow().as_ref().unwrap().clone().into_waker();
+    let (waker, clone) = thread::spawn(move || {
+        let clone = waker.clone();
+        (waker, clone)
+    })
+    .join()
+    .unwrap();
+
+    let local = slot.borrow_mut().take().unwrap();
+    drop(local.clone());
+    local.wake_by_ref();
+    // The task is already queued, the owned wake only releases.
+    local.wake();
+    task.cancel();
+    let entries: Vec<_> = std::iter::from_fn(|| rt.queue.wake_queue.pop()).collect();
+    assert_eq!(entries.len(), 1, "unshared releases bypass the FIFO");
+    for entry in entries {
+        assert!(entry.into_runnable(&rt.queue).is_none());
+    }
+
+    drop((waker, clone));
+    drain(&rt);
+    assert_eq!(rt.queue.task_count(), 0);
+}
+
+#[test]
 fn local_results_survive_runtime_shutdown() {
     for consume in [false, true] {
         let rt = runtime();
@@ -207,7 +246,7 @@ fn raw_queue_survivors_release_after_shutdown() {
 #[test]
 fn raw_queue_shutdown_preserves_release_ordering() {
     struct ReleaseDuringDrain {
-        task: Task<()>,
+        task: Option<Task<()>>,
         local: Option<crate::LocalWaker>,
         deferred: Rc<Cell<bool>>,
         panics: bool,
@@ -215,9 +254,12 @@ fn raw_queue_shutdown_preserves_release_ordering() {
 
     impl Drop for ReleaseDuringDrain {
         fn drop(&mut self) {
-            let refs = core(self.task.h).refs.get();
+            let h = self.task.as_ref().unwrap().h;
+            // A local waker's reference is never a clone source and releases directly.
             drop(self.local.take());
-            self.deferred.set(core(self.task.h).refs.get() == refs);
+            let refs = core(h).refs.get();
+            drop(self.task.take());
+            self.deferred.set(core(h).refs.get() == refs);
             assert!(!self.panics, "shutdown cleanup panic");
         }
     }
@@ -237,7 +279,7 @@ fn raw_queue_shutdown_preserves_release_ordering() {
         let waker = saved.borrow_mut().take().unwrap();
         let deferred = Rc::new(Cell::new(false));
         let release = ReleaseDuringDrain {
-            task,
+            task: Some(task),
             local: Some(crate::LocalWaker::from_waker(&waker)),
             deferred: deferred.clone(),
             panics,
