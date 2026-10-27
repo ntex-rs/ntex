@@ -1,13 +1,40 @@
+//! Native single-threaded runtime, task spawning, handles, and clock access.
+//!
+//! This module always uses the native scheduler, regardless of which runtime
+//! backend is selected at the crate root. Its spawning functions and handles
+//! are re-exported at the crate root when neither `tokio` nor `compio` is enabled.
+//! The free spawning functions require an active [`Runtime`], not an active
+//! [`System`](crate::System).
+//!
+//! A [`Driver`] supplies the event loop and interprets the [`PollResult`]
+//! returned by [`Runtime::poll`]. [`Runtime::block_on`] installs the native
+//! runtime while that driver runs, even when Tokio or Compio is selected:
+//!
+//! ```no_run
+//! use ntex_rt::rt;
+//!
+//! # fn example(driver: impl ntex_rt::Driver) {
+//! let runtime = rt::Runtime::new(driver.handle());
+//! runtime.block_on(
+//!     async {
+//!         let task = rt::spawn(async { std::rc::Rc::new(42) });
+//!         assert_eq!(*task.await.unwrap(), 42);
+//!     },
+//!     &driver,
+//! );
+//! # }
+//! ```
+
 use std::cell::{Cell, RefCell};
 use std::future::poll_fn;
 use std::sync::atomic::Ordering;
 use std::task::Poll;
 use std::time::{Duration, Instant};
-use std::{future::Future, io, marker::PhantomData, panic::Location};
+use std::{fmt, future::Future, io, marker::PhantomData, panic::Location};
 use std::{pin::Pin, rc::Rc, sync::Arc};
 
 use crate::driver::{Driver, Notify, PollResult};
-use crate::handle::{JoinHandle, RemoteJoinHandle, SpawnLocation};
+use crate::handle::SpawnLocation;
 use crate::metrics::Histogram;
 use crate::remote::{Job, RemoteJoin, Runner};
 
@@ -15,6 +42,70 @@ mod queue;
 pub(crate) mod task;
 
 use self::queue::RunnableQueue;
+
+pub use crate::handle::{JoinHandle, RemoteJoinHandle};
+
+/// An error marker exposed by the native runtime.
+///
+/// Native [`JoinHandle`] and [`RemoteJoinHandle`] futures use a separate error
+/// type; this marker is not the error type of their results.
+#[derive(Debug, Copy, Clone)]
+pub struct JoinError;
+
+impl fmt::Display for JoinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "JoinError")
+    }
+}
+
+impl std::error::Error for JoinError {}
+
+/// Returns the start of the current runtime turn.
+///
+/// Tasks polled in the same turn observe the same instant, see
+/// [`Runtime::now`]. Returns [`Instant::now()`] outside of a runtime.
+#[inline]
+pub fn now() -> Instant {
+    Runtime::current_now()
+}
+
+/// Spawns a future on the current native runtime and returns its join handle.
+///
+/// The future and its output need not be `Send`. Registered
+/// [`task_callbacks`](crate::task_callbacks) wrap the task. Dropping the handle
+/// detaches it; completion is not guaranteed if the runtime shuts down.
+///
+/// # Panics
+///
+/// Panics if no native runtime is active on the current thread.
+#[track_caller]
+pub fn spawn<F>(fut: F) -> JoinHandle<F::Output>
+where
+    F: Future + 'static,
+{
+    let location = Location::caller();
+    let fut = crate::task::wrap(fut);
+    Runtime::with_current(|rt| unsafe { rt.spawn_at(fut, location) })
+}
+
+/// Spawns a future on the current thread without a join handle.
+///
+/// The future and its output need not be `Send`. The output is dropped on
+/// completion. Like [`spawn()`], this applies registered task callbacks, but
+/// does not create a join handle.
+///
+/// # Panics
+///
+/// Panics if no native runtime is active on the current thread.
+#[track_caller]
+pub fn spawn_detached<F>(fut: F)
+where
+    F: Future + 'static,
+{
+    let location = Location::caller();
+    let fut = crate::task::wrap(fut);
+    Runtime::with_current(|rt| unsafe { rt.spawn_detached_at(fut, location) });
+}
 
 /// Log target of the scheduler, also used by its submodules.
 const LOG_TARGET: &str = module_path!();
@@ -106,10 +197,13 @@ pub(crate) fn try_current_thread_id() -> Option<ThreadId> {
 }
 
 #[derive(Debug)]
-/// The async runtime for ntex.
+/// The native single-threaded task scheduler.
 ///
 /// This is a thread-local runtime and cannot be sent to other threads, use
 /// [`Handle`] to spawn tasks from other threads.
+/// It is available even when the crate-level APIs select Tokio or Compio.
+/// A [`Driver`] supplies I/O and drives scheduled tasks through
+/// [`block_on`](Self::block_on).
 ///
 /// Dropping the runtime cancels its tasks. If cleanup panics, shutdown finishes
 /// before the panic is resumed. A second cleanup panic, or a cleanup panic
@@ -120,7 +214,7 @@ pub(crate) fn try_current_thread_id() -> Option<ThreadId> {
 ///
 /// ```compile_fail
 /// fn assert_send<T: Send>() {}
-/// assert_send::<ntex_rt::Runtime>();
+/// assert_send::<ntex_rt::rt::Runtime>();
 /// ```
 pub struct Runtime {
     stop: Cell<bool>,
@@ -131,6 +225,9 @@ pub struct Runtime {
 
 impl Runtime {
     /// Creates a runtime with default configuration.
+    ///
+    /// `handle` must wake the driver that will drive this runtime. Creating the
+    /// scheduler does not start an event loop or install it as the current runtime.
     pub fn new(handle: Box<dyn Notify>) -> Self {
         Self::builder().build(handle)
     }
@@ -152,9 +249,9 @@ impl Runtime {
         }
     }
 
-    /// Runs a closure with the runtime active on the current thread.
+    /// Calls `f` with a reference to the native runtime already active on this thread.
     ///
-    /// ## Panics
+    /// # Panics
     ///
     /// Panics if no runtime is active on the current thread.
     pub fn with_current<T, F: FnOnce(&Self) -> T>(f: F) -> T {
@@ -193,16 +290,25 @@ impl Runtime {
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.
+    /// The future and output need not be `Send`. Unlike [`crate::rt::spawn()`],
+    /// this low-level method does not apply registered task callbacks.
     #[track_caller]
     pub fn spawn<F: Future + 'static>(&self, future: F) -> JoinHandle<F::Output> {
         unsafe { self.spawn_at(future, Location::caller()) }
     }
 
-    /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
+    /// Spawns a task whose future may borrow non-`'static` data.
+    ///
+    /// Like [`spawn`](Self::spawn), this returns a local [`JoinHandle`] and
+    /// does not apply registered task callbacks.
     ///
     /// # Safety
     ///
-    /// The caller should ensure the captured lifetime is long enough.
+    /// All data borrowed by the future must remain valid until the future is
+    /// completed or destroyed, including on unwind. Any borrowed data in the
+    /// output must remain valid until that output is destroyed, even if its join
+    /// handle outlives this runtime. Dropping or forgetting a join handle does
+    /// not cancel its task and is not sufficient to end these obligations.
     #[track_caller]
     pub unsafe fn spawn_unchecked<F: Future>(&self, future: F) -> JoinHandle<F::Output> {
         unsafe { self.spawn_at(future, Location::caller()) }
@@ -223,7 +329,9 @@ impl Runtime {
 
     /// Spawns a new asynchronous task without a [`JoinHandle`].
     ///
-    /// The output is dropped when the task completes.
+    /// The future and output need not be `Send`. The output is dropped on the
+    /// runtime thread when the task completes. This low-level method does not
+    /// apply registered task callbacks.
     #[track_caller]
     pub fn spawn_detached<F: Future + 'static>(&self, future: F) {
         unsafe { self.spawn_detached_at(future, Location::caller()) }
@@ -255,6 +363,14 @@ impl Runtime {
     }
 
     /// Polls the runtime and runs scheduled tasks.
+    ///
+    /// Runs bounded batches of ready tasks and remote submissions. Returns
+    /// [`PollResult::PollAgain`] if work remains, [`PollResult::Pending`] if the
+    /// driver may wait for events, or [`PollResult::Ready`] after the future
+    /// supplied to [`block_on`](Self::block_on) completes.
+    ///
+    /// This does not install the runtime as current; [`block_on`](Self::block_on)
+    /// establishes that context before invoking the driver.
     pub fn poll(&self) -> PollResult {
         let start = Instant::now();
         // tasks scheduled from other threads do not end the idle state
@@ -328,7 +444,9 @@ impl Runtime {
         self.queue.busy.current_turn()
     }
 
-    /// Returns the number of times [`poll`](Self::poll) ran scheduled tasks.
+    /// Returns the number of scheduler polls, including polls with no ready tasks.
+    ///
+    /// Calls that immediately return [`PollResult::Ready`] are not counted.
     pub fn poll_count(&self) -> u64 {
         self.queue.polls.load(Ordering::Relaxed)
     }
@@ -357,9 +475,9 @@ impl Runtime {
 
     /// Returns the histogram of [`poll`](Self::poll) durations.
     ///
-    /// A poll lasts from the start of the runtime turn, see [`now`](Self::now),
-    /// until it finishes running tasks. Tasks woken during a poll wait at least
-    /// until it finishes, long polls mean high scheduling latency.
+    /// Measures time spent inside `poll`, excluding driver-event processing
+    /// before the call. Calls returning [`PollResult::Ready`] are not recorded.
+    /// Long polls can delay driver events and increase scheduling latency.
     pub fn poll_histogram(&self) -> Histogram {
         self.queue.poll_histogram.snapshot()
     }
@@ -367,10 +485,14 @@ impl Runtime {
     /// Runs the provided future.
     ///
     /// Blocks the current thread until the future completes.
+    /// The future may borrow local data. Other tasks remain scheduled after
+    /// this call and may be driven by a later call; dropping the runtime cancels
+    /// its unfinished tasks. The supplied future is dropped before returning,
+    /// including if the driver fails or panics.
     ///
     /// # Panics
     ///
-    /// Panics if the driver fails to run the provided future, or if a runtime
+    /// Panics if the driver fails to complete the provided future, or if a runtime
     /// is already active on the current thread. Nested calls would block the
     /// running task and its runtime until the inner future completes.
     #[track_caller]
@@ -487,7 +609,7 @@ impl Handle {
         self.queue.busy.current_turn()
     }
 
-    /// Returns the number of runtime polls that ran scheduled tasks.
+    /// Returns the number of scheduler polls, including polls with no ready tasks.
     ///
     /// See [`Runtime::poll_count`]. Always returns `Some`.
     pub fn poll_count(&self) -> Option<u64> {
@@ -531,13 +653,18 @@ impl Handle {
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.
     ///
-    /// On the runtime thread the task is spawned directly. From other threads
-    /// the future and output must be `Send`, the future is polled and dropped
-    /// on the runtime thread and its output is returned through the handle.
-    /// The handle is neither `Send` nor `Sync`, dropping it detaches the task.
+    /// Both the future and output must be `Send`, including submissions from the
+    /// runtime's own thread, which use the local fast path. Accepted futures
+    /// are polled and dropped on the runtime thread; the output is transferred
+    /// to the caller through the join handle.
+    ///
+    /// The returned join handle is neither `Send` nor `Sync`; dropping it
+    /// detaches the task. Submissions rejected after shutdown are never polled
+    /// and their futures may be dropped on the submitting thread. This low-level
+    /// method does not apply registered task callbacks.
     ///
     /// ```no_run
-    /// # async fn check(hnd: ntex_rt::Handle) {
+    /// # async fn check(hnd: ntex_rt::rt::Handle) {
     /// let task = hnd.spawn(async { 42 });
     /// assert_eq!(task.await.unwrap(), 42);
     /// # }
@@ -566,6 +693,9 @@ impl Handle {
     ///
     /// The output is dropped on the runtime thread when the task completes,
     /// so it does not have to be `Send`.
+    /// The future must be `Send`, even when submitted on the owner thread.
+    /// Rejected submissions are never polled and their futures may be dropped
+    /// on the submitting thread. Registered task callbacks are not applied.
     #[track_caller]
     pub fn spawn_detached<F>(&self, future: F)
     where
@@ -603,7 +733,7 @@ impl Default for RuntimeBuilder {
 }
 
 impl RuntimeBuilder {
-    /// Create the builder with default config.
+    /// Creates a builder with the default scheduler budgets and warning thresholds.
     pub fn new() -> Self {
         Self {
             event_interval: 61,
@@ -612,11 +742,11 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Sets the number of scheduler ticks after which the scheduler will poll
-    /// for external events (timers, I/O, and so on).
+    /// Sets the local task-poll budget for one [`Runtime::poll`] call.
     ///
-    /// A scheduler “tick” roughly corresponds to one poll invocation on a task.
-    /// Values below 1 are treated as 1.
+    /// The driver can process external events between calls. Remote work is
+    /// serviced in separate batches, so this is not a strict limit on all work
+    /// done in one call. The default is 61; zero is treated as one.
     pub fn event_interval(&mut self, val: usize) -> &mut Self {
         self.event_interval = val.max(1);
         self
@@ -638,17 +768,23 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Build [`Runtime`].
+    /// Creates a native runtime using this configuration and driver notifier.
+    ///
+    /// Does not start an event loop. The notifier must wake the driver used to
+    /// run this runtime.
     pub fn build(&self, handle: Box<dyn Notify>) -> Runtime {
         Runtime::with_builder(self, handle)
     }
 }
 
 #[cfg(test)]
+#[path = "../../tests/rt/task_tests.rs"]
 mod task_tests;
 
 #[cfg(all(test, ntex_loom))]
+#[path = "../../tests/rt/task_loom.rs"]
 mod task_loom;
 
 #[cfg(test)]
+#[path = "../../tests/rt/tests.rs"]
 mod tests;

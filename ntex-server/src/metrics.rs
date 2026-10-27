@@ -4,7 +4,8 @@ use std::{cell::RefCell, panic::Location, time::Duration, time::Instant};
 
 use ntex_bytes::{PageCacheMetrics, PageCacheSnapshot};
 use ntex_io::{IoConfigMetrics, IoMetricsGroup, IoMetricsSnapshot};
-use ntex_rt::{Arbiter, Histogram, LatencyMetrics};
+use ntex_rt::Arbiter;
+use ntex_rt::metrics::{Histogram, LatencyMetrics};
 
 use crate::WorkerId;
 

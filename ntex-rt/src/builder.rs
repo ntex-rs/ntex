@@ -5,8 +5,8 @@ use crate::{driver::Runner, signals, system::System, system::SystemConfig};
 #[derive(Debug, Clone)]
 /// Builder for an ntex runtime system.
 ///
-/// Use [`build`](Self::build) to create a [`SystemRunner`], then run the event
-/// loop or block on a future.
+/// Obtain a builder from [`System::build`]. Use [`build`](Self::build) to create
+/// a [`SystemRunner`], then run the event loop or block on a future.
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
     name: String,
@@ -46,7 +46,9 @@ impl Builder {
     }
 
     #[must_use]
-    /// Sets the name of the System.
+    /// Sets the system name, used when naming its threads.
+    ///
+    /// The default is `"ntex"`.
     pub fn name<N: AsRef<str>>(mut self, name: N) -> Self {
         self.name = name.as_ref().into();
         self
@@ -55,19 +57,23 @@ impl Builder {
     #[must_use]
     /// Enables or disables process signal handling.
     ///
-    /// By default, signal handling is disabled.
+    /// By default, signal handling is disabled. At startup the system attempts
+    /// to acquire process-wide ownership; another system's existing registration
+    /// is not replaced. See [`System::enable_signals`].
     pub fn signals(mut self, eanbled: bool) -> Self {
         self.signals = eanbled;
         self
     }
 
     #[must_use]
-    /// Enables panic handling.
+    /// Enables or disables installation of the process-wide panic hook at startup.
     ///
     /// When panic handling is enabled, the application can receive
     /// `Signal::Panic(PanicSource::App(..))` signals while signal handling
     /// is enabled. The previously installed panic hook is still called.
-    /// By default, panic handling is disabled.
+    /// The hook is installed once and remains installed for the process lifetime;
+    /// `false` does not remove a hook installed earlier. By default, installation
+    /// is disabled.
     pub fn panic_handling(mut self, eanbled: bool) -> Self {
         self.panics = eanbled;
         self
@@ -87,21 +93,24 @@ impl Builder {
     #[must_use]
     /// Enable signal handling.
     ///
-    /// By default, signal handling is enabled.
+    /// By default, signal handling is disabled.
     pub fn enable_signals(mut self) -> Self {
         self.signals = true;
         self
     }
 
     #[must_use]
-    /// Sets the size of the stack (in bytes) for the new worker thread.
+    /// Sets the stack size, in bytes, for newly spawned arbiter threads.
+    ///
+    /// The default is zero, which uses the standard library's thread stack size.
+    /// This does not change the primary arbiter's or blocking pool workers' stacks.
     pub fn stack_size(mut self, size: usize) -> Self {
         self.stack_size = size;
         self
     }
 
     #[must_use]
-    /// Sets the ping interval for spawned arbiters.
+    /// Sets the ping interval for all registered arbiters, including the primary.
     ///
     /// The interval is specified in milliseconds and defaults to 2,000.
     /// Set it to zero to disable pings.
@@ -116,7 +125,7 @@ impl Builder {
     /// A watchdog thread marks an arbiter as stalled when it records no
     /// latency sample for longer than the
     /// [`latency_interval`](Self::latency_interval) plus this threshold, see
-    /// [`LatencyMetrics::stalls`](crate::LatencyMetrics::stalls). On Linux and
+    /// [`LatencyMetrics::stalls`](crate::metrics::LatencyMetrics::stalls). On Linux and
     /// Windows an attempt is made to create a backtrace for the stalled arbiter.
     ///
     /// The threshold is specified in milliseconds and defaults to 1,000.
@@ -141,7 +150,7 @@ impl Builder {
     #[must_use]
     /// Sets the maximum number of blocking thread-pool workers.
     ///
-    /// The default is 256.
+    /// The default is 256. Zero is treated as one; excess work is queued.
     pub fn thread_pool_limit(mut self, value: usize) -> Self {
         self.pool_limit = value;
         self
@@ -150,7 +159,8 @@ impl Builder {
     #[must_use]
     /// Configures the system for testing.
     ///
-    /// This disables signal and panic handling.
+    /// Sets the testing flag and disables signal and panic handling on this
+    /// builder. Subsequent calls can enable either again.
     pub fn testing(mut self) -> Self {
         self.testing = true;
         self.signals = false;
@@ -172,9 +182,8 @@ impl Builder {
 
     /// Creates a system runner using the specified runtime runner.
     ///
-    /// # Panics
-    ///
-    /// Panics if the runtime cannot be created.
+    /// This stores configuration only; the system starts when the returned
+    /// [`SystemRunner`] is driven.
     pub fn build<R: Runner>(self, runner: R) -> SystemRunner {
         let config = SystemConfig {
             name: self.name.clone(),
@@ -192,9 +201,9 @@ impl Builder {
 
     /// Creates a system runner from an existing system configuration.
     ///
-    /// # Panics
-    ///
-    /// Panics if the runtime cannot be created.
+    /// The supplied configuration determines the name, runtime runner, and all
+    /// other system settings. Only this builder's signal and panic-handling
+    /// settings are used. No event loop is started by this method.
     pub fn build_with(self, config: SystemConfig) -> SystemRunner {
         let runner = config.runner.clone();
 
@@ -210,6 +219,9 @@ impl Builder {
 }
 
 /// A configured system that has not yet started its event loop.
+///
+/// Driving it installs a system and primary arbiter on the current thread.
+/// This value is neither `Send` nor `Sync`.
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
     config: SystemConfig,
@@ -221,11 +233,28 @@ pub struct SystemRunner {
 
 impl SystemRunner {
     /// Runs the event loop until [`System::stop()`] is called.
+    ///
+    /// Equivalent to [`run`](Self::run) with an initialization callback that
+    /// returns `Ok(())`, including its error and panic behavior.
     pub fn run_until_stop(self) -> io::Result<()> {
         self.run(|| Ok(()))
     }
 
     /// Runs `f`, then drives the event loop until [`System::stop()`] is called.
+    ///
+    /// The callback runs inside the event loop with the system and its primary
+    /// arbiter installed. On exit, the system requests its arbiters to stop.
+    ///
+    /// # Errors
+    ///
+    /// Returns the initialization error from `f`, or an error if the system
+    /// stops with a nonzero exit code or its stop channel closes unexpectedly.
+    ///
+    /// # Panics
+    ///
+    /// Resumes panics from initialization or the runtime runner after cleanup.
+    /// Also panics if the runner returns successfully without completing its
+    /// supplied future.
     pub fn run<F>(self, f: F) -> io::Result<()>
     where
         F: FnOnce() -> io::Result<()> + 'static,
@@ -270,7 +299,17 @@ impl SystemRunner {
     }
 
     #[allow(clippy::missing_panics_doc)]
-    /// Execute a future and wait for result.
+    /// Runs the system until `fut` completes and returns its output.
+    ///
+    /// The future runs with the system and primary arbiter installed. Completion
+    /// requests all system arbiters to stop. Unlike [`run`](Self::run), this
+    /// waits for the future, not a stop request, and does not check the system's
+    /// exit code.
+    ///
+    /// # Panics
+    ///
+    /// Resumes panics from the future or runtime runner after cleanup. Also
+    /// panics if the runner returns without completing its supplied future.
     pub fn block_on<F, R>(self, fut: F) -> R
     where
         F: Future<Output = R> + 'static,
@@ -302,7 +341,18 @@ impl SystemRunner {
     }
 
     #[cfg(feature = "tokio")]
-    /// Execute a future and wait for result.
+    /// Runs the system's future in a local task set on an existing Tokio runtime.
+    ///
+    /// Does not invoke the configured [`Runner`] or apply the builder's signal
+    /// and panic-handling settings. The system and primary arbiter are installed
+    /// while the future runs, and shutdown callbacks are run on normal completion.
+    /// Like [`block_on`](Self::block_on), this waits for the future rather than
+    /// a stop request.
+    ///
+    /// # Panics
+    ///
+    /// Panics if used without a compatible Tokio runtime context. Panics from
+    /// the future propagate to the caller.
     pub async fn run_local<F, R>(self, fut: F) -> R
     where
         F: Future<Output = R> + 'static,
@@ -374,186 +424,5 @@ impl fmt::Debug for SystemRunner {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::{cell::Cell, cell::RefCell, time::Duration};
-
-    use super::*;
-    use crate::{Arbiter, testing::TestRunner};
-
-    #[test]
-    fn builder_options() {
-        let builder = System::build()
-            .name("opts")
-            .signals(false)
-            .panic_handling(false)
-            .enable_signals()
-            .disable_signals()
-            .stack_size(2 * 1024 * 1024)
-            .ping_interval(0)
-            .ping_threshold(10)
-            .thread_pool_limit(1)
-            .thread_pool_recv_timeout(Duration::from_millis(100))
-            .testing();
-        assert!(format!("{builder:?}").contains("opts"));
-
-        let runner = builder.build(TestRunner);
-        assert!(format!("{runner:?}").contains("opts"));
-        runner.block_on(async {
-            let sys = System::current();
-            assert_eq!(sys.name(), "opts");
-            assert!(sys.testing());
-            assert!(!sys.signals());
-
-            // arbiter thread with configured stack size
-            let mut arb = Arbiter::new();
-            arb.stop();
-            arb.join().unwrap();
-
-            assert_eq!(sys.spawn_blocking(|| 1).await, Ok(1));
-        });
-    }
-
-    #[test]
-    fn run_exit_codes() {
-        // `f` error is returned
-        let err = System::new("test", TestRunner)
-            .run(|| Err(io::Error::other("init failed")))
-            .unwrap_err();
-        assert_eq!(err.to_string(), "init failed");
-
-        System::new("test", TestRunner)
-            .run(|| {
-                System::current().stop();
-                Ok(())
-            })
-            .unwrap();
-
-        // stopping the system stops arbiters and runs shutdown callbacks
-        let called = Rc::new(Cell::new(false));
-        let arb = Rc::new(RefCell::new(None));
-        let (called2, arb2) = (called.clone(), arb.clone());
-        let err = System::new("test", TestRunner)
-            .run(move || {
-                Arbiter::on_shutdown(move || called2.set(true));
-                *arb2.borrow_mut() = Some(Arbiter::new());
-                System::current().stop_with_code(3);
-                Ok(())
-            })
-            .unwrap_err();
-        assert_eq!(err.to_string(), "Non-zero exit code: 3");
-        assert!(called.get());
-
-        let mut arb = arb.borrow_mut().take().unwrap();
-        arb.join().unwrap();
-        assert!(!arb.is_running());
-    }
-
-    #[test]
-    fn exit_stops_child_arbiters() {
-        fn assert_stopped(arb: &Rc<RefCell<Option<Arbiter>>>) {
-            let arb = arb.borrow_mut().take().unwrap();
-            let mut arb2 = arb.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(arb2.join().is_ok());
-            });
-            let stopped = rx.recv_timeout(Duration::from_secs(5));
-            arb.stop();
-            assert_eq!(stopped, Ok(true), "child arbiter is still running");
-        }
-
-        // initialization error
-        let arb = Rc::new(RefCell::new(None));
-        let arb2 = arb.clone();
-        let err = System::new("test", TestRunner)
-            .run(move || {
-                *arb2.borrow_mut() = Some(Arbiter::new());
-                Err(io::Error::other("init failed"))
-            })
-            .unwrap_err();
-        assert_eq!(err.to_string(), "init failed");
-        assert_stopped(&arb);
-
-        // root future completion
-        let arb2 = arb.clone();
-        System::new("test", TestRunner).block_on(async move {
-            *arb2.borrow_mut() = Some(Arbiter::new());
-        });
-        assert_stopped(&arb);
-
-        // root future panic
-        let arb2 = arb.clone();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            System::new("test", TestRunner).block_on(async move {
-                *arb2.borrow_mut() = Some(Arbiter::new());
-                panic!("root future panic");
-            });
-        }));
-        assert!(result.is_err());
-        assert_stopped(&arb);
-    }
-
-    #[test]
-    fn primary_arbiter_finalized() {
-        fn with_on_stop(calls: &Arc<AtomicUsize>) -> Arbiter {
-            let calls = calls.clone();
-            Arbiter::current().on_stop(move || {
-                calls.fetch_add(1, Ordering::Relaxed);
-            })
-        }
-
-        // root future completion
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls2 = calls.clone();
-        let arb = System::new("test", TestRunner).block_on(async move { with_on_stop(&calls2) });
-        assert!(!arb.is_running());
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-
-        // root future panic
-        let calls = Arc::new(AtomicUsize::new(0));
-        let (calls2, slot) = (calls.clone(), Rc::new(RefCell::new(None)));
-        let slot2 = slot.clone();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            System::new("test", TestRunner).block_on(async move {
-                *slot2.borrow_mut() = Some(with_on_stop(&calls2));
-                panic!("root future panic");
-            });
-        }));
-        assert!(result.is_err());
-        assert!(!slot.borrow().as_ref().unwrap().is_running());
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-
-        // `run`
-        let calls = Arc::new(AtomicUsize::new(0));
-        let (calls2, slot) = (calls.clone(), Rc::new(RefCell::new(None)));
-        let slot2 = slot.clone();
-        System::new("test", TestRunner)
-            .run(move || {
-                *slot2.borrow_mut() = Some(with_on_stop(&calls2));
-                System::current().stop();
-                Ok(())
-            })
-            .unwrap();
-        assert!(!slot.borrow().as_ref().unwrap().is_running());
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-    }
-
-    #[cfg(feature = "tokio")]
-    #[test]
-    fn run_local_finalizes_primary_arbiter() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls2 = calls.clone();
-        let rt = tok_io::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let arb = rt.block_on(System::new("test", TestRunner).run_local(async move {
-            Arbiter::current().on_stop(move || {
-                calls2.fetch_add(1, Ordering::Relaxed);
-            })
-        }));
-        assert!(!arb.is_running());
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-    }
-}
+#[path = "../tests/unit/builder.rs"]
+mod tests;

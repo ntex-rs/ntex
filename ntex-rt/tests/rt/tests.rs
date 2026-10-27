@@ -73,6 +73,11 @@ impl Driver for PollDriver {
     }
 }
 
+/// STATEMENT: Scheduler notifications retry interruptions and coalesce queued work.
+///
+/// HOW:
+/// - Submit pairs of tasks locally and remotely with the first two notifications interrupted.
+/// - Check three initial calls, one call next round, and both tasks completed per poll.
 #[test]
 fn interrupted_scheduler_notifications() {
     for remote in [false, true] {
@@ -105,6 +110,11 @@ fn interrupted_scheduler_notifications() {
     }
 }
 
+/// STATEMENT: The `block_on` completion notification retries interrupted driver calls.
+///
+/// HOW:
+/// - Mark the runtime awake and block on a future returning 42 with two injected interruptions.
+/// - Check the result and exactly three notification attempts.
 #[test]
 fn interrupted_block_on_notification() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -118,6 +128,11 @@ fn interrupted_block_on_notification() {
     assert_eq!(calls.load(Ordering::Relaxed), 3);
 }
 
+/// STATEMENT: Explicit `Handle::notify` returns driver errors without retrying them.
+///
+/// HOW:
+/// - Inject `Interrupted` and `Other` errors through the notifier.
+/// - Check the returned error kind and a single driver call for each case.
 #[test]
 fn handle_notify_returns_errors() {
     for kind in [io::ErrorKind::Interrupted, io::ErrorKind::Other] {
@@ -133,6 +148,12 @@ fn handle_notify_returns_errors() {
 }
 
 #[cfg(not(any(miri, ntex_loom)))]
+/// STATEMENT: Unrecoverable scheduler notification failures abort rather than lose work.
+///
+/// HOW:
+/// - Run local spawn, remote spawn, and `block_on` completion with a failing notifier in children.
+/// - Require termination before the deadline and the notification failure diagnostic.
+/// - Check `SIGABRT` on Unix, or a failing non-panic exit elsewhere.
 #[test]
 fn failed_scheduler_notification_aborts() {
     use std::process::{Command, Stdio};
@@ -213,6 +234,11 @@ fn failed_scheduler_notification_aborts() {
     }
 }
 
+/// STATEMENT: Local scheduling skips notifications while awake and coalesces them while idle.
+///
+/// HOW:
+/// - Mark the runtime awake, spawn a task, and check no notification before draining it.
+/// - Spawn two tasks while idle and check one notification and a `Pending` poll result.
 #[test]
 fn awake_skips_local_notify() {
     use std::sync::atomic::Ordering;
@@ -233,6 +259,11 @@ fn awake_skips_local_notify() {
     assert_eq!(rt.poll(), PollResult::Pending);
 }
 
+/// STATEMENT: Remote submissions notify once per batch until polling clears the wake flag.
+///
+/// HOW:
+/// - Submit and drain two successive batches of 100 tasks from another thread.
+/// - Check one new notification per batch and no additional notification during draining.
 #[test]
 fn remote_schedule_notifies_once() {
     let cnt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -259,6 +290,12 @@ fn remote_schedule_notifies_once() {
     assert_eq!(cnt.load(Ordering::Relaxed), 2);
 }
 
+/// STATEMENT: Concurrent remote submissions cannot strand work when the driver goes idle.
+///
+/// HOW:
+/// - Submit counted tasks from four producer threads to a condition-variable notifier.
+/// - Poll and wait like a blocking driver until every task runs; fail any timed-out wait.
+/// - Join all producers after reaching the expected completion count.
 #[test]
 fn remote_schedule_no_lost_wakeup() {
     use std::sync::{Condvar, Mutex, atomic::AtomicUsize};
@@ -318,6 +355,11 @@ fn remote_schedule_no_lost_wakeup() {
     }
 }
 
+/// STATEMENT: A remote task waking a local task makes the runtime request another poll.
+///
+/// HOW:
+/// - Poll a local future once to save its waker, then remotely submit a task that wakes it.
+/// - Check `PollAgain` followed by `Pending` and the local future's completion flag.
 #[test]
 fn local_task_woken_by_remote_task() {
     use std::sync::{Mutex, atomic::AtomicBool, atomic::Ordering};
@@ -352,6 +394,12 @@ fn local_task_woken_by_remote_task() {
     assert!(done.load(Ordering::Relaxed));
 }
 
+/// STATEMENT: `Runtime` spawn entrypoints do not populate the owner thread-ID cache.
+///
+/// HOW:
+/// - Clear the TLS ID and spawn normal, unchecked borrowing, and detached local futures.
+/// - Check the cache stays empty, restore it, and verify all results and side effects.
+/// - Drain the runtime and check no task allocations remain.
 #[test]
 #[cfg(not(ntex_loom))]
 fn runtime_spawn_skips_owner_lookup() {
@@ -378,6 +426,11 @@ fn runtime_spawn_skips_owner_lookup() {
     assert_eq!(rt.queue.task_count(), 0, "task allocations retained");
 }
 
+/// STATEMENT: A running task can schedule and await another task on the current runtime.
+///
+/// HOW:
+/// - Spawn a detached parent that uses `Runtime::with_current` to spawn a child returning 1.
+/// - Poll with the runtime installed as current and check the parent records the child result.
 #[test]
 fn schedule_while_running() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -393,6 +446,12 @@ fn schedule_while_running() {
     assert_eq!(*done.borrow(), 1);
 }
 
+/// STATEMENT: Event intervals bound local polling and still drain overflowed remote work.
+///
+/// HOW:
+/// - For intervals zero and one, check an empty poll and two tasks split across two polls.
+/// - Remotely submit 130 counted tasks with interval one to overflow the fixed queue.
+/// - Check 129 tasks run before `PollAgain` and the final task runs before `Pending`.
 #[test]
 fn event_interval() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -433,6 +492,13 @@ fn event_interval() {
     assert_eq!(cnt.load(Ordering::Relaxed), 130);
 }
 
+/// STATEMENT: Runtime time is live while idle and fixed at turn start while awake.
+///
+/// HOW:
+/// - Sleep between idle time reads, then mark the runtime awake and check its time freezes.
+/// - Check the default clock remains live when the runtime is not installed as current.
+/// - Run two tasks under `CURRENT_RUNTIME` and check both clocks report turn start.
+/// - Check idle time advances after those tasks drain.
 #[test]
 fn now() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -449,16 +515,14 @@ fn now() {
     std::thread::sleep(Duration::from_millis(5));
     assert_eq!(rt.now(), start);
     // the runtime is not current on this thread
-    assert!(crate::rt_default::now() >= start + Duration::from_millis(5));
+    assert!(crate::rt::now() >= start + Duration::from_millis(5));
 
     let seen = Rc::new(RefCell::new(Vec::new()));
     for _ in 0..2 {
         let seen = seen.clone();
         rt.spawn(async move {
-            seen.borrow_mut().push((
-                Runtime::with_current(Runtime::now),
-                crate::rt_default::now(),
-            ));
+            seen.borrow_mut()
+                .push((Runtime::with_current(Runtime::now), crate::rt::now()));
             std::thread::sleep(Duration::from_millis(5));
         })
         .detach();
@@ -470,6 +534,12 @@ fn now() {
     assert!(rt.now() > start);
 }
 
+/// STATEMENT: Local scheduling while idle starts a fresh turn and its busy-time accounting.
+///
+/// HOW:
+/// - End a delayed awake turn, then spawn a task while idle and record the new turn time.
+/// - Check `awake` preserves that time and the new turn starts after the previous delay.
+/// - Bound the added busy duration by elapsed times immediately before and after polling.
 #[test]
 fn local_schedule_while_idle_starts_turn() {
     let sleep = Duration::from_millis(20);
@@ -494,6 +564,12 @@ fn local_schedule_while_idle_starts_turn() {
     assert!(total <= busy + after_poll);
 }
 
+/// STATEMENT: Busy duration counts task and awake time, excludes idle time, and publishes each poll.
+///
+/// HOW:
+/// - Sleep in a task and between `awake` and `poll`; check both increase the handle's busy duration.
+/// - Sleep while idle and bound any subsequent increase by the poll's own elapsed time.
+/// - Leave a backlog with interval one and check time in and between busy polls is counted.
 #[test]
 fn busy_duration() {
     let sleep = Duration::from_millis(20);
@@ -538,6 +614,12 @@ fn busy_duration() {
     assert!(rt.busy_duration() >= busy2 + sleep);
 }
 
+/// STATEMENT: Handles expose in-progress busy time and clear `current_turn` after polling ends.
+///
+/// HOW:
+/// - Run a sleeping task on another thread, keeping its turn open with a channel.
+/// - Check the handle's busy duration and current turn include elapsed running time.
+/// - Release and join the owner; check busy time includes the sleep and `current_turn` is `None`.
 #[test]
 fn busy_duration_during_turn() {
     let sleep = Duration::from_millis(50);
@@ -569,6 +651,12 @@ fn busy_duration_during_turn() {
     assert_eq!(hnd.current_turn(), None);
 }
 
+/// STATEMENT: Current-task metadata reports local and remote spawn sites only while tasks run.
+///
+/// HOW:
+/// - Hold a locally spawned task inside poll and inspect its file and line from another thread.
+/// - Check metadata clears after polling, then remotely spawn a task that reports its own location.
+/// - Verify the remote spawn site and that no current task remains after completion.
 #[test]
 fn current_task() {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -616,6 +704,11 @@ fn current_task() {
     assert_eq!(hnd.current_task(), None);
 }
 
+/// STATEMENT: Concurrent busy-duration reads never regress as busy turns end.
+///
+/// HOW:
+/// - Repeatedly run sleeping tasks and idle gaps on an owner thread.
+/// - Read `busy_duration` through its handle until completion and compare every sample to the last.
 #[test]
 fn busy_duration_is_monotonic() {
     let done = Arc::new(AtomicBool::new(false));
@@ -644,6 +737,12 @@ fn busy_duration_is_monotonic() {
     th.join().unwrap();
 }
 
+/// STATEMENT: Poll counters and histogram count active polls but not stopped-runtime polls.
+///
+/// HOW:
+/// - Check initial counters, an empty poll, and two interval-limited polls with one `PollAgain`.
+/// - Verify handle counters and histogram count match three polls and one backlog result.
+/// - Stop the runtime and check `Ready` leaves counters and histogram unchanged.
 #[test]
 fn poll_count() {
     let rt = Runtime::builder()
@@ -671,6 +770,11 @@ fn poll_count() {
     assert_eq!(rt.poll_histogram().count(), 3);
 }
 
+/// STATEMENT: Shutdown also drops a waiting task woken by another queued task's destructor.
+///
+/// HOW:
+/// - Poll a detached pending task to retain its waker, then queue a `WakeOnDrop` guard.
+/// - Drop the runtime and check the saved waker is consumed and its slot has no task-held clones.
 #[test]
 fn schedule_while_clearing() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -697,6 +801,12 @@ fn schedule_while_clearing() {
     assert_eq!(Rc::strong_count(&waker), 1);
 }
 
+/// STATEMENT: Self-wake totals count wakes during poll, not later external wakes.
+///
+/// HOW:
+/// - Run a future that wakes itself five times with warning tracking enabled and disabled.
+/// - Check runtime and handle totals, and no tracking clock when the threshold is zero.
+/// - Wake its saved waker outside poll, complete it, and check the self-wake total stays five.
 #[test]
 fn self_wake() {
     for count in [0, 10_000] {
@@ -735,6 +845,12 @@ fn self_wake() {
     }
 }
 
+/// STATEMENT: Self-wake streak reporting honors count, duration, disablement, and turn-clock refreshes.
+///
+/// HOW:
+/// - Feed synthetic task statistics through thresholds and check counts and the `REPORTED` bit.
+/// - Check long-duration and disabled thresholds suppress reporting without losing global totals.
+/// - Check streak start times refresh after `awake`, a subsequent busy poll, and a new `block_on`.
 #[test]
 fn self_wake_streak() {
     #[derive(Default)]
@@ -855,6 +971,12 @@ fn self_wake_streak() {
     );
 }
 
+/// STATEMENT: A warning logger may reenter polling without duplicate streak reports or retained tasks.
+///
+/// HOW:
+/// - Install a scoped warning counter whose first log callback polls the current runtime.
+/// - Run self-waking tasks that either wake again or complete during the nested poll.
+/// - Check one warning, exact poll and self-wake totals, and zero remaining task allocations.
 #[test]
 fn reentrant_self_wake_logger() {
     scoped_tls::scoped_thread_local!(static WARNINGS: Cell<usize>);
@@ -980,6 +1102,12 @@ fn wait_polls(
     })
 }
 
+/// STATEMENT: Standard task wakers support remote reference wakes, cloning, dropping, and owned wakes.
+///
+/// HOW:
+/// - Poll a task waiting for four polls and move each saved waker through worker threads.
+/// - Exercise `wake_by_ref`, clone/drop plus wake, and a final consuming wake.
+/// - Check each intermediate poll count and join the local handle with result four.
 #[test]
 fn remote_wakers() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1016,6 +1144,11 @@ fn remote_wakers() {
     assert_eq!(block_on_thread(h).unwrap(), 4);
 }
 
+/// STATEMENT: Concurrent remote waker operations neither lose progress nor repoll completed work.
+///
+/// HOW:
+/// - Run a future with a fixed poll target while four threads wake, wake by reference, and clone/drop.
+/// - Poll until finished, stop and join the workers, and check the result and poll count equal the target.
 #[test]
 fn remote_wakers_stress() {
     const POLLS: usize = iters(5000, 10);
@@ -1053,6 +1186,11 @@ fn remote_wakers_stress() {
     poll_until(&rt, || true);
 }
 
+/// STATEMENT: Dropping the last external waker cancels an otherwise unreferenced pending future.
+///
+/// HOW:
+/// - Detach a future that retains a drop flag and publishes its only waker.
+/// - Drop that waker locally and remotely in separate cases, polling until the future's flag is set.
 #[test]
 fn last_waker_drops_future() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1083,6 +1221,11 @@ fn last_waker_drops_future() {
     }
 }
 
+/// STATEMENT: Local cancellation still drops a pending future after a remote wake is queued.
+///
+/// HOW:
+/// - Poll a drop-tracked local future until it saves a waker.
+/// - Consume the waker on another thread, cancel the join handle, and poll until the drop flag is set.
 #[test]
 fn local_cancel_after_remote_wake() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1109,6 +1252,11 @@ fn local_cancel_after_remote_wake() {
     poll_until(&rt, || dropped.load(Ordering::SeqCst));
 }
 
+/// STATEMENT: A task cancelling itself during poll is dropped without running its self-wake again.
+///
+/// HOW:
+/// - Give a pending future its own join handle and have its first poll wake and cancel itself.
+/// - Poll until its drop flag is set and check the future was polled exactly once.
 #[test]
 fn cancel_while_running() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1135,6 +1283,11 @@ fn cancel_while_running() {
     assert_eq!(polls.get(), 1);
 }
 
+/// STATEMENT: A task poll panic drops its future, fails its join, and leaves the runtime usable.
+///
+/// HOW:
+/// - Catch a panic from polling a drop-tracked future and check its flag and finished handle.
+/// - Check joining fails, then spawn and run a second task to verify continued progress.
 #[test]
 fn panic_in_poll() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1159,6 +1312,11 @@ fn panic_in_poll() {
     poll_until(&rt, || done.get());
 }
 
+/// STATEMENT: Runtime shutdown drops both locally queued and remotely submitted futures.
+///
+/// HOW:
+/// - Queue local and remote futures carrying separate drop flags without polling the runtime.
+/// - Drop the runtime and check both flags and the local handle's finished state.
 #[test]
 fn drop_runtime_with_tasks() {
     let dropped = Arc::new(AtomicBool::new(false));
@@ -1203,8 +1361,12 @@ impl Drop for Borrowing<'_> {
     }
 }
 
-/// A task that polls the runtime and wakes itself is not run by a notify
-/// that reenters the runtime, the running poll picks it up.
+/// STATEMENT: Reentrant polling followed by self-waking is handled by the running poll, not notify.
+///
+/// HOW:
+/// - Use a notifier that reenters poll and records notifications during an active task.
+/// - Run a task that polls the runtime then self-wakes on its first poll and completes on its second.
+/// - Check two polls, one self-wake, no active-task notification, and a cleared current-task pointer.
 #[test]
 fn reentrant_notify_self_wake() {
     #[derive(Debug, Default)]
@@ -1259,7 +1421,11 @@ fn reentrant_notify_self_wake() {
     assert!(rt.queue.current.load(Ordering::Relaxed).is_null());
 }
 
-// Backtraces captured in a task stop at the task poll.
+/// STATEMENT: Backtraces captured inside `block_on` stop before task implementation frames.
+///
+/// HOW:
+/// - Capture and resolve a backtrace inside a `block_on` future using `PollDriver`.
+/// - Require a resolved representation and check it does not contain `task.rs`.
 #[cfg(not(miri))]
 #[test]
 fn block_on_backtrace_cutoff() {
@@ -1272,6 +1438,11 @@ fn block_on_backtrace_cutoff() {
     assert!(!repr.contains("task.rs"), "{repr}");
 }
 
+/// STATEMENT: Nested `block_on` is rejected for both the current runtime and a different runtime.
+///
+/// HOW:
+/// - Attempt both nesting cases inside an outer `block_on` and catch the rejection panic.
+/// - Check each rejection and successfully block on another future using the outer runtime afterward.
 #[test]
 fn block_on_rejects_nesting() {
     struct BusyDriver;
@@ -1308,6 +1479,11 @@ fn block_on_rejects_nesting() {
     }
 }
 
+/// STATEMENT: A driver error makes `block_on` unwind only after dropping its borrowing future.
+///
+/// HOW:
+/// - Block on a frame-borrowing pending future using a driver that immediately returns an error.
+/// - Catch the panic, check the future's drop flag, and poll the runtime afterward.
 #[test]
 fn block_on_drops_future_on_driver_error() {
     struct ErrorDriver;
@@ -1332,6 +1508,11 @@ fn block_on_drops_future_on_driver_error() {
     rt.poll();
 }
 
+/// STATEMENT: A driver panic drops `block_on`'s borrowing future even after it has been polled.
+///
+/// HOW:
+/// - Use a driver that polls the borrowing pending future before panicking.
+/// - Catch the unwind, check the future's drop flag, and poll the runtime afterward.
 #[test]
 fn block_on_drops_future_on_driver_panic() {
     struct PanicDriver;
@@ -1411,6 +1592,11 @@ async fn yield_once() {
     .await;
 }
 
+/// STATEMENT: Remote joins receive results when completion races join-waker registration.
+///
+/// HOW:
+/// - Repeatedly submit numbered futures from a worker, varying their number of yields.
+/// - Block on each remote join while the owner polls, and check every result and final completion count.
 #[test]
 fn remote_join_result_race() {
     const N: usize = iters(2000, 50);
@@ -1436,6 +1622,12 @@ fn remote_join_result_race() {
     th.join().unwrap();
 }
 
+/// STATEMENT: Remote join results are reclaimed once without retaining owner task allocations.
+///
+/// HOW:
+/// - Drop remote handles before completion, after owner shutdown, or consume their result after shutdown.
+/// - Drain the owner and check task allocations are gone while retained results remain undropped.
+/// - Shut down, release the worker, and check each result token is dropped exactly once.
 #[test]
 fn remote_join_result_reclamation() {
     for path in 0..3 {
@@ -1474,6 +1666,11 @@ fn remote_join_result_reclamation() {
     }
 }
 
+/// STATEMENT: Remote cancellation destroys queued and already-polled futures on their owner thread.
+///
+/// HOW:
+/// - Cancel a remotely submitted task before polling; check its body never runs and its drop thread.
+/// - Start a second pending task, signal its remote handle to cancel, and check owner-thread destruction.
 #[test]
 fn remote_join_cancel() {
     // cancelled while queued, the future is dropped on the owner unpolled
@@ -1522,6 +1719,11 @@ fn remote_join_cancel() {
     assert_eq!(*dropped_on.lock().unwrap(), Some(owner));
 }
 
+/// STATEMENT: A remote join handle observes completion and retains the task's result.
+///
+/// HOW:
+/// - Submit a task returning seven and check its remote handle is unfinished before owner polling.
+/// - Drain the owner, signal the worker, then check `is_finished` and the joined result.
 #[test]
 fn remote_join_is_finished() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1542,6 +1744,11 @@ fn remote_join_is_finished() {
     th.join().unwrap();
 }
 
+/// STATEMENT: `Handle::spawn` on the owner uses the local queue and executes on that same thread.
+///
+/// HOW:
+/// - Spawn through a handle and inspect the empty remote queue and nonempty local queue.
+/// - Poll to completion and compare the returned thread ID with the owner thread ID.
 #[test]
 fn local_handle_spawn() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1562,6 +1769,12 @@ impl Drop for DropThread {
     }
 }
 
+/// STATEMENT: Joined, detached, dropped, and cancelled task outputs are each destroyed once.
+///
+/// HOW:
+/// - Complete token-producing tasks and check outputs stay live until dropping or cancelling their handles.
+/// - Detach a yielding task and wait for its output drop.
+/// - Consume a joined output, drop it, drain, and check one destruction in every path.
 #[test]
 fn unconsumed_output_dropped() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1599,6 +1812,11 @@ fn unconsumed_output_dropped() {
     assert_eq!(out.get(), 1);
 }
 
+/// STATEMENT: Shutdown drops an unactivated remote submission without polling its future.
+///
+/// HOW:
+/// - Remotely submit a future with separate poll and drop flags, then drop the owner runtime.
+/// - Check the drop flag is set and the poll flag remains clear.
 #[test]
 fn remote_shutdown_before_run() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1620,6 +1838,11 @@ fn remote_shutdown_before_run() {
     assert!(!polled.load(Ordering::SeqCst));
 }
 
+/// STATEMENT: Cancellation racing remote completion drops the future and every created output once.
+///
+/// HOW:
+/// - Repeatedly park a token-producing future, remotely wake it, poll once, and cancel its handle.
+/// - Join the waking thread and poll until the drop flag is set and created and dropped outputs match.
 #[test]
 fn cancel_complete_race() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1661,6 +1884,12 @@ fn cancel_complete_race() {
     }
 }
 
+/// STATEMENT: Stale local and remote wakers do not repoll a completed task or retain its output.
+///
+/// HOW:
+/// - Complete a two-poll task while keeping extra wakers, then wake them locally and remotely.
+/// - Drain and check the poll count stays two; drop the join handle and check one output drop.
+/// - Release the remaining wakers, including a remote consuming wake, and drain cleanup.
 #[test]
 fn stale_wakers() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1700,6 +1929,12 @@ fn stale_wakers() {
     drain(&rt);
 }
 
+/// STATEMENT: An unclaimed output containing its own task waker does not form a retained cycle.
+///
+/// HOW:
+/// - Produce an output containing a cloned task waker and a drop flag.
+/// - Detach or drop before completion, or detach, cancel, or drop after completion.
+/// - Drain each case and check the output's drop flag.
 #[test]
 fn unclaimed_output_with_own_waker() {
     // the output holds a waker of its task, a cycle unless it is dropped
@@ -1754,6 +1989,11 @@ impl Drop for ReDrop {
     }
 }
 
+/// STATEMENT: Cancellation and shutdown tolerate destructors that wake, release handles, and spawn.
+///
+/// HOW:
+/// - Poll a task whose destructor wakes itself, drops another handle, and submits a guarded task.
+/// - Trigger cancellation or queued shutdown and check all three destructor flags become set.
 #[test]
 fn reentrant_drop() {
     for clear in [false, true] {
@@ -1819,6 +2059,11 @@ impl Drop for PollOnDrop {
     }
 }
 
+/// STATEMENT: Reentrant polling from a dropping future cannot poll or destroy that future again.
+///
+/// HOW:
+/// - Poll a pending task whose guard wakes its task and polls the current runtime on drop.
+/// - Cancel it or drop the runtime with it queued, then check exactly one future poll and guard drop.
 #[test]
 fn reentrant_poll_in_drop() {
     for clear in [false, true] {
@@ -1900,6 +2145,12 @@ impl Hook {
     }
 }
 
+/// STATEMENT: A join observes completion triggered while cloning or releasing a replacement waker.
+///
+/// HOW:
+/// - Register an initial join waker on a pending task and leave its last reference in the handle.
+/// - Replace it with hooks that complete and drain during old-waker release or new-waker clone.
+/// - Check the replacement poll immediately returns the successful result in both cases.
 #[test]
 fn join_completes_in_waker_callback() {
     // the target task completes while the join handle replaces its waker
@@ -1943,6 +2194,12 @@ fn join_completes_in_waker_callback() {
     }
 }
 
+/// STATEMENT: Completion during a panicking join-waker clone preserves the result and releases storage.
+///
+/// HOW:
+/// - Register a join waker, then replace it with a hook that drains the task and panics during cloning.
+/// - Catch the panic, check completion, and retrieve the `Rc` result through the original handle.
+/// - Drop the hook waker, check its drop flag, drain, and check zero task allocations.
 #[test]
 fn join_completion_survives_waker_clone_panic() {
     let rt = Runtime::new(Box::new(NoopNotify));
@@ -1976,6 +2233,11 @@ fn join_completion_survives_waker_clone_panic() {
 }
 
 #[cfg(ntex_loom)]
+/// STATEMENT: Reentrant join callbacks and destructor polling preserve lifecycle invariants under Loom.
+///
+/// HOW:
+/// - Model completion during waker replacement and completion followed by a clone panic.
+/// - Run destructor-driven reentrant polling in the same model, retaining each scenario's assertions.
 #[test]
 fn task_loom_reentrant_lifecycle() {
     loom::model(|| {
@@ -1986,11 +2248,22 @@ fn task_loom_reentrant_lifecycle() {
 }
 
 #[cfg(ntex_loom)]
+/// STATEMENT: Panicking future destructors preserve cleanup and join failure under Loom instrumentation.
+///
+/// HOW:
+/// - Run `panic_in_future_drop` inside `loom::model`.
+/// - Reuse its ready and cancelled paths, drop-count checks, and failed-join assertions.
 #[test]
 fn task_loom_panicking_future_drop() {
     loom::model(panic_in_future_drop);
 }
 
+/// STATEMENT: Future-drop panics clean up other fields exactly once and leave handles failed and finished.
+///
+/// HOW:
+/// - Run a ready future whose destructor panics, then repeat with cancellation before a second ready task.
+/// - Catch each drop panic, check the companion flag, and check the surviving handle fails to join.
+/// - Drain remaining work and check one destructor call per spawned future.
 #[test]
 fn panic_in_future_drop() {
     struct PanicOnDrop(Counter);
@@ -2051,6 +2324,12 @@ fn panic_in_future_drop() {
     }
 }
 
+/// STATEMENT: Only the latest registered join waker is notified when a task completes.
+///
+/// HOW:
+/// - Poll a pending join with two different counting wakers, replacing the first with the second.
+/// - Wake the task, run until the second is notified, and check the first has zero notifications.
+/// - Poll the join again and check the two-poll task's result.
 #[test]
 fn join_waker_replaced() {
     fn poll_with(h: &mut JoinHandle<usize>, w: &Arc<CountWaker>) -> Poll<usize> {

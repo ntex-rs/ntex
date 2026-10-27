@@ -1,18 +1,26 @@
-//! The platform-specified driver.
+//! Interfaces between the runtime and its event-loop driver.
 use std::{any::Any, cell::RefCell, fmt, io, panic, pin::Pin, rc::Rc};
 
 use crate::rt::Runtime;
 
+/// A boxed, pinned future passed to a [`Runner`].
+///
+/// The future may contain thread-local state and is not required to be `Send`.
 pub type BlockFuture = Pin<Box<dyn Future<Output = ()>>>;
 
+/// Operating-system I/O mechanism used by a driver.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DriverType {
+    /// Readiness-based polling, such as epoll or kqueue.
     Poll,
+    /// Linux io-uring.
     IoUring,
+    /// Windows I/O completion ports.
     Iocp,
 }
 
 impl DriverType {
+    /// Returns the driver name: `"polling"`, `"io-uring"`, or `"iocp"`.
     pub const fn name(&self) -> &'static str {
         match self {
             DriverType::Poll => "polling",
@@ -21,31 +29,62 @@ impl DriverType {
         }
     }
 
+    /// Returns whether this is a readiness-based polling driver.
     pub const fn is_polling(&self) -> bool {
         matches!(self, &DriverType::Poll)
     }
 }
 
+/// Creates and drives an event loop for a system or arbiter thread.
+///
+/// A system shares its runner between arbiters. Implementations must support
+/// calls from multiple threads, while each supplied future stays on its calling
+/// thread.
 pub trait Runner: Send + Sync + 'static {
     /// Runs the future to completion.
     ///
-    /// A panic of the event loop may be returned as an error or may unwind,
-    /// both are handled the same way.
+    /// Return `Ok(())` only after the future completes. A panic of the event loop
+    /// may be returned as an error containing its panic payload or may unwind;
+    /// the system performs cleanup and resumes the panic in either case.
     fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>>;
 }
 
+/// Drives I/O events and scheduled tasks for the native [`Runtime`].
+///
+/// Unlike [`Runner`], a driver belongs to a single runtime thread.
 pub trait Driver: 'static {
+    /// Returns a thread-safe notifier for this driver's event loop.
     fn handle(&self) -> Box<dyn Notify>;
 
+    /// Drives the runtime until [`Runtime::poll`] returns [`PollResult::Ready`].
+    ///
+    /// Called by [`Runtime::block_on`] with `rt` active on the current thread.
+    /// Process external events between polls, without blocking when the result
+    /// is [`PollResult::PollAgain`]. Call [`Runtime::awake`] after waiting for
+    /// events, before dispatching events that may wake tasks.
+    ///
+    /// Returns an error if the event loop cannot continue.
     fn run(&self, rt: &Runtime) -> io::Result<()>;
 
+    /// Releases driver-owned state when requested by its owner.
+    ///
+    /// The default implementation does nothing. [`Runtime::block_on`] does not
+    /// call this hook.
     fn clear(&self) {}
 }
 
+/// Outcome of one call to [`Runtime::poll`].
+///
+/// Part of the native driver interface: [`Driver::run`] implementations inspect
+/// this result to decide whether to stop, wait for events, or run another
+/// nonblocking iteration.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PollResult {
+    /// The future supplied to [`Runtime::block_on`] has completed; stop driving.
     Ready,
+    /// No work is immediately runnable; the driver may wait for events.
     Pending,
+    /// Work remains; process external events without blocking, then poll again.
     PollAgain,
 }
 
@@ -56,9 +95,19 @@ pub enum PollResult {
 /// queued work may otherwise remain stranded. Explicit notifications through
 /// [`Runtime::handle`] return errors and propagate panics to their caller.
 pub trait Notify: Send + Sync + fmt::Debug + 'static {
+    /// Wakes the driver or records a notification for its next wait.
+    ///
+    /// Notifications may be coalesced, but a notification racing with entry
+    /// into a blocking wait must not be lost. Returns an error if notification
+    /// fails.
     fn notify(&self) -> io::Result<()>;
 }
 
+/// Executes a Windows system call and converts its failure sentinel to an I/O error.
+///
+/// The `BOOL` and `SOCKET` forms check for zero and nonzero respectively;
+/// `HANDLE` checks for `INVALID_HANDLE_VALUE`. The general form accepts an
+/// explicit comparison, as in `syscall!(expression, == 0)`.
 #[cfg(windows)]
 #[macro_export]
 macro_rules! syscall {
@@ -82,7 +131,10 @@ macro_rules! syscall {
     }};
 }
 
-/// Helper macro to execute a system call
+/// Executes a Unix system call and converts a `-1` result to the last I/O error.
+///
+/// The `break` form retries interruptions and returns [`std::task::Poll::Pending`]
+/// for `WouldBlock` or `EINPROGRESS`, otherwise returning a ready result.
 #[cfg(unix)]
 #[macro_export]
 macro_rules! syscall {
@@ -172,16 +224,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::DriverType;
-
-    #[test]
-    fn driver_type() {
-        assert_eq!(DriverType::Poll.name(), "polling");
-        assert_eq!(DriverType::IoUring.name(), "io-uring");
-        assert_eq!(DriverType::Iocp.name(), "iocp");
-        assert!(DriverType::Poll.is_polling());
-        assert!(!DriverType::IoUring.is_polling());
-        assert!(!DriverType::Iocp.is_polling());
-    }
-}
+#[path = "../tests/unit/driver.rs"]
+mod tests;

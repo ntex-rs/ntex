@@ -28,7 +28,7 @@ use std::{process::abort, ptr, ptr::NonNull};
 use crate::handle::SpawnLocation;
 use crate::rt::{REPORTED, RunnableQueue, TaskStats, try_current_thread_id};
 
-#[path = "task_wake.rs"]
+#[path = "wake.rs"]
 pub(super) mod wake;
 pub(crate) use wake::{WakeEntry, WakeQueue};
 
@@ -1141,35 +1141,9 @@ impl<T> fmt::Debug for Task<T> {
 }
 
 #[cfg(all(test, not(ntex_loom)))]
-#[path = "task_core_tests.rs"]
+#[path = "../../tests/rt/task_core_tests.rs"]
 mod core_tests;
 
 #[cfg(all(test, ntex_loom))]
-#[test]
-#[should_panic(expected = "currently writing to cell")]
-fn task_loom_shared_cell_access() {
-    use loom::sync::atomic::Ordering;
-
-    struct Shared(SharedCell<usize>);
-
-    // Deliberately allow conflicting accesses to verify the tracking scope.
-    unsafe impl Sync for Shared {}
-
-    loom::model(|| {
-        let cell = Arc::new(Shared(SharedCell::new(0)));
-        let entered = Arc::new(loom::sync::atomic::AtomicBool::new(false));
-        let (other, entered2) = (cell.clone(), entered.clone());
-        let writer = loom::thread::spawn(move || {
-            other.0.with_mut(|p| {
-                entered2.store(true, Ordering::Release);
-                loom::thread::yield_now();
-                unsafe { *p = 1 };
-            });
-        });
-        while !entered.load(Ordering::Acquire) {
-            loom::thread::yield_now();
-        }
-        cell.0.with_mut(|p| unsafe { *p = 2 });
-        writer.join().unwrap();
-    });
-}
+#[path = "../../tests/rt/task_loom_shared.rs"]
+mod tests;

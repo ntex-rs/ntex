@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{io, thread};
 
 use super::*;
-use crate::{Notify, PollResult, Runtime};
+use crate::rt::Runtime;
+use crate::{Notify, PollResult};
 
 #[derive(Debug)]
 struct NoopNotify;
@@ -29,6 +30,12 @@ fn drain(rt: &Runtime) {
     while rt.poll() == PollResult::PollAgain {}
 }
 
+/// STATEMENT: Final releases of untouched owner-local tasks reclaim storage without FIFO service.
+///
+/// HOW:
+/// - Complete a task returning its waker and release the join, standard waker, and local waker in three orders.
+/// - Check each order leaves the wake FIFO empty and task allocation count zero immediately.
+/// - Run an unshared detached task directly and check the same immediate reclamation.
 #[test]
 fn untouched_final_releases_do_not_need_fifo_service() {
     let rt = runtime();
@@ -53,6 +60,12 @@ fn untouched_final_releases_do_not_need_fifo_service() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: A task touched remotely still orders its final owner release through the FIFO after a drain.
+///
+/// HOW:
+/// - Complete a task, drop its handle, and clone/drop its surviving waker on another thread.
+/// - Drain remote commands, then drop the returned waker on the owner.
+/// - Check one allocation and a queued release remain until a second drain frees storage.
 #[test]
 fn remote_touch_stays_ordered_after_fifo_drains() {
     let rt = runtime();
@@ -77,6 +90,12 @@ fn remote_touch_stays_ordered_after_fifo_drains() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: Owned standard and local wakes transfer their references without extra FIFO releases.
+///
+/// HOW:
+/// - Save a pending task's waker and queue an unprocessed remote clone acquisition.
+/// - Consume an owner standard waker or `LocalWaker` wake and check only the acquisition entry is queued.
+/// - Merge that entry without a runnable, release remaining references, cancel, and check full cleanup.
 #[test]
 fn owned_wakes_transfer_references_without_fifo_releases() {
     for local in [false, true] {
@@ -125,6 +144,12 @@ fn owned_wakes_transfer_references_without_fifo_releases() {
     }
 }
 
+/// STATEMENT: Unshared local releases bypass pending FIFO acquisitions without losing task ownership.
+///
+/// HOW:
+/// - Save a `LocalWaker`, convert a clone to a standard waker, and queue a remote clone acquisition.
+/// - Drop a local clone, wake by reference and by value, then cancel the task.
+/// - Check only one FIFO entry remains, merge it without a runnable, release standard wakers, and drain to zero.
 #[test]
 fn unshared_releases_skip_pending_fifo() {
     let rt = runtime();
@@ -164,6 +189,12 @@ fn unshared_releases_skip_pending_fifo() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: Completed non-`Send` results survive runtime shutdown until consumed or cancelled locally.
+///
+/// HOW:
+/// - Complete a task returning an owner-thread drop guard, then shut down while retaining its handle.
+/// - Check the result stays live, then either join and drop it or cancel the handle.
+/// - Check exactly one owner-thread result drop and zero task allocations in the retained queue.
 #[test]
 fn local_results_survive_runtime_shutdown() {
     for consume in [false, true] {
@@ -196,6 +227,11 @@ fn local_results_survive_runtime_shutdown() {
     }
 }
 
+/// STATEMENT: Shutdown releases native task awaiters even after their runtime endpoint is unregistered.
+///
+/// HOW:
+/// - Spawn a pending inner task and a detached outer task awaiting its native join.
+/// - Drain to register the awaiter, check two allocations, then drop the runtime and check zero remain.
 #[test]
 fn native_join_awaiters_release_after_unregister() {
     let rt = runtime();
@@ -210,6 +246,12 @@ fn native_join_awaiters_release_after_unregister() {
     assert_eq!(queue.task_count(), 0);
 }
 
+/// STATEMENT: Local join and waker survivors release storage safely after their raw owner queue is gone.
+///
+/// HOW:
+/// - Complete a task returning its waker, release the standard waker remotely, and retain a local wrapper.
+/// - Check one allocation and no weak queue endpoints, then drop the runtime and run a new runtime.
+/// - Drop the old join and local waker in both orders; check their allocation tracker releases and the new runtime stays empty.
 #[test]
 fn raw_queue_survivors_release_after_shutdown() {
     for join_first in [false, true] {
@@ -243,6 +285,12 @@ fn raw_queue_survivors_release_after_shutdown() {
     }
 }
 
+/// STATEMENT: Task-handle release during shutdown cannot overtake pending remote FIFO operations.
+///
+/// HOW:
+/// - Queue a submission whose destructor releases a local waker directly and then a completed task handle.
+/// - Queue a remote standard-waker release behind it and drop the runtime with and without a cleanup panic.
+/// - Check the handle's release is deferred, panic behavior matches, and all task allocation trackers release.
 #[test]
 fn raw_queue_shutdown_preserves_release_ordering() {
     struct ReleaseDuringDrain {
@@ -306,6 +354,12 @@ fn raw_queue_shutdown_preserves_release_ordering() {
     }
 }
 
+/// STATEMENT: A raw-queue release retains the driver while its notification callback drops the runtime.
+///
+/// HOW:
+/// - Retain a completed task's local waker after remote standard-waker release and FIFO draining.
+/// - Arm a notifier that removes and drops the TLS-owned runtime when the local waker is released.
+/// - Check inside the callback that the notifier is still alive, then check its eventual drop and allocation cleanup.
 #[test]
 fn raw_queue_release_retains_driver_during_callback() {
     use std::sync::atomic::AtomicBool;
@@ -361,6 +415,11 @@ fn raw_queue_release_retains_driver_during_callback() {
     OWNED_RUNTIME.with(|slot| assert!(slot.borrow().is_none()));
 }
 
+/// STATEMENT: A newly created runtime does not reuse the identity of a destroyed runtime.
+///
+/// HOW:
+/// - Record one runtime's ID, destroy it, and create a second runtime.
+/// - Compare the two runtime IDs and require them to differ.
 #[test]
 fn runtime_ids_are_not_reused() {
     let first = runtime();
@@ -370,6 +429,12 @@ fn runtime_ids_are_not_reused() {
     assert_ne!(old, second.queue.runtime_id);
 }
 
+/// STATEMENT: The owner endpoint cache distinguishes live runtimes and invalidates each at shutdown.
+///
+/// HOW:
+/// - Repeatedly query task pointers from two runtimes, including consecutive hits for one identity.
+/// - Destroy each runtime in turn and check only its own task pointer stops resolving to the active owner.
+/// - Create a third runtime and check neither old task identity is revived before releasing handles.
 #[test]
 fn owner_endpoint_cache_tracks_multiple_runtimes_and_shutdown() {
     let first = runtime();
@@ -397,6 +462,12 @@ fn owner_endpoint_cache_tracks_multiple_runtimes_and_shutdown() {
     drop((first_task, second_task, third));
 }
 
+/// STATEMENT: Remote owner lookups cannot displace or masquerade as a thread's live local owner route.
+///
+/// HOW:
+/// - Move a completed task's waker to another thread and repeatedly check its owner lookup is false.
+/// - Interleave remote clones with lookups of that thread's own runtime and check the local route stays active.
+/// - Return the waker, drain its remote acquisitions, and check the original owner route and full reclamation.
 #[test]
 fn owner_endpoint_cache_does_not_cache_remote_routes() {
     let rt = runtime();
@@ -444,6 +515,12 @@ fn completed_waker(rt: &Runtime) -> Waker {
     waker
 }
 
+/// STATEMENT: The remote endpoint cache evicts old queues safely even when eviction reenters waker release.
+///
+/// HOW:
+/// - Prime a worker's cache with one runtime, destroy that runtime, and check its cached queue remains alive.
+/// - Touch a second runtime from that worker, evicting the first and dropping its notifier-held waker reentrantly.
+/// - Check the first queue and held waker release, then check worker exit releases the second cached queue.
 #[test]
 fn remote_endpoint_cache_is_bounded_and_eviction_can_reenter() {
     use std::sync::{Mutex, mpsc};
@@ -506,6 +583,12 @@ fn remote_endpoint_cache_is_bounded_and_eviction_can_reenter() {
     assert!(second_queue.upgrade().is_none(), "thread cache retained");
 }
 
+/// STATEMENT: A remote cache notification may consume another runtime's waker without retaining either task.
+///
+/// HOW:
+/// - Give the first runtime's notifier a completed waker belonging to a second runtime.
+/// - Clone/drop the first runtime's waker remotely so notification consumes and wakes the second waker.
+/// - Check the callback slot empties, drain both runtimes, and check both allocation counts are zero.
 #[test]
 fn remote_endpoint_cache_notification_can_reenter() {
     use std::sync::Mutex;
@@ -541,6 +624,12 @@ fn remote_endpoint_cache_notification_can_reenter() {
     assert_eq!(second.queue.task_count(), 0);
 }
 
+/// STATEMENT: Remote waking still works from TLS destructors after the endpoint cache is destroyed.
+///
+/// HOW:
+/// - Save a pending task's waker in a worker's TLS destructor before initializing that worker's endpoint cache.
+/// - Let worker exit destroy the cache first and then consume the saved waker.
+/// - Drain the owner, check the task completed on its second poll, and release its handle to reach zero allocations.
 #[test]
 fn remote_endpoint_cache_falls_back_during_tls_destruction() {
     struct WakeOnExit(RefCell<Option<Waker>>);
@@ -588,6 +677,12 @@ fn remote_endpoint_cache_falls_back_during_tls_destruction() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: A borrowed poll waker's remote acquisition is processed before its final owner release.
+///
+/// HOW:
+/// - Clone only the borrowed poll waker on a scoped worker while a detached future becomes ready or pending.
+/// - Run without FIFO draining and check one reference and one task allocation remain.
+/// - Drop the returned waker directly or through local conversion, drain, and check one owner drop and no allocations.
 #[test]
 fn borrowed_poll_waker_acquisition_precedes_final_owner_release() {
     for ready in [false, true] {
@@ -630,6 +725,12 @@ fn borrowed_poll_waker_acquisition_precedes_final_owner_release() {
     }
 }
 
+/// STATEMENT: A remote clone returned to the owner keeps its source alive until FIFO acquisition is merged.
+///
+/// HOW:
+/// - Save a detached pending task's waker, clone it remotely, and return source and clone together.
+/// - Drop both on the owner before draining their acquisition and release commands.
+/// - Drain and check the unfinished list is empty and no task allocations remain.
 #[test]
 fn returned_remote_clone_keeps_its_source_alive_until_acquisition() {
     let rt = runtime();
@@ -653,6 +754,13 @@ fn returned_remote_clone_keeps_its_source_alive_until_acquisition() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: Owner release stays ordered behind queued remote releases and later clone or wake operations.
+///
+/// HOW:
+/// - Keep three wakers for ready and pending tasks, then detach their handles.
+/// - Remotely drop two wakers and either clone or wake the source before returning it to the owner.
+/// - Drop the source and drain; check a clone preserves a pending future or a wake causes the expected poll.
+/// - Release any clone, drain, and check exactly one future drop and zero task allocations.
 #[test]
 fn owner_release_does_not_overtake_queued_remote_releases() {
     for ready in [false, true] {
@@ -715,6 +823,12 @@ fn owner_release_does_not_overtake_queued_remote_releases() {
     }
 }
 
+/// STATEMENT: Releasing a running task's reference cannot overtake a new borrowed-waker acquisition.
+///
+/// HOW:
+/// - Clone a detached future's borrowed poll waker remotely, consume it locally, and run a second poll.
+/// - Save another remote clone from that second poll and drain while keeping it alive.
+/// - Check the future stays live until dropping that waker, then check one owner drop and zero allocations.
 #[test]
 fn running_release_does_not_overtake_borrowed_acquisition() {
     let rt = runtime();
@@ -749,6 +863,13 @@ fn running_release_does_not_overtake_borrowed_acquisition() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: An earlier queued wake acquires writes published by a later coalesced wake across FIFO segments.
+///
+/// HOW:
+/// - Queue a wake and a backlog of clone acquisitions, then consume the first acquisition entry.
+/// - Write 42 remotely and wake again, using only a relaxed flag to signal publication occurred.
+/// - Run the earlier FIFO wake directly, bypassing runtime notification acquisition, and check it reads 42.
+/// - Release all handles and clones, drain, and check zero task allocations.
 #[test]
 fn earlier_fifo_wake_acquires_later_published_writes() {
     struct Published(std::cell::UnsafeCell<usize>);
@@ -820,6 +941,13 @@ fn earlier_fifo_wake_acquires_later_published_writes() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: Unregistered task wakers and native awaiters become inert without retaining the driver.
+///
+/// HOW:
+/// - Retain a standard waker and queue past shutdown; check admission is closed and the unfinished list empty.
+/// - Register an awaiter and clone remotely; check the resulting wakers no longer use the original wake route.
+/// - Exercise all wakes and check the FIFO stays empty while intentionally retained task storage remains counted.
+/// - Drop the explicit queue reference and check its weak reference expires.
 #[test]
 fn unregistered_clones_and_native_awaiters_are_inert() {
     let rt = runtime();
@@ -897,6 +1025,12 @@ impl Drop for PinnedFuture {
     }
 }
 
+/// STATEMENT: A pinned future stays at its owner-thread address while reentrant spawning grows the task list.
+///
+/// HOW:
+/// - Poll a non-`Unpin` future that records its address, saves a local waker, and spawns 128 detached tasks.
+/// - Check its core address and `LISTED` state, then wake and complete it with address checks in poll and drop.
+/// - Check one drop, unlinking, and a successful join; verify stale local wakes stay idle and final release reclaims storage.
 #[test]
 fn pinned_core_survives_reentrant_spawning() {
     let rt = Rc::new(runtime());
@@ -966,6 +1100,12 @@ impl std::task::Wake for CheckCompletion {
     }
 }
 
+/// STATEMENT: Every completion path unlinks its core before notifying reentrant completion callbacks.
+///
+/// HOW:
+/// - Exercise success, cancellation, poll panic, destructor panic, and queued or pending shutdown.
+/// - Register a callback that checks owner identity and an empty unfinished list before spawning more work.
+/// - Check expected panic and callback counts, one future drop, finished unlisted handles, and final reclamation.
 #[test]
 fn unlink_on_completion_cancel_panic_and_shutdown() {
     for path in 0..6 {
@@ -1028,6 +1168,12 @@ fn unlink_on_completion_cancel_panic_and_shutdown() {
     }
 }
 
+/// STATEMENT: The unfinished-task list does not keep a detached future alive after its last waker drops.
+///
+/// HOW:
+/// - Poll a pending owner-bound future and drop its handle, leaving only its saved waker.
+/// - Release that interest through a standard waker, a local wrapper, or a remote standard-waker drop.
+/// - Drain and check one owner-thread future drop, an empty unfinished list, and zero allocations.
 #[test]
 fn unfinished_list_does_not_retain_orphaned_futures() {
     for path in 0..3 {
@@ -1067,6 +1213,12 @@ fn unfinished_list_does_not_retain_orphaned_futures() {
     }
 }
 
+/// STATEMENT: Remote activation links an unfinished core, and dropping its runnable closes it unpolled.
+///
+/// HOW:
+/// - Submit a counted pending future remotely and extract its unactivated submission.
+/// - Check `LISTED` is clear before activation and set after conversion to a runnable.
+/// - Drop the runnable, check zero polls, then drain and require an empty list and zero allocations.
 #[test]
 fn remote_activation_and_shutdown_before_poll() {
     let rt = runtime();
@@ -1096,6 +1248,12 @@ fn remote_activation_and_shutdown_before_poll() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: Wakes cannot relink or reactivate a running core after shutdown closes it.
+///
+/// HOW:
+/// - During poll, either drop the runtime then self-wake, or close the core and merge a remote wake.
+/// - Check the core stays unlisted and the future is destroyed once as the poll returns.
+/// - Check the handle finishes, residual entries yield no runnable, queues stay empty, and storage frees.
 #[test]
 fn shutdown_does_not_reactivate_a_running_core() {
     for remote in [false, true] {
@@ -1148,6 +1306,13 @@ fn shutdown_does_not_reactivate_a_running_core() {
     }
 }
 
+/// STATEMENT: Completed-task wakers retain only task storage and cannot poll unrelated pending work.
+///
+/// HOW:
+/// - Complete a guarded future with a large payload and keep its waker after dropping its handle.
+/// - Check the future dropped but one allocation remains, then wake the stale waker locally and remotely.
+/// - Check a second pending task stays at one poll, cancel it, and shut down.
+/// - Check the driver queue expires before consuming the final stale waker remotely.
 #[test]
 fn completed_wakers_retain_storage_but_not_the_driver() {
     let rt = runtime();
@@ -1202,6 +1367,12 @@ fn completed_wakers_retain_storage_but_not_the_driver() {
     thread::spawn(move || late.wake()).join().unwrap();
 }
 
+/// STATEMENT: Wake-queue processing publishes every producer's preceding writes to the owner poll.
+///
+/// HOW:
+/// - Give each producer a separate relaxed atomic payload and repeatedly write, wake, clone, and drop.
+/// - Wait on a relaxed completion counter, then drain the runtime before joining producers.
+/// - Check the task reads every producer's final value and finishes, then release wakers and check reclamation.
 #[test]
 #[allow(clippy::waker_clone_wake)]
 fn segqueue_publishes_all_producers_writes() {
@@ -1261,6 +1432,12 @@ fn segqueue_publishes_all_producers_writes() {
     assert_eq!(rt.queue.task_count(), 0);
 }
 
+/// STATEMENT: Consuming the final external waker permits one more poll, while dropping it only cancels.
+///
+/// HOW:
+/// - Poll a detached pending future once and move its sole saved waker to another thread.
+/// - Either consume it with a wake or drop it; check the future is not destroyed before owner servicing.
+/// - Drain and check two polls for wake versus one for drop, one owner destruction, and zero allocations.
 #[test]
 fn last_external_wake_runs_but_drop_only_cancels() {
     for wake in [false, true] {
@@ -1304,6 +1481,12 @@ fn last_external_wake_runs_but_drop_only_cancels() {
     }
 }
 
+/// STATEMENT: Shutdown drains wake entries admitted before closure even if publication happens afterward.
+///
+/// HOW:
+/// - Extract a pending task's remote wake entry and hold it with an admission permit on a producer thread.
+/// - Publish only after shutdown closes admission, then join the producer.
+/// - Check exactly one owner-thread future drop and expiration of the queue's weak reference.
 #[test]
 fn shutdown_drains_admitted_wake_entries() {
     let rt = runtime();
