@@ -440,7 +440,7 @@ pub(super) unsafe fn wake<const OWNED: bool>(data: *const ()) {
     match unsafe { owner(data) } {
         // Scheduling may notify a driver that reenters shutdown.
         // Nothing may touch the task afterward.
-        Owner::Active => wake_local(h, OWNED),
+        Owner::Active => wake_local::<false>(h, OWNED),
         Owner::Closed => {}
         Owner::Remote => {
             publish(

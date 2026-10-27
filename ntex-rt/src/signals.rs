@@ -40,6 +40,9 @@ pub enum Signal {
 #[derive(Clone, Debug)]
 pub enum PanicSource {
     /// A `SIGSEGV` or `SIGABRT` signal was received.
+    ///
+    /// Delivery is best effort; a fatal fault can terminate the process before
+    /// the runtime or server handles this notification.
     Sig(&'static str),
     /// An application panic and its captured backtrace.
     App(Arc<str>, Backtrace),
@@ -138,6 +141,10 @@ pub(crate) fn start(sys: &System) -> bool {
         use signal_hook::{iterator::Signals, low_level::register};
 
         ONCE.call_once(|| {
+            if let Err(e) = start_fatal_signal_thread() {
+                log::error!("Cannot start fatal signal handling thread: {e:?}");
+            }
+
             // Use u128 for alignment.
             let buf = Vec::leak(vec![0u128; 4096]);
             let stack = libc::stack_t {
@@ -157,7 +164,7 @@ pub(crate) fn start(sys: &System) -> bool {
 
             let sig_action = signal::SigAction::new(
                 signal::SigHandler::Handler(sig_segv),
-                signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+                signal::SaFlags::SA_ONSTACK,
                 signal::SigSet::empty(),
             );
             unsafe {
@@ -301,19 +308,61 @@ static PREV_SIGSEGV: std::sync::OnceLock<nix::sys::signal::SigAction> = std::syn
 #[cfg(target_family = "unix")]
 static PREV_SIGABRT: std::sync::OnceLock<nix::sys::signal::SigAction> = std::sync::OnceLock::new();
 
+// Both ends stay open for the process lifetime: a handler must never write to a
+// recycled descriptor or raise SIGPIPE if the delivery thread exits.
+#[cfg(target_family = "unix")]
+static FATAL_PIPE: OnceLock<(
+    libc::pid_t,
+    std::os::unix::net::UnixStream,
+    std::os::unix::net::UnixStream,
+)> = OnceLock::new();
+
+#[cfg(target_family = "unix")]
+fn start_fatal_signal_thread() -> std::io::Result<()> {
+    use std::{io::Read, os::unix::net::UnixStream};
+
+    let (read, write) = UnixStream::pair()?;
+    write.set_nonblocking(true)?;
+    let (_, read, _) = FATAL_PIPE.get_or_init(|| (unsafe { libc::getpid() }, read, write));
+    std::thread::Builder::new()
+        .name("ntex-rt:crashes".to_string())
+        .spawn(move || {
+            let mut read = read;
+            let mut byte = [0];
+            while read.read_exact(&mut byte).is_ok() {
+                let name = match byte[0] {
+                    b'A' => "SIGABRT",
+                    b'S' => "SIGSEGV",
+                    _ => continue,
+                };
+                if ENABLED.load(Ordering::Acquire) {
+                    handle_signal(Signal::Panic(PanicSource::Sig(name)));
+                }
+            }
+        })?;
+    Ok(())
+}
+
 #[cfg(target_family = "unix")]
 extern "C" fn sig_segv(v: i32) {
+    use std::os::fd::AsRawFd;
+
+    use nix::errno::Errno;
     use nix::sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet};
 
-    let (sig, prev, name) = if v == libc::SIGABRT {
-        (signal::SIGABRT, &PREV_SIGABRT, "SIGABRT")
+    let errno = Errno::last_raw();
+    let (sig, prev, byte) = if v == libc::SIGABRT {
+        (signal::SIGABRT, &PREV_SIGABRT, b"A")
     } else {
-        (signal::SIGSEGV, &PREV_SIGSEGV, "SIGSEGV")
+        (signal::SIGSEGV, &PREV_SIGSEGV, b"S")
     };
-    eprintln!("{name} Received:\n{:?}", backtrace::Backtrace::new());
-    // best effort, waking the system is not signal-safe
-    if let Some(mut sigs) = SIGS.try_lock() {
-        sigs.push(Signal::Panic(PanicSource::Sig(name)));
+    if let Some((pid, _, write)) = FATAL_PIPE.get() {
+        unsafe {
+            // A forked child must not shut down its parent's server.
+            if libc::getpid() == *pid {
+                let _ = libc::write(write.as_raw_fd(), byte.as_ptr().cast(), 1);
+            }
+        }
     }
 
     // restore the previous handler, it handles the signal raised again by
@@ -325,6 +374,7 @@ extern "C" fn sig_segv(v: i32) {
     unsafe {
         let _ = signal::sigaction(sig, &prev);
     }
+    Errno::set_raw(errno);
 }
 
 /// Installs the panic hook, once per process.
@@ -759,49 +809,220 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[test]
-    fn segv_terminates_process() {
-        use std::os::unix::process::ExitStatusExt;
+    fn signal_child_mode() -> Option<String> {
+        let mode = std::env::var("NTEX_FATAL_SIGNAL_CHILD").ok()?;
+        for (resource, limit) in [(libc::RLIMIT_CORE, 0), (libc::RLIMIT_CPU, 10)] {
+            let limits = libc::rlimit {
+                rlim_cur: limit,
+                rlim_max: limit,
+            };
+            assert_eq!(unsafe { libc::setrlimit(resource, &raw const limits) }, 0);
+        }
+        Some(mode)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn signal_child(test: &str, mode: &str) -> std::process::ExitStatus {
         use std::process::{Command, Stdio};
         use std::time::{Duration, Instant};
 
-        if std::env::var_os("NTEX_SEGV_CHILD").is_some() {
-            System::new("test", TestRunner).block_on(async {
-                System::current().enable_signals();
-                unsafe {
-                    let page = libc::mmap(
-                        std::ptr::null_mut(),
-                        4096,
-                        libc::PROT_NONE,
-                        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                        -1,
-                        0,
-                    );
-                    assert_ne!(page, libc::MAP_FAILED);
-                    page.cast::<u8>().write_volatile(1);
-                }
-            });
-            return;
-        }
-
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "signals::tests::segv_terminates_process"])
-            .env("NTEX_SEGV_CHILD", "1")
+            .args(["--exact", &format!("signals::tests::{test}")])
+            .env("NTEX_FATAL_SIGNAL_CHILD", mode)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
         let start = Instant::now();
-        let status = loop {
+        loop {
             if let Some(status) = child.try_wait().unwrap() {
-                break status;
+                return status;
             }
-            if start.elapsed() > Duration::from_secs(30) {
-                let _ = child.kill();
-                panic!("process did not terminate after SIGSEGV");
+            if start.elapsed() > Duration::from_secs(10) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("{test} ({mode}) did not terminate");
             }
-            std::thread::sleep(Duration::from_millis(50));
-        };
-        assert_eq!(status.signal(), Some(libc::SIGSEGV));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fatal_signals_terminate_process() {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(mode) = signal_child_mode() {
+            System::new("test", TestRunner).block_on(async {
+                System::current().enable_signals();
+                let other_thread = mode.starts_with("thread-");
+                let crash = move || {
+                    if mode.ends_with("abort") {
+                        std::process::abort();
+                    }
+                    unsafe {
+                        let page = libc::mmap(
+                            std::ptr::null_mut(),
+                            4096,
+                            libc::PROT_NONE,
+                            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                            -1,
+                            0,
+                        );
+                        assert_ne!(page, libc::MAP_FAILED);
+                        page.cast::<u8>().write_volatile(1);
+                    }
+                };
+                if other_thread {
+                    let _stderr = std::io::stderr().lock();
+                    let _sigs = SIGS.lock();
+                    std::thread::spawn(crash).join().unwrap();
+                } else {
+                    crash();
+                }
+            });
+            return;
+        }
+
+        for mode in ["abort", "segv", "thread-abort", "thread-segv"] {
+            let status = signal_child("fatal_signals_terminate_process", mode);
+            let expected = if mode.ends_with("abort") {
+                libc::SIGABRT
+            } else {
+                libc::SIGSEGV
+            };
+            assert_eq!(status.signal(), Some(expected), "{mode}: {status}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn wait_for_signal_handler() {
+        poll_fn(|cx| {
+            if HANDLERS.with(|handlers| handlers.borrow().is_empty()) {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
+        .await;
+    }
+
+    #[cfg(target_os = "linux")]
+    fn raise_fatal_signal(sig: i32) {
+        std::thread::spawn(move || {
+            nix::errno::Errno::EBUSY.set();
+            assert_eq!(unsafe { libc::raise(sig) }, 0);
+            assert_eq!(nix::errno::Errno::last(), nix::errno::Errno::EBUSY);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fatal_signal_notifications() {
+        use std::os::fd::AsRawFd;
+
+        if let Some(mode) = signal_child_mode() {
+            System::new("test", TestRunner).block_on(async move {
+                System::current().enable_signals();
+                if mode == "full" {
+                    // Block the receiver and fill the pipe: the signal handler
+                    // must still return without waiting or changing errno.
+                    let _sigs = SIGS.lock();
+                    let (_, _, write) = FATAL_PIPE.get().unwrap();
+                    let fd = write.as_raw_fd();
+                    assert_eq!(unsafe { libc::write(fd, b"A".as_ptr().cast(), 1) }, 1);
+                    let bytes = [0u8; 1];
+                    while unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) } >= 0 {}
+                    assert_eq!(nix::errno::Errno::last(), nix::errno::Errno::EAGAIN);
+                    raise_fatal_signal(libc::SIGABRT);
+                    return;
+                }
+
+                if mode == "fork" {
+                    let rx = signal();
+                    wait_for_signal_handler().await;
+                    let pid = unsafe { libc::fork() };
+                    assert!(pid >= 0);
+                    if pid == 0 {
+                        unsafe {
+                            libc::alarm(2);
+                            libc::raise(libc::SIGABRT);
+                            libc::_exit(0);
+                        }
+                    }
+                    let mut status = 0;
+                    assert_eq!(unsafe { libc::waitpid(pid, &raw mut status, 0) }, pid);
+                    assert_eq!(status, 0);
+                    raise_fatal_signal(libc::SIGSEGV);
+                    let sigs = recv(rx).await.unwrap();
+                    assert!(
+                        sigs.iter()
+                            .all(|sig| matches!(sig, Signal::Panic(PanicSource::Sig("SIGSEGV"))))
+                    );
+                    return;
+                }
+
+                for (sig, name) in [(libc::SIGABRT, "SIGABRT"), (libc::SIGSEGV, "SIGSEGV")] {
+                    let rx = signal();
+                    wait_for_signal_handler().await;
+                    {
+                        let _stderr = std::io::stderr().lock();
+                        let _sigs = SIGS.lock();
+                        raise_fatal_signal(sig);
+                    }
+                    let sigs = recv(rx).await.expect("fatal signal was not delivered");
+                    assert!(sigs.iter().any(
+                        |sig| matches!(sig, Signal::Panic(PanicSource::Sig(s)) if *s == name)
+                    ));
+                }
+            });
+            return;
+        }
+
+        for mode in ["notify", "full", "fork"] {
+            let status = signal_child("fatal_signal_notifications", mode);
+            assert!(status.success(), "{mode}: {status}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fatal_signal_stops_server() {
+        if let Some(mode) = signal_child_mode() {
+            ntex::rt::System::new("test", ntex::rt::DefaultRuntime).block_on(async move {
+                let srv = ntex::server::build()
+                    .workers(1)
+                    .graceful_shutdown()
+                    .bind(
+                        "test",
+                        "127.0.0.1:0",
+                        ntex::service::cfg::SharedCfg::default(),
+                        async |()| async |_| Ok::<_, ()>(()),
+                    )
+                    .unwrap()
+                    .run();
+                while srv.status() != ntex::server::ServerStatus::Ready {
+                    srv.status_changed().await;
+                }
+                futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
+                raise_fatal_signal(if mode == "abort" {
+                    libc::SIGABRT
+                } else {
+                    libc::SIGSEGV
+                });
+                let stopped = srv.clone();
+                srv.await.unwrap();
+                assert_eq!(stopped.status(), ntex::server::ServerStatus::Stopped);
+            });
+            return;
+        }
+
+        for mode in ["abort", "segv"] {
+            let status = signal_child("fatal_signal_stops_server", mode);
+            assert!(status.success(), "{mode}: {status}");
+        }
     }
 }

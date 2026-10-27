@@ -34,7 +34,6 @@ ntex-error = { workspace = true }
 
 atomic-waker = { workspace = true }
 async-channel = { workspace = true }
-backtrace = { workspace = true }
 crossbeam-channel = { workspace = true }
 crossbeam-queue = { workspace = true }
 foldhash = { workspace = true }

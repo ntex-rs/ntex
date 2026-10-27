@@ -1,6 +1,10 @@
 # Changes
 
-## [4.4.0] - Unreleased
+## [4.4.0] - 2026-10-27
+
+* Keep fatal signal handlers minimal to avoid hangs when another thread aborts or
+  faults. Forward best-effort server shutdown notifications through a nonblocking
+  pipe instead of capturing backtraces or updating the signal queue in the handler. #1152
 
 * Retire a running task during reentrant shutdown and cancel it after its poll,
   rather than registering it again or leaving a self-wake queued after shutdown
@@ -14,6 +18,10 @@
 * Add `LocalWaker`, a thread-confined owned wake handle with native owner-thread
   operations and a standard-waker fallback for other runtimes and wrapped
   wakers.
+
+* Release `LocalWaker` and join handle references directly while remote wake
+  commands are pending, instead of queueing each release of a remotely woken
+  task behind them
 
 ## [4.3.0] - 2026-10-21
 

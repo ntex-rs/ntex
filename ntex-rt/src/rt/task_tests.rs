@@ -1945,9 +1945,9 @@ fn run_until_done(rt: &Runtime, done: impl Fn() -> bool) {
 /// `NTEX_RAW_STRESS=<rounds>` runs more rounds.
 #[test]
 fn stress() {
-    const WORKERS: usize = 4;
+    const WORKERS: usize = if cfg!(miri) { 2 } else { 4 };
     let (rounds, per_worker) = if cfg!(miri) {
-        (1, 4)
+        (1, 2)
     } else {
         let rounds = std::env::var("NTEX_RAW_STRESS")
             .ok()

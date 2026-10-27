@@ -342,7 +342,7 @@ pub(crate) unsafe fn clone_local_waker(ptr: *const ()) {
 /// The caller must hold a native task reference and be on its owner thread.
 #[inline]
 pub(crate) unsafe fn wake_local_waker(ptr: *const (), owned: bool) {
-    wake_local(unsafe { task_ptr(ptr) }, owned);
+    wake_local::<true>(unsafe { task_ptr(ptr) }, owned);
 }
 
 /// Releases a native reference on its owner thread.
@@ -350,7 +350,7 @@ pub(crate) unsafe fn wake_local_waker(ptr: *const (), owned: bool) {
 /// The caller must own a native task reference and be on its owner thread.
 #[inline]
 pub(crate) unsafe fn drop_local_waker(ptr: *const ()) {
-    release_local(unsafe { task_ptr(ptr) });
+    release_unshared(unsafe { task_ptr(ptr) });
 }
 
 /// Borrows a task reference; the raw pointer retains allocation provenance.
@@ -441,13 +441,36 @@ fn mark_scheduled(h: NonNull<Header>) -> bool {
 }
 
 /// Wakes the task on the owner thread, `owned` passes a reference.
-fn wake_local(h: NonNull<Header>, owned: bool) {
+///
+/// `UNSHARED` marks a reference of a native local waker, see `release_unshared`.
+fn wake_local<const UNSHARED: bool>(h: NonNull<Header>, owned: bool) {
     if mark_scheduled(h) {
         if !owned {
             inc_local(h);
         }
         owner_queue(h).schedule_local(Runnable(h));
     } else if owned {
+        if UNSHARED {
+            release_unshared(h);
+        } else {
+            release_local(h);
+        }
+    }
+}
+
+/// Releases a counted reference that no other thread can borrow or clone, held
+/// by a native local waker or a join handle.
+///
+/// Remote acquisitions clone standard wakers, whose releases wait behind the
+/// queued acquisitions. Such a reference is never their source, so a non-final
+/// release leaves every source counted and skips the FIFO ordering of `release_local`.
+#[inline]
+fn release_unshared(h: NonNull<Header>) {
+    let refs = &core(h).refs;
+    let n = refs.get();
+    if n > 1 {
+        refs.set(n - 1);
+    } else {
         release_local(h);
     }
 }
@@ -1103,7 +1126,7 @@ fn detach_local(h: NonNull<Header>, cancel: bool) {
         owner_queue(h).schedule_local(Runnable(h));
     } else {
         local.state.set(state);
-        release_local(h);
+        release_unshared(h);
     }
     drop(awaiter);
 }
