@@ -1,10 +1,14 @@
 use std::{marker::PhantomData, rc::Rc};
 
+use ntex_http::Method;
+use ntex_util::HashSet;
+
 use crate::error::{Failure, IntoFailure};
+use crate::http::{Response, header};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 
-use super::error::{WebError, WebResponseError};
+use super::error::{InternalError, WebError, WebResponseError};
 use super::guard::{AllGuard, Guard};
 use super::{HttpService, State, WebRequest, WebResponse, dev::insert_slash, rmap::ResourceMap};
 
@@ -129,6 +133,7 @@ pub struct WebServiceAdapter {
     rdef: Vec<String>,
     name: Option<String>,
     guards: AllGuard,
+    methods: HashSet<Method>,
 }
 
 impl WebServiceAdapter {
@@ -140,6 +145,7 @@ impl WebServiceAdapter {
             rdef: path.patterns(),
             name: None,
             guards: AllGuard::default(),
+            methods: HashSet::default(),
         }
     }
 
@@ -182,6 +188,41 @@ impl WebServiceAdapter {
         self
     }
 
+    /// Add a supported method to this service.
+    ///
+    /// Repeated calls allow any of the registered methods. If this method is
+    /// never called, no method check is added and existing guard and service
+    /// behavior is unchanged.
+    ///
+    /// Methods are checked after the path and all guards match, but before the
+    /// service is called. An unsupported method returns `405 Method Not Allowed`
+    /// with an `Allow` header; the router does not try another service or fallback.
+    /// Use a method guard instead when a mismatch should continue routing.
+    ///
+    /// ```rust
+    /// use std::convert::Infallible;
+    /// use ntex::http::Method;
+    /// use ntex::web::{self, guard, App, HttpResponse};
+    ///
+    /// async fn index(
+    ///     req: web::WebRequest<()>,
+    /// ) -> Result<web::WebResponse, Infallible> {
+    ///     Ok(req.into_response(HttpResponse::Ok().build()))
+    /// }
+    ///
+    /// App::default().service(
+    ///     web::service("/health")
+    ///         .method(Method::GET)
+    ///         .guard(guard::Header("x-health-check", "true"))
+    ///         .build(index)
+    /// );
+    /// ```
+    #[must_use]
+    pub fn method(mut self, method: Method) -> Self {
+        self.methods.insert(method);
+        self
+    }
+
     /// Set a service factory implementation and generate web service.
     pub fn build<Sf, St, In, F>(self, service: F) -> impl WebServiceFactory<St, In>
     where
@@ -200,6 +241,7 @@ impl WebServiceAdapter {
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
+            methods: self.methods,
             ph: PhantomData,
         }
     }
@@ -210,6 +252,7 @@ struct WebServiceImpl<Sf, In> {
     rdef: Vec<String>,
     name: Option<String>,
     guards: AllGuard,
+    methods: HashSet<Method>,
     ph: PhantomData<In>,
 }
 
@@ -240,7 +283,31 @@ where
         if let Some(name) = self.name {
             rdef.set_name(name);
         }
-        config.register_service(rdef, guards, None, self.srv);
+        if self.methods.is_empty() {
+            config.register_service(rdef, guards, None, self.srv);
+        } else {
+            let mut allow: Vec<_> = self.methods.iter().map(Method::as_str).collect();
+            allow.sort_unstable();
+            let allow = allow.join(", ");
+            let methods = Rc::new(self.methods);
+
+            let service = crate::factory(async move |req: WebRequest<In>| {
+                if methods.contains(&req.head().method) {
+                    Ok(req)
+                } else {
+                    Err(WebError::from_err(InternalError::from_response(
+                        "Method not allowed",
+                        Response::MethodNotAllowed()
+                            .header(header::ALLOW, allow.as_str())
+                            .build(),
+                    )))
+                }
+            })
+            .map_init_err(|_| unreachable!())
+            .and_then(self.srv);
+
+            config.register_service(rdef, guards, None, service);
+        }
     }
 }
 
@@ -297,6 +364,7 @@ mod tests {
     use std::convert::Infallible;
 
     use super::*;
+    use crate::http::header::ALLOW;
     use crate::http::{Method, StatusCode};
     use crate::web::test::{TestRequest, init_service};
     use crate::web::{self, App, DefaultError, HttpResponse, guard};
@@ -326,6 +394,119 @@ mod tests {
             .to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[crate::rt_test]
+    async fn test_service_methods() {
+        for (prefix, restricted) in [("", false), ("", true), ("/app", false), ("/app", true)] {
+            let mut service = web::service("/test");
+            if restricted {
+                service = service
+                    .method(Method::GET)
+                    .method(Method::POST)
+                    .method(Method::GET);
+            }
+            let service = service.build(async |req: WebRequest<()>| {
+                Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().build()))
+            });
+            let app = App::new();
+            let app = if prefix.is_empty() {
+                app.service(service)
+            } else {
+                app.service(web::scope(prefix).service(service))
+            };
+            let srv = init_service(app).await;
+
+            for (method, supported) in [
+                (Method::GET, true),
+                (Method::POST, true),
+                (Method::PUT, false),
+                (Method::HEAD, false),
+                (Method::from_bytes(b"PROPFIND").unwrap(), false),
+            ] {
+                let rejected = restricted && !supported;
+                let resp = srv
+                    .call(
+                        TestRequest::with_uri(&format!("{prefix}/test"))
+                            .method(method)
+                            .to_request(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    resp.status(),
+                    if rejected {
+                        StatusCode::METHOD_NOT_ALLOWED
+                    } else {
+                        StatusCode::OK
+                    },
+                    "prefix={prefix:?}, restricted={restricted}, supported={supported}",
+                );
+                if rejected {
+                    assert_eq!(resp.headers().get(ALLOW).unwrap(), "GET, POST");
+                } else {
+                    assert!(!resp.headers().contains_key(ALLOW));
+                }
+            }
+
+            let resp = srv
+                .call(
+                    TestRequest::with_uri(&format!("{prefix}/missing"))
+                        .method(Method::PUT)
+                        .to_request(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        }
+    }
+
+    #[crate::rt_test]
+    async fn test_service_methods_and_guards() {
+        let srv = init_service(
+            App::new()
+                .service(
+                    web::service("/test")
+                        .method(Method::GET)
+                        .guard(guard::Header("x-service", "selected"))
+                        .build(async |req: WebRequest<()>| {
+                            Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().build()))
+                        }),
+                )
+                .service(web::service("/test").build(async |req: WebRequest<()>| {
+                    Ok::<_, Infallible>(req.into_response(HttpResponse::Created().build()))
+                }))
+                .default_service(web::to(async || HttpResponse::Accepted())),
+        )
+        .await;
+
+        let resp = srv
+            .call(
+                TestRequest::with_uri("/test")
+                    .method(Method::PUT)
+                    .to_request(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let resp = srv
+            .call(
+                TestRequest::with_uri("/test")
+                    .method(Method::PUT)
+                    .header("x-service", "selected")
+                    .to_request(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(resp.headers().get(ALLOW).unwrap(), "GET");
+
+        let resp = srv
+            .call(TestRequest::with_uri("/missing").to_request())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
     }
 
     #[crate::rt_test]
