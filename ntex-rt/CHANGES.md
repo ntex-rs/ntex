@@ -1,5 +1,19 @@
 # Changes
 
+## [4.5.0] - 2026-10-28
+
+* Add `spawn_sendable()` to spawn a local future and receive its `Send` output
+  on another thread. Dropping the returned future requests cancellation
+
+* Add `JoinHandle::cancel_on_drop()` to request cancellation when the handle is
+  dropped, without waiting for cleanup. Supported by the native, Tokio, and
+  Compio runtimes; handles still detach on drop by default
+
+* Deprecate `JoinHandle::detach()` and `RemoteJoinHandle::detach()`. Drop the
+  handle instead unless cancellation-on-drop is enabled. The deprecated
+  `JoinHandle::detach()` still overrides cancellation-on-drop for compatibility.
+  `spawn_blocking()` and `BlockingResult::detach()` are unchanged
+
 ## [4.4.0] - 2026-10-27
 
 * Keep fatal signal handlers minimal to avoid hangs when another thread aborts or

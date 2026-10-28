@@ -45,7 +45,7 @@ use self::queue::RunnableQueue;
 
 pub use crate::handle::{JoinHandle, RemoteJoinHandle};
 
-/// An error marker exposed by the native runtime.
+/// Error returned by [`crate::spawn_sendable()`] when no task output is available.
 ///
 /// Native [`JoinHandle`] and [`RemoteJoinHandle`] futures use a separate error
 /// type; this marker is not the error type of their results.
@@ -73,7 +73,8 @@ pub fn now() -> Instant {
 ///
 /// The future and its output need not be `Send`. Registered
 /// [`task_callbacks`](crate::task_callbacks) wrap the task. Dropping the handle
-/// detaches it; completion is not guaranteed if the runtime shuts down.
+/// detaches it unless [`cancel_on_drop`](JoinHandle::cancel_on_drop) is enabled.
+/// Completion is not guaranteed if the runtime shuts down.
 ///
 /// # Panics
 ///
@@ -307,8 +308,10 @@ impl Runtime {
     /// All data borrowed by the future must remain valid until the future is
     /// completed or destroyed, including on unwind. Any borrowed data in the
     /// output must remain valid until that output is destroyed, even if its join
-    /// handle outlives this runtime. Dropping or forgetting a join handle does
-    /// not cancel its task and is not sufficient to end these obligations.
+    /// handle outlives this runtime. Requesting cancellation, including through
+    /// [`JoinHandle::cancel_on_drop`], does not wait for destruction and is not
+    /// sufficient to end these obligations. Forgetting a join handle does not
+    /// request cancellation.
     #[track_caller]
     pub unsafe fn spawn_unchecked<F: Future>(&self, future: F) -> JoinHandle<F::Output> {
         unsafe { self.spawn_at(future, Location::caller()) }

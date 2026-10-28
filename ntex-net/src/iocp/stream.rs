@@ -328,13 +328,12 @@ impl Handler for StreamOpsHandler {
                             // runs, the socket must still be closed, and
                             // `cleanup()` skips `CLOSED` items.
                             let close = close.spawn();
-                            ntex_rt::spawn(async move {
+                            ntex_rt::spawn_detached(async move {
                                 let res = close.await;
                                 #[cfg(feature = "trace")]
                                 log::trace!("{_tag}: WaitClosed({:?})", io);
                                 let _ = tx.send(res);
-                            })
-                            .detach();
+                            });
                         }
                     }
                 } else {

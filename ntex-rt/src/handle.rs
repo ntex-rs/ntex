@@ -10,7 +10,8 @@ pub(crate) type SpawnLocation = &'static Location<'static>;
 /// A native local task handle. It is neither `Send` nor `Sync`.
 ///
 /// Returned by [`crate::rt::spawn()`] and [`crate::rt::Runtime::spawn()`]. Dropping
-/// the handle detaches the task.
+/// the handle detaches the task unless [`cancel_on_drop`](Self::cancel_on_drop)
+/// is enabled.
 /// Awaiting it yields the task's output, or an error if no output is available,
 /// for example after cancellation, a task panic, or runtime shutdown.
 #[derive(Debug)]
@@ -23,6 +24,17 @@ impl<T> JoinHandle<T> {
         JoinHandle { task }
     }
 
+    /// Requests cancellation when this handle is dropped instead of detaching the task.
+    ///
+    /// Cancellation follows [`cancel`](Self::cancel) and does not wait for cleanup.
+    /// A running poll is not interrupted. The deprecated [`detach`](Self::detach)
+    /// method still overrides this setting.
+    #[must_use]
+    pub fn cancel_on_drop(self) -> Self {
+        self.task.set_cancel_on_drop(true);
+        self
+    }
+
     /// Requests cancellation and discards the result without waiting for cleanup.
     ///
     /// The future is dropped when the runtime next processes the task, or
@@ -32,7 +44,15 @@ impl<T> JoinHandle<T> {
     }
 
     /// Detaches the task so it continues running independently.
-    pub fn detach(self) {}
+    ///
+    /// Overrides [`cancel_on_drop`](Self::cancel_on_drop) without requesting cancellation.
+    #[deprecated(
+        since = "4.5.0",
+        note = "Drop the handle instead if cancel_on_drop() is not enabled"
+    )]
+    pub fn detach(self) {
+        self.task.set_cancel_on_drop(false);
+    }
 
     /// Returns `true` if the task completed or was closed without an output.
     pub fn is_finished(&self) -> bool {
@@ -92,6 +112,10 @@ impl<T> RemoteJoinHandle<T> {
     }
 
     /// Detaches the task so it continues running independently.
+    ///
+    /// This method does nothing beyond dropping the handle; dropping it already
+    /// detaches the task without canceling it.
+    #[deprecated(since = "4.5.0", note = "Use drop(handle) instead")]
     pub fn detach(self) {}
 
     /// Returns `true` if the task completed or was closed without an output.
@@ -129,6 +153,6 @@ impl fmt::Display for JoinError {
 
 impl std::error::Error for JoinError {}
 
-#[cfg(all(test, not(feature = "tokio"), not(feature = "compio")))]
+#[cfg(test)]
 #[path = "../tests/unit/handle.rs"]
 mod tests;

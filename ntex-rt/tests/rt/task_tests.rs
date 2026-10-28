@@ -672,26 +672,34 @@ fn detached_awaiter() {
 /// STATEMENT: Pending cancellation runs cleanup once, and later wakes of the closed task are inert.
 ///
 /// HOW:
-/// - Poll a pending probe, cancel it, and check destruction waits until its cancellation runnable runs.
+/// - Poll a pending probe and cancel it explicitly or by dropping its opted-in handle.
+/// - Check destruction waits until its cancellation runnable runs.
 /// - Exercise borrowed and consuming wakes afterward; check no runnable appears and release storage.
 #[test]
 fn cancel_pending() {
-    let rt = new_rt();
-    let p = Probe::default();
-    let task = spawn(&rt, p.future(Res::Pending));
-    one_local(&rt).run();
-    task.cancel();
-    p.check(1, 0, 0);
-    // the cancel schedules the task, the runner drops the future
-    one_local(&rt).run();
-    p.check(1, 1, 0);
-    // wakers of a closed task do not schedule it
-    let w = p.waker();
-    w.wake_by_ref();
-    w.clone().wake();
-    assert_idle(&rt);
-    drop(w);
-    assert_freed(&rt);
+    for cancel_on_drop in [false, true] {
+        let rt = new_rt();
+        let p = Probe::default();
+        let task = spawn(&rt, p.future(Res::Pending));
+        task.set_cancel_on_drop(cancel_on_drop);
+        one_local(&rt).run();
+        if cancel_on_drop {
+            drop(task);
+        } else {
+            task.cancel();
+        }
+        p.check(1, 0, 0);
+        // the cancel schedules the task, the runner drops the future
+        one_local(&rt).run();
+        p.check(1, 1, 0);
+        // wakers of a closed task do not schedule it
+        let w = p.waker();
+        w.wake_by_ref();
+        w.clone().wake();
+        assert_idle(&rt);
+        drop(w);
+        assert_freed(&rt);
+    }
 }
 
 /// STATEMENT: Local wakes coalesce until a runnable runs, and the last interest drop schedules cleanup.

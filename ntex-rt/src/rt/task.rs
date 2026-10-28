@@ -70,6 +70,9 @@ const WAKES_REPORTED: u8 = 1 << 4;
 const DETACHED: u8 = 1 << 5;
 /// In the task list of the runtime.
 const LISTED: u8 = 1 << 6;
+/// Dropping the join handle requests cancellation.
+const CANCEL_ON_DROP: u8 = 1 << 7;
+
 /// The self-wake count saturates at this value.
 pub(crate) const MAX_SELF_WAKES: u32 = u16::MAX as u32;
 
@@ -1073,6 +1076,16 @@ impl<T> Task<T> {
         core(self.h).state.get() & FINISHED != 0
     }
 
+    /// Sets whether dropping the join handle requests cancellation.
+    pub(crate) fn set_cancel_on_drop(&self, enabled: bool) {
+        let state = &core(self.h).state;
+        state.set(if enabled {
+            state.get() | CANCEL_ON_DROP
+        } else {
+            state.get() & !CANCEL_ON_DROP
+        });
+    }
+
     /// Cancels the task and drops the join handle, the owner thread drops
     /// the future. The output of a finished task is dropped.
     pub(crate) fn cancel(self) {
@@ -1099,9 +1112,10 @@ impl<T> Task<T> {
 }
 
 impl<T> Drop for Task<T> {
-    /// Detaches the local join and releases its reference without requesting cancellation.
+    /// Releases the join reference, requesting cancellation only when opted in.
     fn drop(&mut self) {
-        detach_local(self.h, false);
+        let cancel = core(self.h).state.get() & CANCEL_ON_DROP != 0;
+        detach_local(self.h, cancel);
     }
 }
 

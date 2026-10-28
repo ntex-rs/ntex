@@ -172,5 +172,13 @@ fn callbacks_set_once_and_wrap_spawned_tasks() {
         assert!(!crate::spawn(async { INSIDE.get() }).await.unwrap());
         assert_eq!(BEFORE.load(Ordering::Relaxed), 1);
         assert_eq!(AFTER.load(Ordering::Relaxed), 1);
+
+        TRACK.set(true);
+        let result = crate::spawn_sendable(async { INSIDE.get() });
+        TRACK.set(false);
+        assert_eq!(BEFORE.load(Ordering::Relaxed), 2);
+        assert!(result.await.unwrap());
+        assert!(!INSIDE.get());
+        assert_eq!(AFTER.load(Ordering::Relaxed), 2);
     });
 }
