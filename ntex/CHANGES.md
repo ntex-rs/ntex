@@ -1,5 +1,9 @@
 # Changes
 
+## [4.5.0] - 2026-10-27
+
+* Add `web::service::method` for allowed method restrictions on web services
+
 ## [4.4.2] - 2026-10-30
 
 * Attempt to fix docs.rs build
