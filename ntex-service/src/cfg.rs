@@ -2,26 +2,19 @@
 #![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, UnsafeCell};
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
-use std::{fmt, hash::Hash, hash::Hasher, marker::PhantomData, mem, ops, ptr, rc};
+use std::sync::{Arc, OnceLock, RwLock, Weak, atomic::AtomicUsize, atomic::Ordering};
+use std::{fmt, hash::Hash, hash::Hasher, marker::PhantomData, ops, ptr, rc};
 
 type Key = (usize, TypeId);
 type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
 
 thread_local! {
-    static DEFAULT_CFG: Arc<Storage> = {
-        let mut st = Arc::new(Storage::new("--", "", false, CfgContext(ptr::null())));
-        let p = Arc::as_ptr(&st);
-        Arc::get_mut(&mut st).unwrap().ctx.update(p);
-        st
-    };
+    static DEFAULT_CFG: SharedCfg = SharedCfg::new("--").service("").build();
     static MAPPING: RefCell<HashMap<Key, Arc<dyn Any + Send + Sync>>> = {
         RefCell::new(HashMap::default())
     };
 }
 static IDX: AtomicUsize = AtomicUsize::new(0);
-const KIND_ARC: usize = 1;
-const KIND_UNMASK: usize = !KIND_ARC;
 
 /// A value that can be stored in [`SharedCfg`].
 pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
@@ -37,116 +30,144 @@ pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
 
 #[derive(Debug)]
 struct Storage {
-    id: usize,
-    tag: &'static str,
-    service: &'static str,
     ctx: CfgContext,
-    building: bool,
-    data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-}
-
-impl Storage {
-    fn new(tag: &'static str, service: &'static str, building: bool, ctx: CfgContext) -> Self {
-        let id = IDX.fetch_add(1, Ordering::SeqCst);
-        Storage {
-            id,
-            ctx,
-            tag,
-            service,
-            building,
-            data: HashMap::default(),
-        }
-    }
+    data: OnceLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
 }
 
 #[derive(Debug)]
-/// Metadata and lookup access for a shared configuration.
-pub struct CfgContext(*const Storage);
+struct Metadata {
+    id: usize,
+    tag: &'static str,
+    service: RwLock<&'static str>,
+    storage: Weak<Storage>,
+}
 
-unsafe impl Send for CfgContext {}
-unsafe impl Sync for CfgContext {}
+impl Storage {
+    fn new(tag: &'static str) -> Arc<Self> {
+        let id = IDX.fetch_add(1, Ordering::SeqCst);
+        Arc::new_cyclic(|storage| Storage {
+            ctx: CfgContext(Arc::new(Metadata {
+                id,
+                tag,
+                service: RwLock::new(tag),
+                storage: storage.clone(),
+            })),
+            data: OnceLock::new(),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+/// Metadata and lookup access for a shared configuration.
+///
+/// A context keeps metadata alive, but does not keep configuration values alive.
+/// Metadata remains readable after the last owning handle is dropped, including
+/// after the thread that created a default context exits. Use [`Self::try_get`]
+/// or [`Self::try_shared`] when the shared configuration may have expired.
+pub struct CfgContext(Arc<Metadata>);
 
 impl CfgContext {
-    fn update(&mut self, new_p: *const Storage) {
-        self.0 = new_p;
-    }
-
     /// Returns the unique identifier of the shared configuration.
     pub fn id(&self) -> usize {
-        self.get_ref().id
+        self.0.id
     }
 
     #[inline]
     /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
-        self.get_ref().tag
+        self.0.tag
     }
 
     /// Returns the configured service name.
     pub fn service(&self) -> &'static str {
-        self.get_ref().service
+        *self.0.service.read().unwrap()
     }
 
     /// Returns a typed configuration value from the same shared configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shared configuration has expired or is still being built.
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
     {
-        let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
-        let cfg = get(&inner);
-        mem::forget(inner);
-        cfg
+        self.shared().get()
+    }
+
+    /// Returns a typed configuration value, or `None` if the configuration expired.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shared configuration is still being built.
+    pub fn try_get<T>(&self) -> Option<Cfg<T>>
+    where
+        T: Configuration,
+    {
+        self.try_shared().map(|shared| shared.get())
     }
 
     /// Returns a handle to the complete shared configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shared configuration has expired.
     pub fn shared(&self) -> SharedCfg {
-        let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
-        let shared = SharedCfg(inner.clone());
-        mem::forget(inner);
-        shared
+        self.try_shared()
+            .unwrap_or_else(|| panic!("{}: Shared configuration has expired", self.tag()))
     }
 
-    fn get_ref(&self) -> &Storage {
-        unsafe { self.0.as_ref().unwrap() }
+    /// Returns an owning handle, or `None` if the shared configuration expired.
+    pub fn try_shared(&self) -> Option<SharedCfg> {
+        self.0.storage.upgrade().map(SharedCfg)
     }
 }
 
 impl Default for CfgContext {
     #[inline]
     fn default() -> Self {
-        CfgContext(DEFAULT_CFG.with(Arc::as_ptr))
+        DEFAULT_CFG.with(|cfg| cfg.0.ctx.clone())
     }
 }
 
 #[derive(Debug)]
 /// A typed handle to a value in a [`SharedCfg`].
-pub struct Cfg<T: Configuration>(UnsafeCell<*const T>, PhantomData<rc::Rc<T>>);
+///
+/// Keeps both the value and its shared configuration alive independently of
+/// the context returned by [`Configuration::ctx`].
+pub struct Cfg<T: Configuration>(UnsafeCell<CfgInner<T>>, PhantomData<rc::Rc<T>>);
+
+#[derive(Debug)]
+struct CfgInner<T> {
+    value: Arc<T>,
+    storage: Arc<Storage>,
+}
 
 impl<T: Configuration> Cfg<T> {
-    fn new(ptr: *const T) -> Self {
-        Self(UnsafeCell::new(ptr), PhantomData)
+    fn new(value: Arc<T>, storage: Arc<Storage>) -> Self {
+        Self(UnsafeCell::new(CfgInner { value, storage }), PhantomData)
     }
 
     #[inline]
     /// Returns the unique identifier of the shared configuration.
     pub fn id(&self) -> usize {
-        self.get_ref().ctx().id()
+        self.inner().storage.ctx.id()
     }
 
     #[inline]
     /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
-        self.get_ref().ctx().tag()
+        self.inner().storage.ctx.tag()
     }
 
     /// Returns the configured service name.
     pub fn service(&self) -> &'static str {
-        self.get_ref().ctx().service()
+        self.inner().storage.ctx.service()
     }
 
     /// Returns a handle to the complete shared configuration.
     pub fn shared(&self) -> SharedCfg {
-        self.get_ref().ctx().shared()
+        SharedCfg(self.inner().storage.clone())
     }
 
     /// Returns another typed value from the same shared configuration.
@@ -154,16 +175,15 @@ impl<T: Configuration> Cfg<T> {
     where
         U: Configuration,
     {
-        self.get_ref().ctx().get::<U>()
+        self.shared().get::<U>()
+    }
+
+    fn inner(&self) -> &CfgInner<T> {
+        unsafe { &*self.0.get() }
     }
 
     fn get_ref(&self) -> &T {
-        unsafe {
-            (*self.0.get())
-                .map_addr(|addr| addr & KIND_UNMASK)
-                .as_ref()
-                .unwrap()
-        }
+        &self.inner().value
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -180,23 +200,11 @@ impl<T: Configuration> Cfg<T> {
     }
 }
 
-impl<T: Configuration> Drop for Cfg<T> {
-    fn drop(&mut self) {
-        unsafe {
-            let addr = (*self.0.get()).map_addr(|addr| addr & KIND_UNMASK);
-            Arc::decrement_strong_count(addr.as_ref().unwrap().ctx().0);
-
-            if ((*self.0.get()).addr() & KIND_ARC) != 0 {
-                Arc::from_raw(addr);
-            }
-        }
-    }
-}
-
 impl<T: Configuration> Clone for Cfg<T> {
     #[inline]
     fn clone(&self) -> Self {
-        self.ctx().get()
+        let inner = self.inner();
+        Self::new(inner.value.clone(), inner.storage.clone())
     }
 }
 
@@ -237,8 +245,8 @@ pub struct SharedCfg(Arc<Storage>);
 #[derive(Debug)]
 /// Builder for [`SharedCfg`].
 pub struct SharedCfgBuilder {
-    ctx: CfgContext,
     storage: Arc<Storage>,
+    data: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
 }
 
 impl Eq for SharedCfg {}
@@ -251,7 +259,7 @@ impl PartialEq for SharedCfg {
 
 impl Hash for SharedCfg {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.id.hash(state);
+        self.id().hash(state);
     }
 }
 
@@ -264,18 +272,18 @@ impl SharedCfg {
     #[inline]
     /// Returns the unique identifier of this configuration.
     pub fn id(&self) -> usize {
-        self.0.id
+        self.0.ctx.id()
     }
 
     #[inline]
     /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
-        self.0.tag
+        self.0.ctx.tag()
     }
 
     /// Returns the configured service name.
     pub fn service(&self) -> &'static str {
-        self.0.service
+        self.0.ctx.service()
     }
 
     /// Returns the configuration value of type `T`.
@@ -294,7 +302,7 @@ impl SharedCfg {
 impl Default for SharedCfg {
     #[inline]
     fn default() -> Self {
-        Self(DEFAULT_CFG.with(Clone::clone))
+        DEFAULT_CFG.with(Clone::clone)
     }
 }
 
@@ -341,17 +349,16 @@ impl<T: Configuration> From<Cfg<T>> for SharedCfg {
 
 impl SharedCfgBuilder {
     fn new(tag: &'static str) -> SharedCfgBuilder {
-        let mut storage = Arc::new(Storage::new(tag, tag, true, CfgContext::default()));
-        let ctx = CfgContext(Arc::as_ptr(&storage));
-        Arc::get_mut(&mut storage).unwrap().ctx.update(ctx.0);
-
-        SharedCfgBuilder { ctx, storage }
+        SharedCfgBuilder {
+            storage: Storage::new(tag),
+            data: HashMap::default(),
+        }
     }
 
     #[must_use]
     /// Sets the service name.
-    pub fn service(mut self, name: &'static str) -> Self {
-        Arc::get_mut(&mut self.storage).unwrap().service = name;
+    pub fn service(self, name: &'static str) -> Self {
+        *self.storage.ctx.0.service.write().unwrap() = name;
         self
     }
 
@@ -360,11 +367,8 @@ impl SharedCfgBuilder {
     ///
     /// Replaces the existing value when the same type was already inserted.
     pub fn add<T: Configuration>(mut self, mut val: T) -> Self {
-        val.set_ctx(CfgContext(self.ctx.0));
-        Arc::get_mut(&mut self.storage)
-            .unwrap()
-            .data
-            .insert(TypeId::of::<T>(), Box::new(val));
+        val.set_ctx(self.storage.ctx.clone());
+        self.data.insert(TypeId::of::<T>(), Arc::new(val));
         self
     }
 
@@ -376,9 +380,8 @@ impl SharedCfgBuilder {
 }
 
 impl From<SharedCfgBuilder> for SharedCfg {
-    fn from(mut cfg: SharedCfgBuilder) -> SharedCfg {
-        let st = Arc::get_mut(&mut cfg.storage).unwrap();
-        st.building = false;
+    fn from(cfg: SharedCfgBuilder) -> SharedCfg {
+        cfg.storage.data.set(cfg.data).unwrap();
         SharedCfg(cfg.storage)
     }
 }
@@ -387,51 +390,294 @@ fn get<T>(st: &Arc<Storage>) -> Cfg<T>
 where
     T: Configuration,
 {
-    assert!(
-        !st.building,
-        "{}: Cannot access shared config while building",
-        st.tag
-    );
-
-    // increase arc refs for storage instead of actual item
-    // CfgContext and Cfg::shared() rely on Arc<Storage>.
-    mem::forget(st.clone());
+    let data = st.data.get().unwrap_or_else(|| {
+        panic!(
+            "{}: Cannot access shared config while building",
+            st.ctx.tag()
+        )
+    });
 
     let tp = TypeId::of::<T>();
-    if let Some(arc) = st.data.get(&tp) {
-        Cfg::new(arc.as_ref().downcast_ref::<T>().unwrap())
+    let value = if let Some(arc) = data.get(&tp) {
+        arc.clone().downcast::<T>().unwrap()
     } else {
         MAPPING.with(|store| {
-            let key = (st.id, tp);
-            if let Some(arc) = store.borrow().get(&key) {
-                Cfg::new(
-                    Arc::into_raw(arc.clone())
-                        .cast::<T>()
-                        .map_addr(|addr| addr ^ KIND_ARC),
-                )
+            let key = (st.ctx.id(), tp);
+            let cached = store.borrow().get(&key).cloned();
+            if let Some(arc) = cached {
+                arc.downcast::<T>().unwrap()
             } else {
                 log::info!(
                     "{}: Configuration {:?} does not exist, using default",
-                    st.tag,
+                    st.ctx.tag(),
                     T::NAME
                 );
                 let mut val = T::default();
-                val.set_ctx(CfgContext(st.ctx.0));
+                val.set_ctx(st.ctx.clone());
                 let arc = Arc::new(val);
-                store.borrow_mut().insert(key, arc.clone());
-                Cfg::new(
-                    Arc::into_raw(arc)
-                        .cast::<T>()
-                        .map_addr(|addr| addr ^ KIND_ARC),
-                )
+                let previous = store.borrow_mut().insert(key, arc.clone());
+                drop(previous);
+                arc
             }
         })
-    }
+    };
+    Cfg::new(value, st.clone())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::{Mutex, mpsc};
+
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct ProbeCfg {
+        ctx: CfgContext,
+        capture: Option<Arc<Mutex<Option<CfgContext>>>>,
+        drops: Option<Arc<AtomicUsize>>,
+    }
+
+    impl Configuration for ProbeCfg {
+        const NAME: &str = "PROBE";
+
+        fn ctx(&self) -> &CfgContext {
+            &self.ctx
+        }
+
+        fn set_ctx(&mut self, ctx: CfgContext) {
+            if let Some(capture) = &self.capture {
+                *capture.lock().unwrap() = Some(ctx.clone());
+            }
+            self.ctx = ctx;
+        }
+    }
+
+    impl Drop for ProbeCfg {
+        fn drop(&mut self) {
+            if let Some(drops) = &self.drops {
+                drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    #[test]
+    fn default_context_outlives_owner_thread() {
+        let ctx = std::thread::spawn(CfgContext::default).join().unwrap();
+        assert_eq!(ctx.tag(), "--");
+        assert_eq!(ctx.service(), "");
+        assert!(ctx.try_shared().is_none());
+        assert!(ctx.try_get::<ProbeCfg>().is_none());
+        assert!(catch_unwind(AssertUnwindSafe(|| ctx.shared())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| ctx.get::<ProbeCfg>())).is_err());
+    }
+
+    #[test]
+    fn context_keeps_metadata_but_not_values_alive() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let shared = SharedCfg::new("TAG")
+            .service("SERVICE")
+            .add(ProbeCfg {
+                ctx: CfgContext::default(),
+                capture: None,
+                drops: Some(drops.clone()),
+            })
+            .build();
+        let id = shared.id();
+        let cfg = shared.get::<ProbeCfg>();
+        let clone = cfg.clone();
+        let ctx = cfg.ctx().clone();
+        drop(shared);
+        drop(cfg);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert!(ctx.try_get::<ProbeCfg>().is_some());
+        drop(clone);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(ctx.id(), id);
+        assert_eq!(ctx.tag(), "TAG");
+        assert_eq!(ctx.service(), "SERVICE");
+        assert!(ctx.try_shared().is_none());
+    }
+
+    #[test]
+    fn escaped_builder_context_observes_publication() {
+        let capture = Arc::new(Mutex::new(None));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let builder = SharedCfg::new("BUILDING").add(ProbeCfg {
+            ctx: CfgContext::default(),
+            capture: Some(capture.clone()),
+            drops: Some(drops.clone()),
+        });
+        let ctx = capture.lock().unwrap().take().unwrap();
+        let other = ctx.clone();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let shared = other.shared();
+            assert_eq!(other.service(), "BUILDING");
+            assert!(catch_unwind(AssertUnwindSafe(|| other.try_get::<ProbeCfg>())).is_err());
+            ready_tx.send(()).unwrap();
+            resume_rx.recv().unwrap();
+            assert_eq!(other.service(), "PUBLISHED");
+            assert_eq!(other.try_get::<ProbeCfg>().unwrap().shared(), shared);
+            shared
+        });
+        ready_rx.recv().unwrap();
+        let shared = builder.service("PUBLISHED").build();
+        resume_tx.send(()).unwrap();
+        let other = thread.join().unwrap();
+        assert_eq!(shared, other);
+        drop(shared);
+        drop(other);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(ctx.service(), "PUBLISHED");
+        assert!(ctx.try_shared().is_none());
+    }
+
+    #[test]
+    fn escaped_context_outlives_abandoned_builder() {
+        let capture = Arc::new(Mutex::new(None));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let builder = SharedCfg::new("ABANDONED").add(ProbeCfg {
+            ctx: CfgContext::default(),
+            capture: Some(capture.clone()),
+            drops: Some(drops.clone()),
+        });
+        let ctx = capture.lock().unwrap().take().unwrap();
+        drop(builder);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(ctx.tag(), "ABANDONED");
+        assert_eq!(ctx.service(), "ABANDONED");
+        assert!(ctx.try_get::<ProbeCfg>().is_none());
+    }
+
+    #[test]
+    fn handle_ownership_does_not_depend_on_value_context() {
+        #[derive(Debug, Default)]
+        struct Unassociated(ProbeCfg);
+
+        impl Configuration for Unassociated {
+            const NAME: &str = "UNASSOCIATED";
+
+            fn ctx(&self) -> &CfgContext {
+                &self.0.ctx
+            }
+
+            fn set_ctx(&mut self, _: CfgContext) {}
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let shared = SharedCfg::new("OWNER")
+            .add(Unassociated(ProbeCfg {
+                ctx: CfgContext::default(),
+                capture: None,
+                drops: Some(drops.clone()),
+            }))
+            .build();
+        let cfg = shared.get::<Unassociated>();
+        let clone = cfg.clone();
+        assert_eq!(cfg.ctx().tag(), "--");
+        assert_eq!(cfg.tag(), "OWNER");
+        assert_eq!(cfg.id(), shared.id());
+        assert_eq!(cfg.shared(), shared);
+        assert_eq!(cfg.get_shared::<Unassociated>().shared(), shared);
+        assert!(ptr::eq(&raw const *cfg, &raw const *clone));
+        drop(shared);
+        drop(cfg);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(clone);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn caught_building_lookup_panic_preserves_owner() {
+        #[derive(Debug, Default)]
+        struct Recovering(CfgContext);
+
+        impl Configuration for Recovering {
+            const NAME: &str = "RECOVERING";
+
+            fn ctx(&self) -> &CfgContext {
+                &self.0
+            }
+
+            fn set_ctx(&mut self, ctx: CfgContext) {
+                assert!(catch_unwind(AssertUnwindSafe(|| ctx.get::<Self>())).is_err());
+                self.0 = ctx;
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let shared = SharedCfg::new("RECOVERED")
+            .add(ProbeCfg {
+                ctx: CfgContext::default(),
+                capture: None,
+                drops: Some(drops.clone()),
+            })
+            .add(Recovering::default())
+            .service("READY")
+            .build();
+        assert_eq!(shared.get::<Recovering>().service(), "READY");
+        drop(shared);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn default_lookup_panics_do_not_leak_storage() {
+        #[derive(Debug)]
+        struct PanicDefault;
+
+        impl Default for PanicDefault {
+            fn default() -> Self {
+                panic!("default failed")
+            }
+        }
+
+        impl Configuration for PanicDefault {
+            const NAME: &str = "PANIC_DEFAULT";
+
+            fn ctx(&self) -> &CfgContext {
+                unreachable!()
+            }
+
+            fn set_ctx(&mut self, _: CfgContext) {
+                unreachable!()
+            }
+        }
+
+        #[derive(Debug, Default)]
+        struct PanicContext(CfgContext);
+
+        impl Configuration for PanicContext {
+            const NAME: &str = "PANIC_CONTEXT";
+
+            fn ctx(&self) -> &CfgContext {
+                &self.0
+            }
+
+            fn set_ctx(&mut self, _: CfgContext) {
+                panic!("context assignment failed")
+            }
+        }
+
+        fn check<T: Configuration>() {
+            let drops = Arc::new(AtomicUsize::new(0));
+            let shared = SharedCfg::new("PANIC").add(ProbeCfg {
+                ctx: CfgContext::default(),
+                capture: None,
+                drops: Some(drops.clone()),
+            });
+            let shared = shared.build();
+            let storage = Arc::downgrade(&shared.0);
+            assert!(catch_unwind(AssertUnwindSafe(|| shared.get::<T>())).is_err());
+            drop(shared);
+            assert!(storage.upgrade().is_none());
+            assert_eq!(drops.load(Ordering::SeqCst), 1);
+        }
+
+        check::<PanicDefault>();
+        check::<PanicContext>();
+    }
 
     #[test]
     #[allow(clippy::should_panic_without_expect)]

@@ -1,5 +1,17 @@
 # Changes
 
+## Unreleased
+
+* Keep configuration-context metadata alive independently of configuration values.
+  Add `CfgContext::try_get()` and `try_shared()` for expired configurations;
+  existing lookup methods panic explicitly on expiration.
+
+* Publish configuration values only when the builder finishes, so contexts and
+  shared handles can safely escape construction, including to other threads.
+
+* Give typed configuration handles ownership of both their value and storage,
+  independent of user-provided contexts, and make lookup ownership unwind-safe.
+
 ## [5.3.0] - 2026-10-21
 
 * Reduce the initial readiness waiter reservation for small pipelines
