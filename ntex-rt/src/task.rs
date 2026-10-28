@@ -1,4 +1,5 @@
-use std::{future::Future, sync::Arc, sync::atomic::AtomicUsize, sync::atomic::Ordering};
+use std::{future::Future, pin::Pin, sync::Arc, sync::atomic::AtomicUsize, sync::atomic::Ordering};
+use std::{task::Context, task::Poll};
 
 // The Callbacks static holds a pointer to the global callbacks. It is protected by
 // the STATE static which determines whether `CBS` has been initialized yet.
@@ -115,20 +116,19 @@ impl Drop for Data {
     }
 }
 
-/// Spawns a local future and returns a `Send` future for its result.
+/// Spawns a local future and returns a [`SendableJoinHandle`] for its result.
 ///
 /// The task is spawned immediately on the current runtime, using
 /// [`crate::spawn_detached`] and its registered task callbacks. The spawned
-/// future need not be `Send`, but its output must be. Only the returned future
+/// future need not be `Send`, but its output must be. Only the returned handle
 /// may be moved to another thread; the task stays on its original runtime,
 /// which must keep being driven.
 ///
-/// Dropping the returned future requests cancellation, even before its first
-/// poll. The task's future is dropped on its runtime thread when the runtime
-/// next processes the task, or during shutdown. Cancellation does not wait for
-/// cleanup or interrupt an active poll.
+/// Dropping the handle detaches the task unless
+/// [`cancel_on_drop`](SendableJoinHandle::cancel_on_drop) is enabled.
+/// Use [`cancel`](SendableJoinHandle::cancel) to request cancellation explicitly.
 ///
-/// Awaiting the returned future yields the output or [`crate::JoinError`] if
+/// Awaiting the handle yields the output or [`crate::JoinError`] if
 /// the task ends without one, for example on panic or runtime shutdown. Task
 /// panics follow the runtime's usual behavior.
 ///
@@ -136,10 +136,7 @@ impl Drop for Data {
 ///
 /// Panics outside a runtime context that supports [`crate::spawn_detached`].
 #[track_caller]
-#[must_use = "dropping the returned future cancels the task"]
-pub fn spawn_sendable<F>(
-    fut: F,
-) -> impl Future<Output = Result<F::Output, crate::JoinError>> + Send + 'static
+pub fn spawn_sendable<F>(fut: F) -> SendableJoinHandle<F::Output>
 where
     F: Future + 'static,
     F::Output: Send,
@@ -149,13 +146,16 @@ where
     crate::spawn_detached(async move {
         let output = {
             let mut fut = std::pin::pin!(fut);
-            let mut canceled = std::pin::pin!(canceled);
+            let mut canceled = Some(canceled);
             std::future::poll_fn(|cx| {
-                if canceled.as_mut().poll(cx).is_ready() {
-                    std::task::Poll::Ready(None)
-                } else {
-                    fut.as_mut().poll(cx).map(Some)
+                if let Some(rx) = &mut canceled {
+                    match Pin::new(rx).poll(cx) {
+                        Poll::Ready(Ok(())) => return Poll::Ready(None),
+                        Poll::Ready(Err(_)) => canceled = None,
+                        Poll::Pending => {}
+                    }
                 }
+                fut.as_mut().poll(cx).map(Some)
             })
             .await
         };
@@ -163,9 +163,73 @@ where
             let _ = tx.send(output);
         }
     });
-    async move {
-        let _cancel = cancel;
-        rx.await.map_err(|_| crate::JoinError)
+    SendableJoinHandle {
+        rx,
+        cancel: Some(cancel),
+        cancel_on_drop: false,
+    }
+}
+
+/// A sendable task handle returned by [`spawn_sendable()`].
+///
+/// The handle is `Send` when `T` is `Send`, but is not `Sync`. It may be moved
+/// and polled on another thread while the task stays on its original runtime.
+/// That runtime must keep being driven for the task to make progress.
+///
+/// Dropping the handle detaches the task unless
+/// [`cancel_on_drop`](Self::cancel_on_drop) is enabled. Awaiting it yields the
+/// output, or [`crate::JoinError`] if the task ends without one, including on
+/// panic or runtime shutdown.
+#[derive(Debug)]
+pub struct SendableJoinHandle<T> {
+    rx: oneshot::AsyncReceiver<T>,
+    cancel: Option<oneshot::Sender<()>>,
+    cancel_on_drop: bool,
+}
+
+impl<T> SendableJoinHandle<T> {
+    /// Requests cancellation when this handle is dropped instead of detaching the task.
+    ///
+    /// Cancellation follows [`cancel`](Self::cancel) and does not wait for cleanup.
+    /// A running poll is not interrupted.
+    #[must_use]
+    pub fn cancel_on_drop(mut self) -> Self {
+        self.cancel_on_drop = true;
+        self
+    }
+
+    /// Requests cancellation and discards the result without waiting for cleanup.
+    ///
+    /// The future is dropped on its runtime thread when the runtime next
+    /// processes the task, or during shutdown. A running poll is not interrupted.
+    /// This method may be called from another thread without a runtime context.
+    pub fn cancel(mut self) {
+        self.cancel_on_drop = true;
+    }
+
+    /// Returns `true` if the task completed or was closed without an output.
+    pub fn is_finished(&self) -> bool {
+        self.rx.has_message() || self.rx.is_closed()
+    }
+}
+
+impl<T> Drop for SendableJoinHandle<T> {
+    fn drop(&mut self) {
+        if self.cancel_on_drop
+            && let Some(cancel) = self.cancel.take()
+        {
+            let _ = cancel.send(());
+        }
+    }
+}
+
+impl<T> Future for SendableJoinHandle<T> {
+    type Output = Result<T, crate::JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.rx)
+            .poll(cx)
+            .map(|result| result.map_err(|_| crate::JoinError))
     }
 }
 

@@ -12,7 +12,9 @@
 //! request cancellation on drop instead.
 //!
 //! Use [`spawn_sendable()`] to spawn a local future whose `Send` output can be
-//! awaited on another thread. Dropping its returned future requests cancellation.
+//! awaited on another thread through a [`SendableJoinHandle`]. Dropping that
+//! handle detaches the task by default; use [`SendableJoinHandle::cancel()`] or
+//! [`SendableJoinHandle::cancel_on_drop()`] to request cancellation.
 //!
 //! [`Handle::spawn()`] submits a `Send` future to the handle's runtime and
 //! returns a [`RemoteJoinHandle`] for the calling thread. On the runtime's own thread
@@ -107,7 +109,7 @@ pub use self::local_waker::LocalWaker;
 pub use self::pool::{BlockingError, BlockingResult, ThreadPool, spawn_blocking};
 pub use self::rt::{Runtime, RuntimeBuilder};
 pub use self::system::{Id, System};
-pub use self::task::{spawn_sendable, task_callbacks, task_opt_callbacks};
+pub use self::task::{SendableJoinHandle, spawn_sendable, task_callbacks, task_opt_callbacks};
 
 #[cfg(feature = "tokio")]
 pub use self::rt_tokio::*;

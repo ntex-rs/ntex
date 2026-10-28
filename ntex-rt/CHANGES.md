@@ -1,5 +1,11 @@
 # Changes
 
+## [4.5.1] - 2026-10-28
+
+* Change `spawn_sendable()` to return `SendableJoinHandle`. Dropping the handle
+  now detaches the task by default. Use `cancel()` or `cancel_on_drop()` to
+  request cancellation, and `is_finished()` to check completion
+
 ## [4.5.0] - 2026-10-28
 
 * Add `spawn_sendable()` to spawn a local future and receive its `Send` output

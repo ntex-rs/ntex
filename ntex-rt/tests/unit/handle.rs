@@ -254,7 +254,7 @@ fn cancel_on_drop_runtime_shutdown() {
 /// STATEMENT: A sendable result is woken on another thread while its non-Send task stays local.
 ///
 /// HOW:
-/// - Spawn a gated task holding an Rc and poll its result on a plain thread.
+/// - Spawn a gated task holding an Rc, opt into cancellation-on-drop, and poll its handle remotely.
 /// - Release the task after the remote poll returns pending and require a wake notification.
 /// - Receive a Send but non-Sync output and verify owner-thread execution and cleanup.
 #[test]
@@ -277,13 +277,14 @@ fn spawn_sendable_cross_thread() {
         let drops = Rc::new(Cell::new(0));
         let (guard, dropped) = drop_signal(&drops);
         let (release, gate) = oneshot::async_channel();
-        let result = crate::spawn_sendable(async move {
+        let result: crate::SendableJoinHandle<Cell<i32>> = crate::spawn_sendable(async move {
             let _guard = guard;
             assert_eq!(thread::current().id(), owner);
             gate.await.unwrap();
             assert_eq!(thread::current().id(), owner);
             Cell::new(42)
-        });
+        })
+        .cancel_on_drop();
         let (polled, remote_poll) = oneshot::async_channel();
         let (done, finished) = oneshot::async_channel();
         let reader = thread::spawn(move || {
@@ -291,13 +292,16 @@ fn spawn_sendable_cross_thread() {
             let waker = Waker::from(Arc::new(Notify(tx)));
             let mut cx = Context::from_waker(&waker);
             let mut result = std::pin::pin!(result);
+            assert!(!result.is_finished());
             assert!(result.as_mut().poll(&mut cx).is_pending());
             polled.send(()).unwrap();
             notifications.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(result.is_finished());
             let Poll::Ready(Ok(value)) = result.as_mut().poll(&mut cx) else {
                 panic!("result not ready after completion notification");
             };
             assert_eq!(value.get(), 42);
+            assert!(result.is_finished());
             let mut dropped = std::pin::pin!(dropped);
             assert!(matches!(
                 dropped.as_mut().poll(&mut cx),
@@ -313,14 +317,14 @@ fn spawn_sendable_cross_thread() {
     });
 }
 
-/// STATEMENT: Dropping a sendable result remotely cancels unpolled and suspended local tasks.
+/// STATEMENT: Dropping a default sendable handle detaches unpolled and suspended local tasks.
 ///
 /// HOW:
 /// - Capture a non-Send drop signal and optionally wait for the task's first poll.
-/// - Drop the result on another thread, both before and after polling it, without releasing the task.
-/// - Observe exactly one cleanup and no execution when cancelled before the first task poll.
+/// - Drop the handle on another thread, both before and after polling it.
+/// - Let the detached task suspend, release it, and require completion and exactly one cleanup.
 #[test]
-fn spawn_sendable_cancel_on_drop() {
+fn spawn_sendable_detach_on_drop() {
     System::new("spawn-sendable", TestRunner).block_on(async {
         for (poll_first, poll_result) in
             [(false, false), (false, true), (true, false), (true, true)]
@@ -328,30 +332,85 @@ fn spawn_sendable_cancel_on_drop() {
             let drops = Rc::new(Cell::new(0));
             let (guard, dropped) = drop_signal(&drops);
             let ran = Rc::new(Cell::new(false));
-            let polled = ran.clone();
-            let (started, start) = oneshot::async_channel();
-            let result = crate::spawn_sendable(async move {
+            let continued = ran.clone();
+            let (started, mut start) = oneshot::async_channel();
+            let (release, gate) = oneshot::async_channel();
+            let mut result = crate::spawn_sendable(async move {
                 let _guard = guard;
-                polled.set(true);
-                let _ = started.send(());
-                pending::<()>().await;
+                started.send(()).unwrap();
+                gate.await.unwrap();
+                continued.set(true);
             });
             if poll_first {
-                start.await.unwrap();
+                (&mut start).await.unwrap();
             }
             std::thread::spawn(move || {
-                let mut result = Box::pin(result);
                 if poll_result {
                     let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-                    assert!(result.as_mut().poll(&mut cx).is_pending());
+                    assert!(std::pin::Pin::new(&mut result).poll(&mut cx).is_pending());
                 }
                 drop(result);
             })
             .join()
             .unwrap();
+            if !poll_first {
+                start.await.unwrap();
+            }
+            release.send(()).unwrap();
             dropped.await.unwrap();
-            assert_eq!(ran.get(), poll_first);
+            assert!(ran.get());
             assert_eq!(drops.get(), 1);
+        }
+    });
+}
+
+/// STATEMENT: Explicit cancellation and opted-in drop cancel local tasks from another thread.
+///
+/// HOW:
+/// - Capture a non-Send drop signal and optionally wait for the task's first poll.
+/// - Explicitly cancel or drop an opted-in handle remotely, before or after polling it.
+/// - Observe exactly one cleanup and no execution when cancelled before the first task poll.
+#[test]
+fn spawn_sendable_cancel_on_drop() {
+    System::new("spawn-sendable", TestRunner).block_on(async {
+        for explicit in [false, true] {
+            for (poll_first, poll_result) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                let drops = Rc::new(Cell::new(0));
+                let (guard, dropped) = drop_signal(&drops);
+                let ran = Rc::new(Cell::new(false));
+                let polled = ran.clone();
+                let (started, start) = oneshot::async_channel();
+                let mut result = crate::spawn_sendable(async move {
+                    let _guard = guard;
+                    polled.set(true);
+                    let _ = started.send(());
+                    pending::<()>().await;
+                });
+                if !explicit {
+                    result = result.cancel_on_drop().cancel_on_drop();
+                }
+                if poll_first {
+                    start.await.unwrap();
+                }
+                std::thread::spawn(move || {
+                    if poll_result {
+                        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+                        assert!(std::pin::Pin::new(&mut result).poll(&mut cx).is_pending());
+                    }
+                    if explicit {
+                        result.cancel();
+                    } else {
+                        drop(result);
+                    }
+                })
+                .join()
+                .unwrap();
+                dropped.await.unwrap();
+                assert_eq!(ran.get(), poll_first);
+                assert_eq!(drops.get(), 1);
+            }
         }
     });
 }
@@ -382,11 +441,13 @@ fn spawn_sendable_runtime_shutdown() {
         assert_eq!(drops.get(), 1);
         std::thread::spawn(move || {
             let mut result = std::pin::pin!(result);
+            assert!(result.is_finished());
             let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
             assert!(matches!(
                 result.as_mut().poll(&mut cx),
                 std::task::Poll::Ready(Err(_))
             ));
+            assert!(result.is_finished());
         })
         .join()
         .unwrap();
@@ -416,11 +477,13 @@ fn spawn_sendable_task_panic() {
     let result = rx.try_recv().unwrap();
     std::thread::spawn(move || {
         let mut result = std::pin::pin!(result);
+        assert!(result.is_finished());
         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(matches!(
             result.as_mut().poll(&mut cx),
             std::task::Poll::Ready(Err(_))
         ));
+        assert!(result.is_finished());
     })
     .join()
     .unwrap();
