@@ -115,10 +115,64 @@ impl Drop for Data {
     }
 }
 
+/// Spawns a local future and returns a `Send` future for its result.
+///
+/// The task is spawned immediately on the current runtime, using
+/// [`crate::spawn_detached`] and its registered task callbacks. The spawned
+/// future need not be `Send`, but its output must be. Only the returned future
+/// may be moved to another thread; the task stays on its original runtime,
+/// which must keep being driven.
+///
+/// Dropping the returned future requests cancellation, even before its first
+/// poll. The task's future is dropped on its runtime thread when the runtime
+/// next processes the task, or during shutdown. Cancellation does not wait for
+/// cleanup or interrupt an active poll.
+///
+/// Awaiting the returned future yields the output or [`crate::JoinError`] if
+/// the task ends without one, for example on panic or runtime shutdown. Task
+/// panics follow the runtime's usual behavior.
+///
+/// # Panics
+///
+/// Panics outside a runtime context that supports [`crate::spawn_detached`].
+#[track_caller]
+#[must_use = "dropping the returned future cancels the task"]
+pub fn spawn_sendable<F>(
+    fut: F,
+) -> impl Future<Output = Result<F::Output, crate::JoinError>> + Send + 'static
+where
+    F: Future + 'static,
+    F::Output: Send,
+{
+    let (tx, rx) = oneshot::async_channel();
+    let (cancel, canceled) = oneshot::async_channel::<()>();
+    crate::spawn_detached(async move {
+        let output = {
+            let mut fut = std::pin::pin!(fut);
+            let mut canceled = std::pin::pin!(canceled);
+            std::future::poll_fn(|cx| {
+                if canceled.as_mut().poll(cx).is_ready() {
+                    std::task::Poll::Ready(None)
+                } else {
+                    fut.as_mut().poll(cx).map(Some)
+                }
+            })
+            .await
+        };
+        if let Some(output) = output {
+            let _ = tx.send(output);
+        }
+    });
+    async move {
+        let _cancel = cancel;
+        rx.await.map_err(|_| crate::JoinError)
+    }
+}
+
 /// Installs process-wide callbacks for instrumenting spawned tasks.
 ///
 /// Callbacks apply when [`crate::spawn`], [`crate::spawn_detached`],
-/// [`crate::rt::spawn`], or [`crate::rt::spawn_detached`] wraps a future, not
+/// [`spawn_sendable`], [`crate::rt::spawn`], or [`crate::rt::spawn_detached`] wraps a future, not
 /// retroactively to existing tasks. Direct [`crate::rt::Runtime`] spawning
 /// methods do not apply them.
 ///

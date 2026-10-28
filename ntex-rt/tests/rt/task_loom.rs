@@ -761,25 +761,33 @@ fn local_join_and_remote_wake() {
 ///
 /// HOW:
 /// - Wake and release a cloned standard waker remotely while cancelling its pending task locally.
+/// - Exercise both explicit cancellation and cancellation-on-drop.
 /// - Run until destruction, join the producer, and release the saved waker.
 /// - Check full reclamation and at most two total future polls.
 #[test]
 fn local_cancel_remote_wake() {
-    model(|| {
-        let rt = new_rt();
-        let (st, task) = pending(&rt);
-        let w = st.waker();
-        let th = thread::spawn(move || {
-            w.wake_by_ref();
-            drop(w);
+    for cancel_on_drop in [false, true] {
+        model(move || {
+            let rt = new_rt();
+            let (st, task) = pending(&rt);
+            task.set_cancel_on_drop(cancel_on_drop);
+            let w = st.waker();
+            let th = thread::spawn(move || {
+                w.wake_by_ref();
+                drop(w);
+            });
+            if cancel_on_drop {
+                drop(task);
+            } else {
+                task.cancel();
+            }
+            run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
+            th.join().unwrap();
+            drop(st.waker.lock().unwrap().take());
+            assert_freed(&rt);
+            assert!(st.polls.load(Ordering::Relaxed) <= 2);
         });
-        task.cancel();
-        run_until(&rt, || st.drops.load(Ordering::Relaxed) == 1);
-        th.join().unwrap();
-        drop(st.waker.lock().unwrap().take());
-        assert_freed(&rt);
-        assert!(st.polls.load(Ordering::Relaxed) <= 2);
-    });
+    }
 }
 
 /// STATEMENT: Concurrent owner-handle and remote-waker release reclaim a detached pending task.

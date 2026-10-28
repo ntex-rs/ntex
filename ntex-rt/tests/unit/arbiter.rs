@@ -297,6 +297,7 @@ fn remote_join_handle() {
                 let _ = done.send(());
             });
             if detach {
+                #[allow(deprecated, reason = "verify legacy detach matches handle drop")]
                 task.detach();
             } else {
                 drop(task);

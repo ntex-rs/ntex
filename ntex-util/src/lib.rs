@@ -28,7 +28,7 @@ pub mod task;
 pub mod time;
 
 pub use futures_core::Stream;
-pub use ntex_rt::{spawn, spawn_detached};
+pub use ntex_rt::{spawn, spawn_detached, spawn_sendable};
 
 #[doc(hidden)]
 pub use hashbrown::{Equivalent, hash_map, hash_set};

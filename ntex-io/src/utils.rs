@@ -354,11 +354,10 @@ mod tests {
         let slot = Rc::new(WaiterEntry::new(7));
         let nested = Rc::new(WaiterEntry::new(8));
         let (task_ext, task_slot) = (ext.clone(), slot.clone());
-        rt.spawn(std::future::poll_fn(move |cx| {
+        rt.spawn_detached(std::future::poll_fn(move |cx| {
             task_ext.register_waker(&task_slot, cx.waker());
             Poll::<()>::Pending
-        }))
-        .detach();
+        }));
         rt.poll();
 
         let notifications = Arc::new(AtomicUsize::new(0));

@@ -239,7 +239,7 @@ mod tests {
         let svc = p.bind();
 
         let (tx, rx) = oneshot::channel();
-        spawn(Dispatcher { p, tx: Some(tx) }).detach();
+        drop(spawn(Dispatcher { p, tx: Some(tx) }));
 
         sleep(Millis(25)).await;
         assert_eq!(svc.call(1usize).await, Ok(1usize));

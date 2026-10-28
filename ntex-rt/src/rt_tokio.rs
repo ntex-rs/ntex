@@ -19,8 +19,9 @@ pub fn now() -> Instant {
 /// Spawns a future on the current Tokio local task set and returns its join handle.
 ///
 /// The future and output need not be `Send`. Registered task callbacks are
-/// applied. Dropping the handle detaches the task; the local task set must keep
-/// being driven for it to make progress. An ntex system is not required.
+/// applied. Dropping the handle detaches the task unless
+/// [`cancel_on_drop`](JoinHandle::cancel_on_drop) is enabled. The local task set
+/// must keep being driven for it to make progress. An ntex system is not required.
 ///
 /// # Panics
 ///
@@ -67,11 +68,13 @@ impl std::error::Error for JoinError {}
 
 /// A local task handle. It is neither `Send` nor `Sync`.
 ///
-/// Returned by [`spawn()`]. Dropping the handle detaches the task.
+/// Returned by [`spawn()`]. Dropping the handle detaches the task unless
+/// [`cancel_on_drop`](Self::cancel_on_drop) is enabled.
 /// Awaiting it returns the task output or [`JoinError`] on cancellation or panic.
 #[derive(Debug)]
 pub struct JoinHandle<T> {
     task: Option<tok_io::task::JoinHandle<T>>,
+    cancel_on_drop: bool,
     _local: PhantomData<Rc<()>>,
 }
 
@@ -79,8 +82,20 @@ impl<T> JoinHandle<T> {
     fn new(task: tok_io::task::JoinHandle<T>) -> Self {
         Self {
             task: Some(task),
+            cancel_on_drop: false,
             _local: PhantomData,
         }
+    }
+
+    /// Requests cancellation when this handle is dropped instead of detaching the task.
+    ///
+    /// Cancellation follows [`cancel`](Self::cancel) and does not wait for cleanup.
+    /// A running poll is not interrupted. The deprecated [`detach`](Self::detach)
+    /// method still overrides this setting.
+    #[must_use]
+    pub fn cancel_on_drop(mut self) -> Self {
+        self.cancel_on_drop = true;
+        self
     }
 
     /// Requests cancellation and discards the result without waiting for cleanup.
@@ -94,13 +109,31 @@ impl<T> JoinHandle<T> {
     }
 
     /// Detaches the task to let it keep running in the background.
-    pub fn detach(self) {}
+    ///
+    /// Overrides [`cancel_on_drop`](Self::cancel_on_drop) without requesting cancellation.
+    #[deprecated(
+        since = "4.5.0",
+        note = "Drop the handle instead if cancel_on_drop() is not enabled"
+    )]
+    pub fn detach(mut self) {
+        self.cancel_on_drop = false;
+    }
 
     /// Returns `true` if the task completed, panicked, or finished cancellation.
     pub fn is_finished(&self) -> bool {
         match &self.task {
             Some(t) => t.is_finished(),
             None => true,
+        }
+    }
+}
+
+impl<T> Drop for JoinHandle<T> {
+    fn drop(&mut self) {
+        if self.cancel_on_drop
+            && let Some(t) = &self.task
+        {
+            t.abort();
         }
     }
 }
@@ -159,6 +192,10 @@ impl<T> RemoteJoinHandle<T> {
     }
 
     /// Detaches the task to let it keep running in the background.
+    ///
+    /// This method does nothing beyond dropping the handle; dropping it already
+    /// detaches the task without canceling it.
+    #[deprecated(since = "4.5.0", note = "Use drop(handle) instead")]
     pub fn detach(self) {}
 
     /// Returns `true` if the task completed or ended without an output.

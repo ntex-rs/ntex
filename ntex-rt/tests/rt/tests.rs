@@ -248,13 +248,13 @@ fn awake_skips_local_notify() {
 
     // the driver is awake and polls the runtime before blocking
     rt.awake();
-    rt.spawn(async {}).detach();
+    drop(rt.spawn(async {}));
     assert_eq!(cnt.load(Ordering::Relaxed), 0);
     assert_eq!(rt.poll(), PollResult::Pending);
 
     // the runtime is idle, the driver may block
-    rt.spawn(async {}).detach();
-    rt.spawn(async {}).detach();
+    drop(rt.spawn(async {}));
+    drop(rt.spawn(async {}));
     assert_eq!(cnt.load(Ordering::Relaxed), 1);
     assert_eq!(rt.poll(), PollResult::Pending);
 }
@@ -368,15 +368,14 @@ fn local_task_woken_by_remote_task() {
     let waker = Arc::new(Mutex::new(None::<Waker>));
     let done = Rc::new(AtomicBool::new(false));
     let (waker2, done2) = (waker.clone(), done.clone());
-    rt.spawn(poll_fn(move |cx| {
+    drop(rt.spawn(poll_fn(move |cx| {
         if waker2.lock().unwrap().replace(cx.waker().clone()).is_some() {
             done2.store(true, Ordering::Relaxed);
             Poll::Ready(())
         } else {
             Poll::Pending
         }
-    }))
-    .detach();
+    })));
     assert_eq!(rt.poll(), PollResult::Pending);
 
     let hnd = rt.handle();
@@ -436,12 +435,11 @@ fn schedule_while_running() {
     let rt = Runtime::new(Box::new(NoopNotify));
     let done = Rc::new(RefCell::new(0));
     let done2 = done.clone();
-    rt.spawn(async move {
+    drop(rt.spawn(async move {
         // schedules into the local queue from a running task
         let h = Runtime::with_current(|rt| rt.spawn(async { 1 }));
         *done2.borrow_mut() = h.await.unwrap();
-    })
-    .detach();
+    }));
     CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
     assert_eq!(*done.borrow(), 1);
 }
@@ -462,8 +460,8 @@ fn event_interval() {
             .build(Box::new(NoopNotify));
         assert_eq!(rt.poll(), PollResult::Pending);
 
-        rt.spawn(async {}).detach();
-        rt.spawn(async {}).detach();
+        drop(rt.spawn(async {}));
+        drop(rt.spawn(async {}));
         assert_eq!(rt.poll(), PollResult::PollAgain);
         assert_eq!(rt.poll(), PollResult::Pending);
     }
@@ -520,12 +518,11 @@ fn now() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     for _ in 0..2 {
         let seen = seen.clone();
-        rt.spawn(async move {
+        drop(rt.spawn(async move {
             seen.borrow_mut()
                 .push((Runtime::with_current(Runtime::now), crate::rt::now()));
             std::thread::sleep(Duration::from_millis(5));
-        })
-        .detach();
+        }));
     }
     CURRENT_RUNTIME.set(&rt, || assert_eq!(rt.poll(), PollResult::Pending));
     assert_eq!(*seen.borrow(), vec![(start, start), (start, start)]);
@@ -551,7 +548,7 @@ fn local_schedule_while_idle_starts_turn() {
     let busy = rt.busy_duration();
 
     // the driver wakes a task before blocking, the next turn starts here
-    rt.spawn(async {}).detach();
+    drop(rt.spawn(async {}));
     let turn_start = rt.now();
     rt.awake();
     assert_eq!(rt.now(), turn_start);
@@ -580,7 +577,7 @@ fn busy_duration() {
     assert_eq!(rt.poll(), PollResult::Pending);
 
     // task time is counted
-    rt.spawn(async move { std::thread::sleep(sleep) }).detach();
+    drop(rt.spawn(async move { std::thread::sleep(sleep) }));
     assert_eq!(rt.poll(), PollResult::Pending);
     let busy = hnd.busy_duration().unwrap();
     assert!(busy >= sleep);
@@ -601,8 +598,8 @@ fn busy_duration() {
     assert!(rt.busy_duration() <= busy + poll_elapsed);
 
     // published on each poll while the runtime stays busy
-    rt.spawn(async move { std::thread::sleep(sleep) }).detach();
-    rt.spawn(async {}).detach();
+    drop(rt.spawn(async move { std::thread::sleep(sleep) }));
+    drop(rt.spawn(async {}));
     let busy = rt.busy_duration();
     assert_eq!(rt.poll(), PollResult::PollAgain);
     let busy2 = rt.busy_duration();
@@ -628,13 +625,12 @@ fn busy_duration_during_turn() {
     let th = thread::spawn(move || {
         let rt = Runtime::new(Box::new(NoopNotify));
         let hnd = rt.handle();
-        rt.spawn(async move {
+        drop(rt.spawn(async move {
             tx.send(hnd).unwrap();
             thread::sleep(sleep);
             // keep the turn running until the other thread checked it
             let _ = done_rx.recv();
-        })
-        .detach();
+        }));
         assert_eq!(rt.poll(), PollResult::Pending);
         assert_eq!(rt.current_turn(), None);
     });
@@ -669,11 +665,10 @@ fn current_task() {
         assert_eq!(hnd.current_task(), None);
 
         let line = line!() + 1;
-        rt.spawn(async move {
+        drop(rt.spawn(async move {
             tx.send((hnd, line)).unwrap();
             release_rx.recv().unwrap();
-        })
-        .detach();
+        }));
         assert_eq!(rt.poll(), PollResult::Pending);
         polled_tx.send(()).unwrap();
 
@@ -718,8 +713,7 @@ fn busy_duration_is_monotonic() {
         let rt = Runtime::new(Box::new(NoopNotify));
         tx.send(rt.handle()).unwrap();
         for _ in 0..100 {
-            rt.spawn(async { thread::sleep(Duration::from_micros(500)) })
-                .detach();
+            drop(rt.spawn(async { thread::sleep(Duration::from_micros(500)) }));
             assert_eq!(rt.poll(), PollResult::Pending);
             thread::sleep(Duration::from_micros(200));
         }
@@ -755,8 +749,8 @@ fn poll_count() {
     assert_eq!((rt.poll_count(), rt.poll_again_count()), (1, 0));
 
     // one task per poll, the first poll leaves a backlog
-    rt.spawn(async {}).detach();
-    rt.spawn(async {}).detach();
+    drop(rt.spawn(async {}));
+    drop(rt.spawn(async {}));
     assert_eq!(rt.poll(), PollResult::PollAgain);
     assert_eq!(rt.poll(), PollResult::Pending);
     assert_eq!(hnd.poll_count(), Some(3));
@@ -780,21 +774,19 @@ fn schedule_while_clearing() {
     let rt = Runtime::new(Box::new(NoopNotify));
     let waker = Rc::new(RefCell::new(None));
     let waker2 = waker.clone();
-    rt.spawn(poll_fn(move |cx| {
+    drop(rt.spawn(poll_fn(move |cx| {
         *waker2.borrow_mut() = Some(cx.waker().clone());
         Poll::<()>::Pending
-    }))
-    .detach();
+    })));
     assert_eq!(rt.poll(), PollResult::Pending);
     assert!(waker.borrow().is_some());
 
     // queued task wakes the waiting task while the queue is cleared
     let guard = WakeOnDrop(waker.clone());
-    rt.spawn(async move {
+    drop(rt.spawn(async move {
         let _g = guard;
-    })
-    .detach();
-    rt.spawn(async {}).detach();
+    }));
+    drop(rt.spawn(async {}));
     drop(rt);
     assert!(waker.borrow().is_none());
     // the woken task is dropped too, releasing its clone of `waker`
@@ -1199,15 +1191,14 @@ fn last_waker_drops_future() {
         let dropped = Arc::new(AtomicBool::new(false));
         let flag = DropFlag(dropped.clone());
         let slot2 = slot.clone();
-        rt.spawn(async move {
+        drop(rt.spawn(async move {
             let _flag = flag;
             poll_fn(|cx| {
                 *slot2.lock().unwrap() = Some(cx.waker().clone());
                 Poll::<()>::Pending
             })
             .await;
-        })
-        .detach();
+        }));
         poll_until(&rt, || slot.lock().unwrap().is_some());
         assert!(!dropped.load(Ordering::SeqCst));
 
@@ -1308,7 +1299,7 @@ fn panic_in_poll() {
     // the runtime keeps running tasks
     let done = Rc::new(Cell::new(false));
     let done2 = done.clone();
-    rt.spawn(async move { done2.set(true) }).detach();
+    drop(rt.spawn(async move { done2.set(true) }));
     poll_until(&rt, || done.get());
 }
 
@@ -1795,11 +1786,10 @@ fn unconsumed_output_dropped() {
     // detached before completion
     let out = Counter::default();
     let tok = out.token();
-    rt.spawn(async move {
+    drop(rt.spawn(async move {
         yield_once().await;
         tok
-    })
-    .detach();
+    }));
     poll_until(&rt, || out.get() == 1);
 
     // consumed by the join handle
@@ -1936,6 +1926,7 @@ fn stale_wakers() {
 /// - Detach or drop before completion, or detach, cancel, or drop after completion.
 /// - Drain each case and check the output's drop flag.
 #[test]
+#[allow(deprecated, reason = "verify legacy detach releases unclaimed outputs")]
 fn unclaimed_output_with_own_waker() {
     // the output holds a waker of its task, a cycle unless it is dropped
     for case in 0..5 {
@@ -2027,7 +2018,7 @@ fn reentrant_drop() {
 
         if clear {
             // queued when the runtime is dropped
-            h.detach();
+            drop(h);
             waker.borrow().as_ref().unwrap().wake_by_ref();
             drop(rt);
         } else {
@@ -2089,7 +2080,7 @@ fn reentrant_poll_in_drop() {
 
         if clear {
             // queued when the runtime is dropped
-            h.detach();
+            drop(h);
             waker.borrow().as_ref().unwrap().wake_by_ref();
             drop(rt);
         } else {
