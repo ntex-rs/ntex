@@ -1,24 +1,24 @@
 //! Owner-directed references. Remote code reads immutable routing and sets a
 //! sticky publication flag, but never accesses owner-only execution state.
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-};
-
-use super::{
-    Arc, Core, Header, ManuallyDrop, NonNull, Ordering, RawWaker, Remote, Runnable, RunnableQueue,
-    Waker, abort, core, inc_local, live_owner_queue, mark_scheduled, raw_waker, release_local,
-    release_local_ordered, task_ptr, wake_local,
-};
-use crate::rt::{ThreadId, try_current_thread_id};
+use std::process::abort;
+use std::sync::{Arc, atomic::Ordering};
+use std::task::{RawWaker, RawWakerVTable, Waker};
+use std::{cell::Cell, cell::RefCell, collections::HashMap, mem::ManuallyDrop, ptr, ptr::NonNull};
 
 #[cfg(ntex_loom)]
 use loom::sync::RwLock;
 #[cfg(not(ntex_loom))]
 use std::sync::{OnceLock, RwLock};
 
+use super::task::{self, Core, Header, Remote, Runnable};
+use super::{ThreadId, queue::RunnableQueue, try_current_thread_id};
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RuntimeId(u16);
+
+/// Standard wakers own owner-accounted references to the task allocation.
+static WAKER_VTABLE: RawWakerVTable =
+    RawWakerVTable::new(clone_waker, wake::<true>, wake::<false>, drop_waker);
 
 // Entries are populated only on their owner thread, so a matching never-reused
 // runtime ID proves ownership. Shutdown invalidates the entry before callbacks.
@@ -36,15 +36,24 @@ enum Owner {
 }
 
 #[cfg(not(ntex_loom))]
+type RemoteEndpoints = crate::HashMap<RuntimeId, Arc<RunnableQueue>>;
+
+// Loom must replay the same pruning order when it models admission loads.
+#[cfg(ntex_loom)]
+type RemoteEndpoints = HashMap<RuntimeId, Arc<RunnableQueue>, foldhash::fast::FixedState>;
+
+#[cfg(not(ntex_loom))]
 thread_local! {
     static OWNER_ENDPOINT: Cell<OwnerEndpoint> = const { Cell::new(OwnerEndpoint::Unknown) };
-    static REMOTE_ENDPOINT: RefCell<Option<Arc<RunnableQueue>>> = const { RefCell::new(None) };
+    static REMOTE_ENDPOINTS: RefCell<RemoteEndpoints> = RefCell::new(RemoteEndpoints::default());
+    #[cfg(test)]
+    pub(super) static REGISTRY_LOOKUPS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(ntex_loom)]
 loom::thread_local! {
     static OWNER_ENDPOINT: Cell<OwnerEndpoint> = Cell::new(OwnerEndpoint::Unknown);
-    static REMOTE_ENDPOINT: RefCell<Option<Arc<RunnableQueue>>> = RefCell::new(None);
+    static REMOTE_ENDPOINTS: RefCell<RemoteEndpoints> = RefCell::new(RemoteEndpoints::default());
 }
 
 struct Registry {
@@ -143,20 +152,10 @@ pub(crate) fn unregister(id: RuntimeId) -> Shutdown {
     Shutdown(id)
 }
 
-/// Retains an active or draining queue for owner cleanup, including callbacks.
-pub(super) fn retain_owner_queue(h: NonNull<Header>) -> Option<Arc<RunnableQueue>> {
-    registry()
-        .read()
-        .unwrap()
-        .queues
-        .get(&core(h).routing.runtime)
-        .cloned()
-}
-
 /// Coallocated immutable metadata, readable without borrowing the task header.
 pub(super) struct Routing {
-    pub(super) runtime: RuntimeId,
     pub(super) owner: ThreadId,
+    pub(super) runtime: RuntimeId,
 }
 
 /// Projects immutable routing metadata without borrowing owner-only task state.
@@ -172,6 +171,44 @@ unsafe fn routing<'a>(data: *const ()) -> &'a Routing {
 #[inline]
 pub(super) unsafe fn active_owner(data: *const ()) -> bool {
     matches!(unsafe { owner(data) }, Owner::Active)
+}
+
+/// Clones a native reference on its owner thread.
+///
+/// The caller must hold a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn clone_local_waker(ptr: *const ()) {
+    task::inc_local(unsafe { task::task_ptr(ptr) });
+}
+
+/// Wakes a native task on its owner thread, transferring a reference if owned.
+///
+/// The caller must hold a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn wake_local_waker(ptr: *const (), owned: bool) {
+    task::wake_local::<true>(unsafe { task::task_ptr(ptr) }, owned);
+}
+
+/// Releases a native reference on its owner thread.
+///
+/// The caller must own a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn drop_local_waker(ptr: *const ()) {
+    task::release_unshared(unsafe { task::task_ptr(ptr) });
+}
+
+/// Borrows a task reference; the raw pointer retains allocation provenance.
+#[inline]
+pub(crate) fn raw_waker(ptr: *const ()) -> RawWaker {
+    RawWaker::new(ptr, &WAKER_VTABLE)
+}
+
+/// Acquire thread-safe ownership before releasing the local reference.
+pub(crate) unsafe fn into_waker(ptr: *const ()) -> Waker {
+    let raw = ManuallyDrop::new(unsafe { Waker::from_raw(raw_waker(ptr)) });
+    let waker = (*raw).clone();
+    unsafe { drop_local_waker(ptr) };
+    waker
 }
 
 /// Resolves owner-local liveness, caching closure before shutdown runs callbacks.
@@ -208,28 +245,73 @@ pub(super) fn with_registered<R>(
     id: RuntimeId,
     f: impl FnOnce(&Arc<RunnableQueue>) -> R,
 ) -> Option<R> {
+    #[cfg(all(test, not(ntex_loom)))]
+    REGISTRY_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
+
     let registry = registry().read().unwrap();
     let queue = registry.queues.get(&id)?;
     if queue.is_closed() { None } else { Some(f(queue)) }
 }
 
-/// Publishes through the remote thread's last endpoint, notifying outside TLS borrows.
+/// Retains an active or draining endpoint for owner cleanup, including callbacks.
+///
+/// Unlike remote lookup, closed queues remain available until shutdown drains.
+/// Open TLS entries bypass the registry without populating or pruning the cache.
+pub(super) fn retain_owner_queue(id: RuntimeId) -> Option<Arc<RunnableQueue>> {
+    if let Ok(Some(queue)) = REMOTE_ENDPOINTS.try_with(|cached| {
+        cached
+            .borrow()
+            .get(&id)
+            .filter(|queue| !queue.is_closed())
+            .cloned()
+    }) {
+        return Some(queue);
+    }
+
+    #[cfg(all(test, not(ntex_loom)))]
+    REGISTRY_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
+
+    registry().read().unwrap().queues.get(&id).cloned()
+}
+
+/// Retains a remote endpoint observed open, consulting TLS before the registry.
+///
+/// Lookup does not publish work or reserve admission. The endpoint may close
+/// immediately afterward, so callers must still admit work before publishing.
+pub(super) fn remote_queue(id: RuntimeId) -> Option<Arc<RunnableQueue>> {
+    let queue = match REMOTE_ENDPOINTS.try_with(|cached| cached.borrow().get(&id).cloned()) {
+        Ok(Some(queue)) => queue,
+        _ => remote_queue_uncached(id)?,
+    };
+    if queue.is_closed() {
+        let removed = REMOTE_ENDPOINTS.try_with(|cached| cached.borrow_mut().remove(&id));
+        drop(removed);
+        None
+    } else {
+        Some(queue)
+    }
+}
+
+/// Publishes through the remote thread's cached endpoints, notifying outside TLS borrows.
 ///
 /// Returns `false` if the endpoint is absent or has closed admission.
 fn publish(id: RuntimeId, entry: WakeEntry) -> bool {
     let mut entry = Some(entry);
-    let cached = REMOTE_ENDPOINT.try_with(|cached| {
+    let cached = REMOTE_ENDPOINTS.try_with(|cached| {
         let cached = cached.borrow();
         cached
-            .as_ref()
-            .filter(|queue| queue.runtime_id == id)
+            .get(&id)
             .map(|queue| publish_admitted(queue, entry.take().unwrap()))
     });
     let notify = match cached {
         Ok(Some(notify)) => notify,
-        _ => publish_uncached(id, entry.unwrap()),
+        _ => remote_queue(id)
+            .ok_or(())
+            .and_then(|queue| publish_admitted(&queue, entry.unwrap())),
     };
     let Ok(notify) = notify else {
+        let removed = REMOTE_ENDPOINTS.try_with(|cached| cached.borrow_mut().remove(&id));
+        drop(removed);
         return false;
     };
     if let Some(queue) = notify {
@@ -238,16 +320,26 @@ fn publish(id: RuntimeId, entry: WakeEntry) -> bool {
     true
 }
 
-/// Refreshes the one-entry cache, or bypasses it during thread-local destruction.
+/// Caches a new endpoint and prunes closed ones, or bypasses unavailable TLS.
 #[cold]
-fn publish_uncached(id: RuntimeId, entry: WakeEntry) -> Result<Option<Arc<RunnableQueue>>, ()> {
-    let queue = with_registered(id, Arc::clone).ok_or(())?;
-    if let Ok(previous) = REMOTE_ENDPOINT.try_with(|cached| cached.replace(Some(queue.clone()))) {
+fn remote_queue_uncached(id: RuntimeId) -> Option<Arc<RunnableQueue>> {
+    let queue = with_registered(id, Arc::clone);
+    if let Ok(retired) = REMOTE_ENDPOINTS.try_with(|cached| {
+        let mut cached = cached.borrow_mut();
+        let mut retired: Vec<_> = cached
+            .extract_if(|_, queue| queue.is_closed())
+            .map(|(_, queue)| queue)
+            .collect();
+        if let Some(queue) = &queue {
+            retired.extend(cached.insert(id, queue.clone()));
+        }
+        retired
+    }) {
         // Destructors may reenter wakers. Keep our endpoint alive independently,
-        // release the TLS borrow, and retire the old endpoint before admitting work.
-        drop(previous);
+        // release the TLS borrow, and retire closed endpoints before returning.
+        drop(retired);
     }
-    publish_admitted(&queue, entry)
+    queue
 }
 
 /// Reserves shutdown-safe publication without cloning the cached queue reference.
@@ -288,7 +380,7 @@ const _: () = {
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum Operation {
+pub(super) enum Operation {
     /// Activates an unpolled, detached submission.
     Spawn = 0,
     AddRef = 1,
@@ -301,7 +393,7 @@ unsafe impl Send for WakeEntry {}
 
 impl WakeEntry {
     /// Encodes a command without exposing or discarding the pointer's provenance.
-    fn new(h: NonNull<Header>, op: Operation) -> Self {
+    pub(super) fn new(h: NonNull<Header>, op: Operation) -> Self {
         #[cfg(target_pointer_width = "64")]
         let h = {
             debug_assert_eq!(h.addr().get() & OP_MASK, 0);
@@ -359,20 +451,20 @@ impl WakeEntry {
     pub(crate) fn into_runnable(self, queue: &RunnableQueue) -> Option<Runnable> {
         let h = self.header();
         let op = self.operation();
-        debug_assert_eq!(core(h).routing.runtime, queue.runtime_id);
+        debug_assert_eq!(task::core(h).routing.runtime, queue.runtime_id);
         match op {
             Operation::Spawn => return Some(Remote(h).into_runnable()),
-            Operation::AddRef => inc_local(h),
-            Operation::Release => release_local_ordered(h),
+            Operation::AddRef => task::inc_local(h),
+            Operation::Release => task::release_local_ordered(h),
             Operation::Wake | Operation::WakeAndRelease => {
                 queue.acquire_wakes();
-                let runnable = mark_scheduled(h).then(|| {
+                let runnable = task::mark_scheduled(h).then(|| {
                     // Establish scheduling ownership before consuming the waker.
-                    inc_local(h);
+                    task::inc_local(h);
                     Runnable(h)
                 });
                 if matches!(op, Operation::WakeAndRelease) {
-                    release_local_ordered(h);
+                    task::release_local_ordered(h);
                 }
                 return runnable;
             }
@@ -381,24 +473,13 @@ impl WakeEntry {
     }
 }
 
-/// Orders an owner release through the FIFO, or releases directly after shutdown drains.
-pub(super) fn defer_release(h: NonNull<Header>) {
-    let entry = WakeEntry::new(h, Operation::Release);
-    if let Some(queue) = live_owner_queue(h)
-        && !queue.idle.get()
-        && !queue.is_closed()
-    {
-        // A busy owner services this FIFO without notification or callbacks.
-        // No strong queue reference is needed for the callback-free publication.
-        queue.wake_queue.push(entry);
-        return;
-    }
-    if let Some(queue) = retain_owner_queue(h) {
-        queue.owner_entry(entry);
+/// Checks routing once, for a direct owner-local handle.
+#[inline]
+pub(crate) fn local_waker_ptr(waker: &Waker) -> Option<*const ()> {
+    if ptr::eq(waker.vtable(), &raw const WAKER_VTABLE) && unsafe { active_owner(waker.data()) } {
+        Some(waker.data())
     } else {
-        // Shutdown drained publications before removing cleanup access. Only
-        // owner-local survivors can reach this path; standard wakers are inert.
-        release_local_ordered(h);
+        None
     }
 }
 
@@ -408,11 +489,11 @@ pub(super) fn defer_release(h: NonNull<Header>) {
 /// # Safety
 ///
 /// `data` must belong to a live native standard waker or a protected borrowed poll waker.
-pub(super) unsafe fn clone_waker(data: *const ()) -> RawWaker {
-    let h = unsafe { task_ptr(data) };
+unsafe fn clone_waker(data: *const ()) -> RawWaker {
+    let h = unsafe { task::task_ptr(data) };
     let acquired = match unsafe { owner(data) } {
         Owner::Active => {
-            inc_local(h);
+            task::inc_local(h);
             true
         }
         Owner::Closed => false,
@@ -435,12 +516,12 @@ pub(super) unsafe fn clone_waker(data: *const ()) -> RawWaker {
 ///
 /// `data` must belong to a live native standard waker, owned if `OWNED`.
 /// A borrowed poll waker is also valid when `OWNED` is false.
-pub(super) unsafe fn wake<const OWNED: bool>(data: *const ()) {
-    let h = unsafe { task_ptr(data) };
+unsafe fn wake<const OWNED: bool>(data: *const ()) {
+    let h = unsafe { task::task_ptr(data) };
     match unsafe { owner(data) } {
         // Scheduling may notify a driver that reenters shutdown.
         // Nothing may touch the task afterward.
-        Owner::Active => wake_local::<false>(h, OWNED),
+        Owner::Active => task::wake_local::<false>(h, OWNED),
         Owner::Closed => {}
         Owner::Remote => {
             publish(
@@ -463,10 +544,10 @@ pub(super) unsafe fn wake<const OWNED: bool>(data: *const ()) {
 /// # Safety
 ///
 /// `data` must belong to an owned native standard waker whose reference is consumed.
-pub(super) unsafe fn drop_waker(data: *const ()) {
-    let h = unsafe { task_ptr(data) };
+unsafe fn drop_waker(data: *const ()) {
+    let h = unsafe { task::task_ptr(data) };
     match unsafe { owner(data) } {
-        Owner::Active => release_local(h),
+        Owner::Active => task::release_local(h),
         Owner::Closed => {}
         Owner::Remote => {
             publish(

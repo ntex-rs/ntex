@@ -300,6 +300,7 @@ fn first_remote_publication_races_completed_owner_release() {
 /// STATEMENT: Owner release cannot overtake remote releases followed by acquisition of another clone.
 ///
 /// HOW:
+/// - Prime the owner's endpoint cache so idle releases use its open queue fast path.
 /// - Detach a pending task, then remotely drop two wakers and clone the surviving source.
 /// - Return source and clone; drop the source on the owner and drain, checking the future stays live.
 /// - Drop the last clone and check one future destruction and complete reclamation.
@@ -307,6 +308,7 @@ fn first_remote_publication_races_completed_owner_release() {
 fn owner_release_follows_pending_remote_releases() {
     model(|| {
         let rt = new_rt();
+        drop(super::wake::remote_queue(rt.queue.runtime_id).unwrap());
         let (state, task) = pending(&rt);
         let source = state.waker.lock().unwrap().take().unwrap();
         let first = source.clone();
@@ -387,6 +389,96 @@ fn cached_remote_clone_races_shutdown() {
         drop(task);
         assert_eq!(state.drops.load(Ordering::Relaxed), 1);
         assert!(queue.upgrade().is_none());
+    });
+}
+
+/// STATEMENT: Owned remote queue lookup can race shutdown without preserving admission or leaking the queue.
+///
+/// HOW:
+/// - Optionally prime the remote cache, then race another lookup against runtime shutdown.
+/// - Wait for shutdown and check admission on any retained queue is rejected and lookup returns None.
+/// - Release the producer and check the queue allocation expires.
+#[test]
+fn remote_queue_lookup_races_shutdown() {
+    for cached in [false, true] {
+        model(move || {
+            let rt = new_rt();
+            let id = rt.queue.runtime_id;
+            let queue = Arc::downgrade(&rt.queue);
+            let (primed, ready) = loom::sync::mpsc::channel();
+            let (closed, shutdown) = loom::sync::mpsc::channel();
+            let producer = thread::spawn(move || {
+                if cached {
+                    drop(super::wake::remote_queue(id).unwrap());
+                }
+                primed.send(()).unwrap();
+                let retained = super::wake::remote_queue(id);
+                shutdown.recv().unwrap();
+                if let Some(queue) = retained {
+                    assert!(queue.admit(false).is_none());
+                }
+                assert!(super::wake::remote_queue(id).is_none());
+            });
+            ready.recv().unwrap();
+            drop(rt);
+            closed.send(()).unwrap();
+            producer.join().unwrap();
+            assert!(queue.upgrade().is_none());
+        });
+    }
+}
+
+/// STATEMENT: Pruning a multi-runtime remote cache can race shutdown without losing live endpoints.
+///
+/// HOW:
+/// - Prime two remote endpoints, then race shutdown of the first against a miss for a third endpoint.
+/// - Wake the first and second again, exercising both rejected and admitted cached publication.
+/// - Keep completed task handles alive for the borrowed wakers, then check queue and task reclamation.
+#[test]
+fn cached_remote_endpoints_prune_during_shutdown() {
+    model(|| {
+        let first = new_rt();
+        let second = new_rt();
+        let third = new_rt();
+        let mut tasks = [&first, &second, &third].map(|rt| {
+            spawn(
+                rt,
+                std::future::poll_fn(|cx| {
+                    Poll::Ready(std::mem::ManuallyDrop::new(unsafe {
+                        Waker::from_raw(super::wake::raw_waker(cx.waker().data()))
+                    }))
+                }),
+            )
+        });
+        for rt in [&first, &second, &third] {
+            drain(rt);
+        }
+        let wakers = tasks.each_mut().map(|task| {
+            let Poll::Ready(Some(waker)) = task.poll_join(&Context::from_waker(Waker::noop()))
+            else {
+                panic!("missing borrowed waker");
+            };
+            waker
+        });
+        let queue = Arc::downgrade(&first.queue);
+        let allocations = Arc::downgrade(&first.queue.task_allocations);
+        let (primed, ready) = loom::sync::mpsc::channel();
+        let producer = thread::spawn(move || {
+            wakers[0].wake_by_ref();
+            wakers[1].wake_by_ref();
+            primed.send(()).unwrap();
+            wakers[2].wake_by_ref();
+            wakers[0].wake_by_ref();
+            wakers[1].wake_by_ref();
+        });
+        ready.recv().unwrap();
+        drop(first);
+        producer.join().unwrap();
+        drop(tasks);
+        assert!(queue.upgrade().is_none());
+        assert!(allocations.upgrade().is_none());
+        assert_freed(&second);
+        assert_freed(&third);
     });
 }
 
