@@ -5,13 +5,13 @@ use std::sync::{Arc, atomic::Ordering};
 use std::task::{RawWaker, RawWakerVTable, Waker};
 use std::{cell::Cell, cell::RefCell, collections::HashMap, mem::ManuallyDrop, ptr, ptr::NonNull};
 
-use super::task::{self, Core, Header, Remote, Runnable};
-use super::{ThreadId, queue::RunnableQueue, try_current_thread_id};
-
 #[cfg(ntex_loom)]
 use loom::sync::RwLock;
 #[cfg(not(ntex_loom))]
 use std::sync::{OnceLock, RwLock};
+
+use super::task::{self, Core, Header, Remote, Runnable};
+use super::{ThreadId, queue::RunnableQueue, try_current_thread_id};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RuntimeId(u16);
@@ -56,10 +56,10 @@ loom::thread_local! {
     static REMOTE_ENDPOINTS: RefCell<RemoteEndpoints> = RefCell::new(RemoteEndpoints::default());
 }
 
-pub(super) struct Registry {
+struct Registry {
     /// The last issued runtime identity.
     next: u16,
-    pub(super) queues: HashMap<RuntimeId, Arc<RunnableQueue>>,
+    queues: HashMap<RuntimeId, Arc<RunnableQueue>>,
 }
 
 impl Registry {
@@ -74,14 +74,14 @@ impl Registry {
 
 /// Returns the process-wide registry, initializing it on first use.
 #[cfg(not(ntex_loom))]
-pub(super) fn registry() -> &'static RwLock<Registry> {
+fn registry() -> &'static RwLock<Registry> {
     static REGISTRY: OnceLock<RwLock<Registry>> = OnceLock::new();
     REGISTRY.get_or_init(|| RwLock::new(Registry::new()))
 }
 
 /// Returns the registry scoped to the current Loom model execution.
 #[cfg(ntex_loom)]
-pub(super) fn registry() -> &'static RwLock<Registry> {
+fn registry() -> &'static RwLock<Registry> {
     loom::lazy_static! {
         static ref REGISTRY: RwLock<Registry> = RwLock::new(Registry::new());
     }
@@ -253,6 +253,45 @@ pub(super) fn with_registered<R>(
     if queue.is_closed() { None } else { Some(f(queue)) }
 }
 
+/// Retains an active or draining endpoint for owner cleanup, including callbacks.
+///
+/// Unlike remote lookup, closed queues remain available until shutdown drains.
+/// Open TLS entries bypass the registry without populating or pruning the cache.
+pub(super) fn retain_owner_queue(id: RuntimeId) -> Option<Arc<RunnableQueue>> {
+    if let Ok(Some(queue)) = REMOTE_ENDPOINTS.try_with(|cached| {
+        cached
+            .borrow()
+            .get(&id)
+            .filter(|queue| !queue.is_closed())
+            .cloned()
+    }) {
+        return Some(queue);
+    }
+
+    #[cfg(all(test, not(ntex_loom)))]
+    REGISTRY_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
+
+    registry().read().unwrap().queues.get(&id).cloned()
+}
+
+/// Retains a remote endpoint observed open, consulting TLS before the registry.
+///
+/// Lookup does not publish work or reserve admission. The endpoint may close
+/// immediately afterward, so callers must still admit work before publishing.
+pub(super) fn remote_queue(id: RuntimeId) -> Option<Arc<RunnableQueue>> {
+    let queue = match REMOTE_ENDPOINTS.try_with(|cached| cached.borrow().get(&id).cloned()) {
+        Ok(Some(queue)) => queue,
+        _ => remote_queue_uncached(id)?,
+    };
+    if queue.is_closed() {
+        let removed = REMOTE_ENDPOINTS.try_with(|cached| cached.borrow_mut().remove(&id));
+        drop(removed);
+        None
+    } else {
+        Some(queue)
+    }
+}
+
 /// Publishes through the remote thread's cached endpoints, notifying outside TLS borrows.
 ///
 /// Returns `false` if the endpoint is absent or has closed admission.
@@ -266,7 +305,9 @@ fn publish(id: RuntimeId, entry: WakeEntry) -> bool {
     });
     let notify = match cached {
         Ok(Some(notify)) => notify,
-        _ => publish_uncached(id, entry.unwrap()),
+        _ => remote_queue(id)
+            .ok_or(())
+            .and_then(|queue| publish_admitted(&queue, entry.unwrap())),
     };
     let Ok(notify) = notify else {
         let removed = REMOTE_ENDPOINTS.try_with(|cached| cached.borrow_mut().remove(&id));
@@ -281,7 +322,7 @@ fn publish(id: RuntimeId, entry: WakeEntry) -> bool {
 
 /// Caches a new endpoint and prunes closed ones, or bypasses unavailable TLS.
 #[cold]
-fn publish_uncached(id: RuntimeId, entry: WakeEntry) -> Result<Option<Arc<RunnableQueue>>, ()> {
+fn remote_queue_uncached(id: RuntimeId) -> Option<Arc<RunnableQueue>> {
     let queue = with_registered(id, Arc::clone);
     if let Ok(retired) = REMOTE_ENDPOINTS.try_with(|cached| {
         let mut cached = cached.borrow_mut();
@@ -295,11 +336,10 @@ fn publish_uncached(id: RuntimeId, entry: WakeEntry) -> Result<Option<Arc<Runnab
         retired
     }) {
         // Destructors may reenter wakers. Keep our endpoint alive independently,
-        // release the TLS borrow, and retire closed endpoints before admitting work.
+        // release the TLS borrow, and retire closed endpoints before returning.
         drop(retired);
     }
-    let queue = queue.ok_or(())?;
-    publish_admitted(&queue, entry)
+    queue
 }
 
 /// Reserves shutdown-safe publication without cloning the cached queue reference.

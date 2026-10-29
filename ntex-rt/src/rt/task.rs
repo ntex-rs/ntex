@@ -27,7 +27,7 @@ use std::{fmt, future::Future, mem, mem::ManuallyDrop, pin::Pin};
 use crate::handle::SpawnLocation;
 use crate::rt::{REPORTED, RunnableQueue, TaskStats, try_current_thread_id, wake};
 
-use super::wake::{Operation, WakeEntry, registry};
+use super::wake::{Operation, WakeEntry};
 
 #[cfg(ntex_loom)]
 use loom::{cell::UnsafeCell, sync::atomic::AtomicBool};
@@ -344,16 +344,6 @@ fn live_owner_queue<'a>(h: NonNull<Header>) -> Option<&'a RunnableQueue> {
     }
 }
 
-/// Retains an active or draining queue for owner cleanup, including callbacks.
-fn retain_owner_queue(h: NonNull<Header>) -> Option<Arc<RunnableQueue>> {
-    registry()
-        .read()
-        .unwrap()
-        .queues
-        .get(&core(h).routing.runtime)
-        .cloned()
-}
-
 /// Task of a waker data pointer.
 #[inline]
 pub(super) unsafe fn task_ptr(ptr: *const ()) -> NonNull<Header> {
@@ -438,7 +428,8 @@ fn release_touched(h: NonNull<Header>) {
     let pending_commands = if let Some(queue) = live_owner_queue(h) {
         !queue.wake_queue.is_empty()
     } else {
-        retain_owner_queue(h).is_some_and(|queue| !queue.wake_queue.is_empty())
+        wake::retain_owner_queue(core(h).routing.runtime)
+            .is_some_and(|queue| !queue.wake_queue.is_empty())
     };
     if !pending_commands && core(h).refs.get() > 1 {
         release_local_ordered(h);
@@ -454,7 +445,7 @@ fn release_touched(h: NonNull<Header>) {
             queue.wake_queue.push(entry);
             return;
         }
-        if let Some(queue) = retain_owner_queue(h) {
+        if let Some(queue) = wake::retain_owner_queue(core(h).routing.runtime) {
             queue.owner_entry(entry);
         } else {
             // Shutdown drained publications before removing cleanup access. Only

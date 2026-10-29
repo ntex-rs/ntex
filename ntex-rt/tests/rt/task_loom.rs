@@ -300,6 +300,7 @@ fn first_remote_publication_races_completed_owner_release() {
 /// STATEMENT: Owner release cannot overtake remote releases followed by acquisition of another clone.
 ///
 /// HOW:
+/// - Prime the owner's endpoint cache so idle releases use its open queue fast path.
 /// - Detach a pending task, then remotely drop two wakers and clone the surviving source.
 /// - Return source and clone; drop the source on the owner and drain, checking the future stays live.
 /// - Drop the last clone and check one future destruction and complete reclamation.
@@ -307,6 +308,7 @@ fn first_remote_publication_races_completed_owner_release() {
 fn owner_release_follows_pending_remote_releases() {
     model(|| {
         let rt = new_rt();
+        drop(super::wake::remote_queue(rt.queue.runtime_id).unwrap());
         let (state, task) = pending(&rt);
         let source = state.waker.lock().unwrap().take().unwrap();
         let first = source.clone();
@@ -388,6 +390,42 @@ fn cached_remote_clone_races_shutdown() {
         assert_eq!(state.drops.load(Ordering::Relaxed), 1);
         assert!(queue.upgrade().is_none());
     });
+}
+
+/// STATEMENT: Owned remote queue lookup can race shutdown without preserving admission or leaking the queue.
+///
+/// HOW:
+/// - Optionally prime the remote cache, then race another lookup against runtime shutdown.
+/// - Wait for shutdown and check admission on any retained queue is rejected and lookup returns None.
+/// - Release the producer and check the queue allocation expires.
+#[test]
+fn remote_queue_lookup_races_shutdown() {
+    for cached in [false, true] {
+        model(move || {
+            let rt = new_rt();
+            let id = rt.queue.runtime_id;
+            let queue = Arc::downgrade(&rt.queue);
+            let (primed, ready) = loom::sync::mpsc::channel();
+            let (closed, shutdown) = loom::sync::mpsc::channel();
+            let producer = thread::spawn(move || {
+                if cached {
+                    drop(super::wake::remote_queue(id).unwrap());
+                }
+                primed.send(()).unwrap();
+                let retained = super::wake::remote_queue(id);
+                shutdown.recv().unwrap();
+                if let Some(queue) = retained {
+                    assert!(queue.admit(false).is_none());
+                }
+                assert!(super::wake::remote_queue(id).is_none());
+            });
+            ready.recv().unwrap();
+            drop(rt);
+            closed.send(()).unwrap();
+            producer.join().unwrap();
+            assert!(queue.upgrade().is_none());
+        });
+    }
 }
 
 /// STATEMENT: Pruning a multi-runtime remote cache can race shutdown without losing live endpoints.

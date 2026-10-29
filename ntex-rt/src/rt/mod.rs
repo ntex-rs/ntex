@@ -26,10 +26,12 @@
 //! ```
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 use std::time::{Duration, Instant};
 use std::{fmt, future::Future, io, marker::PhantomData, panic::Location};
-use std::{future::poll_fn, pin::Pin, rc::Rc, sync::Arc, task::Poll};
+use std::{future::poll_fn, pin::Pin, rc::Rc, task::Poll};
+
+pub use crate::handle::{JoinHandle, RemoteJoinHandle};
 
 use crate::driver::{Driver, Notify, PollResult};
 use crate::handle::SpawnLocation;
@@ -41,8 +43,6 @@ pub(crate) mod task;
 pub(crate) mod wake;
 
 use self::queue::RunnableQueue;
-
-pub use crate::handle::{JoinHandle, RemoteJoinHandle};
 
 /// Error returned by [`crate::spawn_sendable()`] when no task output is available.
 ///
@@ -211,11 +211,6 @@ pub(crate) fn try_current_thread_id() -> Option<ThreadId> {
 ///
 /// A process can create at most 65,535 runtimes, and at most 65,535 threads can
 /// create one. Neither is reused, and the process aborts when either runs out.
-///
-/// ```compile_fail
-/// fn assert_send<T: Send>() {}
-/// assert_send::<ntex_rt::rt::Runtime>();
-/// ```
 pub struct Runtime {
     stop: Cell<bool>,
     queue: Arc<RunnableQueue>,

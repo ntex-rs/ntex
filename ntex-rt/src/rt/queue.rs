@@ -1,11 +1,7 @@
 //! Run queues of a runtime, shared by the runtime and the tasks.
-use std::borrow::Cow;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use std::{cell::Cell, fmt, future::Future, io, panic::Location, ptr, sync::Arc};
-
-use crate::handle::{JoinHandle, SpawnLocation};
-use crate::{busy::BusyClock, driver::Notify, metrics::AtomicHistogram};
+use std::{borrow::Cow, cell::Cell, fmt, future::Future, io, panic::Location, ptr, sync::Arc};
 
 #[cfg(not(ntex_loom))]
 use std::{
@@ -18,6 +14,9 @@ use loom::{
     sync::atomic::{AtomicBool, AtomicUsize},
     thread::yield_now,
 };
+
+use crate::handle::{JoinHandle, SpawnLocation};
+use crate::{busy::BusyClock, driver::Notify, metrics::AtomicHistogram};
 
 use super::task::{self, LocalQueue, Remote as RemoteTask, Runnable as Task, TaskList};
 use super::wake::{self, WakeEntry, WakeQueue};

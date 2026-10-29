@@ -285,9 +285,10 @@ fn raw_queue_survivors_release_after_shutdown() {
 /// STATEMENT: Task-handle release during shutdown cannot overtake pending remote FIFO operations.
 ///
 /// HOW:
+/// - Optionally prime the owner's endpoint cache before shutdown.
 /// - Queue a submission whose destructor releases a local waker directly and then a completed task handle.
 /// - Queue a remote standard-waker release behind it and drop the runtime with and without a cleanup panic.
-/// - Check the handle's release is deferred, panic behavior matches, and all task allocation trackers release.
+/// - Check the handle's release is deferred, the endpoint stops resolving after draining, and all allocations release.
 #[test]
 fn raw_queue_shutdown_preserves_release_ordering() {
     struct ReleaseDuringDrain {
@@ -309,8 +310,12 @@ fn raw_queue_shutdown_preserves_release_ordering() {
         }
     }
 
-    for panics in [false, true] {
+    for (cached, panics) in [(false, false), (false, true), (true, false), (true, true)] {
         let rt = runtime();
+        let id = rt.queue.runtime_id;
+        if cached {
+            drop(wake::remote_queue(id).unwrap());
+        }
         let saved = Rc::new(RefCell::new(None));
         let slot = saved.clone();
         let task = spawn(
@@ -347,6 +352,10 @@ fn raw_queue_shutdown_preserves_release_ordering() {
         let result = catch_unwind(AssertUnwindSafe(|| drop(rt)));
         assert_eq!(result.is_err(), panics);
         assert!(deferred.get(), "owner release overtook the pending FIFO");
+        assert!(wake::retain_owner_queue(id).is_none());
+        if cached {
+            assert!(wake::remote_queue(id).is_none());
+        }
         assert_eq!(Arc::strong_count(&allocations), 1);
     }
 }
@@ -512,6 +521,129 @@ fn completed_waker(rt: &Runtime) -> Waker {
     waker
 }
 
+/// STATEMENT: Owner queue lookup reuses open cached endpoints without populating or pruning the cache.
+///
+/// HOW:
+/// - Cache two endpoints, close one, and leave a third endpoint uncached.
+/// - Check repeated owner lookups avoid registry reads only for the open cached endpoint.
+/// - Check the closed cached endpoint remains retained but cannot resolve after shutdown.
+/// - Explicitly prune it through remote lookup and check the queue is released.
+#[test]
+fn owner_queue_lookup_reuses_cache_without_maintenance() {
+    let cached = runtime();
+    let closed = runtime();
+    let uncached = runtime();
+    let closed_id = closed.queue.runtime_id;
+    let closed_queue = Arc::downgrade(&closed.queue);
+    drop(wake::remote_queue(cached.queue.runtime_id).unwrap());
+    drop(wake::remote_queue(closed_id).unwrap());
+    drop(closed);
+
+    let before = wake::REGISTRY_LOOKUPS.with(Cell::get);
+    for _ in 0..3 {
+        assert!(Arc::ptr_eq(
+            &wake::retain_owner_queue(cached.queue.runtime_id).unwrap(),
+            &cached.queue
+        ));
+    }
+    assert_eq!(wake::REGISTRY_LOOKUPS.with(Cell::get), before);
+    for _ in 0..3 {
+        assert!(Arc::ptr_eq(
+            &wake::retain_owner_queue(uncached.queue.runtime_id).unwrap(),
+            &uncached.queue
+        ));
+    }
+    assert_eq!(wake::REGISTRY_LOOKUPS.with(Cell::get) - before, 3);
+    assert!(
+        closed_queue.upgrade().is_some(),
+        "owner lookup pruned the cache"
+    );
+    assert!(wake::retain_owner_queue(closed_id).is_none());
+    assert_eq!(wake::REGISTRY_LOOKUPS.with(Cell::get) - before, 4);
+    assert!(
+        closed_queue.upgrade().is_some(),
+        "owner lookup removed a closed hit"
+    );
+    assert!(wake::remote_queue(closed_id).is_none());
+    assert!(closed_queue.upgrade().is_none());
+}
+
+/// STATEMENT: Remote queue lookup caches each runtime independently without publishing work.
+///
+/// HOW:
+/// - Look up three runtimes owned by the same thread from a remote thread.
+/// - Repeat the lookups and check queue identity and no additional registry reads.
+/// - Check an unregistered identity returns None and all wake queues remain empty.
+#[test]
+fn remote_queue_lookup_caches_without_publishing() {
+    let runtimes = [runtime(), runtime(), runtime()];
+    let ids = runtimes.each_ref().map(|rt| rt.queue.runtime_id);
+    let missing = wake::runtime_id();
+    thread::spawn(move || {
+        let before = wake::REGISTRY_LOOKUPS.with(Cell::get);
+        let queues = ids.map(|id| wake::remote_queue(id).unwrap());
+        let primed = wake::REGISTRY_LOOKUPS.with(Cell::get);
+        assert_eq!(primed - before, ids.len());
+        for _ in 0..3 {
+            for (id, queue) in ids.iter().zip(&queues) {
+                assert_eq!(queue.runtime_id, *id);
+                assert!(Arc::ptr_eq(&wake::remote_queue(*id).unwrap(), queue));
+            }
+        }
+        assert_eq!(wake::REGISTRY_LOOKUPS.with(Cell::get), primed);
+        assert!(wake::remote_queue(missing).is_none());
+    })
+    .join()
+    .unwrap();
+    for rt in &runtimes {
+        assert!(rt.queue.wake_queue.is_empty());
+    }
+}
+
+/// STATEMENT: Retained remote queues do not prevent shutdown or allow subsequent admission.
+///
+/// HOW:
+/// - Optionally cache and retain a remote queue, then close its runtime while the producer waits.
+/// - Check admission is rejected and both cached and uncached lookup return None after closure.
+/// - Drop the retained queue and check its allocation expires before producer TLS destruction.
+#[test]
+fn remote_queue_lookup_rejects_closed_endpoints() {
+    use std::sync::mpsc;
+
+    for cached_hit in [false, true] {
+        let rt = runtime();
+        let id = rt.queue.runtime_id;
+        let queue = Arc::downgrade(&rt.queue);
+        let (ack, ready) = mpsc::channel();
+        let (resume, next) = mpsc::channel();
+        let producer = thread::spawn(move || {
+            let retained = cached_hit.then(|| wake::remote_queue(id).unwrap());
+            ack.send(()).unwrap();
+            next.recv().unwrap();
+            if let Some(queue) = &retained {
+                assert!(queue.admit(false).is_none());
+            }
+            let before = wake::REGISTRY_LOOKUPS.with(Cell::get);
+            assert!(wake::remote_queue(id).is_none());
+            assert_eq!(
+                wake::REGISTRY_LOOKUPS.with(Cell::get) - before,
+                usize::from(!cached_hit)
+            );
+            drop(retained);
+            ack.send(()).unwrap();
+            next.recv().unwrap();
+        });
+        ready.recv().unwrap();
+        drop(rt);
+        assert_eq!(queue.upgrade().is_some(), cached_hit);
+        resume.send(()).unwrap();
+        ready.recv().unwrap();
+        assert!(queue.upgrade().is_none(), "closed endpoint retained");
+        resume.send(()).unwrap();
+        producer.join().unwrap();
+    }
+}
+
 /// STATEMENT: Alternating remote runtimes reuse cached endpoints without repeated registry lookups.
 ///
 /// HOW:
@@ -606,18 +738,18 @@ fn remote_endpoint_cache_releases_closed_queues_on_rejection() {
     }
 }
 
-/// STATEMENT: The remote endpoint cache prunes closed queues safely even when pruning reenters waker release.
+/// STATEMENT: The remote endpoint cache prunes closed queues safely even when pruning reenters lookup and waker release.
 ///
 /// HOW:
 /// - Prime a worker's cache with one runtime, destroy that runtime, and check its cached queue remains alive.
-/// - Touch a second runtime from that worker, pruning the first and dropping its notifier-held waker reentrantly.
+/// - Touch a second runtime, pruning the first and reentering queue lookup before dropping its notifier-held waker.
 /// - Check the first queue and held waker release, then check worker exit releases the second cached queue.
 #[test]
 fn remote_endpoint_cache_pruning_can_reenter() {
     use std::sync::{Mutex, mpsc};
 
     #[derive(Debug)]
-    struct RetireNotify(Arc<Mutex<Option<Waker>>>);
+    struct RetireNotify(Arc<Mutex<Option<Waker>>>, wake::RuntimeId);
 
     impl Notify for RetireNotify {
         fn notify(&self) -> io::Result<()> {
@@ -627,14 +759,19 @@ fn remote_endpoint_cache_pruning_can_reenter() {
 
     impl Drop for RetireNotify {
         fn drop(&mut self) {
+            let queue = wake::remote_queue(self.1).unwrap();
+            assert_eq!(queue.runtime_id, self.1);
             let waker = self.0.lock().unwrap().take();
             drop(waker);
         }
     }
 
     let release = Arc::new(Mutex::new(None));
-    let first = Runtime::new(Box::new(RetireNotify(release.clone())));
     let second = runtime();
+    let first = Runtime::new(Box::new(RetireNotify(
+        release.clone(),
+        second.queue.runtime_id,
+    )));
     let first_waker = completed_waker(&first);
     let second_waker = completed_waker(&second);
     *release.lock().unwrap() = Some(second_waker.clone());
