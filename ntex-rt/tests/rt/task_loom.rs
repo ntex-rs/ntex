@@ -390,6 +390,60 @@ fn cached_remote_clone_races_shutdown() {
     });
 }
 
+/// STATEMENT: Pruning a multi-runtime remote cache can race shutdown without losing live endpoints.
+///
+/// HOW:
+/// - Prime two remote endpoints, then race shutdown of the first against a miss for a third endpoint.
+/// - Wake the first and second again, exercising both rejected and admitted cached publication.
+/// - Keep completed task handles alive for the borrowed wakers, then check queue and task reclamation.
+#[test]
+fn cached_remote_endpoints_prune_during_shutdown() {
+    model(|| {
+        let first = new_rt();
+        let second = new_rt();
+        let third = new_rt();
+        let mut tasks = [&first, &second, &third].map(|rt| {
+            spawn(
+                rt,
+                std::future::poll_fn(|cx| {
+                    Poll::Ready(std::mem::ManuallyDrop::new(unsafe {
+                        Waker::from_raw(super::wake::raw_waker(cx.waker().data()))
+                    }))
+                }),
+            )
+        });
+        for rt in [&first, &second, &third] {
+            drain(rt);
+        }
+        let wakers = tasks.each_mut().map(|task| {
+            let Poll::Ready(Some(waker)) = task.poll_join(&Context::from_waker(Waker::noop()))
+            else {
+                panic!("missing borrowed waker");
+            };
+            waker
+        });
+        let queue = Arc::downgrade(&first.queue);
+        let allocations = Arc::downgrade(&first.queue.task_allocations);
+        let (primed, ready) = loom::sync::mpsc::channel();
+        let producer = thread::spawn(move || {
+            wakers[0].wake_by_ref();
+            wakers[1].wake_by_ref();
+            primed.send(()).unwrap();
+            wakers[2].wake_by_ref();
+            wakers[0].wake_by_ref();
+            wakers[1].wake_by_ref();
+        });
+        ready.recv().unwrap();
+        drop(first);
+        producer.join().unwrap();
+        drop(tasks);
+        assert!(queue.upgrade().is_none());
+        assert!(allocations.upgrade().is_none());
+        assert_freed(&second);
+        assert_freed(&third);
+    });
+}
+
 /// STATEMENT: Shutting down one cached owner endpoint does not invalidate another live runtime's wakers.
 ///
 /// HOW:

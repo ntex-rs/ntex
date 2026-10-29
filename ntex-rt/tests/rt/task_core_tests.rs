@@ -512,14 +512,108 @@ fn completed_waker(rt: &Runtime) -> Waker {
     waker
 }
 
-/// STATEMENT: The remote endpoint cache evicts old queues safely even when eviction reenters waker release.
+/// STATEMENT: Alternating remote runtimes reuse cached endpoints without repeated registry lookups.
+///
+/// HOW:
+/// - Prime a producer's cache with wakers for three live runtimes.
+/// - Alternate borrowed wakes, consuming wakes, and clone/drop operations between the runtimes.
+/// - Check only priming consults the registry, then drain all runtimes and check full reclamation.
+#[test]
+fn remote_endpoint_cache_keeps_multiple_live_runtimes() {
+    let runtimes = [runtime(), runtime(), runtime()];
+    let wakers = runtimes.each_ref().map(completed_waker);
+    thread::spawn(move || {
+        let before = wake::REGISTRY_LOOKUPS.with(Cell::get);
+        for waker in &wakers {
+            waker.wake_by_ref();
+        }
+        let primed = wake::REGISTRY_LOOKUPS.with(Cell::get);
+        assert_eq!(primed - before, wakers.len());
+        for _ in 0..3 {
+            for waker in &wakers {
+                let owned = waker.clone();
+                waker.wake_by_ref();
+                owned.wake();
+                drop(waker.clone());
+            }
+        }
+        drop(wakers);
+        assert_eq!(wake::REGISTRY_LOOKUPS.with(Cell::get), primed);
+    })
+    .join()
+    .unwrap();
+    for rt in &runtimes {
+        drain(rt);
+        assert_eq!(rt.queue.task_count(), 0);
+    }
+}
+
+/// STATEMENT: Rejected cache hits and failed registry lookups release closed cached endpoints.
+///
+/// HOW:
+/// - Prime a producer's cache, then close both the cached runtime and an uncached runtime.
+/// - Wake either the cached or uncached endpoint and check the cached queue is released before producer exit.
+/// - Keep task handles alive until the borrowed wakers are retired, then check storage is reclaimed.
+#[test]
+fn remote_endpoint_cache_releases_closed_queues_on_rejection() {
+    use std::sync::mpsc;
+
+    for cached_hit in [false, true] {
+        let cached = runtime();
+        let missing = runtime();
+        let cached_task = spawn(&cached, async {});
+        let missing_task = spawn(&missing, async {});
+        drain(&cached);
+        drain(&missing);
+        let queue = Arc::downgrade(&cached.queue);
+        let allocations = Arc::downgrade(&cached.queue.task_allocations);
+        // The join handles protect these borrowed wakers through shutdown.
+        let waker = ManuallyDrop::new(unsafe {
+            Waker::from_raw(wake::raw_waker(cached_task.h.as_ptr().cast()))
+        });
+        let other = ManuallyDrop::new(unsafe {
+            Waker::from_raw(wake::raw_waker(missing_task.h.as_ptr().cast()))
+        });
+        let (ack, ready) = mpsc::channel();
+        let (resume, next) = mpsc::channel();
+        let producer = thread::spawn(move || {
+            waker.wake_by_ref();
+            ack.send(()).unwrap();
+            next.recv().unwrap();
+            let before = wake::REGISTRY_LOOKUPS.with(Cell::get);
+            if cached_hit {
+                waker.wake_by_ref();
+            } else {
+                other.wake_by_ref();
+            }
+            assert_eq!(
+                wake::REGISTRY_LOOKUPS.with(Cell::get) - before,
+                usize::from(!cached_hit)
+            );
+            ack.send(()).unwrap();
+            next.recv().unwrap();
+        });
+        ready.recv().unwrap();
+        drop((cached, missing));
+        assert!(queue.upgrade().is_some());
+        resume.send(()).unwrap();
+        ready.recv().unwrap();
+        assert!(queue.upgrade().is_none(), "closed endpoint retained");
+        resume.send(()).unwrap();
+        producer.join().unwrap();
+        drop((cached_task, missing_task));
+        assert!(allocations.upgrade().is_none());
+    }
+}
+
+/// STATEMENT: The remote endpoint cache prunes closed queues safely even when pruning reenters waker release.
 ///
 /// HOW:
 /// - Prime a worker's cache with one runtime, destroy that runtime, and check its cached queue remains alive.
-/// - Touch a second runtime from that worker, evicting the first and dropping its notifier-held waker reentrantly.
+/// - Touch a second runtime from that worker, pruning the first and dropping its notifier-held waker reentrantly.
 /// - Check the first queue and held waker release, then check worker exit releases the second cached queue.
 #[test]
-fn remote_endpoint_cache_is_bounded_and_eviction_can_reenter() {
+fn remote_endpoint_cache_pruning_can_reenter() {
     use std::sync::{Mutex, mpsc};
 
     #[derive(Debug)]

@@ -36,15 +36,24 @@ enum Owner {
 }
 
 #[cfg(not(ntex_loom))]
+type RemoteEndpoints = crate::HashMap<RuntimeId, Arc<RunnableQueue>>;
+
+// Loom must replay the same pruning order when it models admission loads.
+#[cfg(ntex_loom)]
+type RemoteEndpoints = HashMap<RuntimeId, Arc<RunnableQueue>, foldhash::fast::FixedState>;
+
+#[cfg(not(ntex_loom))]
 thread_local! {
     static OWNER_ENDPOINT: Cell<OwnerEndpoint> = const { Cell::new(OwnerEndpoint::Unknown) };
-    static REMOTE_ENDPOINT: RefCell<Option<Arc<RunnableQueue>>> = const { RefCell::new(None) };
+    static REMOTE_ENDPOINTS: RefCell<RemoteEndpoints> = RefCell::new(RemoteEndpoints::default());
+    #[cfg(test)]
+    pub(super) static REGISTRY_LOOKUPS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(ntex_loom)]
 loom::thread_local! {
     static OWNER_ENDPOINT: Cell<OwnerEndpoint> = Cell::new(OwnerEndpoint::Unknown);
-    static REMOTE_ENDPOINT: RefCell<Option<Arc<RunnableQueue>>> = RefCell::new(None);
+    static REMOTE_ENDPOINTS: RefCell<RemoteEndpoints> = RefCell::new(RemoteEndpoints::default());
 }
 
 pub(super) struct Registry {
@@ -236,21 +245,23 @@ pub(super) fn with_registered<R>(
     id: RuntimeId,
     f: impl FnOnce(&Arc<RunnableQueue>) -> R,
 ) -> Option<R> {
+    #[cfg(all(test, not(ntex_loom)))]
+    REGISTRY_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
+
     let registry = registry().read().unwrap();
     let queue = registry.queues.get(&id)?;
     if queue.is_closed() { None } else { Some(f(queue)) }
 }
 
-/// Publishes through the remote thread's last endpoint, notifying outside TLS borrows.
+/// Publishes through the remote thread's cached endpoints, notifying outside TLS borrows.
 ///
 /// Returns `false` if the endpoint is absent or has closed admission.
 fn publish(id: RuntimeId, entry: WakeEntry) -> bool {
     let mut entry = Some(entry);
-    let cached = REMOTE_ENDPOINT.try_with(|cached| {
+    let cached = REMOTE_ENDPOINTS.try_with(|cached| {
         let cached = cached.borrow();
         cached
-            .as_ref()
-            .filter(|queue| queue.runtime_id == id)
+            .get(&id)
             .map(|queue| publish_admitted(queue, entry.take().unwrap()))
     });
     let notify = match cached {
@@ -258,6 +269,8 @@ fn publish(id: RuntimeId, entry: WakeEntry) -> bool {
         _ => publish_uncached(id, entry.unwrap()),
     };
     let Ok(notify) = notify else {
+        let removed = REMOTE_ENDPOINTS.try_with(|cached| cached.borrow_mut().remove(&id));
+        drop(removed);
         return false;
     };
     if let Some(queue) = notify {
@@ -266,15 +279,26 @@ fn publish(id: RuntimeId, entry: WakeEntry) -> bool {
     true
 }
 
-/// Refreshes the one-entry cache, or bypasses it during thread-local destruction.
+/// Caches a new endpoint and prunes closed ones, or bypasses unavailable TLS.
 #[cold]
 fn publish_uncached(id: RuntimeId, entry: WakeEntry) -> Result<Option<Arc<RunnableQueue>>, ()> {
-    let queue = with_registered(id, Arc::clone).ok_or(())?;
-    if let Ok(previous) = REMOTE_ENDPOINT.try_with(|cached| cached.replace(Some(queue.clone()))) {
+    let queue = with_registered(id, Arc::clone);
+    if let Ok(retired) = REMOTE_ENDPOINTS.try_with(|cached| {
+        let mut cached = cached.borrow_mut();
+        let mut retired: Vec<_> = cached
+            .extract_if(|_, queue| queue.is_closed())
+            .map(|(_, queue)| queue)
+            .collect();
+        if let Some(queue) = &queue {
+            retired.extend(cached.insert(id, queue.clone()));
+        }
+        retired
+    }) {
         // Destructors may reenter wakers. Keep our endpoint alive independently,
-        // release the TLS borrow, and retire the old endpoint before admitting work.
-        drop(previous);
+        // release the TLS borrow, and retire closed endpoints before admitting work.
+        drop(retired);
     }
+    let queue = queue.ok_or(())?;
     publish_admitted(&queue, entry)
 }
 
