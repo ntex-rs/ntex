@@ -1,16 +1,12 @@
 //! Owner-directed references. Remote code reads immutable routing and sets a
 //! sticky publication flag, but never accesses owner-only execution state.
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-};
+use std::process::abort;
+use std::sync::{Arc, atomic::Ordering};
+use std::task::{RawWaker, RawWakerVTable, Waker};
+use std::{cell::Cell, cell::RefCell, collections::HashMap, mem::ManuallyDrop, ptr, ptr::NonNull};
 
-use super::{
-    Arc, Core, Header, ManuallyDrop, NonNull, Ordering, RawWaker, Remote, Runnable, RunnableQueue,
-    Waker, abort, core, inc_local, live_owner_queue, mark_scheduled, raw_waker, release_local,
-    release_local_ordered, task_ptr, wake_local,
-};
-use crate::rt::{ThreadId, try_current_thread_id};
+use super::task::{self, Core, Header, Remote, Runnable};
+use super::{ThreadId, queue::RunnableQueue, try_current_thread_id};
 
 #[cfg(ntex_loom)]
 use loom::sync::RwLock;
@@ -19,6 +15,10 @@ use std::sync::{OnceLock, RwLock};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RuntimeId(u16);
+
+/// Standard wakers own owner-accounted references to the task allocation.
+static WAKER_VTABLE: RawWakerVTable =
+    RawWakerVTable::new(clone_waker, wake::<true>, wake::<false>, drop_waker);
 
 // Entries are populated only on their owner thread, so a matching never-reused
 // runtime ID proves ownership. Shutdown invalidates the entry before callbacks.
@@ -47,10 +47,10 @@ loom::thread_local! {
     static REMOTE_ENDPOINT: RefCell<Option<Arc<RunnableQueue>>> = RefCell::new(None);
 }
 
-struct Registry {
+pub(super) struct Registry {
     /// The last issued runtime identity.
     next: u16,
-    queues: HashMap<RuntimeId, Arc<RunnableQueue>>,
+    pub(super) queues: HashMap<RuntimeId, Arc<RunnableQueue>>,
 }
 
 impl Registry {
@@ -65,14 +65,14 @@ impl Registry {
 
 /// Returns the process-wide registry, initializing it on first use.
 #[cfg(not(ntex_loom))]
-fn registry() -> &'static RwLock<Registry> {
+pub(super) fn registry() -> &'static RwLock<Registry> {
     static REGISTRY: OnceLock<RwLock<Registry>> = OnceLock::new();
     REGISTRY.get_or_init(|| RwLock::new(Registry::new()))
 }
 
 /// Returns the registry scoped to the current Loom model execution.
 #[cfg(ntex_loom)]
-fn registry() -> &'static RwLock<Registry> {
+pub(super) fn registry() -> &'static RwLock<Registry> {
     loom::lazy_static! {
         static ref REGISTRY: RwLock<Registry> = RwLock::new(Registry::new());
     }
@@ -143,20 +143,10 @@ pub(crate) fn unregister(id: RuntimeId) -> Shutdown {
     Shutdown(id)
 }
 
-/// Retains an active or draining queue for owner cleanup, including callbacks.
-pub(super) fn retain_owner_queue(h: NonNull<Header>) -> Option<Arc<RunnableQueue>> {
-    registry()
-        .read()
-        .unwrap()
-        .queues
-        .get(&core(h).routing.runtime)
-        .cloned()
-}
-
 /// Coallocated immutable metadata, readable without borrowing the task header.
 pub(super) struct Routing {
-    pub(super) runtime: RuntimeId,
     pub(super) owner: ThreadId,
+    pub(super) runtime: RuntimeId,
 }
 
 /// Projects immutable routing metadata without borrowing owner-only task state.
@@ -172,6 +162,44 @@ unsafe fn routing<'a>(data: *const ()) -> &'a Routing {
 #[inline]
 pub(super) unsafe fn active_owner(data: *const ()) -> bool {
     matches!(unsafe { owner(data) }, Owner::Active)
+}
+
+/// Clones a native reference on its owner thread.
+///
+/// The caller must hold a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn clone_local_waker(ptr: *const ()) {
+    task::inc_local(unsafe { task::task_ptr(ptr) });
+}
+
+/// Wakes a native task on its owner thread, transferring a reference if owned.
+///
+/// The caller must hold a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn wake_local_waker(ptr: *const (), owned: bool) {
+    task::wake_local::<true>(unsafe { task::task_ptr(ptr) }, owned);
+}
+
+/// Releases a native reference on its owner thread.
+///
+/// The caller must own a native task reference and be on its owner thread.
+#[inline]
+pub(crate) unsafe fn drop_local_waker(ptr: *const ()) {
+    task::release_unshared(unsafe { task::task_ptr(ptr) });
+}
+
+/// Borrows a task reference; the raw pointer retains allocation provenance.
+#[inline]
+pub(crate) fn raw_waker(ptr: *const ()) -> RawWaker {
+    RawWaker::new(ptr, &WAKER_VTABLE)
+}
+
+/// Acquire thread-safe ownership before releasing the local reference.
+pub(crate) unsafe fn into_waker(ptr: *const ()) -> Waker {
+    let raw = ManuallyDrop::new(unsafe { Waker::from_raw(raw_waker(ptr)) });
+    let waker = (*raw).clone();
+    unsafe { drop_local_waker(ptr) };
+    waker
 }
 
 /// Resolves owner-local liveness, caching closure before shutdown runs callbacks.
@@ -288,7 +316,7 @@ const _: () = {
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum Operation {
+pub(super) enum Operation {
     /// Activates an unpolled, detached submission.
     Spawn = 0,
     AddRef = 1,
@@ -301,7 +329,7 @@ unsafe impl Send for WakeEntry {}
 
 impl WakeEntry {
     /// Encodes a command without exposing or discarding the pointer's provenance.
-    fn new(h: NonNull<Header>, op: Operation) -> Self {
+    pub(super) fn new(h: NonNull<Header>, op: Operation) -> Self {
         #[cfg(target_pointer_width = "64")]
         let h = {
             debug_assert_eq!(h.addr().get() & OP_MASK, 0);
@@ -359,20 +387,20 @@ impl WakeEntry {
     pub(crate) fn into_runnable(self, queue: &RunnableQueue) -> Option<Runnable> {
         let h = self.header();
         let op = self.operation();
-        debug_assert_eq!(core(h).routing.runtime, queue.runtime_id);
+        debug_assert_eq!(task::core(h).routing.runtime, queue.runtime_id);
         match op {
             Operation::Spawn => return Some(Remote(h).into_runnable()),
-            Operation::AddRef => inc_local(h),
-            Operation::Release => release_local_ordered(h),
+            Operation::AddRef => task::inc_local(h),
+            Operation::Release => task::release_local_ordered(h),
             Operation::Wake | Operation::WakeAndRelease => {
                 queue.acquire_wakes();
-                let runnable = mark_scheduled(h).then(|| {
+                let runnable = task::mark_scheduled(h).then(|| {
                     // Establish scheduling ownership before consuming the waker.
-                    inc_local(h);
+                    task::inc_local(h);
                     Runnable(h)
                 });
                 if matches!(op, Operation::WakeAndRelease) {
-                    release_local_ordered(h);
+                    task::release_local_ordered(h);
                 }
                 return runnable;
             }
@@ -381,24 +409,13 @@ impl WakeEntry {
     }
 }
 
-/// Orders an owner release through the FIFO, or releases directly after shutdown drains.
-pub(super) fn defer_release(h: NonNull<Header>) {
-    let entry = WakeEntry::new(h, Operation::Release);
-    if let Some(queue) = live_owner_queue(h)
-        && !queue.idle.get()
-        && !queue.is_closed()
-    {
-        // A busy owner services this FIFO without notification or callbacks.
-        // No strong queue reference is needed for the callback-free publication.
-        queue.wake_queue.push(entry);
-        return;
-    }
-    if let Some(queue) = retain_owner_queue(h) {
-        queue.owner_entry(entry);
+/// Checks routing once, for a direct owner-local handle.
+#[inline]
+pub(crate) fn local_waker_ptr(waker: &Waker) -> Option<*const ()> {
+    if ptr::eq(waker.vtable(), &raw const WAKER_VTABLE) && unsafe { active_owner(waker.data()) } {
+        Some(waker.data())
     } else {
-        // Shutdown drained publications before removing cleanup access. Only
-        // owner-local survivors can reach this path; standard wakers are inert.
-        release_local_ordered(h);
+        None
     }
 }
 
@@ -408,11 +425,11 @@ pub(super) fn defer_release(h: NonNull<Header>) {
 /// # Safety
 ///
 /// `data` must belong to a live native standard waker or a protected borrowed poll waker.
-pub(super) unsafe fn clone_waker(data: *const ()) -> RawWaker {
-    let h = unsafe { task_ptr(data) };
+unsafe fn clone_waker(data: *const ()) -> RawWaker {
+    let h = unsafe { task::task_ptr(data) };
     let acquired = match unsafe { owner(data) } {
         Owner::Active => {
-            inc_local(h);
+            task::inc_local(h);
             true
         }
         Owner::Closed => false,
@@ -435,12 +452,12 @@ pub(super) unsafe fn clone_waker(data: *const ()) -> RawWaker {
 ///
 /// `data` must belong to a live native standard waker, owned if `OWNED`.
 /// A borrowed poll waker is also valid when `OWNED` is false.
-pub(super) unsafe fn wake<const OWNED: bool>(data: *const ()) {
-    let h = unsafe { task_ptr(data) };
+unsafe fn wake<const OWNED: bool>(data: *const ()) {
+    let h = unsafe { task::task_ptr(data) };
     match unsafe { owner(data) } {
         // Scheduling may notify a driver that reenters shutdown.
         // Nothing may touch the task afterward.
-        Owner::Active => wake_local::<false>(h, OWNED),
+        Owner::Active => task::wake_local::<false>(h, OWNED),
         Owner::Closed => {}
         Owner::Remote => {
             publish(
@@ -463,10 +480,10 @@ pub(super) unsafe fn wake<const OWNED: bool>(data: *const ()) {
 /// # Safety
 ///
 /// `data` must belong to an owned native standard waker whose reference is consumed.
-pub(super) unsafe fn drop_waker(data: *const ()) {
-    let h = unsafe { task_ptr(data) };
+unsafe fn drop_waker(data: *const ()) {
+    let h = unsafe { task::task_ptr(data) };
     match unsafe { owner(data) } {
-        Owner::Active => release_local(h),
+        Owner::Active => task::release_local(h),
         Owner::Closed => {}
         Owner::Remote => {
             publish(

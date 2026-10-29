@@ -26,12 +26,10 @@
 //! ```
 
 use std::cell::{Cell, RefCell};
-use std::future::poll_fn;
 use std::sync::atomic::Ordering;
-use std::task::Poll;
 use std::time::{Duration, Instant};
 use std::{fmt, future::Future, io, marker::PhantomData, panic::Location};
-use std::{pin::Pin, rc::Rc, sync::Arc};
+use std::{future::poll_fn, pin::Pin, rc::Rc, sync::Arc, task::Poll};
 
 use crate::driver::{Driver, Notify, PollResult};
 use crate::handle::SpawnLocation;
@@ -40,6 +38,7 @@ use crate::remote::{Job, RemoteJoin, Runner};
 
 mod queue;
 pub(crate) mod task;
+pub(crate) mod wake;
 
 use self::queue::RunnableQueue;
 
@@ -242,7 +241,7 @@ impl Runtime {
     #[allow(clippy::arc_with_non_send_sync)]
     fn with_builder(builder: &RuntimeBuilder, handle: Box<dyn Notify>) -> Self {
         let queue = Arc::new(RunnableQueue::new(builder, handle));
-        task::wake::register(&queue);
+        wake::register(&queue);
         Self {
             stop: Cell::new(false),
             queue,

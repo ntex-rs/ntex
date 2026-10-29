@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 use std::task::{RawWaker, RawWakerVTable, Waker};
 use std::{fmt, rc::Rc};
 
-use crate::rt::task;
+use crate::rt::wake;
 
 // Address 1 cannot be an aligned vtable pointer and leaves the null niche free.
 const NATIVE: NonNull<()> = NonNull::dangling();
@@ -63,8 +63,8 @@ impl LocalWaker {
     /// Clones a standard waker into a thread-confined wake handle.
     #[inline]
     pub fn from_waker(waker: &Waker) -> Self {
-        if let Some(ptr) = task::local_waker_ptr(waker) {
-            unsafe { task::clone_local_waker(ptr) };
+        if let Some(ptr) = wake::local_waker_ptr(waker) {
+            unsafe { wake::clone_local_waker(ptr) };
             Self::native(ptr)
         } else {
             Self::fallback(waker.clone())
@@ -76,7 +76,7 @@ impl LocalWaker {
     pub fn wake(self) {
         if self.is_native() {
             let this = ManuallyDrop::new(self);
-            unsafe { task::wake_local_waker(this.data, true) };
+            unsafe { wake::wake_local_waker(this.data, true) };
         } else {
             self.into_waker().wake();
         }
@@ -86,7 +86,7 @@ impl LocalWaker {
     #[inline]
     pub fn wake_by_ref(&self) {
         if self.is_native() {
-            unsafe { task::wake_local_waker(self.data, false) };
+            unsafe { wake::wake_local_waker(self.data, false) };
         } else {
             self.borrowed_waker().wake_by_ref();
         }
@@ -108,7 +108,7 @@ impl LocalWaker {
     pub fn into_waker(self) -> Waker {
         let this = ManuallyDrop::new(self);
         if this.is_native() {
-            unsafe { task::into_waker(this.data) }
+            unsafe { wake::into_waker(this.data) }
         } else {
             unsafe { Waker::from_raw(this.raw_waker()) }
         }
@@ -137,7 +137,7 @@ impl LocalWaker {
 
     fn raw_waker(&self) -> RawWaker {
         if self.is_native() {
-            task::raw_waker(self.data)
+            wake::raw_waker(self.data)
         } else {
             // Fallback metadata came from Waker::vtable(), a static reference.
             RawWaker::new(self.data, unsafe {
@@ -156,8 +156,8 @@ impl From<Waker> for LocalWaker {
     /// Consumes a standard waker to acquire thread-confined wake ownership.
     #[inline]
     fn from(waker: Waker) -> Self {
-        if let Some(ptr) = task::local_waker_ptr(&waker) {
-            unsafe { task::clone_local_waker(ptr) };
+        if let Some(ptr) = wake::local_waker_ptr(&waker) {
+            unsafe { wake::clone_local_waker(ptr) };
             drop(waker);
             Self::native(ptr)
         } else {
@@ -170,7 +170,7 @@ impl Clone for LocalWaker {
     #[inline]
     fn clone(&self) -> Self {
         if self.is_native() {
-            unsafe { task::clone_local_waker(self.data) };
+            unsafe { wake::clone_local_waker(self.data) };
             Self::native(self.data)
         } else {
             Self::fallback((*self.borrowed_waker()).clone())
@@ -189,7 +189,7 @@ impl Drop for LocalWaker {
     #[inline]
     fn drop(&mut self) {
         if self.is_native() {
-            unsafe { task::drop_local_waker(self.data) };
+            unsafe { wake::drop_local_waker(self.data) };
         } else {
             drop(unsafe { Waker::from_raw(self.raw_waker()) });
         }

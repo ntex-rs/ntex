@@ -1,9 +1,8 @@
 //! Run queues of a runtime, shared by the runtime and the tasks.
 use std::borrow::Cow;
-use std::cell::Cell;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use std::{fmt, future::Future, io, panic::Location, ptr, sync::Arc};
+use std::{cell::Cell, fmt, future::Future, io, panic::Location, ptr, sync::Arc};
 
 use crate::handle::{JoinHandle, SpawnLocation};
 use crate::{busy::BusyClock, driver::Notify, metrics::AtomicHistogram};
@@ -20,10 +19,8 @@ use loom::{
     thread::yield_now,
 };
 
-use super::task::{
-    self, LocalQueue, Remote as RemoteTask, Runnable as Task, TaskList, WakeEntry, WakeQueue,
-    task_ref,
-};
+use super::task::{self, LocalQueue, Remote as RemoteTask, Runnable as Task, TaskList};
+use super::wake::{self, WakeEntry, WakeQueue};
 use super::{LOG_TARGET, REPORTED, RuntimeBuilder, TaskStats, ThreadId, current_thread_id};
 
 const MAX_SELF_WAKES: u32 = task::MAX_SELF_WAKES;
@@ -39,7 +36,7 @@ pub(crate) struct RunnableQueue {
     /// Immutable owner-thread identity, also read by remote scheduling code.
     pub(crate) id: ThreadId,
     /// Never-reused identity of this queue's registered wake endpoint.
-    pub(crate) runtime_id: task::wake::RuntimeId,
+    pub(crate) runtime_id: wake::RuntimeId,
     /// Driver notifier, callable from the owner and remote producers.
     pub(super) handle: Box<dyn Notify>,
     /// Epoch for per-task self-wake streak timestamps.
@@ -104,7 +101,7 @@ impl RunnableQueue {
             handle,
             event_interval: builder.event_interval,
             id: current_thread_id(),
-            runtime_id: task::wake::runtime_id(),
+            runtime_id: wake::runtime_id(),
             idle: Cell::new(true),
             poll_start: Cell::new(now),
             self_wake_clock: Cell::new(None),
@@ -308,7 +305,7 @@ impl RunnableQueue {
             }
         }
 
-        let stats = task_ref(&task);
+        let stats = task.stats();
         // only the owner writes `current`; no callback can reenter between
         // saving it and publishing the new location
         let prev = self.current.load(Ordering::Relaxed);
@@ -430,7 +427,7 @@ impl RunnableQueue {
         let previous = self.admission.fetch_or(CLOSED, Ordering::AcqRel);
         // Synchronize endpoint lookups before waiting for admitted publications.
         // A nested or repeated shutdown must not remove the outer cleanup access.
-        let _shutdown = (previous & CLOSED == 0).then(|| task::wake::unregister(self.runtime_id));
+        let _shutdown = (previous & CLOSED == 0).then(|| wake::unregister(self.runtime_id));
         // A reserved submission may not have entered its queue yet.
         while self.admission.load(Ordering::Acquire) != CLOSED {
             yield_now();

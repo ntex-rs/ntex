@@ -1,13 +1,10 @@
-use std::cell::RefCell;
 use std::future::{pending, poll_fn};
 use std::panic::{AssertUnwindSafe, Location, catch_unwind};
-use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{io, thread};
+use std::{cell::RefCell, io, rc::Rc, thread};
 
-use super::*;
-use crate::rt::Runtime;
-use crate::{Notify, PollResult};
+use super::{wake, *};
+use crate::{Notify, PollResult, rt::Runtime};
 
 #[derive(Debug)]
 struct NoopNotify;
@@ -1272,7 +1269,7 @@ fn shutdown_does_not_reactivate_a_running_core() {
                 async move {
                     let _guard = guard;
                     poll_fn(move |cx| {
-                        let h = task_ptr(local_waker_ptr(cx.waker()).unwrap());
+                        let h = task_ptr(wake::local_waker_ptr(cx.waker()).unwrap());
                         if remote {
                             assert!(q.tasks.close_first());
                             let waker = cx.waker().clone();

@@ -14,6 +14,7 @@ use std::thread;
 
 use super::{Arc, Future, Location, Notify, Ordering, RunnableQueue, Runtime, io};
 use crate::rt::task::{self, Runnable, Task};
+use crate::rt::wake;
 
 #[derive(Debug)]
 struct NoopNotify;
@@ -2350,7 +2351,7 @@ fn id_exhaustion_aborts() {
 
     if let Ok(case) = std::env::var(CHILD) {
         if case == "runtime" {
-            task::wake::set_runtime_index(u16::MAX - 1);
+            wake::set_runtime_index(u16::MAX - 1);
             let _rt = new_rt();
             eprintln!("last id issued");
             let _rt = new_rt();
