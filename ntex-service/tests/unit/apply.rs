@@ -4,11 +4,15 @@ use super::*;
 use crate::{factory, fn_factory, service};
 
 #[derive(Debug, Default, Clone)]
-struct Srv(Rc<Cell<usize>>);
+struct Srv(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
 impl Service<(), ()> for Srv {
     type Res = ();
     type Error = ();
+
+    fn bind(&self, _: crate::BindCtx<'_>) {
+        self.1.set(self.1.get() + 1);
+    }
 
     async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
         Ok(())
@@ -33,23 +37,30 @@ impl From<()> for Err {
     }
 }
 
-/// STATEMENT: An apply wrapper adapts calls while forwarding readiness and shutdown.
+/// STATEMENT: An apply wrapper adapts calls while forwarding binding, readiness, and shutdown.
 ///
 /// HOW:
 /// - Wrap a counted service with a closure that calls it and constructs a tuple response.
-/// - Verify readiness, shutdown counts, and the adapted response.
+/// - Verify pipeline construction binds the inner service once, before readiness is checked.
+/// - Check readiness/shutdown counts and the adapted response without additional binding.
 #[ntex::test]
 async fn test_call() {
     let cnt_sht = Rc::new(Cell::new(0));
+    let binds = Rc::new(Cell::new(0));
     let srv = service(
-        apply_fn(Srv(cnt_sht.clone()), async move |req: &'static str, svc| {
-            svc.call(()).await.unwrap();
-            Ok((req, ()))
-        })
+        apply_fn(
+            Srv(cnt_sht.clone(), binds.clone()),
+            async move |req: &'static str, svc| {
+                svc.call(()).await.unwrap();
+                Ok((req, ()))
+            },
+        )
         .clone(),
     )
     .pipeline(());
 
+    assert_eq!(binds.get(), 1);
+    assert_eq!(cnt_sht.get(), 0);
     assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
     srv.shutdown().await;
@@ -58,6 +69,7 @@ async fn test_call() {
     let res = srv.call("srv").await;
     assert!(res.is_ok());
     assert_eq!(res.unwrap(), ("srv", ()));
+    assert_eq!(binds.get(), 1);
 }
 
 /// STATEMENT: A cloned apply chain retains service access and lifecycle forwarding.
@@ -68,7 +80,7 @@ async fn test_call() {
 #[ntex::test]
 async fn test_call_svc() {
     let cnt_sht = Rc::new(Cell::new(0));
-    let srv = service(Srv(cnt_sht.clone()))
+    let srv = service(Srv(cnt_sht.clone(), Rc::default()))
         .apply_fn(async move |req: &'static str, svc| {
             svc.st();
             svc.call(()).await.unwrap();
@@ -126,7 +138,7 @@ async fn test_create_chain() {
     let created = checks.clone();
     let new_srv = factory(fn_factory(move |(): &()| {
         let created = created.clone();
-        async move { Ok::<_, ()>(Srv(created)) }
+        async move { Ok::<_, ()>(Srv(created, Rc::default())) }
     }))
     .apply_fn(async move |req: &'static str, srv| {
         srv.call(()).await.unwrap();

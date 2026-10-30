@@ -1,18 +1,9 @@
-use std::{
-    cell::{Cell, OnceCell, RefCell},
-    collections::HashSet,
-    fmt,
-    future::{Future, poll_fn},
-    marker::PhantomData,
-    pin::Pin,
-    rc::{Rc, Weak},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    task::{Context, Poll, Wake, Waker},
-    thread::{self, ThreadId},
-};
+use std::cell::{Cell, OnceCell, RefCell};
+use std::future::{Future, poll_fn};
+use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::task::{Context, Poll, Wake, Waker};
+use std::thread::{self, ThreadId};
+use std::{collections::HashSet, fmt, marker::PhantomData, pin::Pin, rc::Rc, rc::Weak};
 
 /// A reusable callback invoked when a readiness scope receives a notification.
 ///

@@ -2,10 +2,45 @@ use std::{fmt, marker::PhantomData};
 
 use super::{Ctx, Service, ServiceFactory};
 
-/// Service produced by the `map_err` combinator.
+/// Transforms call and readiness errors with a synchronous function.
 ///
-/// This is created by the `Service::map_err()` and `ServiceChain::map_err()` methods.
-/// Mapping errors preserves the wrapped service's readiness identity.
+/// Created by [`Service::map_err`] and [`crate::ServiceChain::map_err`].
+/// The function receives an inner error and returns the new error value.
+/// Successful responses are returned unchanged without invoking the function.
+/// Request and state types are also unchanged.
+///
+/// This is useful for giving composed services a common error type. It does
+/// not recover errors into responses; use [`crate::ServiceChain::then`] for
+/// call-result recovery.
+///
+/// Binding and shutdown are forwarded to the inner service. Readiness is
+/// forwarded with the same error conversion as calls. Mapping preserves the
+/// inner service's readiness identity without adding an independent cache or
+/// an extra readiness check at call time. An explicit [`crate::ready()`]
+/// wrapper retains its own readiness behavior.
+///
+/// Cloning clones both the inner service and mapping function. Whether their
+/// state is shared depends on their clone implementations.
+///
+/// # Example
+///
+/// ```
+/// use ntex_service::{Service, fn_service};
+///
+/// # async fn example() {
+/// let pipeline = fn_service(async |req: u32| {
+///     if req == 0 { Err("zero is not allowed") } else { Ok(req) }
+/// })
+/// .map_err(|error| format!("request failed: {error}"))
+/// .pipeline(());
+///
+/// assert_eq!(pipeline.call(1).await, Ok(1));
+/// assert_eq!(
+///     pipeline.call(0).await,
+///     Err(String::from("request failed: zero is not allowed")),
+/// );
+/// # }
+/// ```
 pub struct MapErr<F, S, E> {
     f: F,
     svc: S,
@@ -83,9 +118,37 @@ where
     }
 }
 
-/// Service factory produced by the `map_err` combinator.
+/// Maps call and readiness errors from each service created by an inner factory.
 ///
-/// This is created by the `ServiceChainFactory::map_err()` method.
+/// Created by [`ServiceFactory::map_err`] and
+/// [`crate::ServiceChainFactory::map_err`]. Creation forwards the supplied state
+/// to the inner factory. On success, the new service is wrapped in [`MapErr`]
+/// with a clone of the mapping function.
+///
+/// Initialization errors are returned unchanged, without cloning or invoking
+/// the function. Use [`ServiceFactory::map_init_err`] to transform those
+/// errors. Request, response, and state types remain unchanged.
+///
+/// Created services use the lifecycle and readiness behavior described in
+/// [`MapErr`]. Cloning clones the inner factory and mapping function without
+/// creating a service.
+///
+/// # Example
+///
+/// ```
+/// use ntex_service::{ServiceFactory, fn_factory, fn_service};
+///
+/// # async fn example() -> Result<(), ()> {
+/// let factory = fn_factory(async |_: &()| {
+///     Ok::<_, ()>(fn_service(async |_: u32| Err::<u32, _>("unavailable")))
+/// })
+/// .map_err(String::from);
+///
+/// let pipeline = factory.pipeline(()).await?;
+/// assert_eq!(pipeline.call(1).await, Err(String::from("unavailable")));
+/// # Ok(())
+/// # }
+/// ```
 pub struct MapErrFactory<F, Sf, E> {
     f: F,
     sf: Sf,

@@ -2,10 +2,39 @@ use std::{fmt, marker::PhantomData};
 
 use super::{Ctx, Service, ServiceFactory};
 
-/// Service produced by the `map` combinator.
+/// Transforms successful service responses with a synchronous function.
 ///
-/// This is created by the `Service::map()` and `ServiceChain::map()` methods.
-/// Mapping responses preserves the wrapped service's readiness identity.
+/// Created by [`Service::map`] and [`crate::ServiceChain::map`]. Each successful
+/// inner call passes its response to the mapping function, whose return value
+/// becomes the new response. On failure, the error is returned unchanged and
+/// the mapping function is not invoked.
+///
+/// The request, state, and error types are unchanged. For asynchronous response
+/// processing, use [`Service::and_then`] or [`crate::apply_fn`] instead.
+///
+/// Binding, readiness, and shutdown are forwarded to the inner service.
+/// Mapping preserves the inner service's readiness identity without adding an
+/// independent cache or an extra readiness check at call time. An explicit
+/// [`crate::ready()`] wrapper on the inner service retains its own readiness
+/// behavior.
+///
+/// Cloning clones both the inner service and mapping function. Whether their
+/// state is shared depends on their clone implementations.
+///
+/// # Example
+///
+/// ```
+/// use ntex_service::{Service, fn_service};
+///
+/// # async fn example() -> Result<(), ()> {
+/// let pipeline = fn_service(async |req: u32| Ok::<_, ()>(req + 1))
+///     .map(|value| value.to_string())
+///     .pipeline(());
+///
+/// assert_eq!(pipeline.call(41).await?, "42");
+/// # Ok(())
+/// # }
+/// ```
 pub struct Map<F, S, Res> {
     f: F,
     svc: S,
@@ -80,9 +109,39 @@ where
     }
 }
 
-/// Service factory produced by the `map` combinator.
+/// Maps successful responses from each service created by an inner factory.
 ///
-/// This is created by the `ServiceChainFactory::map()` method.
+/// Created by [`ServiceFactory::map`] and [`crate::ServiceChainFactory::map`].
+/// Creation forwards the supplied state to the inner factory. On success,
+/// the new service is wrapped in [`Map`] with a clone of the mapping function.
+/// The function runs when that service produces a successful response, not
+/// during initialization.
+///
+/// The request, state, service-error, and initialization-error types are
+/// unchanged. Inner initialization errors are returned without cloning or
+/// invoking the mapping function. Created services retain the binding,
+/// readiness, and shutdown behavior described in [`Map`].
+///
+/// Cloning clones the inner factory and mapping function without creating a
+/// service.
+///
+/// # Example
+///
+/// ```
+/// use ntex_service::{ServiceFactory, fn_factory, fn_service};
+///
+/// # async fn example() -> Result<(), ()> {
+/// let factory = fn_factory(async |offset: &u32| {
+///     let offset = *offset;
+///     Ok::<_, ()>(fn_service(async move |req: u32| Ok::<_, ()>(req + offset)))
+/// })
+/// .map(|value| value.to_string());
+///
+/// let pipeline = factory.pipeline(10).await?;
+/// assert_eq!(pipeline.call(2).await?, "12");
+/// # Ok(())
+/// # }
+/// ```
 pub struct MapFactory<F, Sf, Res> {
     f: F,
     sf: Sf,
