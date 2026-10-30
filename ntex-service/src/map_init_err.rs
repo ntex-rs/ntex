@@ -70,40 +70,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::{ServiceFactory, factory, fn_factory, fn_service};
-
-    #[ntex::test]
-    async fn map_init_err() {
-        let factory = factory(fn_factory(async move |err: &bool| {
-            if *err {
-                Err(())
-            } else {
-                Ok(fn_service(async |i: usize| Ok::<_, ()>(i * 2)))
-            }
-        }))
-        .map_init_err(|()| std::io::Error::other("err"))
-        .clone();
-
-        assert!(factory.create(&true).await.is_err());
-        assert!(factory.create(&false).await.is_ok());
-        let _ = format!("{factory:?}");
-    }
-
-    #[ntex::test]
-    async fn map_init_err2() {
-        let factory = factory(fn_factory(async |err: &bool| {
-            if *err {
-                Err(())
-            } else {
-                Ok(fn_service(async |i: usize| Ok::<_, ()>(i * 2)))
-            }
-        }))
-        .map_init_err(|()| std::io::Error::other("err"))
-        .clone();
-
-        assert!(factory.create(&true).await.is_err());
-        assert!(factory.create(&false).await.is_ok());
-        let _ = format!("{factory:?}");
-    }
-}
+#[path = "../tests/unit/map_init_err.rs"]
+mod tests;

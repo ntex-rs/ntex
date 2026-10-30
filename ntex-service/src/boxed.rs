@@ -1,3 +1,37 @@
+//! Type-erased services and service factories.
+//!
+//! Use [`service()`] or [`BoxService::new`] to hide a service's concrete type
+//! while keeping its state, request, response, and error types explicit.
+//! This lets different implementations share a return type or collection.
+//! [`factory()`] and [`BoxServiceFactory`] do the same for factories; each
+//! created service is returned as a [`BoxService`].
+//!
+//! These wrappers use reference-counted, local handles. Cloning shares the
+//! underlying service or factory rather than cloning its implementation.
+//! Binding, readiness, calls, and shutdown are forwarded to the wrapped
+//! service. Type erasure preserves existing readiness caches but does not add
+//! one to a raw service; use [`crate::Pipeline`] or [`crate::ready()`] when a
+//! readiness cache is needed.
+//!
+//! # Example
+//!
+//! ```
+//! use ntex_service::{boxed, fn_service};
+//!
+//! fn handler(double: bool) -> boxed::BoxService<(), u32, u32, ()> {
+//!     if double {
+//!         boxed::service(fn_service(async |req: u32| Ok::<_, ()>(req * 2)))
+//!     } else {
+//!         boxed::service(fn_service(async |req: u32| Ok::<_, ()>(req)))
+//!     }
+//! }
+//! ```
+//!
+//! # Framework guide
+//!
+//! - [Service Model](https://docs.ntex.rs/1-service.html)
+//! - [Service Pipelines](https://docs.ntex.rs/2-pipeline.html)
+
 use std::{fmt, rc::Rc};
 
 use crate::{BindCtx, Ctx};

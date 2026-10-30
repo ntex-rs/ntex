@@ -1,4 +1,63 @@
 //! Typed, shared configuration for services.
+//!
+//! [`SharedCfg`] stores configuration values by their concrete type. Start
+//! with [`SharedCfg::new`], insert values through [`SharedCfgBuilder::add`],
+//! and finish with [`SharedCfgBuilder::build`]. Adding the same type again
+//! replaces its previous value.
+//!
+//! Each value implements [`Configuration`] and stores a [`CfgContext`].
+//! The builder associates that context with the collection, providing access
+//! to its tag, service name, and other configuration types.
+//! [`SharedCfg::get`] returns a [`Cfg<T>`] handle that dereferences to `T`.
+//! If a type was not inserted, lookup creates its default value and caches it
+//! for that collection on the calling thread.
+//!
+//! The built collection can be shared across threads, while typed [`Cfg`]
+//! handles are local to the thread that obtains them. Configuration is
+//! separate from the state passed to [`crate::Service`] operations; a state
+//! value can carry whichever configuration handles the service needs.
+//!
+//! # Example
+//!
+//! ```
+//! use ntex_service::cfg::{CfgContext, Configuration, SharedCfg};
+//!
+//! #[derive(Debug, Default)]
+//! struct Limits {
+//!     ctx: CfgContext,
+//!     max_requests: usize,
+//! }
+//!
+//! impl Configuration for Limits {
+//!     const NAME: &'static str = "limits";
+//!
+//!     fn ctx(&self) -> &CfgContext {
+//!         &self.ctx
+//!     }
+//!
+//!     fn set_ctx(&mut self, ctx: CfgContext) {
+//!         self.ctx = ctx;
+//!     }
+//! }
+//!
+//! let shared = SharedCfg::new("listener")
+//!     .service("example")
+//!     .add(Limits {
+//!         max_requests: 32,
+//!         ..Limits::default()
+//!     })
+//!     .build();
+//! let limits = shared.get::<Limits>();
+//! assert_eq!(limits.max_requests, 32);
+//! assert_eq!(limits.tag(), "listener");
+//! assert_eq!(limits.service(), "example");
+//! ```
+//!
+//! # Framework guide
+//!
+//! See [Service State](https://docs.ntex.rs/3-state.html) for passing shared
+//! data to services.
+
 #![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, UnsafeCell};
@@ -430,152 +489,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[allow(clippy::should_panic_without_expect)]
-    #[should_panic]
-    fn access_cfg_in_building_state() {
-        #[derive(Debug)]
-        struct TestCfg {
-            config: CfgContext,
-        }
-        impl TestCfg {
-            fn new() -> Self {
-                Self {
-                    config: CfgContext::default(),
-                }
-            }
-        }
-        impl Default for TestCfg {
-            fn default() -> Self {
-                panic!()
-            }
-        }
-        impl Configuration for TestCfg {
-            const NAME: &str = "TEST";
-            fn ctx(&self) -> &CfgContext {
-                &self.config
-            }
-            fn set_ctx(&mut self, ctx: CfgContext) {
-                let _ = ctx.shared().get::<TestCfg>();
-                self.config = ctx;
-            }
-        }
-        let _ = TestCfg::new().ctx();
-        let _ = SharedCfg::new("TEST").add(TestCfg::new());
-    }
-
-    #[test]
-    fn shared_cfg() {
-        #[derive(Default, Debug)]
-        struct TestCfg {
-            config: CfgContext,
-        }
-        impl Configuration for TestCfg {
-            const NAME: &str = "TEST";
-            fn ctx(&self) -> &CfgContext {
-                &self.config
-            }
-            fn set_ctx(&mut self, ctx: CfgContext) {
-                self.config = ctx;
-            }
-        }
-
-        let cfg: SharedCfg = SharedCfg::new("TEST")
-            .add(TestCfg::default())
-            .service("SVC")
-            .into();
-
-        assert_eq!(cfg.tag(), "TEST");
-        assert_eq!(cfg.service(), "SVC");
-        let t = cfg.get::<TestCfg>();
-        assert_eq!(t.tag(), "TEST");
-        assert_eq!(t.service(), "SVC");
-        assert_eq!(t.shared(), cfg);
-        let t: Cfg<TestCfg> = Cfg::default();
-        assert_eq!(t.tag(), "--");
-        assert_eq!(t.service(), "");
-        assert_eq!(t.ctx().id(), t.id());
-
-        let t: Cfg<TestCfg> = t.ctx().get();
-        assert_eq!(t.tag(), "--");
-        assert_eq!(t.ctx().id(), t.id());
-
-        let cfg = SharedCfg::new("TEST2").build();
-        let cfg = SharedCfg::from(&cfg);
-        let t = cfg.get::<TestCfg>();
-        assert_eq!(t.tag(), "TEST2");
-        assert_eq!(t.id(), cfg.id());
-        drop(cfg);
-
-        let cfg2 = t.shared();
-        let t2 = cfg2.get::<TestCfg>();
-        assert_eq!(t2.tag(), "TEST2");
-        assert_eq!(t2.id(), cfg2.id());
-        unsafe { t2.replace(SharedCfg::from(SharedCfg::new("TEST3")).get::<TestCfg>()) };
-
-        let cfg2 = t2.shared();
-        let t3 = cfg2.get::<TestCfg>();
-        assert_eq!(t3.tag(), "TEST3");
-        assert_eq!(t3.id(), cfg2.id());
-
-        let t = SharedCfg::from(SharedCfg::new("TEST4").add(TestCfg::default())).get::<TestCfg>();
-        let cfg = t.shared();
-        assert_eq!(t.id(), cfg.id());
-        let t2 = t.clone();
-        assert_eq!(t2.id(), cfg.id());
-        assert_eq!(t2.tag(), "TEST4");
-
-        let t3 = t.ctx().get::<TestCfg>();
-        let t3 = Cfg::from(t3.get_ref());
-        let t3 = t3.get_shared::<TestCfg>();
-        assert_eq!(t3.id(), cfg.id());
-        assert_eq!(t3.tag(), "TEST4");
-
-        let t1 = SharedCfg::from(t3);
-        assert_eq!(t.id(), t1.id());
-    }
-
-    #[test]
-    fn cfg_conversions() {
-        use std::hash::BuildHasher;
-
-        #[derive(Default, Debug)]
-        struct TestCfg {
-            config: CfgContext,
-            val: usize,
-        }
-        impl Configuration for TestCfg {
-            const NAME: &str = "TEST";
-            fn ctx(&self) -> &CfgContext {
-                &self.config
-            }
-            fn set_ctx(&mut self, ctx: CfgContext) {
-                self.config = ctx;
-            }
-        }
-        let new = |val| TestCfg {
-            val,
-            ..Default::default()
-        };
-
-        let t = Cfg::from(new(1));
-        assert_eq!(t.val, 1);
-        assert_eq!(t.tag(), "--");
-
-        let shared = SharedCfg::from(new(2));
-        assert_eq!(shared.get::<TestCfg>().val, 2);
-        assert_eq!(Cfg::<TestCfg>::from(&shared).val, 2);
-        assert_eq!(Cfg::<TestCfg>::from(shared.clone()).val, 2);
-
-        let t: Cfg<TestCfg> = SharedCfg::new("T").add(new(3)).into();
-        assert_eq!(t.val, 3);
-        assert_eq!(t.tag(), "T");
-
-        let hasher = foldhash::fast::FixedState::default();
-        assert_eq!(hasher.hash_one(&shared), hasher.hash_one(shared.clone()));
-        assert_eq!(hasher.hash_one(&shared), hasher.hash_one(shared.id()));
-    }
-}
+#[path = "../tests/unit/cfg.rs"]
+mod tests;
