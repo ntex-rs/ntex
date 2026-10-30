@@ -55,7 +55,7 @@ pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
 pub use crate::readiness::{ReadyCallback, ReadyNotifier};
 pub use crate::ready::{ready, ready_factory};
-pub use crate::service_binding::ServiceBinding;
+pub use crate::service_binding::{ServiceBinding, ServiceBindingMiddleware};
 pub use crate::state::{RequestState, State};
 
 #[allow(unused_variables)]

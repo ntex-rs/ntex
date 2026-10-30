@@ -4,7 +4,7 @@ use std::{cell::Cell, cell::RefCell, future::Future, future::poll_fn, pin::pin, 
 
 use super::*;
 use crate::{
-    Pipeline, ReadyCallback, ReadyNotifier, ServiceCaller, ctx::WaitersRef,
+    Pipeline, ReadyCallback, ReadyNotifier, ServiceCaller, ServiceFactory, ctx::WaitersRef,
     pipeline::PipelineState, ready,
 };
 
@@ -181,6 +181,78 @@ fn compose_probes(
     } else {
         crate::boxed::service(crate::and_then::AndThen::new(ready(a), ready(b)))
     }
+}
+
+/// STATEMENT: `ServiceBindingMiddleware` gives each factory-created service its own readiness scope.
+///
+/// HOW:
+/// - Apply the middleware to a factory returning clones of one probe and create two services.
+/// - Verify binding is deferred to pipeline construction and each service checks readiness once.
+/// - Check repeated calls reuse readiness and calls and shutdown receive each pipeline's state.
+#[test]
+fn binding_middleware_factory_creates_independent_scopes() {
+    let probe = Probe::new();
+    let factory = crate::apply(
+        ServiceBindingMiddleware,
+        crate::fn_factory(async |_: &State| Ok::<_, ()>(probe.clone())),
+    );
+    let first = run(factory.create(&State(10))).unwrap();
+    let second = run(factory.create(&State(20))).unwrap();
+    assert_eq!(probe.0.binds.get(), 0);
+    assert_eq!(probe.0.starts.get(), 0);
+
+    let first = Pipeline::new(State(10), first);
+    let second = Pipeline::new(State(20), second);
+    assert_eq!(probe.0.binds.get(), 2);
+    assert_eq!(run(first.call(1)), Ok(11));
+    assert_eq!(run(first.call(2)), Ok(12));
+    assert_eq!(probe.0.starts.get(), 1);
+    assert_eq!(run(second.call(1)), Ok(21));
+    assert_eq!(run(second.call(2)), Ok(22));
+    assert_eq!(probe.0.starts.get(), 2);
+
+    run(first.shutdown());
+    assert_eq!(probe.0.shutdown_state.get(), 10);
+    run(second.shutdown());
+    assert_eq!(probe.0.shutdown_state.get(), 20);
+}
+
+/// STATEMENT: Middleware-created bindings ignore sibling invalidation but observe inner notifications.
+///
+/// HOW:
+/// - Chain a middleware-wrapped probe with a raw sibling and cache readiness.
+/// - Invalidate the sibling and verify only its readiness is rechecked.
+/// - Notify an inner readiness failure and verify it blocks dispatch until recovery.
+#[test]
+fn binding_middleware_preserves_independent_readiness() {
+    let probe = Probe::new();
+    let sibling = Probe::new();
+    let bound = ServiceBindingMiddleware.create(&State(10), probe.clone());
+    let pipeline = crate::service(bound)
+        .and_then(sibling.clone())
+        .pipeline(State(10));
+
+    assert_eq!(run(pipeline.ready()), Ok(()));
+    assert_eq!(probe.0.starts.get(), 1);
+    assert_eq!(sibling.0.starts.get(), 1);
+
+    sibling.0.changed.notify();
+    assert_eq!(run(pipeline.ready()), Ok(()));
+    assert_eq!(probe.0.starts.get(), 1);
+    assert_eq!(sibling.0.starts.get(), 2);
+
+    probe.0.fail.set(true);
+    probe.0.changed.notify();
+    assert_eq!(run(pipeline.call(1)), Err(Error));
+    assert_eq!(probe.0.starts.get(), 2);
+    assert_eq!(probe.0.calls.get(), 0);
+    assert_eq!(sibling.0.calls.get(), 0);
+
+    probe.0.fail.set(false);
+    probe.0.changed.notify();
+    assert_eq!(run(pipeline.call(1)), Ok(21));
+    assert_eq!(probe.0.calls.get(), 1);
+    assert_eq!(sibling.0.calls.get(), 1);
 }
 
 /// STATEMENT: Bound callbacks observe direct and propagated notifications, not calls or scheduling wakes.

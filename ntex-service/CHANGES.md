@@ -1,5 +1,10 @@
 # Changes
 
+## [5.4.0] - 2026-10-30
+
+* Add `ServiceBindingMiddleware` to wrap factory-created services in fresh
+  `ServiceBinding` instances with independent readiness caches
+
 ## [5.3.1] - 2026-10-30
 
 * Allow to use `self.` for service forward macros
