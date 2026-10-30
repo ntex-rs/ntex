@@ -66,6 +66,11 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
+    /// STATEMENT: An in-place channel holds one value and becomes reusable after receiving it.
+    ///
+    /// HOW:
+    /// - Poll an empty channel pending, send a value, and verify a second send returns its input.
+    /// - Receive through polling, send again, and verify the async receive and debug name.
     #[ntex::test]
     async fn test_inplace() {
         let ch = channel();

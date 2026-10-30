@@ -916,6 +916,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Timer waker registration avoids redundant clones and survives replacement panics.
+    ///
+    /// HOW:
+    /// - Count raw-waker clones and references while re-registering, resetting, and replacing.
+    /// - Catch a clone panic, then verify expiry wakes only the replacement and drop releases it.
     #[test]
     fn test_local_waker_registration() {
         struct Registration {
@@ -1019,6 +1024,11 @@ mod tests {
         assert_eq!(Arc::strong_count(&old), 2);
     }
 
+    /// STATEMENT: A timer wakes the most recently registered native task and supports later reuse.
+    ///
+    /// HOW:
+    /// - Register two runtime tasks on one handle and expire it, checking only the second finishes.
+    /// - Rearm for the first task, expire again, and wake its saved waker after runtime shutdown.
     #[test]
     fn test_local_waker_native_replacement() {
         let timer = timer_state();
@@ -1057,6 +1067,11 @@ mod tests {
         first_waker.take().unwrap().wake();
     }
 
+    /// STATEMENT: Timer handles safely retain stale task wakers across runtime shutdown and reuse.
+    ///
+    /// HOW:
+    /// - Register timer and driver wakers, drop the runtime, and reset timer state.
+    /// - Check released task references and driver slots, then optionally reuse the handle in a new runtime.
     #[test]
     fn test_local_waker_runtime_shutdown() {
         for reuse in [false, true] {
@@ -1101,6 +1116,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Timer wakers can be replaced across successive systems on the same thread.
+    ///
+    /// HOW:
+    /// - Reuse one handle across three systems with alternating native and wrapped wakers.
+    /// - Reset and expire it in each system and check wrapped notification counts after shutdown.
     #[test]
     fn test_local_waker_in_next_system() {
         struct Wrapped {
@@ -1160,6 +1180,11 @@ mod tests {
         .unwrap();
     }
 
+    /// STATEMENT: Callback timers can be canceled and repeatedly rearmed for one delivery each.
+    ///
+    /// HOW:
+    /// - Cancel a reset timer and verify no callback runs after waiting.
+    /// - Rearm with zero delay twice and check elapsed state and one additional call per expiry.
     #[ntex::test]
     async fn test_callback_timer() {
         let calls = Rc::new(Cell::new(0));
@@ -1184,6 +1209,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Stale callback tickets cannot invoke canceled, reset, dropped, or reused entries.
+    ///
+    /// HOW:
+    /// - Queue expired callbacks, then cancel, reset, and drop them before driver delivery.
+    /// - Reuse the freed slot, verify captures were released, and check only new deadlines fire once.
     #[test]
     fn test_callback_stale_tickets() {
         let timer = timer_state();
@@ -1240,6 +1270,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A callback can rearm itself and cancel another callback already due for delivery.
+    ///
+    /// HOW:
+    /// - Expire two callbacks that each cancel their peer and reset themselves.
+    /// - Verify only one runs initially and its rearmed deadline produces one further call.
     #[test]
     fn test_callback_self_rearm_and_cross_cancel() {
         let timer = timer_state();
@@ -1288,6 +1323,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Dropping callback captures can safely create, reset, and cancel timers.
+    ///
+    /// HOW:
+    /// - Drop queued and actively executing callbacks whose capture destructors manipulate timers.
+    /// - Check deferred capture release, slot reuse, cancellation, and exactly-once later delivery.
     #[test]
     fn test_callback_capture_drop_schedules_timers() {
         for active in [false, true] {
@@ -1373,6 +1413,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A callback capture can reset the runtime without the old driver consuming new work.
+    ///
+    /// HOW:
+    /// - Drop a callback during delivery and reset timer state from its capture destructor.
+    /// - Queue a replacement, verify the old driver exits, and deliver it once with a new driver.
     #[test]
     fn test_callback_capture_drop_resets_runtime() {
         let timer = timer_state();
@@ -1425,6 +1470,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Callback delivery refreshes time after a slow callback.
+    ///
+    /// HOW:
+    /// - Schedule two deadlines and make the first callback block past the second.
+    /// - Poll the driver once and verify both callbacks ran and both timers elapsed.
     #[test]
     fn test_callback_refreshes_time() {
         let timer = timer_state();
@@ -1457,6 +1507,11 @@ mod tests {
         assert!(handles.iter().all(CallbackTimer::is_elapsed));
     }
 
+    /// STATEMENT: Dropping a panicked driver cleans callbacks rearmed before the panic.
+    ///
+    /// HOW:
+    /// - Run a callback that rearms itself and panics while other timers remain pending.
+    /// - Drop the driver and verify elapsed handles, cleared callback flags, and empty wheel queues.
     #[test]
     fn test_callback_panic_after_rearm_cleanup() {
         let timer = timer_state();
@@ -1492,6 +1547,11 @@ mod tests {
         });
     }
 
+    /// STATEMENT: Resetting timer state during callback delivery stops the old generation safely.
+    ///
+    /// HOW:
+    /// - Queue two callbacks that reset runtime state and create a replacement.
+    /// - Verify only one old callback runs and the replacement survives old-driver drop for later delivery.
     #[test]
     fn test_callback_runtime_reset_during_delivery() {
         let timer = timer_state();
@@ -1539,6 +1599,11 @@ mod tests {
         assert_eq!(new_calls.get(), 1);
     }
 
+    /// STATEMENT: A waker panic in a mixed timer bucket leaves callback state recoverable.
+    ///
+    /// HOW:
+    /// - Place a panicking waker at each position among two callback entries and catch driver unwind.
+    /// - Check bucket and pending-ticket cleanup, then rearm a callback and verify one delivery.
     #[test]
     fn test_callback_mixed_bucket_waker_panic() {
         for panic_position in 0..3 {
@@ -1621,6 +1686,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A callback timer can be rearmed in a later system without stale delivery.
+    ///
+    /// HOW:
+    /// - Carry one callback handle across two systems on a dedicated thread.
+    /// - Verify shutdown elapses it, no callback runs before rearming, and each reset delivers once.
     #[test]
     fn test_callback_reuse_in_next_system() {
         std::thread::spawn(|| {
@@ -1657,6 +1727,11 @@ mod tests {
         .unwrap();
     }
 
+    /// STATEMENT: Wheel access is restored after an operation panics.
+    ///
+    /// HOW:
+    /// - Insert an entry inside `with_wheel`, panic, and catch the unwind.
+    /// - Access the wheel again and verify the inserted entry remains.
     #[test]
     fn test_wheel_access_restored_on_unwind() {
         let timer = Timer::new();
@@ -1672,6 +1747,11 @@ mod tests {
         timer.with_wheel(|wheel| assert_eq!(wheel.timers.len(), 2));
     }
 
+    /// STATEMENT: Manual and driven expiry wake registered tasks while wheel access is held.
+    ///
+    /// HOW:
+    /// - Register a waker that asserts wheel ownership and expire handles by reset, elapse, and dispatch.
+    /// - Check all four wakes, elapsed handles, and released waker references.
     #[test]
     fn test_wake_in_place() {
         let timer = timer_state();
@@ -1706,6 +1786,11 @@ mod tests {
         assert_eq!(Arc::strong_count(&task), 2);
     }
 
+    /// STATEMENT: Waker dispatch uses one time sample even if a wake callback blocks.
+    ///
+    /// HOW:
+    /// - Schedule two deadlines and block inside the first wake past the second deadline.
+    /// - Verify the first driver poll expires only one timer and the next poll expires the other.
     #[test]
     fn test_dispatch_uses_one_time_sample_for_wakers() {
         let timer = timer_state();
@@ -1746,6 +1831,11 @@ mod tests {
         assert_eq!(task.wakes.load(Ordering::Relaxed), 2);
     }
 
+    /// STATEMENT: A wake panic clears its expired bucket and leaves driver cleanup safe.
+    ///
+    /// HOW:
+    /// - Expire two same-bucket timers with a panicking waker and inspect bucket occupancy.
+    /// - Rearm both handles, drop the driver, and verify both elapse and the driver flag clears.
     #[test]
     fn test_dispatch_panic_cleans_expired_bucket() {
         let timer = timer_state();
@@ -1793,8 +1883,11 @@ mod tests {
         assert!(!timer.flags.get().contains(Flags::DRIVER_STARTED));
     }
 
-    /// A handle dropped by a thread-local destructor after the wheel is
-    /// destroyed must not panic.
+    /// STATEMENT: A timer handle can be dropped after its thread-local wheel is destroyed.
+    ///
+    /// HOW:
+    /// - Register handle storage before timer storage so its destructor runs last.
+    /// - Leave a registered handle in that storage and verify the thread exits without panic.
     #[test]
     fn test_drop_handle_after_wheel_destroyed() {
         use std::cell::RefCell;
@@ -1823,6 +1916,11 @@ mod tests {
         assert!(res.is_ok());
     }
 
+    /// STATEMENT: Callback captures are released once even when their timer outlives wheel storage.
+    ///
+    /// HOW:
+    /// - Store a callback in earlier-registered thread-local storage with a counted drop capture.
+    /// - Exit the thread and verify capture destruction occurred after wheel destruction exactly once.
     #[test]
     fn test_drop_callback_after_wheel_destroyed() {
         thread_local! {
@@ -1858,8 +1956,11 @@ mod tests {
         assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 
-    /// The drivers of a stopped system may never be dropped, the next system
-    /// on the same thread starts its own drivers.
+    /// STATEMENT: Successive systems on one thread start working timers despite prior pending tasks.
+    ///
+    /// HOW:
+    /// - Start three systems, complete a short sleep, and leave long sleeps pending in each.
+    /// - Check per-system elapsed bounds and thread completion within an overall deadline.
     #[test]
     fn test_timer_in_next_system() {
         let res = std::thread::spawn(|| {
@@ -1882,7 +1983,11 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(10)), Ok(true));
     }
 
-    /// A stale driver does not stop the drivers of a newer generation.
+    /// STATEMENT: Dropping stale drivers does not clear a newer generation's running flags.
+    ///
+    /// HOW:
+    /// - Reset timer state, mark the new generation running, and drop both old driver types.
+    /// - Verify all new-generation driver flags remain set.
     #[test]
     fn test_stale_driver_drop() {
         let timer = Rc::new(Timer::new());
@@ -1917,8 +2022,11 @@ mod tests {
         }
     }
 
-    /// Bucket expiry is never earlier than the requested delay, and at most
-    /// one level granularity later.
+    /// STATEMENT: Bucket placement never expires early and stays within its level's granularity.
+    ///
+    /// HOW:
+    /// - Calculate buckets for varied elapsed times and exponentially increasing delays.
+    /// - Check expiry bounds, alignment, bucket indices, and clamping beyond wheel capacity.
     #[test]
     fn test_bucket_expiry_bounds() {
         let timer = Timer::new();
@@ -1948,8 +2056,11 @@ mod tests {
         }
     }
 
-    /// The next pending bucket is the earliest occupied one, and executing it
-    /// wakes only its timers.
+    /// STATEMENT: Next-bucket selection visits occupied buckets in increasing expiry order.
+    ///
+    /// HOW:
+    /// - Insert timers with unsorted delays and compute their expected sorted expiries.
+    /// - Expire each selected bucket and verify its entry unlinks and the final occupancy is empty.
     #[test]
     fn test_next_pending_bucket() {
         let timer = Timer::new();
@@ -1978,6 +2089,11 @@ mod tests {
         });
     }
 
+    /// STATEMENT: Linking, unlinking, and relinking keep bucket membership and occupancy consistent.
+    ///
+    /// HOW:
+    /// - Link two entries to one bucket, remove one twice, and move the other to another level.
+    /// - Check occupancy bits and membership after each step and after the final removal.
     #[test]
     fn test_unlink_relink() {
         let timer = Timer::new();
@@ -2002,7 +2118,11 @@ mod tests {
         });
     }
 
-    /// `reset(0)` elapses the timer and wakes the task waiting for it.
+    /// STATEMENT: Resetting a timer to zero promptly wakes its waiting task.
+    ///
+    /// HOW:
+    /// - Reset a shared long timer from another task while selecting against a fallback sleep.
+    /// - Require completion well before the fallback deadline.
     #[ntex::test]
     async fn test_reset_zero_wakes_task() {
         let hnd = Rc::new(TimerHandle::new(10_000));
@@ -2020,7 +2140,11 @@ mod tests {
         assert!(elapsed < Duration::from_millis(100), "elapsed: {elapsed:?}");
     }
 
-    /// Dropping one driver does not reset the state of the other one.
+    /// STATEMENT: Dropping a timer driver preserves the other driver's state.
+    ///
+    /// HOW:
+    /// - Drop the low-resolution driver and verify regular timer occupancy and flags remain.
+    /// - Drop the regular driver and verify its timers clear while the low-resolution flag remains.
     #[test]
     fn test_driver_drop_keeps_other_driver() {
         let timer = Rc::new(Timer::new());
@@ -2061,8 +2185,11 @@ mod tests {
         });
     }
 
-    /// A short timer is measured from the current time, not from the cached
-    /// time that went stale while the thread was blocked.
+    /// STATEMENT: A new short timer uses current time after the runtime thread was blocked.
+    ///
+    /// HOW:
+    /// - Populate the time cache, block the thread, then start a short sleep.
+    /// - Measure with `Instant` and verify the sleep lasts at least its requested duration.
     #[ntex::test]
     async fn test_short_timer_after_blocking() {
         let _hnd = sleep(Millis(10_000));
@@ -2077,7 +2204,11 @@ mod tests {
         assert!(elapsed >= Duration::from_millis(50), "elapsed: {elapsed:?}");
     }
 
-    /// `now()` does not go stale while the wheel is idle.
+    /// STATEMENT: Cached `now()` expires even when the timer wheel becomes idle.
+    ///
+    /// HOW:
+    /// - Let existing timers finish, then wait for a channel message from a sleeping thread.
+    /// - Compare `now()` with the real clock and require less than 300 milliseconds of staleness.
     #[ntex::test]
     async fn test_driver_cached_time_expires() {
         // the lowres timer of the cache populated at start fires first
@@ -2095,7 +2226,11 @@ mod tests {
         assert!(stale < Duration::from_millis(300), "stale: {stale:?}");
     }
 
-    /// A late wakeup must not delay the timers that expire later.
+    /// STATEMENT: A delayed driver wake does not shift later timers by the same delay.
+    ///
+    /// HOW:
+    /// - Start short and long sleeps, then block the thread past the short deadline.
+    /// - Await both and check total elapsed time stays near the long timer's original deadline.
     #[ntex::test]
     async fn test_late_wakeup_does_not_drift() {
         let start = Instant::now();
@@ -2117,6 +2252,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Timers with different deadlines progress alongside a recurring interval.
+    ///
+    /// HOW:
+    /// - Spawn an interval task and await shorter and longer sleeps followed by another short sleep.
+    /// - On non-macOS targets, verify each elapsed duration stays within its configured bounds.
     #[ntex::test]
     #[allow(unused_variables, clippy::used_underscore_binding)]
     async fn test_timer() {

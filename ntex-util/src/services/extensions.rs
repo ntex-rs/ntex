@@ -78,6 +78,10 @@ impl fmt::Debug for Extensions {
     }
 }
 
+/// STATEMENT: Extension debug output reports the number of stored types.
+///
+/// HOW:
+/// - Insert one typed value and compare the complete debug representation.
 #[test]
 fn test_debug() {
     let mut map = Extensions::new();
@@ -85,6 +89,11 @@ fn test_debug() {
     assert_eq!(format!("{map:?}"), "Extensions { size: 1 }");
 }
 
+/// STATEMENT: Inserting a duplicate type replaces its value, and removal clears it.
+///
+/// HOW:
+/// - Insert two `i8` values and verify the second insertion returns the first.
+/// - Remove the type and check that lookup no longer finds it.
 #[test]
 fn test_remove() {
     let mut map = Extensions::new();
@@ -97,6 +106,11 @@ fn test_remove() {
     assert!(map.get::<i8>().is_none());
 }
 
+/// STATEMENT: Clearing extensions removes every type and leaves the map reusable.
+///
+/// HOW:
+/// - Insert three integer types and verify they are present.
+/// - Clear them, check their absence, and insert and retrieve a new value.
 #[test]
 fn test_clear() {
     let mut map = Extensions::new();
@@ -119,6 +133,10 @@ fn test_clear() {
     assert_eq!(*map.get::<i8>().unwrap(), 10);
 }
 
+/// STATEMENT: Signed and unsigned integer types occupy distinct extension entries.
+///
+/// HOW:
+/// - Insert values for ten integer types and verify each typed lookup succeeds.
 #[test]
 fn test_integers() {
     let mut map = Extensions::new();
@@ -145,6 +163,11 @@ fn test_integers() {
     assert!(map.get::<u128>().is_some());
 }
 
+/// STATEMENT: Different generic instantiations have independent extension entries.
+///
+/// HOW:
+/// - Insert three payload types wrapped in the same generic type.
+/// - Retrieve each instantiation and verify its original fields.
 #[test]
 fn test_composition() {
     struct Magi<T>(T);
@@ -172,6 +195,11 @@ fn test_composition() {
     assert_eq!(999, map.get::<Magi<Mami>>().unwrap().0.guns);
 }
 
+/// STATEMENT: Typed access and removal preserve unrelated extension values.
+///
+/// HOW:
+/// - Insert an integer and a custom type, then inspect shared and mutable integer references.
+/// - Remove the integer and check missing-type lookups and the surviving custom value.
 #[test]
 fn test_extensions() {
     #[derive(Debug, PartialEq)]
@@ -192,6 +220,11 @@ fn test_extensions() {
     assert_eq!(extensions.get(), Some(&MyType(10)));
 }
 
+/// STATEMENT: Extending an extension map retains existing entries and adds incoming types.
+///
+/// HOW:
+/// - Merge a custom-type map into an integer map after checking empty-state transitions.
+/// - Access and remove the integer while verifying the imported custom value remains.
 #[test]
 fn test_extend() {
     #[derive(Debug, PartialEq)]

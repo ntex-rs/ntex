@@ -107,6 +107,11 @@ mod tests {
     use super::*;
     use crate::time;
 
+    /// STATEMENT: Join helpers collect all outputs despite different completion times.
+    ///
+    /// HOW:
+    /// - Join an immediately ready value with a sleep and compare the output pair.
+    /// - Join two different-duration sleeps and check both outputs are collected.
     #[ntex::test]
     async fn join_tests() {
         let res = join(ready(Ok::<_, ()>("test")), time::sleep(time::Millis(50))).await;

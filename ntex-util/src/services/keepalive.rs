@@ -223,6 +223,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Keep-alive calls pass through until inactivity causes a readiness error.
+    ///
+    /// HOW:
+    /// - Create and inspect a keep-alive factory and service, then make spaced calls.
+    /// - Wait for the readiness dispatcher to report expiry and verify the error.
     #[ntex::test]
     async fn test_ka() {
         // the keep-alive is much longer than the sleep between calls, so a
@@ -250,6 +255,11 @@ mod tests {
         assert_eq!(svc.ready().await, Err(TestErr));
     }
 
+    /// STATEMENT: A timeout callback does not expire a keep-alive with submillisecond time left.
+    ///
+    /// HOW:
+    /// - Set the last activity so half a millisecond remains and invoke the callback.
+    /// - Verify readiness succeeds, the expired flag stays clear, and the timer is armed.
     #[ntex::test]
     async fn test_ka_sub_millis() {
         let svc = Rc::new(KeepAliveService::new(Millis(100), || TestErr));
@@ -277,6 +287,11 @@ mod tests {
         rx
     }
 
+    /// STATEMENT: Idle expiry invalidates cached readiness for every pipeline sharing a service.
+    ///
+    /// HOW:
+    /// - Prime two pipelines' readiness and wait for an expiry notification.
+    /// - Check both caches are invalidated and both readiness and a subsequent call fail.
     #[ntex::test]
     async fn idle_timer_invalidates_completed_readiness_for_all_roots() {
         let svc = Rc::new(KeepAliveService::new(Millis(25), || TestErr));
@@ -297,6 +312,11 @@ mod tests {
         assert_eq!(first.call(1).await, Err(TestErr));
     }
 
+    /// STATEMENT: A call extends the deadline before an overdue timer callback is processed.
+    ///
+    /// HOW:
+    /// - Force the old timer due, make a call, and verify no premature expiry or notification.
+    /// - Await the extended deadline and check one notification and subsequent failures.
     #[ntex::test]
     async fn call_extends_deadline_before_old_timer_is_processed() {
         let svc = Rc::new(KeepAliveService::new(Millis(250), || TestErr));
@@ -339,6 +359,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: An intentionally bypassed call rearms an expired keep-alive timer.
+    ///
+    /// HOW:
+    /// - Wait for expiry, then call through a wrapper that bypasses readiness.
+    /// - Check readiness recovers and the rearmed timer later expires again.
     #[ntex::test]
     async fn bypassed_call_rearms_an_expired_timer() {
         let svc = Rc::new(KeepAliveService::new(Millis(25), || TestErr));
@@ -361,6 +386,11 @@ mod tests {
         assert_eq!(p.ready().await, Err(TestErr));
     }
 
+    /// STATEMENT: Shutdown and drop cancel timer callbacks without retaining keep-alive state.
+    ///
+    /// HOW:
+    /// - Exercise drop alone and shutdown followed by drop while counting notifications.
+    /// - Verify no delayed notifications, no rearming after shutdown, and release of shared state.
     #[ntex::test]
     async fn timer_callback_is_canceled_on_shutdown_and_drop() {
         for shutdown in [false, true] {
@@ -393,6 +423,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A zero keep-alive duration rejects readiness and calls immediately.
+    ///
+    /// HOW:
+    /// - Construct a zero-duration service and assert its configured error from both operations.
     #[ntex::test]
     async fn test_ka_zero() {
         let p = Pipeline::<usize, usize, TestErr>::new(

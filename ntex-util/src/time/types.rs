@@ -255,6 +255,11 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// STATEMENT: Time-unit arithmetic and conversions preserve units and saturate bounded values.
+    ///
+    /// HOW:
+    /// - Check millisecond, second, and duration conversions and addition, including overflow.
+    /// - Exercise negative and oversized inputs, defaults, and zero-aware mapping helpers.
     #[test]
     fn time_types() {
         let m = Millis::default();
@@ -344,6 +349,11 @@ mod tests {
         assert_eq!(d.as_secs(), 100);
     }
 
+    /// STATEMENT: Integer time conversions clamp negative and oversized values.
+    ///
+    /// HOW:
+    /// - Check zero predicates and conversions from signed and pointer-sized integers.
+    /// - On 64-bit targets, verify maximum pointer-sized inputs saturate both time-unit types.
     #[test]
     fn time_types_conversions() {
         assert!(Millis(1).non_zero());

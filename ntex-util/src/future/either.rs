@@ -177,6 +177,11 @@ mod test {
 
     use super::*;
 
+    /// STATEMENT: `Either` accessors, mutation, extraction, and display use the active branch.
+    ///
+    /// HOW:
+    /// - Inspect and mutate left and right values through borrowed accessors.
+    /// - Extract their values and compare inner-value and display results for both branches.
     #[test]
     fn accessors() {
         let mut value = Either::<u8, String>::Left(10);
@@ -210,6 +215,10 @@ mod test {
         );
     }
 
+    /// STATEMENT: Awaiting `Either` returns the active future's output.
+    ///
+    /// HOW:
+    /// - Wrap ready futures in each branch and verify their distinct returned values.
     #[ntex::test]
     async fn future() {
         let left: Either<_, future::Ready<u8>> = Either::Left(future::ready(10));
@@ -239,6 +248,11 @@ mod test {
         }
     }
 
+    /// STATEMENT: `Either` forwards error messages and sources and preserves I/O conversion semantics.
+    ///
+    /// HOW:
+    /// - Inspect display and source chains for errors in both branches.
+    /// - Convert each branch to `io::Error` and check its kind and message.
     #[test]
     fn errors() {
         let left = Either::<TestError, TestError>::Left(TestError {
@@ -303,6 +317,11 @@ mod test {
         }
     }
 
+    /// STATEMENT: `Either` forwards readiness, calls, and shutdown to its active service.
+    ///
+    /// HOW:
+    /// - Build pipelines for each branch using services with lifecycle flags.
+    /// - Check readiness and call results, then verify every lifecycle flag after shutdown.
     #[ntex::test]
     async fn service() {
         async fn check(service: Either<TestService, TestService>, response: u8) {
@@ -340,6 +359,10 @@ mod test {
         .await;
     }
 
+    /// STATEMENT: Branch-specific extraction returns `None` for the inactive `Either` branch.
+    ///
+    /// HOW:
+    /// - Call both extraction methods on left and right values and compare all four results.
     #[test]
     fn either_left_right() {
         assert_eq!(Either::<u8, u8>::Left(1).left(), Some(1));

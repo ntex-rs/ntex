@@ -79,6 +79,11 @@ mod tests {
 
     use super::*;
 
+    /// STATEMENT: `MaybeDone` exposes an output only after completion and only once.
+    ///
+    /// HOW:
+    /// - Try taking output from a pending future.
+    /// - Complete a ready future, take its output, and verify a second take returns `None`.
     #[ntex::test]
     async fn maybe_done_take_output() {
         let mut fut = pin!(MaybeDone::Pending(pending::<()>()));
@@ -91,6 +96,10 @@ mod tests {
         assert!(fut.as_mut().take_output().is_none());
     }
 
+    /// STATEMENT: Polling `MaybeDone` after taking its output panics with the expected message.
+    ///
+    /// HOW:
+    /// - Complete the future, extract and check its output, then await it again.
     #[ntex::test]
     #[should_panic(expected = "MaybeDone polled after value taken")]
     async fn maybe_done_poll_after_take() {

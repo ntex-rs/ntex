@@ -135,6 +135,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: An active request blocks readiness until it completes.
+    ///
+    /// HOW:
+    /// - Start a channel-blocked request after checking initial readiness.
+    /// - Observe pending readiness, release the request, and verify readiness returns.
     #[ntex::test]
     async fn test_oneshot() {
         let (tx, rx) = oneshot::channel();
@@ -155,6 +160,11 @@ mod tests {
         srv.shutdown().await;
     }
 
+    /// STATEMENT: Factory-applied `OneRequest` blocks readiness during an active call.
+    ///
+    /// HOW:
+    /// - Create middleware around a channel-blocked service and check its debug name.
+    /// - Verify readiness before, during, and after releasing a spawned request.
     #[ntex::test]
     async fn test_middleware() {
         assert_eq!(format!("{OneRequest:?}"), "OneRequest");
@@ -184,6 +194,11 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 
+    /// STATEMENT: A `OneRequest` middleware pipeline becomes ready again after completion.
+    ///
+    /// HOW:
+    /// - Build the middleware through a factory and start a channel-blocked request.
+    /// - Check readiness becomes pending, then send completion and check readiness recovers.
     #[ntex::test]
     async fn test_middleware2() {
         assert_eq!(format!("{OneRequest:?}"), "OneRequest");
@@ -213,6 +228,11 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 
+    /// STATEMENT: Canceling a request releases the single-request readiness gate.
+    ///
+    /// HOW:
+    /// - Time out a call whose inner service is waiting on a channel.
+    /// - Verify the timeout and immediately poll the pipeline as ready.
     #[ntex::test]
     async fn test_cancelled_call_releases() {
         let (_tx, rx) = oneshot::channel();
@@ -253,6 +273,11 @@ mod tests {
         (srv, max)
     }
 
+    /// STATEMENT: Multiple waiting requests complete without overlapping inner calls.
+    ///
+    /// HOW:
+    /// - Spawn four requests against a service that counts active calls.
+    /// - Wait for all completions and verify the maximum concurrency is one.
     #[ntex::test]
     async fn test_many_waiters() {
         let (srv, max) = count_srv();
@@ -277,6 +302,11 @@ mod tests {
         assert_eq!(max.get(), 1);
     }
 
+    /// STATEMENT: Repeated readiness checks do not permit overlapping requests.
+    ///
+    /// HOW:
+    /// - Check readiness twice, then join two concurrent calls.
+    /// - Verify both succeed while the inner service's maximum concurrency stays at one.
     #[ntex::test]
     async fn test_no_overlap_after_ready() {
         let (srv, max) = count_srv();

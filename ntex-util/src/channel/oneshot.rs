@@ -117,6 +117,11 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
+    /// STATEMENT: One-shot channels deliver once and expose cancellation when either endpoint drops.
+    ///
+    /// HOW:
+    /// - Receive values through both future and `recv` APIs, including after a pending poll.
+    /// - Drop each endpoint in fresh channels and check sender cancellation and receiver errors.
     #[ntex::test]
     async fn test_oneshot() {
         let (tx, rx) = channel();

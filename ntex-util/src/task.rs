@@ -168,11 +168,20 @@ pub async fn yield_to() {
 mod test {
     use super::*;
 
+    /// STATEMENT: A task can resume after yielding.
+    ///
+    /// HOW:
+    /// - Await `yield_to` inside an asynchronous test and let the test complete.
     #[ntex::test]
     async fn yield_test() {
         yield_to().await;
     }
 
+    /// STATEMENT: Local and standard slot wake paths reschedule the current task.
+    ///
+    /// HOW:
+    /// - Register and wake through the slot, a taken local waker, and a taken standard waker.
+    /// - Require a fourth poll to finish and verify the slot is empty afterward.
     #[ntex::test]
     async fn local_slot_wakes_current_task() {
         crate::spawn(async {
@@ -265,6 +274,11 @@ mod tests {
         (count, waker)
     }
 
+    /// STATEMENT: Registering an equivalent waker avoids cloning it again.
+    ///
+    /// HOW:
+    /// - Repeatedly register one raw waker, then replace it with a distinct one.
+    /// - Check clone counts and verify the taken waker matches the replacement.
     #[test]
     fn test_register_same_waker() {
         static A: u8 = 0;
@@ -283,6 +297,11 @@ mod tests {
         assert!(w.take().unwrap().will_wake(&b));
     }
 
+    /// STATEMENT: Cloning a `LocalWaker` creates an empty slot without clearing the original.
+    ///
+    /// HOW:
+    /// - Clone a registered slot and verify only the original remains set.
+    /// - Check waking the empty clone returns false and inspect the original's debug output.
     #[test]
     fn local_waker_clone_is_empty() {
         let waker = LocalWaker::new();
@@ -295,6 +314,11 @@ mod tests {
         assert_eq!(format!("{waker:?}"), "LocalWaker");
     }
 
+    /// STATEMENT: Owning waker conversions and wake operations consume the slot without cloning.
+    ///
+    /// HOW:
+    /// - Install a clone hook that panics and exercise four owning wake paths.
+    /// - Verify four wakes, empty slots, and an unused clone hook.
     #[test]
     fn owning_conversions_and_wakes_do_not_clone() {
         ON_CLONE.set(Some(Box::new(|| panic!("unexpected clone"))));
@@ -317,6 +341,11 @@ mod tests {
         assert!(ON_CLONE.with(Cell::take).is_some());
     }
 
+    /// STATEMENT: A replacement-waker clone panic preserves the previous registration.
+    ///
+    /// HOW:
+    /// - Register a counted waker, then catch a replacement's clone panic.
+    /// - Wake the slot and verify the original waker receives exactly one wake.
     #[test]
     fn clone_panic_preserves_registration() {
         let (calls, original) = counted_waker();
@@ -328,6 +357,11 @@ mod tests {
         assert_eq!(calls.0.load(Ordering::Relaxed), 1);
     }
 
+    /// STATEMENT: Reentrant clone callbacks retain nested registration when replacement unwinds.
+    ///
+    /// HOW:
+    /// - During replacement cloning, wake the previous waker and register a nested one.
+    /// - Exercise normal and panicking callbacks and check which registration survives.
     #[test]
     fn clone_reentry_preserves_nested_changes_on_unwind() {
         for panic in [false, true] {
@@ -353,6 +387,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Reentrant drop callbacks can replace a newly registered waker even when they panic.
+    ///
+    /// HOW:
+    /// - Drop the old waker during replacement and have its callback wake and replace the new one.
+    /// - Check replacement and nested wake counts with and without callback unwind.
     #[test]
     fn replaced_drop_reentry_and_unwind() {
         for panic in [false, true] {
@@ -377,6 +416,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Wake callbacks see an empty slot and can register a surviving replacement.
+    ///
+    /// HOW:
+    /// - Exercise checked and unchecked wakes with callbacks that register a nested waker.
+    /// - Repeat with panics and verify the nested registration still receives one wake.
     #[test]
     fn wake_reentry_and_unwind() {
         for panic in [false, true] {
@@ -403,6 +447,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Native task wakers support local and cross-thread delivery and remain safe after shutdown.
+    ///
+    /// HOW:
+    /// - Poll a native runtime task, wake it locally and from another thread, and count three polls.
+    /// - Drop the runtime and check task completion, released task state, and one final consumed wake.
     #[test]
     fn native_slot_delivery_and_shutdown() {
         #[derive(Debug)]

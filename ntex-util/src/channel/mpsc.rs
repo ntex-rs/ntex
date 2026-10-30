@@ -241,6 +241,11 @@ mod tests {
     use super::*;
     use crate::{future::lazy, future::stream_recv};
 
+    /// STATEMENT: MPSC sender clones share delivery and closure state.
+    ///
+    /// HOW:
+    /// - Send from original and cloned handles and verify an empty live channel remains pending.
+    /// - Close or drop endpoints, check failed sends, and recover the value from `SendError`.
     #[ntex::test]
     async fn test_mpsc() {
         let (tx, mut rx) = channel();
@@ -286,6 +291,11 @@ mod tests {
         assert_eq!(err.into_inner(), "test");
     }
 
+    /// STATEMENT: Explicit closure wakes receivers, while sender exhaustion can be reversed.
+    ///
+    /// HOW:
+    /// - Close from each endpoint and check closed, terminated, and registered-waker state.
+    /// - Drop the last sender, then create one through the receiver and check the channel reopens.
     #[ntex::test]
     async fn test_close() {
         let (tx, rx) = channel::<()>();
@@ -315,6 +325,11 @@ mod tests {
         assert!(!rx.is_terminated());
     }
 
+    /// STATEMENT: Sender closure waiters complete when either endpoint closes the channel.
+    ///
+    /// HOW:
+    /// - Register closure waiters before receiver drop, receiver close, and sender close.
+    /// - Verify stored wakers are consumed and closure futures complete for cloned handles too.
     #[ntex::test]
     async fn test_poll_closed() {
         let (tx, rx) = channel::<()>();
@@ -339,6 +354,11 @@ mod tests {
         tx2.closed().await;
     }
 
+    /// STATEMENT: Dropping an MPSC receiver safely rejects reentrant sends from message destructors.
+    ///
+    /// HOW:
+    /// - Queue four values whose destructors attempt another send and count all drops.
+    /// - Drop the receiver and verify eight drops and a closed sender.
     #[test]
     fn test_drop_receiver_reentrant_send() {
         use std::rc::Rc;
@@ -364,6 +384,11 @@ mod tests {
         assert!(tx.is_closed());
     }
 
+    /// STATEMENT: A closed MPSC stream is terminated only after its buffered messages are drained.
+    ///
+    /// HOW:
+    /// - Queue values, drop the sender, and check ordered delivery before termination.
+    /// - Repeat with explicit receiver closure and verify the queued value remains readable.
     #[ntex::test]
     async fn test_fused_drains_buffer() {
         let (tx, mut rx) = channel();
@@ -385,6 +410,10 @@ mod tests {
         assert!(rx.is_terminated());
     }
 
+    /// STATEMENT: Direct MPSC receive returns a sent value and then ends after sender drop.
+    ///
+    /// HOW:
+    /// - Send and receive one value, drop the sender, and verify the next receive returns `None`.
     #[ntex::test]
     async fn test_mpsc_recv() {
         let (tx, rx) = channel();

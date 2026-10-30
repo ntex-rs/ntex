@@ -73,6 +73,10 @@ pub fn clone_io_error(err: &io::Error) -> io::Error {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Cloning an I/O error preserves its kind and message across repeated clones.
+    ///
+    /// HOW:
+    /// - Clone a timeout error, compare kind and display, then clone again and check the message.
     #[test]
     fn test_clone_io_error() {
         let err = io::Error::new(io::ErrorKind::TimedOut, "timed out");
@@ -82,6 +86,11 @@ mod tests {
         assert_eq!(clone_io_error(&cloned).to_string(), "timed out");
     }
 
+    /// STATEMENT: Dynamic error helpers preserve messages for boxed, shared, and string errors.
+    ///
+    /// HOW:
+    /// - Wrap I/O and string errors with each helper and compare their displayed messages.
+    /// - Verify the string wrapper's debug output identifies `StringError`.
     #[test]
     fn test_dyn_errors() {
         let err = io::Error::other("boxed");

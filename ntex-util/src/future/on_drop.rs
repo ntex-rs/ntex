@@ -91,6 +91,11 @@ mod test {
 
     use super::*;
 
+    /// STATEMENT: Dropping an unfinished wrapped future runs its callback, while cancellation clears it.
+    ///
+    /// HOW:
+    /// - Cancel an `OnDropFn` and verify its callback storage is empty.
+    /// - Poll a wrapped pending future, drop it, and verify its callback changed a flag.
     #[ntex::test]
     async fn on_drop() {
         let f = OnDropFn::new(|| ());
@@ -112,6 +117,11 @@ mod test {
         assert!(dropped);
     }
 
+    /// STATEMENT: Completing a wrapped future suppresses its drop callback.
+    ///
+    /// HOW:
+    /// - Await a ready future with a flag-setting drop callback.
+    /// - Verify the output is preserved and the flag remains unset.
     #[ntex::test]
     async fn on_drop_completed() {
         let mut dropped = false;

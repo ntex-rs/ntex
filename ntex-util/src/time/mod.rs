@@ -391,9 +391,11 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
-    /// State Under Test: `now()` returns the start of the current runtime turn.
+    /// STATEMENT: Cached `now()` is not in the future and stays close to the current instant.
     ///
-    /// Expected Behavior: `now()` is not later than the current instant and is close to it.
+    /// HOW:
+    /// - Sleep, then compare `now()` with `Instant::now`.
+    /// - Verify the cached value is no later and less than 50 milliseconds behind.
     #[ntex::test]
     async fn now_is_current() {
         sleep(Millis(25)).await;
@@ -404,10 +406,11 @@ mod tests {
         assert!(cur - now < time::Duration::from_millis(50));
     }
 
-    /// State Under Test: `now()` advances between runtime turns.
+    /// STATEMENT: Cached `now()` advances across an awaited sleep.
     ///
-    /// Expected Behavior: Two calls of `now()` made in subsequent resolution interval return different values
-    /// and second value is greater than the first one at least by a 1ms interval.
+    /// HOW:
+    /// - Read `now()` before and after a 25-millisecond sleep.
+    /// - Verify the second value advances by at least that duration.
     #[ntex::test]
     async fn now_updates_after_sleep() {
         sleep(Millis(50)).await;
@@ -420,10 +423,10 @@ mod tests {
         assert!(second_time - first_time >= time::Duration::from_millis(25));
     }
 
-    /// State Under Test: Two calls of `system_time()` return the same value if they are done within the
-    /// resolution interval.
+    /// STATEMENT: Back-to-back system-time reads share the cached value.
     ///
-    /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
+    /// HOW:
+    /// - Let the runtime advance, then compare two consecutive `system_time()` calls.
     #[ntex::test]
     async fn system_time_service_time_does_not_immediately_change() {
         sleep(Seconds(1)).await;
@@ -431,10 +434,11 @@ mod tests {
         assert_eq!(system_time(), system_time());
     }
 
-    /// State Under Test: `system_time()` updates returned value every resolution interval (150ms).
+    /// STATEMENT: Cached system time advances after sleeping beyond its refresh interval.
     ///
-    /// Expected Behavior: Two calls of `system_time()` made in subsequent resolution interval return different values
-    /// and second value is greater than the first one at least by a resolution interval.
+    /// HOW:
+    /// - Read system time around a 600-millisecond sleep.
+    /// - Compare epoch-relative durations and require at least that much advancement.
     #[ntex::test]
     async fn system_time_service_time_updates_after_resolution_interval() {
         sleep(Millis(100)).await;
@@ -457,6 +461,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Zero sleeps round up, while explicitly elapsed timers complete promptly.
+    ///
+    /// HOW:
+    /// - Measure zero, one-millisecond, and reset-to-zero sleeps and check their elapsed state.
+    /// - Await an already-elapsed handle and a manually elapsed shared sleep within short bounds.
     #[ntex::test]
     async fn test_sleep_0() {
         sleep(Seconds(1)).await;
@@ -509,6 +518,11 @@ mod tests {
         assert!(second_time - first_time < time::Duration::from_millis(50));
     }
 
+    /// STATEMENT: Deadlines can be extended, disabled with zero, and re-enabled by reset.
+    ///
+    /// HOW:
+    /// - Measure initial and extended deadlines and time out a zero deadline.
+    /// - Poll disabled and re-enabled deadlines, then inspect debug output.
     #[ntex::test]
     async fn test_deadline() {
         sleep(Seconds(1)).await;
@@ -539,6 +553,10 @@ mod tests {
         assert!(format!("{dl:?}").contains("Deadline"));
     }
 
+    /// STATEMENT: A zero-period interval waits between ticks instead of staying immediately ready.
+    ///
+    /// HOW:
+    /// - Consume the first tick, verify the next poll is pending, and await another tick.
     #[ntex::test]
     async fn test_interval_zero_period() {
         let int = interval(Millis::ZERO);
@@ -549,6 +567,11 @@ mod tests {
         int.tick().await;
     }
 
+    /// STATEMENT: Intervals tick immediately once, then wait for their period through both APIs.
+    ///
+    /// HOW:
+    /// - Measure the first and second explicit ticks of a 250-millisecond interval.
+    /// - Receive another tick through the stream API and check the same timing bounds.
     #[ntex::test]
     async fn test_interval() {
         let mut int = interval(Millis(250));
@@ -577,6 +600,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A one-second interval keeps subsequent ticks within the expected timing bounds.
+    ///
+    /// HOW:
+    /// - Consume the immediate tick, then measure three ticks between one and 1.3 seconds each.
     #[ntex::test]
     async fn test_interval_one_sec() {
         let int = interval(Millis::ONE_SEC);
@@ -594,6 +621,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Checked timeouts preserve timely results, expire pending work, and disable at zero.
+    ///
+    /// HOW:
+    /// - Run a shorter sleep under a deadline and a permanently pending future under a short one.
+    /// - Verify a zero timeout allows a delayed future to finish.
     #[ntex::test]
     async fn test_timeout_checked() {
         let result = timeout_checked(Millis(200), sleep(Millis(100))).await;
@@ -608,6 +640,11 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// STATEMENT: Sleep and deadline wait helpers complete except for a disabled zero deadline.
+    ///
+    /// HOW:
+    /// - Await both helpers and check the clock has not moved backward.
+    /// - Wrap a zero deadline's wait in a timeout and verify it never completes first.
     #[ntex::test]
     async fn sleep_and_deadline_wait() {
         let start = now();
