@@ -1,12 +1,51 @@
 use super::{Ctx, Service, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
-/// Service produced by the `then` combinator.
+/// Passes a service's complete call result to a second service.
 ///
-/// This is created by the `ServiceChain::then()` method.
-/// Children share the enclosing readiness scope unless explicitly wrapped with
-/// [`crate::ready`]. Calls forward directly to each child; a wrapped child checks
-/// its own readiness at call time, including after the first child's call awaits.
+/// Created by [`crate::ServiceChain::then`]. The second service receives
+/// `Result<A::Res, A::Error>` and can transform a successful response, recover
+/// from an error, or return an error of its own. Its result becomes the final
+/// result. Both services use the same state and error types.
+///
+/// Unlike [`crate::dev::AndThen`], this invokes the second service even when
+/// the first call fails.
+///
+/// # Readiness and lifecycle
+///
+/// Binding is forwarded to both children. Readiness succeeds only when both
+/// children are ready. Errors from the chain's readiness check are returned
+/// directly, not passed to the second service as a request. Shutdown drives
+/// both children's shutdown futures to completion.
+///
+/// Raw children share the enclosing readiness scope, and calls forward
+/// directly without an extra readiness check. Wrap a child with
+/// [`crate::ready()`] when it needs an independent cache and a call-time check,
+/// particularly when the second child's readiness can change while the first
+/// call is awaiting.
+///
+/// Cloning clones both children; shared state and readiness depend on their
+/// clone implementations.
+///
+/// # Example
+///
+/// ```
+/// use ntex_service::{Service, fn_service, service};
+///
+/// # async fn example() -> Result<(), &'static str> {
+/// let pipeline = service(fn_service(async |req: u32| {
+///     if req == 0 { Err("missing value") } else { Ok(req) }
+/// }))
+/// .then(fn_service(async |result: Result<u32, &'static str>| {
+///     Ok::<_, &'static str>(result.unwrap_or(10) * 2)
+/// }))
+/// .pipeline(());
+///
+/// assert_eq!(pipeline.call(3).await?, 6);
+/// assert_eq!(pipeline.call(0).await?, 20);
+/// # Ok(())
+/// # }
+/// ```
 pub struct Then<A, B> {
     svc1: A,
     svc2: B,
@@ -47,9 +86,43 @@ where
 }
 
 #[derive(Debug, Clone)]
-/// Service factory produced by the `then` combinator.
+/// Creates a [`Then`] service from two service factories.
 ///
-/// This is created by the `ServiceChainFactory::then()` method.
+/// Created by [`crate::ServiceChainFactory::then`]. Both factories use the
+/// same state, service-error, and initialization-error types. The second
+/// factory creates services whose request is the first service's complete
+/// `Result`, rather than just its successful response.
+///
+/// Creation is sequential with the same state reference. The second factory
+/// is invoked only after the first succeeds. An initialization error from
+/// either factory is returned unchanged; it is not passed to the second
+/// factory or handled as a service-call result.
+///
+/// Created services use the call and lifecycle behavior described in [`Then`].
+/// Wrap a child factory with [`crate::ready_factory()`] to give each of its
+/// created services an independent readiness cache. Cloning clones both
+/// factories without creating services.
+///
+/// # Example
+///
+/// ```
+/// use ntex_service::{factory, fn_factory, fn_service};
+///
+/// # async fn example() -> Result<(), &'static str> {
+/// let factory = factory(fn_factory(async |_: &()| {
+///     Ok::<_, &'static str>(fn_service(async |_: u32| Err::<u32, _>("unavailable")))
+/// }))
+/// .then(fn_factory(async |_: &()| {
+///     Ok::<_, &'static str>(fn_service(async |result: Result<u32, &'static str>| {
+///         Ok::<_, &'static str>(result.unwrap_or(42))
+///     }))
+/// }));
+///
+/// let pipeline = factory.pipeline(()).await?;
+/// assert_eq!(pipeline.call(1).await?, 42);
+/// # Ok(())
+/// # }
+/// ```
 pub struct ThenFactory<A, B> {
     svc1: A,
     svc2: B,

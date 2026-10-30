@@ -1,11 +1,5 @@
-use std::{
-    pin::pin,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    task::{Context, Wake},
-};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+use std::{pin::pin, task::Context, task::Wake};
 
 use super::*;
 
