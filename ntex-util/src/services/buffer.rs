@@ -468,6 +468,11 @@ mod tests {
         crate::time::sleep(Duration::from_millis(25)).await;
     }
 
+    /// STATEMENT: Buffer capacity applies backpressure and queued calls consume inner readiness.
+    ///
+    /// HOW:
+    /// - Queue three requests behind an unready service and observe the full buffer block readiness.
+    /// - Release one request per readiness signal, check counts, and complete shutdown.
     #[ntex::test]
     async fn test_service() {
         let inner = Inner::new(false);
@@ -507,6 +512,10 @@ mod tests {
         assert!(format!("{:?}", Buffer::<(), (), (), ()>::default()).contains("Buffer"));
     }
 
+    /// STATEMENT: Sequential calls through a buffer do not stall an always-ready service.
+    ///
+    /// HOW:
+    /// - Await three calls with individual deadlines and verify all reach the inner service.
     #[ntex::test]
     async fn sequential_calls_with_ready_service() {
         let inner = Rc::new(PendingInner::default());
@@ -524,6 +533,11 @@ mod tests {
         assert_eq!(inner.count.get(), 3);
     }
 
+    /// STATEMENT: Factory-applied buffering enforces its configured queue capacity.
+    ///
+    /// HOW:
+    /// - Start two calls with one buffer slot while the inner service is unready.
+    /// - Check backpressure, then signal readiness twice and verify both calls reach the service.
     #[ntex::test]
     #[allow(clippy::redundant_clone)]
     async fn test_middleware() {
@@ -560,6 +574,11 @@ mod tests {
         assert_eq!(inner.count.get(), 2);
     }
 
+    /// STATEMENT: Cancel-on-shutdown middleware cancels waiting and buffered requests.
+    ///
+    /// HOW:
+    /// - Queue two calls behind an unready service and shut down within a deadline.
+    /// - Verify both return `RequestCanceled` and neither reaches the inner call.
     #[ntex::test]
     async fn middleware_cancels_buffered_requests_on_shutdown() {
         let inner = Inner::new(false);
@@ -636,6 +655,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Buffer shutdown can finish while an already-dispatched request remains active.
+    ///
+    /// HOW:
+    /// - Start an inner call blocked on a channel and poll shutdown to completion.
+    /// - Check inner shutdown ran before call completion, then release and finish the call.
     #[ntex::test]
     async fn shutdown_with_in_flight_request() {
         let inner = Rc::new(PendingInner::default());
@@ -708,6 +732,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Draining shutdown finishes queued calls before shutting down the inner service.
+    ///
+    /// HOW:
+    /// - Queue two calls while the service is unready, then enable readiness and shut down.
+    /// - Verify both calls completed and no calls were active at inner shutdown.
     #[ntex::test]
     async fn shutdown_drains_buffer() {
         let inner = Rc::new(DrainInner::default());
@@ -734,12 +763,21 @@ mod tests {
         assert_eq!(inner.active_on_shutdown.get(), Some(0));
     }
 
+    /// STATEMENT: Canceled buffer requests have a specific human-readable error message.
+    ///
+    /// HOW:
+    /// - Convert `RequestCanceled` to a string and compare its complete message.
     #[test]
     fn request_canceled_display() {
         let err = BufferServiceError::<&str>::RequestCanceled;
         assert_eq!(err.to_string(), "buffer service request canceled");
     }
 
+    /// STATEMENT: Dropped queued or released requests free capacity without blocking successors.
+    ///
+    /// HOW:
+    /// - Drop buffered and waiting calls, checking readiness recovery and a successor's result.
+    /// - Drop a released successor before polling it and verify a later call and shutdown finish.
     #[ntex::test]
     async fn dropped_requests_are_skipped() {
         let inner = Inner::new(false);
@@ -787,6 +825,11 @@ mod tests {
             .unwrap();
     }
 
+    /// STATEMENT: Shutdown does not wait for buffered requests whose futures were dropped.
+    ///
+    /// HOW:
+    /// - Poll two calls pending against an unready service and drop both futures.
+    /// - Shut down within a deadline and verify no inner calls occurred.
     #[ntex::test]
     async fn shutdown_skips_dropped_buffered_request() {
         let inner = Inner::new(false);
@@ -838,6 +881,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Inner readiness failure reaches both waiting and buffered requests.
+    ///
+    /// HOW:
+    /// - Queue two requests, switch the inner readiness result to an error, and notify.
+    /// - Complete shutdown and verify both requests receive `BufferServiceError::Service`.
     #[ntex::test]
     async fn inner_ready_error_is_returned_to_requests() {
         let inner = Rc::new(FailInner::default());
@@ -869,6 +917,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Shared buffer capacity changes invalidate readiness across all pipeline roots.
+    ///
+    /// HOW:
+    /// - Prime two roots, fill the shared buffer, and verify both become pending.
+    /// - Drop the queued request, check both roots become ready, and complete the active call.
     #[ntex::test]
     async fn shared_buffer_capacity_notifies_all_roots() {
         let inner = Inner::new(false);
@@ -896,6 +949,11 @@ mod tests {
         assert_eq!(active.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
     }
 
+    /// STATEMENT: Notification panics during queueing or release do not strand buffered requests.
+    ///
+    /// HOW:
+    /// - Catch notification panics while polling a queued call and dropping an active call.
+    /// - Verify queue cleanup, successor cancellation, and a successful subsequent request.
     #[ntex::test]
     async fn notification_panics_do_not_strand_buffered_requests() {
         let inner = Inner::new(false);
@@ -934,6 +992,11 @@ mod tests {
         assert_eq!(srv.call(()).await, Ok(()));
     }
 
+    /// STATEMENT: A shutdown notification panic still cancels every waiting buffer request.
+    ///
+    /// HOW:
+    /// - Queue active and buffered waiters under cancel-on-shutdown mode.
+    /// - Catch a shutdown callback panic and verify both cancellations and an empty buffer.
     #[ntex::test]
     async fn shutdown_notification_panic_still_cancels_waiters() {
         let inner = Inner::new(false);

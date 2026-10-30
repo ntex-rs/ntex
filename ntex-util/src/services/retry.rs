@@ -153,6 +153,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Retries stop at the configured budget or return an earlier success.
+    ///
+    /// HOW:
+    /// - Exhaust the default policy against a counted failing service and check remaining failures.
+    /// - Create middleware services that succeed within the retry budget and verify success.
     #[ntex::test]
     async fn test_retry() {
         let cnt = Rc::new(Cell::new(5));
@@ -195,6 +200,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A retry returns its result when the request cannot be cloned again.
+    ///
+    /// HOW:
+    /// - Use a policy that permits only one request clone against a failing service.
+    /// - Verify the error, two service calls, and two clone attempts.
     #[ntex::test]
     async fn test_retry_without_clone() {
         // the retried request cannot be cloned again, its result is returned

@@ -235,6 +235,11 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
+    /// STATEMENT: Condition waiters receive notifications and observe the condition's drop.
+    ///
+    /// HOW:
+    /// - Poll a waiter pending, notify its default value, and check its result and debug output.
+    /// - Drop the condition with two pending cloned waiters and verify both report `Dropped`.
     #[ntex::test]
     #[allow(clippy::unit_cmp)]
     async fn test_condition() {
@@ -265,6 +270,11 @@ mod tests {
         assert_eq!(waiter2.await, ConditionResult::Dropped);
     }
 
+    /// STATEMENT: Polling consumes a condition notification but keeps drop results repeatable.
+    ///
+    /// HOW:
+    /// - Notify and await a waiter, then poll it and its clone repeatedly as pending.
+    /// - Drop the condition and verify repeated polls of both return `Dropped`.
     #[ntex::test]
     async fn test_condition_poll() {
         let cond = Condition::default().clone();
@@ -298,6 +308,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Conditions deliver supplied values and report drop after the value is consumed.
+    ///
+    /// HOW:
+    /// - Notify a string and verify the waiter receives that value.
+    /// - Poll the waiter and its clone before and after dropping the condition.
     #[ntex::test]
     async fn test_condition_with() {
         let cond = Condition::<String>::new();
@@ -334,6 +349,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Awaiting a condition value does not require the value to implement `Default`.
+    ///
+    /// HOW:
+    /// - Create a condition for a cloneable non-default type and poll its waiter pending.
+    /// - Notify a concrete value and verify awaiting the waiter returns it.
     #[ntex::test]
     async fn waiter_future_does_not_require_default() {
         #[derive(Clone, Debug, PartialEq, Eq)]
@@ -347,6 +367,11 @@ mod tests {
         assert_eq!(waiter.await, ConditionResult::Value(Value("ready")));
     }
 
+    /// STATEMENT: Locking a condition delivers its final value once and rejects later notifications.
+    ///
+    /// HOW:
+    /// - Notify and lock a pending waiter, then check its value followed by repeated `Locked` results.
+    /// - Notify again and create another waiter, verifying neither escapes the locked state.
     #[ntex::test]
     async fn notify_ready() {
         let cond = Condition::default().clone();
@@ -379,6 +404,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Notify-and-lock delivers the final value to every existing waiter.
+    ///
+    /// HOW:
+    /// - Register two pending waiters, lock with a string value, and consume it from each.
+    /// - Verify subsequent polls and a newly created waiter report `Locked`.
     #[ntex::test]
     async fn notify_with_and_lock_ready() {
         // with
@@ -417,6 +447,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A default notification cannot unlock an already locked condition.
+    ///
+    /// HOW:
+    /// - Lock the condition, create a waiter, and issue a default notification.
+    /// - Poll the waiter as a future and verify it still reports `Locked`.
     #[ntex::test]
     async fn notify_default_locked() {
         let cond = Condition::<()>::new();

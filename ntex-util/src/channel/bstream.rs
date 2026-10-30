@@ -447,6 +447,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Byte-stream watermarks invalidate cached sender readiness on capacity changes.
+    ///
+    /// HOW:
+    /// - Fill the stream through a pipeline, drain data, and put data back through the receiver.
+    /// - Check readiness across each transition and across raised and lowered watermarks.
     #[ntex::test]
     async fn cached_sender_readiness_tracks_watermarks() {
         let changed = ReadyNotifier::new();
@@ -472,6 +477,11 @@ mod tests {
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_pending());
     }
 
+    /// STATEMENT: Terminal stream states invalidate cached readiness before callbacks inspect them.
+    ///
+    /// HOW:
+    /// - Prime sender readiness, then signal EOF or an error and verify the reported status.
+    /// - Drop a receiver and inspect closed state from a notification callback and subsequent readiness.
     #[ntex::test]
     async fn cached_sender_readiness_tracks_terminal_states() {
         for status in [Status::Eof, Status::Dropped] {
@@ -505,6 +515,11 @@ mod tests {
         assert_eq!(srv.ready().await, Err(Status::Dropped));
     }
 
+    /// STATEMENT: Readiness callback panics do not suppress byte-stream reader or sender wakeups.
+    ///
+    /// HOW:
+    /// - Register a counted reader waker and catch a callback panic while filling the stream.
+    /// - Register sender readiness, catch another panic while draining, and verify both wakeups.
     #[ntex::test]
     async fn callback_panic_does_not_skip_stream_wakes() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -546,6 +561,11 @@ mod tests {
         srv.ready().await.unwrap();
     }
 
+    /// STATEMENT: Dropping the sender wakes a blocked receiver with end-of-stream.
+    ///
+    /// HOW:
+    /// - Spawn a pending read, drop the sender, and await the task within a deadline.
+    /// - Verify the read returned no data.
     #[ntex::test]
     async fn test_sender_drop_wakes_receiver() {
         let (tx, rx) = channel::<()>();
@@ -557,6 +577,10 @@ mod tests {
         assert!(matches!(res, Ok(Ok(true))));
     }
 
+    /// STATEMENT: An EOF channel remains terminal after setting watermarks.
+    ///
+    /// HOW:
+    /// - Construct an EOF channel, configure its watermarks, and check receiver and sender results.
     #[ntex::test]
     async fn test_eof() {
         let (tx, rx) = eof::<()>();
@@ -565,6 +589,11 @@ mod tests {
         assert_eq!(tx.ready().await, Status::Eof);
     }
 
+    /// STATEMENT: Dropping either byte-stream endpoint closes its peer.
+    ///
+    /// HOW:
+    /// - Drop a receiver and check the sender's closed flag.
+    /// - Drop a sender in a fresh channel and verify the receiver returns no data.
     #[ntex::test]
     async fn test_closed() {
         // drop receiver
@@ -579,6 +608,10 @@ mod tests {
         assert_eq!(rx.read().await, None);
     }
 
+    /// STATEMENT: Data put back by the receiver is counted and can be read again.
+    ///
+    /// HOW:
+    /// - Put a byte chunk into the receiver, check buffered length, and poll back the same bytes.
     #[ntex::test]
     async fn test_unread_data() {
         let (_, payload) = channel::<()>();
@@ -591,6 +624,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Changing the high watermark immediately updates sender backpressure.
+    ///
+    /// HOW:
+    /// - Fill to the high watermark and register a pending sender waker.
+    /// - Raise the watermark to release readiness, then lower it to block again.
     #[ntex::test]
     async fn buffer_size_updates_sender_readiness() {
         let (tx, rx) = channel::<()>();
@@ -611,6 +649,11 @@ mod tests {
         assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
     }
 
+    /// STATEMENT: A blocked sender resumes at the low watermark, which is capped below the high one.
+    ///
+    /// HOW:
+    /// - Drain a full stream incrementally and check pending readiness above the low watermark.
+    /// - Verify readiness at the threshold and repeat with an oversized low-watermark setting.
     #[ntex::test]
     async fn sender_resumes_at_low_watermark() {
         let (tx, rx) = channel::<()>();
@@ -648,6 +691,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A custom low watermark controls how far a full stream must drain.
+    ///
+    /// HOW:
+    /// - Fill an eight-byte stream with a two-byte low watermark.
+    /// - Verify the sender stays pending at four bytes and becomes ready at two.
     #[ntex::test]
     async fn custom_low_watermark() {
         let (tx, rx) = channel::<()>();
@@ -665,6 +713,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: The deprecated buffer-size setter derives a half-size low watermark.
+    ///
+    /// HOW:
+    /// - Set the maximum buffer size to ten and inspect both resulting watermark values.
     #[ntex::test]
     #[allow(deprecated)]
     async fn deprecated_max_buffer_size() {
@@ -674,6 +726,10 @@ mod tests {
         assert_eq!(rx.inner.low_watermark.get(), 5);
     }
 
+    /// STATEMENT: The receiver reaches EOF only when the last sender clone is dropped.
+    ///
+    /// HOW:
+    /// - Clone the sender and check EOF before and after dropping each sender handle.
     #[ntex::test]
     async fn test_sender_clone() {
         let (sender, payload) = channel::<()>();
@@ -686,6 +742,10 @@ mod tests {
         assert!(payload.is_eof());
     }
 
+    /// STATEMENT: Sender readiness distinguishes normal operation, EOF, and dropped streams.
+    ///
+    /// HOW:
+    /// - Check readiness before and after setting an error, feeding EOF, and dropping the receiver.
     #[ntex::test]
     async fn test_ready_terminal_states() {
         let (tx, _rx) = channel::<()>();
@@ -702,6 +762,11 @@ mod tests {
         assert_eq!(tx.ready().await, Status::Dropped);
     }
 
+    /// STATEMENT: An empty receiver yields its optional initial chunk before terminating.
+    ///
+    /// HOW:
+    /// - Check immediate EOF without a chunk.
+    /// - Receive the supplied chunk through the stream adapter and verify the next read ends.
     #[ntex::test]
     async fn test_empty() {
         let rx = empty::<()>(None);
@@ -717,6 +782,11 @@ mod tests {
         assert!(crate::future::stream_recv(&mut rx).await.is_none());
     }
 
+    /// STATEMENT: A stream returns buffered data before its error, then ends.
+    ///
+    /// HOW:
+    /// - Feed a chunk and set an error.
+    /// - Read the original bytes, the error, and finally EOF in that order.
     #[ntex::test]
     async fn test_error() {
         let (tx, rx) = channel::<&'static str>();

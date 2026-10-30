@@ -53,6 +53,11 @@ mod tests {
     use super::*;
     use crate::time;
 
+    /// STATEMENT: Selection returns the branch that completes while the other remains pending.
+    ///
+    /// HOW:
+    /// - Select a ready left future against a pending right one and verify `Either::Left`.
+    /// - Select a right-side sleep against a pending left future and verify `Either::Right`.
     #[ntex::test]
     async fn select_tests() {
         let res = select(ready(Ok::<_, ()>("test")), pending::<()>()).await;

@@ -180,6 +180,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A service finishing before its timeout returns success.
+    ///
+    /// HOW:
+    /// - Clone a timeout service whose inner delay is shorter than its deadline.
+    /// - Verify a successful call and readiness, then complete shutdown.
     #[ntex::test]
     async fn test_success() {
         let resolution = Duration::from_millis(100);
@@ -194,6 +199,10 @@ mod tests {
         timeout.shutdown().await;
     }
 
+    /// STATEMENT: A zero timeout disables the deadline rather than rejecting delayed calls.
+    ///
+    /// HOW:
+    /// - Wrap a sleeping service with a zero timeout and verify its call and readiness succeed.
     #[ntex::test]
     async fn test_zero() {
         let wait_time = Duration::from_millis(50);
@@ -204,6 +213,10 @@ mod tests {
         assert_eq!(timeout.ready().await, Ok(()));
     }
 
+    /// STATEMENT: Calls exceeding their deadline return `TimeoutError::Timeout`.
+    ///
+    /// HOW:
+    /// - Give a sleeping service a shorter timeout and compare the returned error.
     #[ntex::test]
     async fn test_timeout() {
         let resolution = Duration::from_millis(100);
@@ -213,6 +226,11 @@ mod tests {
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
+    /// STATEMENT: Factory-applied timeout middleware enforces its configured deadline.
+    ///
+    /// HOW:
+    /// - Apply cloned timeout middleware to a factory producing a slower service.
+    /// - Create its pipeline and verify the call returns the timeout variant.
     #[ntex::test]
     #[allow(clippy::redundant_clone)]
     async fn test_timeout_middleware() {
@@ -229,6 +247,11 @@ mod tests {
         assert_eq!(res, TimeoutError::Timeout);
     }
 
+    /// STATEMENT: Timeout errors distinguish elapsed deadlines from wrapped service errors.
+    ///
+    /// HOW:
+    /// - Format a timeout variant and a converted service error.
+    /// - Check their debug variants and human-readable messages.
     #[test]
     fn test_error() {
         let err1 = TimeoutError::<SrvError>::Timeout;
@@ -240,6 +263,10 @@ mod tests {
         assert!(format!("{err2}").contains("SrvError"));
     }
 
+    /// STATEMENT: Timeout-error equality compares both the variant and any service error.
+    ///
+    /// HOW:
+    /// - Compare matching and differing service errors, mixed variants, and two timeout variants.
     #[test]
     fn timeout_error_eq() {
         assert_eq!(TimeoutError::Service(1), TimeoutError::Service(1));

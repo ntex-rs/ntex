@@ -205,6 +205,11 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
+    /// STATEMENT: Pooled one-shot channels preserve delivery and cancellation behavior.
+    ///
+    /// HOW:
+    /// - Use new, cloned, and default pools to deliver values and inspect debug representations.
+    /// - Poll before send or endpoint drop and verify receiver errors and sender cancellation state.
     #[ntex::test]
     async fn test_pool() {
         let p = new();

@@ -117,6 +117,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A single-slot in-flight limiter queues calls and remains unready while occupied.
+    ///
+    /// HOW:
+    /// - Spawn three channel-blocked calls and check readiness while capacity is exhausted.
+    /// - Release them individually and verify all three completions before shutdown.
     #[ntex::test]
     async fn test_service() {
         let (tx, rx) = mpmc::unbounded();
@@ -169,6 +174,11 @@ mod tests {
         srv.shutdown().await;
     }
 
+    /// STATEMENT: In-flight middleware blocks readiness until its active call completes.
+    ///
+    /// HOW:
+    /// - Check default and debug configuration, then create a single-slot middleware pipeline.
+    /// - Start a blocked call and verify readiness recovers only after releasing it.
     #[ntex::test]
     async fn test_middleware() {
         assert_eq!(InFlight::default().max_inflight, 15);
@@ -202,6 +212,11 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 
+    /// STATEMENT: A factory-created in-flight limiter restores readiness after releasing capacity.
+    ///
+    /// HOW:
+    /// - Create a single-slot middleware service and confirm its configuration.
+    /// - Observe ready, pending, and ready states around a channel-blocked request.
     #[ntex::test]
     async fn test_middleware2() {
         assert_eq!(InFlight::default().max_inflight, 15);
@@ -288,6 +303,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Inner readiness stays cached across calls until its notifier invalidates it.
+    ///
+    /// HOW:
+    /// - Make repeated calls with and without explicit readiness checks and count inner checks.
+    /// - Notify a readiness change and verify exactly one additional check.
     #[ntex::test]
     async fn test_inner_readiness_cached_until_notification() {
         let (tx, rx) = mpmc::unbounded();
@@ -352,6 +372,11 @@ mod tests {
         st.max.get()
     }
 
+    /// STATEMENT: Bypassing outer readiness still enforces both limiter and inner capacity.
+    ///
+    /// HOW:
+    /// - Run four competing calls with several outer and inner limit combinations.
+    /// - Verify peak concurrency equals the smaller configured limit.
     #[ntex::test]
     async fn test_limits_without_readiness_check() {
         assert_eq!(run_concurrent(1, 4).await, 1, "inflight limit");
@@ -359,6 +384,11 @@ mod tests {
         assert_eq!(run_concurrent(2, 4).await, 2, "inflight limit 2");
     }
 
+    /// STATEMENT: A zero in-flight limit blocks calls even through the legacy readiness bypass.
+    ///
+    /// HOW:
+    /// - Poll readiness and a normal call against a zero-limit service.
+    /// - Poll a bypassed call and verify all operations remain pending.
     #[ntex::test]
     async fn test_zero_limit() {
         let (_tx, rx) = mpmc::unbounded();

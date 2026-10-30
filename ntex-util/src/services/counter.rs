@@ -184,6 +184,11 @@ mod tests {
     use super::*;
     use crate::time::sleep;
 
+    /// STATEMENT: Unavailability waiters wake only when the counter reaches capacity.
+    ///
+    /// HOW:
+    /// - Spawn an unavailability waiter on a capacity-two counter.
+    /// - Acquire guards one at a time and verify completion only after the second.
     #[ntex::test]
     async fn test_unavailable_is_woken() {
         let counter = Counter::new(2);
@@ -206,6 +211,11 @@ mod tests {
         assert!(done.get());
     }
 
+    /// STATEMENT: Releasing a guard wakes an availability waiter.
+    ///
+    /// HOW:
+    /// - Fill a capacity-one counter and verify an availability waiter stays pending.
+    /// - Drop the guard and observe the waiter complete.
     #[ntex::test]
     async fn test_available_is_woken() {
         let counter = Counter::new(1);
@@ -225,6 +235,11 @@ mod tests {
         assert!(done.get());
     }
 
+    /// STATEMENT: Increasing capacity wakes waiters without changing the active count.
+    ///
+    /// HOW:
+    /// - Hold the only slot and verify an availability task is pending.
+    /// - Raise capacity, await the task, and drop the guard to check the count returns to zero.
     #[ntex::test]
     async fn test_set_capacity() {
         let counter = Counter::new(1);

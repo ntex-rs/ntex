@@ -168,6 +168,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Limiter capacity notifications do not discard independent inner readiness.
+    ///
+    /// HOW:
+    /// - Exercise both limiter types through two roots and count readiness checks across calls.
+    /// - Notify inner pending and ready transitions and verify each causes a new shared check.
     #[ntex::test]
     async fn inner_cache_survives_capacity_notifications() {
         for (probe, services) in limiters(false) {
@@ -197,6 +202,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Shared limiter capacity wakes all roots and is released on cancellation or error.
+    ///
+    /// HOW:
+    /// - Park calls on two roots, cancel the active call, and verify both registered wakers fire.
+    /// - Complete the successor and an erroring call while checking active counts and cached readiness.
     #[ntex::test]
     async fn shared_capacity_wakes_all_roots_and_releases() {
         for (probe, [first, second]) in limiters(false) {
@@ -243,6 +253,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Legacy readiness bypass still checks inner readiness and releases limiter permits.
+    ///
+    /// HOW:
+    /// - Cancel a call waiting on inner readiness and verify a second root can proceed.
+    /// - Exercise inner readiness errors and panics, then verify subsequent calls succeed.
     #[ntex::test]
     async fn bypass_still_checks_inner_and_releases_pending_permit() {
         for (probe, [first, second]) in limiters(true) {
@@ -279,6 +294,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Notification and inner-call panics cannot leak limiter permits or strand waiters.
+    ///
+    /// HOW:
+    /// - Catch entry-notification and call panics for both limiters and verify later calls succeed.
+    /// - Panic during active-call cancellation under bypass and verify release and waiter wakeup.
     #[ntex::test]
     async fn panicking_notification_or_inner_call_releases_permit() {
         for (probe, [first, second]) in limiters(false) {
