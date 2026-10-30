@@ -253,7 +253,7 @@ mod tests {
         type Res = usize;
         type Error = Error;
 
-        crate::forward_bind!(State, 0);
+        crate::forward_bind!(State, self.0);
 
         async fn ready(&self, ctx: Ctx<'_, Self, State>) -> Result<(), Error> {
             self.0.ready(ctx.cast()).await
@@ -1648,7 +1648,7 @@ mod tests {
         type Res = S::Res;
         type Error = S::Error;
 
-        crate::forward_bind!(State, 0);
+        crate::forward_bind!(State, self.0);
 
         async fn ready(&self, ctx: Ctx<'_, Self, State>) -> Result<(), S::Error> {
             ctx.ready(&self.0).await
@@ -2064,8 +2064,8 @@ mod tests {
             self.inner.bind_to(&ctx);
         }
 
-        crate::forward_pl_ready!(State, inner);
-        crate::forward_pl_shutdown!(State, inner);
+        crate::forward_pl_ready!(State, self.inner);
+        crate::forward_pl_shutdown!(State, self.inner);
 
         async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Error> {
             self.inner.call(req).await
@@ -2124,8 +2124,8 @@ mod tests {
         type Res = usize;
         type Error = &'static str;
 
-        crate::forward_pl_bind!(State, inner);
-        crate::forward_pl_ready!(State, inner, |_| "unavailable");
+        crate::forward_pl_bind!(State, self.inner);
+        crate::forward_pl_ready!(State, self.inner, |_| "unavailable");
 
         async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Self::Error> {
             self.inner.call(req).await.map_err(|_| "unavailable")
@@ -2181,8 +2181,8 @@ mod tests {
         type Res = usize;
         type Error = Error;
 
-        crate::forward_pl_bind!(State, inner);
-        crate::forward_pl_shutdown!(State, inner);
+        crate::forward_pl_bind!(State, self.inner);
+        crate::forward_pl_shutdown!(State, self.inner);
 
         async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Error> {
             self.inner.call(req).await
@@ -2219,8 +2219,8 @@ mod tests {
             type Res = S::Res;
             type Error = S::Error;
 
-            crate::forward_bind!(State, inner);
-            crate::forward_shutdown!(State, inner);
+            crate::forward_bind!(State, self.inner);
+            crate::forward_shutdown!(State, self.inner);
 
             async fn call(
                 &self,
