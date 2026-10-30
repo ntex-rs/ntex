@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::error::{Failure, IntoFailure};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::{Identity, ServiceChainFactory};
+use crate::service::{Identity, ServiceBinding, ServiceChainFactory};
 use crate::{Ctx, IntoServiceFactory, Middleware, Service, ServiceFactory, factory};
 
 use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
@@ -687,7 +687,7 @@ where
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         let filter = self.filter.create(st).await?;
         let default = if let Some(ref default) = self.default {
-            Some(default.create(st).await?)
+            Some(ServiceBinding::new(default.create(st).await?))
         } else {
             None
         };
@@ -710,7 +710,7 @@ where
 pub struct ResourceService<St: State, In, Out, F> {
     filter: F,
     routes: Vec<RouteService<St, Out>>,
-    default: Option<HttpHandler<St, Out>>,
+    default: Option<ServiceBinding<HttpHandler<St, Out>>>,
     ph: PhantomData<In>,
 }
 
@@ -731,6 +731,8 @@ where
             ctx.bind(default);
         }
     }
+
+    crate::forward_ready!(St, filter);
 
     async fn call(
         &self,
@@ -783,6 +785,109 @@ mod tests {
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(filter.get());
+    }
+
+    /// STATEMENT: Resources forward filter readiness and check fallback readiness only when selected.
+    ///
+    /// HOW:
+    /// - Build a resource with raw gated filter and fallback services and verify both are bound.
+    /// - Verify resource readiness waits for the filter but a matched route ignores a blocked fallback.
+    /// - Verify fallback calls wait despite cached resource readiness and filter notifications block later calls.
+    #[crate::rt_test]
+    async fn filter_and_fallback_readiness() {
+        use std::{cell::Cell, future::Future, rc::Rc, task::Context, task::Waker};
+
+        use crate::service::{BindCtx, Ctx, ReadyNotifier, Service, ServiceFactory, fn_factory};
+
+        #[derive(Default)]
+        struct Gate {
+            available: Cell<bool>,
+            binds: Cell<usize>,
+            checks: Cell<usize>,
+            calls: Cell<usize>,
+            changed: ReadyNotifier,
+        }
+
+        struct Gated(Rc<Gate>);
+
+        impl Service<(), WebRequest<()>> for Gated {
+            type Res = WebRequest<()>;
+            type Error = Infallible;
+
+            fn bind(&self, ctx: BindCtx<'_>) {
+                self.0.binds.set(self.0.binds.get() + 1);
+                ctx.subscribe(&self.0.changed);
+            }
+
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Infallible> {
+                self.0.checks.set(self.0.checks.get() + 1);
+                if !self.0.available.get() {
+                    std::future::pending::<()>().await;
+                }
+                Ok(())
+            }
+
+            async fn call(
+                &self,
+                req: WebRequest<()>,
+                _: Ctx<'_, Self>,
+            ) -> Result<WebRequest<()>, Infallible> {
+                self.0.calls.set(self.0.calls.get() + 1);
+                Ok(req)
+            }
+        }
+
+        let filter = Rc::new(Gate::default());
+        let default = Rc::new(Gate::default());
+        let factory = |gate: Rc<Gate>| {
+            fn_factory(async move |(): &()| Ok::<_, Infallible>(Gated(gate.clone())))
+        };
+        let srv = crate::factory(
+            web::resource("/test")
+                .filter(factory(filter.clone()))
+                .route(web::get().to(async || HttpResponse::Ok()))
+                .default_service(
+                    factory(default.clone())
+                        .map(|req: WebRequest<()>| req.into_response(HttpResponse::Created())),
+                ),
+        )
+        .pipeline(())
+        .await
+        .unwrap();
+        assert_eq!((filter.binds.get(), default.binds.get()), (1, 1));
+
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut ready = Box::pin(srv.ready());
+        assert!(ready.as_mut().poll(&mut cx).is_pending());
+        filter.available.set(true);
+        filter.changed.notify();
+        ready.await.unwrap();
+        assert_eq!(default.checks.get(), 0);
+
+        let response = srv
+            .call(TestRequest::default().to_srv_request())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(default.calls.get(), 0);
+
+        let mut call = Box::pin(srv.call(TestRequest::post().to_srv_request()));
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(default.calls.get(), 0);
+        default.available.set(true);
+        default.changed.notify();
+        assert_eq!(call.await.unwrap().status(), StatusCode::CREATED);
+
+        srv.ready().await.unwrap();
+        let calls = filter.calls.get();
+        filter.available.set(false);
+        filter.changed.notify();
+        let mut call = Box::pin(srv.call(TestRequest::default().to_srv_request()));
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(filter.calls.get(), calls);
+        filter.available.set(true);
+        filter.changed.notify();
+        assert_eq!(call.await.unwrap().status(), StatusCode::OK);
     }
 
     #[crate::rt_test]

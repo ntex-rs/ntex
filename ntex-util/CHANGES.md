@@ -1,5 +1,9 @@
 # Changes
 
+## [4.5.1] - 2026-10-30
+
+* Forward .bind() for Either services
+
 ## [4.5.0] - 2026-10-27
 
 * Keep owned local wake handles in timer registrations and driver teardown,

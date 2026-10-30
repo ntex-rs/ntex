@@ -980,11 +980,17 @@ mod tests {
         assert_eq!(attempts.get(), 4);
     }
 
+    /// STATEMENT: Lazily created routes retain independent readiness and bind before dispatch.
+    ///
+    /// HOW:
+    /// - Register raw gated services as a route and fallback, then verify lazy binding and waiting.
+    /// - Invalidate the cached route, refresh app readiness, and verify its next call still waits.
+    /// - Call the unrelated fallback while the route is blocked, then verify recovery and shutdown.
     #[crate::rt_test]
     async fn lazy_routes_bind_current_scope_before_dispatch() {
         use std::{future::Future, task::Context, task::Waker};
 
-        use crate::service::{BindCtx, Ctx, ReadyNotifier, fn_factory, ready_factory};
+        use crate::service::{BindCtx, Ctx, ReadyNotifier, fn_factory};
 
         #[derive(Default)]
         struct Gate {
@@ -1034,9 +1040,7 @@ mod tests {
         let filter_checks = Rc::new(Cell::new(0));
         let checks = filter_checks.clone();
         let factory = |gate: Rc<Gate>| {
-            ready_factory(fn_factory(async move |(): &()| {
-                Ok::<_, Infallible>(Gated(gate.clone()))
-            }))
+            fn_factory(async move |(): &()| Ok::<_, Infallible>(Gated(gate.clone())))
         };
         let srv = init_service(
             App::new()

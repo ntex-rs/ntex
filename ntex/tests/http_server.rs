@@ -1154,6 +1154,65 @@ async fn test_h1_gracefull_shutdown_2() {
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
 
+/// STATEMENT: HTTP/2 keeps delivering request payloads while the application is at capacity.
+///
+/// HOW:
+/// - Limit the request service to one in-flight call and wait for it to start reading a body.
+/// - Send the body after the service consumes its slot and verify the handler receives it.
+#[ntex::test]
+async fn test_h2_request_readiness_does_not_block_payload() {
+    use ntex::http::HeaderMap;
+    use ntex::util::BytesMut;
+    use ntex_h2::client::SimpleClient;
+    use ntex_util::services::inflight::InFlight;
+
+    let started = Arc::new(AtomicBool::new(false));
+    let received = Arc::new(Mutex::new(None));
+    let started2 = started.clone();
+    let received2 = received.clone();
+    let srv = test_server(async move |_| {
+        let started = started2.clone();
+        let received = received2.clone();
+        HttpService::h2(
+            ntex::factory(move |mut req: Request| {
+                let started = started.clone();
+                let received = received.clone();
+                async move {
+                    started.store(true, Ordering::Release);
+                    let mut body = BytesMut::new();
+                    while let Some(chunk) = req.payload().next().await {
+                        body.extend_from_slice(&chunk.map_err(io::Error::other)?);
+                    }
+                    *received.lock().unwrap() = Some(body.freeze());
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }
+            })
+            .apply(InFlight::new(1)),
+        )
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, false, "localhost".into());
+    let (snd, _rcv) = client
+        .send(Method::POST, "/".into(), HeaderMap::default(), false)
+        .await
+        .unwrap();
+    wait_for(|| started.load(Ordering::Acquire)).await.unwrap();
+    snd.send_payload(Bytes::from_static(b"pay"), false)
+        .await
+        .unwrap();
+    snd.send_payload(Bytes::from_static(b"load"), true)
+        .await
+        .unwrap();
+    wait_for(|| received.lock().unwrap().is_some())
+        .await
+        .expect("application readiness blocked delivery of the active request's body");
+    assert_eq!(
+        received.lock().unwrap().take(),
+        Some(Bytes::from_static(b"payload"))
+    );
+}
+
 #[ntex::test]
 async fn test_h2_request_body_dropped_after_response_resets_stream() {
     use ntex::http::{HeaderMap, Payload};
