@@ -1,5 +1,9 @@
 # Changes
 
+## [5.3.1] - 2026-10-30
+
+* Allow to use `self.` for service forward macros
+
 ## [5.3.0] - 2026-10-21
 
 * Reduce the initial readiness waiter reservation for small pipelines

@@ -11,6 +11,12 @@ macro_rules! forward_bind {
             $(ctx.bind::<_, $st, _>(&self.$field);)+
         }
     };
+    ($st:ty, $this:ident.$field:tt) => {
+        #[inline]
+        fn bind(&$this, ctx: $crate::BindCtx<'_>) {
+            ctx.bind::<_, $st, _>(&$this.$field);
+        }
+    };
 }
 
 /// Forwards [`crate::Service::bind`] to pipeline or pipeline-binding fields,
@@ -23,6 +29,12 @@ macro_rules! forward_pl_bind {
         #[inline]
         fn bind(&self, ctx: $crate::BindCtx<'_>) {
             $(self.$field.bind_to(&ctx);)+
+        }
+    };
+    ($st:ty, $this:ident.$field:tt) => {
+        #[inline]
+        fn bind(&$this, ctx: $crate::BindCtx<'_>) {
+            $this.$field.bind_to(&ctx);
         }
     };
 }
@@ -48,6 +60,20 @@ macro_rules! forward_ready {
             ctx.ready(&self.$field).await.map_err($err)
         }
     };
+    ($st:ty, $this:ident.$field:tt) => {
+        #[inline]
+        async fn ready(&$this, ctx: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
+            ctx.ready(&$this.$field)
+                .await
+                .map_err(::core::convert::Into::into)
+        }
+    };
+    ($st:ty, $this:ident.$field:tt, $err:expr) => {
+        #[inline]
+        async fn ready(&$this, ctx: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
+            ctx.ready(&$this.$field).await.map_err($err)
+        }
+    };
 }
 
 /// An implementation of [`crate::Service::shutdown`] that forwards shutdown checks to a field.
@@ -57,6 +83,12 @@ macro_rules! forward_shutdown {
         #[inline]
         async fn shutdown(&self, ctx: $crate::Ctx<'_, Self, $st>) {
             ctx.shutdown(&self.$field).await
+        }
+    };
+    ($st:ty, $this:ident.$field:tt) => {
+        #[inline]
+        async fn shutdown(&$this, ctx: $crate::Ctx<'_, Self, $st>) {
+            ctx.shutdown(&$this.$field).await
         }
     };
 }
@@ -103,6 +135,22 @@ macro_rules! forward_pl_ready {
             self.$field.ready().await.map_err($err)
         }
     };
+    ($st:ty, $this:ident.$field:ident) => {
+        #[inline]
+        async fn ready(&$this, _: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
+            $this
+                .$field
+                .ready()
+                .await
+                .map_err(::core::convert::Into::into)
+        }
+    };
+    ($st:ty, $this:ident.$field:ident, $err:expr) => {
+        #[inline]
+        async fn ready(&$this, _: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
+            $this.$field.ready().await.map_err($err)
+        }
+    };
 }
 
 /// An implementation of [`crate::Service::shutdown`] that shuts down a
@@ -115,6 +163,12 @@ macro_rules! forward_pl_shutdown {
         #[inline]
         async fn shutdown(&self, _: $crate::Ctx<'_, Self, $st>) {
             self.$field.shutdown().await
+        }
+    };
+    ($st:ty, $this:ident.$field:tt) => {
+        #[inline]
+        async fn shutdown(&$this, _: $crate::Ctx<'_, Self, $st>) {
+            $this.$field.shutdown().await
         }
     };
 }
