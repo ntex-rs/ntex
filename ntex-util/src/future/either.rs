@@ -1,6 +1,6 @@
 use std::{error, fmt, future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use ntex_service::{Ctx, Service};
+use ntex_service::{BindCtx, Ctx, Service};
 
 /// A value of one of two types.
 ///
@@ -147,6 +147,13 @@ where
     type Res = A::Res;
     type Error = A::Error;
 
+    fn bind(&self, ctx: BindCtx<'_>) {
+        match self {
+            Either::Left(svc) => ctx.bind::<_, St, Req>(svc),
+            Either::Right(svc) => ctx.bind::<_, St, Req>(svc),
+        }
+    }
+
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         match self {
             Either::Left(svc) => ctx.call(svc, req).await,
@@ -173,7 +180,7 @@ where
 mod test {
     use std::{cell::Cell, error::Error as _, future, rc::Rc};
 
-    use ntex_service::Pipeline;
+    use ntex_service::{Pipeline, ReadyNotifier, ServiceBinding};
 
     use super::*;
 
@@ -288,9 +295,12 @@ mod test {
 
     #[derive(Default)]
     struct ServiceState {
+        bound: Cell<bool>,
         ready: Cell<bool>,
+        failed: Cell<bool>,
         called: Cell<bool>,
         shutdown: Cell<bool>,
+        changed: ReadyNotifier,
     }
 
     struct TestService {
@@ -302,9 +312,14 @@ mod test {
         type Res = u8;
         type Error = ();
 
+        fn bind(&self, ctx: BindCtx<'_>) {
+            self.state.bound.set(true);
+            ctx.subscribe(&self.state.changed);
+        }
+
         async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             self.state.ready.set(true);
-            Ok(())
+            if self.state.failed.get() { Err(()) } else { Ok(()) }
         }
 
         async fn call(&self, req: u8, _: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
@@ -317,11 +332,12 @@ mod test {
         }
     }
 
-    /// STATEMENT: `Either` forwards readiness, calls, and shutdown to its active service.
+    /// STATEMENT: `Either` forwards binding, readiness, calls, and shutdown to its active service.
     ///
     /// HOW:
     /// - Build pipelines for each branch using services with lifecycle flags.
-    /// - Check readiness and call results, then verify every lifecycle flag after shutdown.
+    /// - Check binding and calls, then notify a readiness failure and verify it reaches the pipeline.
+    /// - Restore readiness and verify shutdown reaches the active service.
     #[ntex::test]
     async fn service() {
         async fn check(service: Either<TestService, TestService>, response: u8) {
@@ -330,10 +346,22 @@ mod test {
             };
             let service = Pipeline::new((), service);
 
+            assert!(state.bound.get());
             assert_eq!(service.ready().await, Ok(()));
             assert!(state.ready.get());
             assert_eq!(service.call(5).await, Ok(5 + response));
             assert!(state.called.get());
+
+            state.called.set(false);
+            state.failed.set(true);
+            state.changed.notify();
+            assert!(!service.is_ready());
+            assert_eq!(service.call(5).await, Err(()));
+            assert!(!state.called.get());
+            state.failed.set(false);
+            state.changed.notify();
+            assert_eq!(service.call(5).await, Ok(5 + response));
+
             service.shutdown().await;
             assert!(state.shutdown.get());
         }
@@ -357,6 +385,29 @@ mod test {
             20,
         )
         .await;
+    }
+
+    /// STATEMENT: Either branch binds an enclosed `ServiceBinding` before using its readiness scope.
+    ///
+    /// HOW:
+    /// - Place a bound service in each branch and construct an enclosing pipeline.
+    /// - Verify readiness and calls succeed without an unbound-dependency panic.
+    #[ntex::test]
+    async fn bound_service() {
+        for left in [true, false] {
+            let inner = ServiceBinding::new(TestService {
+                state: Rc::new(ServiceState::default()),
+                response: 10,
+            });
+            let service = if left {
+                Either::Left(inner)
+            } else {
+                Either::Right(inner)
+            };
+            let service = Pipeline::new((), service);
+            assert_eq!(service.ready().await, Ok(()));
+            assert_eq!(service.call(5).await, Ok(15));
+        }
     }
 
     /// STATEMENT: Branch-specific extraction returns `None` for the inactive `Either` branch.

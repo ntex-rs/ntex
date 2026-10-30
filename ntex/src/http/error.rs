@@ -235,6 +235,9 @@ pub enum DispatchError {
 #[derive(thiserror::Error, Clone, Debug)]
 /// Errors that can occur while dispatching HTTP/2 requests.
 pub enum H2Error {
+    /// Readiness error
+    #[error("Readiness error")]
+    Ready,
     /// Too many consecutive empty non-final `DATA` frames
     #[error("Too many consecutive empty DATA frames")]
     EmptyDataFrames,

@@ -3,9 +3,11 @@ use std::{cell::RefCell, marker::PhantomData, mem, rc::Rc};
 use crate::error::Failure;
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceId, Router};
-use crate::service::{ServiceChainFactory, boxed, cfg::Cfg, cfg::Configuration};
-use crate::util::HashMap;
-use crate::{Ctx, Middleware, Service, ServiceFactory, factory};
+use crate::service::{
+    ServiceBinding, ServiceBindingMiddleware, ServiceChainFactory, boxed, cfg::Cfg,
+    cfg::Configuration,
+};
+use crate::{Ctx, Middleware, Service, ServiceFactory, factory, util::HashMap};
 
 use super::config::WebAppConfig;
 use super::guard::Guard;
@@ -225,14 +227,15 @@ where
 ///
 /// Routes and the default service are created lazily through [`Ctx::create`],
 /// binding their dependencies to the current scope before first use.
+/// Each cached service has independent readiness, checked only when selected.
 #[derive(derive_more::Debug)]
 #[debug("Router")]
 pub struct WebServiceRouter<St: State, In, Out, F> {
     filter: F,
     router: Rc<Router<HttpService<St, Out>, Guards>>,
     default: HttpService<St, Out>,
-    cache: RefCell<HashMap<ResourceId, HttpHandler<St, Out>>>,
-    cache_default: RefCell<Option<HttpHandler<St, Out>>>,
+    cache: RefCell<HashMap<ResourceId, Rc<ServiceBinding<HttpHandler<St, Out>>>>>,
+    cache_default: RefCell<Option<Rc<ServiceBinding<HttpHandler<St, Out>>>>>,
     ph: PhantomData<In>,
 }
 
@@ -297,7 +300,11 @@ where
         let svc = if let Some((sf, id)) = res {
             if let Some(svc) = self.cache.borrow().get(&id) {
                 svc.clone()
-            } else if let Ok(svc) = ctx.create(sf).await {
+            } else if let Ok(svc) = ctx
+                .create(&factory(sf.clone()).apply(ServiceBindingMiddleware))
+                .await
+            {
+                let svc = Rc::new(svc);
                 self.cache.borrow_mut().insert(id, svc.clone());
                 svc
             } else {
@@ -306,7 +313,11 @@ where
         } else {
             if let Some(svc) = &*self.cache_default.borrow() {
                 svc.clone()
-            } else if let Ok(svc) = ctx.create(&self.default).await {
+            } else if let Ok(svc) = ctx
+                .create(&factory(self.default.clone()).apply(ServiceBindingMiddleware))
+                .await
+            {
+                let svc = Rc::new(svc);
                 *self.cache_default.borrow_mut() = Some(svc.clone());
                 svc
             } else {
