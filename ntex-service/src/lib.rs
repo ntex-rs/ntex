@@ -118,6 +118,12 @@ pub use crate::state::{RequestState, State};
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Framework guide
+///
+/// - [Service Model](https://docs.ntex.rs/1-service.html)
+/// - [Service Pipelines](https://docs.ntex.rs/2-pipeline.html)
+/// - [Service State](https://docs.ntex.rs/3-state.html)
 pub trait Service<St, Req> {
     /// Response produced by the service.
     type Res;
@@ -485,6 +491,27 @@ where
 }
 
 /// Combinator and helper types used by the public API.
+///
+/// Most services can be built through the crate-level functions and the
+/// [`Service`] and [`ServiceFactory`] methods without naming these types.
+/// This module exposes their concrete return types for type annotations,
+/// reusable wrappers, and custom composition.
+///
+/// - [`ServiceChain`] and [`ServiceChainFactory`] are builders returned by
+///   [`service()`] and [`factory()`].
+/// - [`dev::FnService`], [`dev::FnServiceSt`], and [`dev::FnFactory`] adapt
+///   functions into services and factories.
+/// - [`dev::AndThen`], [`dev::Then`], [`dev::Map`], and [`dev::MapErr`] compose
+///   or transform service results, with corresponding factory adapters.
+/// - [`dev::ApplyCtx`] provides state and inner-service calls to
+///   [`apply_fn`] middleware; [`dev::MapState`] substitutes the inner state.
+/// - [`dev::Ready`] and [`dev::ReadyFactory`] are the wrappers produced by
+///   [`ready()`] and [`ready_factory()`] for independent cached readiness.
+///
+/// # Framework guide
+///
+/// - [Service Pipelines](https://docs.ntex.rs/2-pipeline.html)
+/// - [Service State](https://docs.ntex.rs/3-state.html)
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
     pub use crate::apply::{Apply, ApplyCtx, ApplyFactory};
@@ -502,276 +529,5 @@ pub mod dev {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{cell::Cell, task::Poll};
-
-    use ntex::util::lazy;
-
-    use super::*;
-    use crate::dev::FnServiceSt;
-    use crate::pipeline::PipelineFactory;
-
-    #[derive(Clone, Debug, Default)]
-    struct Srv(Rc<Cell<usize>>);
-
-    impl Service<usize, usize> for Srv {
-        type Res = usize;
-        type Error = &'static str;
-
-        async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), Self::Error> {
-            self.0.set(self.0.get() + 1);
-            Ok(())
-        }
-
-        async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
-            if req == 0 { Err("zero") } else { Ok(req + *ctx) }
-        }
-
-        async fn shutdown(&self, _: Ctx<'_, Self, usize>) {
-            self.0.set(self.0.get() + 100);
-        }
-    }
-
-    struct Fwd {
-        inner: Srv,
-        pl: Pipeline<usize, usize, &'static str>,
-    }
-
-    impl Service<usize, usize> for Fwd {
-        type Res = usize;
-        type Error = usize;
-
-        crate::forward_bind!(usize, inner);
-        crate::forward_ready!(usize, inner, str::len);
-
-        async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, usize> {
-            let res = ctx.call(&self.inner, req).await.map_err(str::len)?;
-            self.pl.call(res).await.map_err(str::len)
-        }
-
-        crate::forward_shutdown!(usize, inner);
-    }
-
-    struct FwdPl {
-        pl: Pipeline<usize, usize, &'static str>,
-    }
-
-    impl Service<usize, usize> for FwdPl {
-        type Res = usize;
-        type Error = &'static str;
-
-        crate::forward_pl_bind!(usize, pl);
-        crate::forward_pl_ready!(usize, pl);
-        crate::forward_pl_shutdown!(usize, pl);
-
-        async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, &'static str> {
-            self.pl.call(req).await
-        }
-    }
-
-    struct FwdPlErr {
-        pl: Pipeline<usize, usize, &'static str>,
-    }
-
-    impl Service<usize, usize> for FwdPlErr {
-        type Res = usize;
-        type Error = usize;
-
-        crate::forward_pl_bind!(usize, pl);
-        crate::forward_pl_ready!(usize, pl, str::len);
-
-        async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, usize> {
-            self.pl.call(req).await.map_err(str::len)
-        }
-    }
-
-    #[ntex::test]
-    async fn service_wrappers() {
-        let cnt = Rc::new(Cell::new(0));
-
-        let srv: &'static Srv = Box::leak(Box::new(Srv(cnt.clone())));
-        let pl = Pipeline::new(1, srv);
-        assert_eq!(pl.call(1).await, Ok(2));
-        assert_eq!(pl.call(0).await, Err("zero"));
-        pl.shutdown().await;
-        assert_eq!(cnt.get(), 101);
-
-        let pl = Pipeline::new(2, Box::new(Srv(cnt.clone())));
-        assert_eq!(pl.call(1).await, Ok(3));
-        pl.shutdown().await;
-        assert_eq!(cnt.get(), 202);
-
-        let pl = Pipeline::new(3, Rc::new(Srv(cnt.clone())));
-        assert_eq!(pl.call(1).await, Ok(4));
-        pl.shutdown().await;
-        assert_eq!(cnt.get(), 303);
-
-        let pl = Pipeline::new(
-            1,
-            Fwd {
-                inner: Srv(cnt.clone()),
-                pl: Pipeline::new(10, Srv(cnt.clone())),
-            },
-        );
-        assert_eq!(pl.call(1).await, Ok(12));
-        assert_eq!(pl.call(0).await, Err(4));
-        pl.shutdown().await;
-        assert_eq!(cnt.get(), 405);
-
-        let pl = Pipeline::new(
-            1,
-            FwdPl {
-                pl: Pipeline::new(10, Srv(cnt.clone())),
-            },
-        );
-        assert_eq!(pl.call(1).await, Ok(11));
-        pl.shutdown().await;
-        // inner pipeline readiness is checked once, by `forward_pl_ready!`
-        assert_eq!(cnt.get(), 506);
-
-        let pl = Pipeline::new(
-            1,
-            FwdPlErr {
-                pl: Pipeline::new(10, Srv(cnt.clone())),
-            },
-        );
-        assert_eq!(pl.call(0).await, Err(4));
-        pl.shutdown().await;
-        assert_eq!(cnt.get(), 507);
-    }
-
-    #[ntex::test]
-    async fn pipeline_calls() {
-        let cnt = Rc::new(Cell::new(0));
-        let pl = Srv(cnt.clone()).pipeline(1);
-
-        assert_eq!(pl.call_static(1).await, Ok(2));
-        assert_eq!(cnt.get(), 1);
-
-        // all entry points reuse the same successful readiness check
-        assert_eq!(pl.ready().await, Ok(()));
-        assert_eq!(cnt.get(), 1);
-        assert_eq!(pl.call(2).await, Ok(3));
-        assert_eq!(cnt.get(), 1);
-        assert_eq!(ServiceCaller::call_service(&pl, 3).await, Ok(4));
-        assert_eq!(cnt.get(), 1);
-
-        assert_eq!(lazy(|cx| pl.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(cnt.get(), 1);
-        assert_eq!(pl.call_static(3).await, Ok(4));
-        assert_eq!(pl.call_static(3).await, Ok(4));
-        assert_eq!(cnt.get(), 1);
-
-        let b = pl.bind();
-        assert!(format!("{b:?}").contains("PipelineBinding"));
-        assert_eq!(b.call_static(4).await, Ok(5));
-        assert_eq!(cnt.get(), 1);
-        assert_eq!(b.ready().await, Ok(()));
-        assert_eq!(cnt.get(), 1);
-        assert_eq!(pl.call(4).await, Ok(5));
-        assert_eq!(b.call(4).await, Ok(5));
-        assert_eq!(cnt.get(), 1);
-
-        // owned calls also share readiness regardless of polling order
-        assert_eq!(pl.ready().await, Ok(()));
-        let fut1 = pl.call_static(1);
-        let fut2 = pl.call_static(2);
-        assert_eq!(fut2.await, Ok(3));
-        assert_eq!(cnt.get(), 1);
-        assert_eq!(fut1.await, Ok(2));
-        assert_eq!(cnt.get(), 1);
-
-        // shutdown invalidates cached readiness
-        assert_eq!(pl.ready().await, Ok(()));
-        assert_eq!(cnt.get(), 1);
-        pl.shutdown().await;
-        assert_eq!(pl.call(1).await, Ok(2));
-        assert_eq!(cnt.get(), 102);
-
-        let svc = apply_fn(
-            Srv(cnt.clone()),
-            async |req: usize, svc: &dev::ApplyCtx<'_, Srv, usize, usize>| {
-                svc.call_service(req * 2).await
-            },
-        );
-        let pl = Pipeline::new(1, svc);
-        assert_eq!(pl.call(2).await, Ok(5));
-        assert_eq!(cnt.get(), 103);
-    }
-
-    #[ntex::test]
-    async fn fn_conversions() {
-        let pl = Pipeline::new(5, async |st: &usize, req: usize| Ok::<_, ()>(st + req));
-        assert_eq!(pl.call(1).await, Ok(6));
-
-        let _: FnServiceSt<_, usize, usize, usize, ()> =
-            IntoService::into_service(async |st: &usize, req: usize| Ok::<_, ()>(st + req));
-
-        let f = factory(async |st: &usize| Ok::<_, ()>(Srv(Rc::new(Cell::new(*st)))));
-        let pl = f.pipeline(1).await.unwrap();
-        assert_eq!(pl.call(1).await, Ok(2));
-    }
-
-    #[ntex::test]
-    async fn factory_combinators() {
-        let cnt = Rc::new(Cell::new(0));
-        let c = cnt.clone();
-        let f = fn_factory(async move |st: &usize| {
-            if *st == 0 {
-                Err(())
-            } else {
-                Ok::<_, ()>(Srv(c.clone()))
-            }
-        });
-
-        let rc = Rc::new(f.clone());
-        let pl = rc.pipeline(1).await.unwrap();
-        assert_eq!(pl.call(1).await, Ok(2));
-        assert!(rc.pipeline(0).await.is_err());
-
-        let f2 = f.clone().map_init_err(|()| "init");
-        assert_eq!(f2.create(&0).await.err(), Some("init"));
-
-        let f2 = f.clone().and_then(f.clone());
-        let pl = f2.pipeline(1).await.unwrap();
-        assert_eq!(pl.call(1).await, Ok(3));
-
-        let f2 = factory(f.clone()).map(|r| r * 10).map_err(|_| ());
-        let pl = f2.pipeline(1).await.unwrap();
-        assert_eq!(pl.call(1).await, Ok(20));
-        assert_eq!(pl.call(0).await, Err(()));
-
-        let pf = PipelineFactory::new(f.clone());
-        let pf2 = pf.clone();
-        assert!(format!("{pf2:?}").contains("PipelineFactory"));
-        let pl = pf2.create(2).await.unwrap();
-        assert_eq!(pl.call(1).await, Ok(3));
-        assert!(pf.create(0).await.is_err());
-    }
-
-    #[ntex::test]
-    async fn boxed_and_debug() {
-        let cnt = Rc::new(Cell::new(0));
-
-        let svc = boxed::service(Srv(cnt.clone()));
-        let pl = Pipeline::new(1, svc.clone());
-        assert_eq!(pl.call(1).await, Ok(2));
-
-        let f = boxed::factory(fn_factory(async |_: &usize| Ok::<_, ()>(Srv::default())));
-        let pl = f.clone().pipeline(1).await.unwrap();
-        assert_eq!(pl.call(1).await, Ok(2));
-
-        let s = format!("{:?}", service(Srv::default()).map(|r| r).map_err(|e| e));
-        assert!(s.contains("Map") && s.contains("MapErr"));
-    }
-
-    #[test]
-    fn request_state() {
-        let st = State {
-            req: 1,
-            state: "st",
-        };
-        assert_eq!(st.unpack(), ("st", 1));
-        assert_eq!(("st", 2).unpack(), ("st", 2));
-    }
-}
+#[path = "../tests/unit/lib.rs"]
+mod tests;

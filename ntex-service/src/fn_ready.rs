@@ -80,46 +80,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{cell::Cell, rc::Rc};
-
-    use crate::{Pipeline, factory, service};
-
-    use super::*;
-
-    #[ntex::test]
-    async fn test_fn_readiness() {
-        // Service
-        let is_called = Rc::new(Cell::new(false));
-        let is_called2 = is_called.clone();
-
-        let svc = service(async |()| Ok::<_, ()>("pipe")).readiness(async move |()| {
-            is_called2.set(true);
-            Ok(())
-        });
-        let _ = format!("{svc:?}");
-        let pipe = Pipeline::new((), svc);
-
-        let res = pipe.call(()).await;
-        assert_eq!(pipe.ready().await, Ok(()));
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), "pipe");
-        assert!(is_called.get());
-
-        // Service factory
-        let is_called = Rc::new(Cell::new(false));
-        let is_called2 = is_called.clone();
-
-        let factory = factory(|()| async { Ok::<_, ()>("pipe") }).readiness(async move |()| {
-            is_called2.set(true);
-            Ok(())
-        });
-        let pipe = Pipeline::new((), factory.create(&()).await.unwrap());
-
-        let res = pipe.call(()).await;
-        assert_eq!(pipe.ready().await, Ok(()));
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), "pipe");
-        assert!(is_called.get());
-    }
-}
+#[path = "../tests/unit/fn_ready.rs"]
+mod tests;

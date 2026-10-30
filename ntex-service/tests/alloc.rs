@@ -160,6 +160,11 @@ fn probe() -> (Probe, Rc<Gate>) {
     (Probe(gate.clone(), callback), gate)
 }
 
+/// STATEMENT: Registered notification callbacks add no delivery allocations.
+///
+/// HOW:
+/// - Measure notification without extra callbacks, then register 64 counted callbacks.
+/// - Compare allocation, byte, and deallocation counts over two deliveries and verify every callback runs.
 #[test]
 fn notification_delivery_reuses_registered_callback_storage() {
     let (svc, gate) = probe();
@@ -183,6 +188,11 @@ fn notification_delivery_reuses_registered_callback_storage() {
     }
 }
 
+/// STATEMENT: Invalidating a single ready scope does not allocate.
+///
+/// HOW:
+/// - Warm a pipeline's readiness cache and measure a source notification.
+/// - Verify zero allocations, invalidated readiness, and one callback invocation.
 #[test]
 fn single_scope_notification_does_not_allocate() {
     let (svc, gate) = probe();
@@ -221,6 +231,11 @@ impl Wake for WakeCount {
     }
 }
 
+/// STATEMENT: Notifying a single pending caller allocates nothing for either retained or borrowed checks.
+///
+/// HOW:
+/// - Park each checker form on a closed gate and notify before and after making it available.
+/// - Verify zero notification allocations, expected wakes, and eventual checker completion.
 #[test]
 fn notification_of_single_pending_caller_does_not_allocate() {
     for retained in [false, true] {
@@ -257,6 +272,11 @@ fn notification_of_single_pending_caller_does_not_allocate() {
     }
 }
 
+/// STATEMENT: Waking a checker with one observer requires no allocation.
+///
+/// HOW:
+/// - Park retained readiness and capture the service's checker waker.
+/// - Re-register and wake it twice, measuring zero allocations and one task wake per iteration.
 #[test]
 fn checker_wake_of_single_observer_does_not_allocate() {
     let parked = Rc::new(RefCell::new(None));
@@ -273,6 +293,11 @@ fn checker_wake_of_single_observer_does_not_allocate() {
     }
 }
 
+/// STATEMENT: Cached pipeline handles avoid readiness allocations and retain only call-dispatch allocation.
+///
+/// HOW:
+/// - Warm readiness and measure direct, bound, cloned, owned, and trait-based entry points.
+/// - Verify zero readiness allocations, one per call, notification rechecks, and shutdown behavior.
 #[test]
 fn cached_pipeline_handles_skip_readiness_allocations() {
     let (svc, gate) = probe();
@@ -342,6 +367,11 @@ fn cached_pipeline_handles_skip_readiness_allocations() {
     );
 }
 
+/// STATEMENT: State-taking and fixed-state handles share allocation-free cached readiness.
+///
+/// HOW:
+/// - Warm a `PipelineState` and measure readiness and calls across state values and handle types.
+/// - Check dispatch-only call allocations, revalidation, and callback lifetime after handle drops.
 #[test]
 fn cached_state_handles_skip_readiness_allocations() {
     let (svc, gate) = probe();
@@ -443,6 +473,11 @@ impl<S: Service<usize, usize>> Service<usize, usize> for Forward<S> {
     }
 }
 
+/// STATEMENT: Cached context forwarding adds no allocations beyond the pipeline and boxed call dispatches.
+///
+/// HOW:
+/// - Warm nested readiness/state/mapping wrappers and an erased-service wrapper.
+/// - Verify zero readiness allocations, expected call-box counts, and one underlying readiness check.
 #[test]
 fn cached_context_and_wrapper_forwarding_add_no_allocations() {
     let (svc, gate) = probe();
@@ -476,6 +511,11 @@ fn cached_context_and_wrapper_forwarding_add_no_allocations() {
     assert_eq!(gate.checks.get(), 1);
 }
 
+/// STATEMENT: Invalidation and cancellation preserve one active checker with allocation-free repolls.
+///
+/// HOW:
+/// - Measure cold checks, rechecks, pending owner/waiter polls, and owner cancellation.
+/// - Verify checker handoff, retained-checker survival after waiter cancellation, and restored cache behavior.
 #[test]
 fn invalidation_and_cancellation_preserve_the_shared_checker() {
     let (svc, gate) = probe();
@@ -584,6 +624,11 @@ fn invalidation_and_cancellation_preserve_the_shared_checker() {
     );
 }
 
+/// STATEMENT: Parents sharing a child reuse its readiness cache without per-parent cache-hit allocation.
+///
+/// HOW:
+/// - Warm 16 parent pipelines around one binding and measure repeated readiness and calls.
+/// - Invalidate the child, verify all parents become unready, and observe only one child recheck.
 #[test]
 fn shared_child_cache_hits_do_not_allocate_per_parent() {
     let (svc, gate) = probe();
@@ -622,6 +667,11 @@ fn shared_child_cache_hits_do_not_allocate_per_parent() {
     }
 }
 
+/// STATEMENT: Readiness timing comparisons retain cache-sharing and checker-handoff invariants.
+///
+/// HOW:
+/// - Report seven warmed allocation/timing samples for cached, invalidated, shared, and pending operations.
+/// - Assert readiness counts and cancellation handoff without imposing timing thresholds.
 #[test]
 #[ignore = "run the readiness microbenchmark explicitly in release mode"]
 fn benchmark_readiness() {

@@ -1,3 +1,54 @@
+//! Execution containers and shared handles for service pipelines.
+//!
+//! A pipeline owns a service, initializes its binding dependencies, and
+//! coordinates readiness, calls, and shutdown.
+//!
+//! - [`Pipeline`] owns one state value for all operations.
+//! - [`PipelineState`] accepts a state reference for each operation instead.
+//! - [`PipelineBinding`] and [`PipelineStateBinding`] provide independently
+//!   registered handles to the same service and readiness machinery.
+//!   [`PipelineState::bind_state`] attaches an owned state value to a handle.
+//! - [`PipelineCall`] is an owned call future that keeps its pipeline alive
+//!   without borrowing the originating handle.
+//! - [`PipelineFactory`] creates a service and wraps it with its state.
+//!
+//! Calls wait for readiness before dispatch. Successful readiness is shared
+//! by all handles until a subscribed [`crate::ReadyNotifier`] invalidates it;
+//! neither a call nor a different state value consumes that success.
+//! Independent readiness gates require separate pipelines or
+//! [`crate::ServiceBinding`] wrappers.
+//!
+//! Pipelines and their handles are local to a thread. Services whose readiness
+//! changes must subscribe in [`Service::bind`] and notify on those changes;
+//! waking a task alone does not invalidate cached readiness.
+//!
+//! # Example
+//!
+//! ```
+//! use ntex_service::pipeline::{Pipeline, PipelineState};
+//!
+//! # async fn example() -> Result<(), ()> {
+//! let pipeline = Pipeline::new(
+//!     10u32,
+//!     async |state: &u32, req: u32| Ok::<_, ()>(*state + req),
+//! );
+//! let handle = pipeline.bind();
+//! assert_eq!(handle.call(2).await?, 12);
+//!
+//! let stateful = PipelineState::new(
+//!     async |state: &u32, req: u32| Ok::<_, ()>(*state + req),
+//! );
+//! assert_eq!(stateful.call(2, &20).await?, 22);
+//! assert_eq!(stateful.call(2, &30).await?, 32);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Framework guide
+//!
+//! - [Service Pipelines](https://docs.ntex.rs/2-pipeline.html)
+//! - [Service State](https://docs.ntex.rs/3-state.html)
+
 use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
