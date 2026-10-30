@@ -1,6 +1,44 @@
-use crate::{BindCtx, Ctx, Service, readiness::ReadyScope};
+use crate::{BindCtx, Ctx, Middleware, Service, readiness::ReadyScope};
+
+/// Middleware that wraps each service in a fresh [`ServiceBinding`].
+///
+/// Each created service gets an independent, notification-invalidated readiness
+/// cache. Successful readiness survives calls and changes to sibling services.
+/// The inner service must subscribe to readiness-change notifications in
+/// [`Service::bind`], as described by [`ServiceBinding`].
+///
+/// Construction does not retain state, bind the service, or check readiness.
+/// The enclosing pipeline or service must bind the returned wrapper before use.
+///
+/// # Example
+///
+/// ```
+/// use ntex_service::{ServiceBindingMiddleware, factory, fn_service};
+///
+/// # async fn example() {
+/// let factory = factory(fn_service(async |req: u32| Ok::<_, ()>(req + 1)))
+///     .apply(ServiceBindingMiddleware);
+///
+/// let pipeline = factory.pipeline(()).await.unwrap();
+/// assert_eq!(pipeline.call(1).await, Ok(2));
+/// # }
+/// ```
+#[derive(Copy, Clone, Default, Debug)]
+pub struct ServiceBindingMiddleware;
+
+impl<S, St> Middleware<S, St> for ServiceBindingMiddleware {
+    type Service = ServiceBinding<S>;
+
+    #[inline]
+    fn create(&self, _: &St, service: S) -> Self::Service {
+        ServiceBinding::new(service)
+    }
+}
 
 /// A service paired with persistent readiness.
+///
+/// Construct directly with [`Self::new`] or apply [`ServiceBindingMiddleware`]
+/// to a factory to wrap each service it creates.
 ///
 /// [`Ctx::ready`] and [`Ctx::call`] reuse the binding's successful readiness
 /// until a subscribed [`crate::ReadyNotifier`] invalidates it. Calls do not
