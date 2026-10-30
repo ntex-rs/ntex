@@ -46,6 +46,7 @@
     clippy::unused_async_trait_impl
 )]
 // Used for fake variadics
+#![cfg_attr(any(docsrs, docsrs_dep), allow(internal_features))]
 #![cfg_attr(any(docsrs, docsrs_dep), feature(rustdoc_internals))]
 
 #[cfg(not(test))] // Work around for rust-lang/rust#62127

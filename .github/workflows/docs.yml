@@ -69,6 +69,30 @@ jobs:
         with:
           path: _site
 
+  docsrs:
+    name: Build docs.rs docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2.8.2
+        with:
+          cache-on-failure: true
+
+      - name: Build docs.rs docs
+        env:
+          DOCS_RS: "1"
+        run: >
+          cargo rustdoc --lib -p ntex
+          --features="tokio,openssl,rustls,compress,cookie,ws,tracker,ntex-tls/rustls-ring"
+          -- --cfg docsrs --cfg docsrs_dep
+
   deploy:
     name: Deploy to GitHub Pages
     needs: build
