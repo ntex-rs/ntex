@@ -704,7 +704,10 @@ where
     }
 }
 
-/// Resource service
+/// Resource service.
+///
+/// Readiness requires both the filter and the configured fallback to be ready,
+/// even when a request matches a route.
 #[derive(derive_more::Debug)]
 #[debug("ResourceService")]
 pub struct ResourceService<St: State, In, Out, F> {
@@ -732,7 +735,13 @@ where
         }
     }
 
-    crate::forward_ready!(St, filter);
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
+        ctx.ready(&self.filter).await?;
+        if let Some(default) = &self.default {
+            ctx.ready(default).await?;
+        }
+        Ok(())
+    }
 
     async fn call(
         &self,
@@ -787,12 +796,13 @@ mod tests {
         assert!(filter.get());
     }
 
-    /// STATEMENT: Resources forward filter readiness and check fallback readiness only when selected.
+    /// STATEMENT: Resource readiness requires both the filter and initialized fallback to be ready.
     ///
     /// HOW:
     /// - Build a resource with raw gated filter and fallback services and verify both are bound.
-    /// - Verify resource readiness waits for the filter but a matched route ignores a blocked fallback.
-    /// - Verify fallback calls wait despite cached resource readiness and filter notifications block later calls.
+    /// - Release the filter and verify resource readiness still waits for the fallback.
+    /// - Cache readiness, block the fallback, and verify readiness and both request paths wait.
+    /// - Recover the fallback, then verify filter notifications also block calls without rebinding.
     #[crate::rt_test]
     async fn filter_and_fallback_readiness() {
         use std::{cell::Cell, future::Future, rc::Rc, task::Context, task::Waker};
@@ -803,7 +813,6 @@ mod tests {
         struct Gate {
             available: Cell<bool>,
             binds: Cell<usize>,
-            checks: Cell<usize>,
             calls: Cell<usize>,
             changed: ReadyNotifier,
         }
@@ -820,7 +829,6 @@ mod tests {
             }
 
             async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Infallible> {
-                self.0.checks.set(self.0.checks.get() + 1);
                 if !self.0.available.get() {
                     std::future::pending::<()>().await;
                 }
@@ -861,8 +869,10 @@ mod tests {
         assert!(ready.as_mut().poll(&mut cx).is_pending());
         filter.available.set(true);
         filter.changed.notify();
+        assert!(ready.as_mut().poll(&mut cx).is_pending());
+        default.available.set(true);
+        default.changed.notify();
         ready.await.unwrap();
-        assert_eq!(default.checks.get(), 0);
 
         let response = srv
             .call(TestRequest::default().to_srv_request())
@@ -871,11 +881,22 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(default.calls.get(), 0);
 
+        srv.ready().await.unwrap();
+        default.available.set(false);
+        default.changed.notify();
+        let calls = filter.calls.get();
+        let mut ready = Box::pin(srv.ready());
+        assert!(ready.as_mut().poll(&mut cx).is_pending());
+        let mut matched = Box::pin(srv.call(TestRequest::default().to_srv_request()));
+        assert!(matched.as_mut().poll(&mut cx).is_pending());
         let mut call = Box::pin(srv.call(TestRequest::post().to_srv_request()));
         assert!(call.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(filter.calls.get(), calls);
         assert_eq!(default.calls.get(), 0);
         default.available.set(true);
         default.changed.notify();
+        ready.await.unwrap();
+        assert_eq!(matched.await.unwrap().status(), StatusCode::OK);
         assert_eq!(call.await.unwrap().status(), StatusCode::CREATED);
 
         srv.ready().await.unwrap();
@@ -888,6 +909,7 @@ mod tests {
         filter.available.set(true);
         filter.changed.notify();
         assert_eq!(call.await.unwrap().status(), StatusCode::OK);
+        assert_eq!((filter.binds.get(), default.binds.get()), (1, 1));
     }
 
     #[crate::rt_test]

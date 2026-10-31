@@ -1,6 +1,9 @@
 # Changes
 
-## [4.5.0] - Unreleased
+## [4.5.0] - 2026-10-31
+
+* http: Wait for application readiness before reading HTTP/1 request heads,
+  pausing transport reads and read deadlines while preserving active payload delivery.
 
 * service: Rename `ServiceBinding` and `ServiceBindingMiddleware` to
   `ReadyBinding` and `ReadyBindingMiddleware`, retaining both old names as
