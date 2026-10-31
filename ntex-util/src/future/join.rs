@@ -49,7 +49,7 @@ where
 
 /// Creates a future which represents a collection of the outputs of the futures
 /// given.
-pub async fn join_all<I>(i: I) -> Vec<<I::Item as Future>::Output>
+pub fn join_all<I>(i: I) -> impl Future<Output = Vec<<I::Item as Future>::Output>>
 where
     I: IntoIterator,
     I::Item: Future,
@@ -58,7 +58,6 @@ where
     JoinAll {
         elems: elems.into(),
     }
-    .await
 }
 
 pub(crate) struct JoinAll<T: Future> {

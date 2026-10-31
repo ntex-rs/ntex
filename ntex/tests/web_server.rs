@@ -84,6 +84,160 @@ impl Stream for TestBody {
     }
 }
 
+/// STATEMENT: Cached services retain independent readiness through invalidation and shutdown.
+///
+/// HOW:
+/// - Invalidate a cached filter and verify app readiness waits until it recovers.
+/// - Dispatch to two routes and the fallback, verifying each handler is bound exactly once.
+/// - Block one route and verify aggregate readiness waits without rechecking unaffected services.
+/// - Invalidate both routes and verify both are rechecked.
+/// - Invalidate a filter, route, or default during another route's check and require readiness to wait.
+/// - Keep default readiness pending while shutting down to detect cache borrows across awaits.
+#[ntex::test]
+async fn test_cached_service_binding_scopes() {
+    use std::cell::{Cell, RefCell};
+    use std::future::{Future, poll_fn};
+    use std::{convert::Infallible, rc::Rc, task::Waker};
+
+    use ntex::service::{BindCtx, Ctx, ReadyNotifier, fn_factory};
+    use ntex::web::WebRequest;
+
+    #[derive(Default)]
+    struct Gate {
+        available: Cell<bool>,
+        binds: Cell<usize>,
+        checks: Cell<usize>,
+        changed: ReadyNotifier,
+        waker: RefCell<Option<Waker>>,
+    }
+
+    struct Gated(Rc<Gate>);
+
+    impl Service<(), WebRequest<()>> for Gated {
+        type Res = WebRequest<()>;
+        type Error = Infallible;
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            self.0.binds.set(self.0.binds.get() + 1);
+            ctx.subscribe(&self.0.changed);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Infallible> {
+            self.0.checks.set(self.0.checks.get() + 1);
+            poll_fn(|cx| {
+                if self.0.available.get() {
+                    Poll::Ready(Ok(()))
+                } else {
+                    *self.0.waker.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+            })
+            .await
+        }
+
+        async fn call(
+            &self,
+            req: WebRequest<()>,
+            _: Ctx<'_, Self>,
+        ) -> Result<WebRequest<()>, Infallible> {
+            Ok(req)
+        }
+    }
+
+    let gates: [_; 4] = std::array::from_fn(|_| {
+        Rc::new(Gate {
+            available: Cell::new(true),
+            ..Gate::default()
+        })
+    });
+    let [filter, first, second, default] = &gates;
+    let factory = |gate: Rc<Gate>| {
+        ntex::factory(fn_factory(async move |(): &()| {
+            Ok::<_, Infallible>(Gated(gate.clone()))
+        }))
+    };
+    let handler =
+        |gate| factory(gate).map(|req: WebRequest<()>| req.into_response(HttpResponse::Ok()));
+    let srv = test::init_service(
+        App::new()
+            .filter(factory(filter.clone()))
+            .service(web::service("/one").build(handler(first.clone())))
+            .service(web::service("/two").build(handler(second.clone())))
+            .default_service(handler(default.clone())),
+    )
+    .await;
+
+    srv.ready().await.unwrap();
+    assert_eq!(filter.binds.get(), 1);
+    assert_eq!(
+        (first.binds.get(), second.binds.get(), default.binds.get()),
+        (0, 0, 0)
+    );
+    filter.available.set(false);
+    filter.changed.notify();
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut ready = Box::pin(srv.ready());
+    assert!(ready.as_mut().poll(&mut cx).is_pending());
+    filter.available.set(true);
+    filter.changed.notify();
+    ready.await.unwrap();
+
+    for path in ["/one", "/two", "/missing"] {
+        let response = srv
+            .call(test::TestRequest::with_uri(path).to_request())
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+    srv.ready().await.unwrap();
+    for gate in &gates {
+        assert_eq!(gate.binds.get(), 1);
+    }
+    let filter_checks = filter.checks.get();
+    first.available.set(false);
+    first.changed.notify();
+    let mut ready = Box::pin(srv.ready());
+    assert!(ready.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(filter.checks.get(), filter_checks);
+    assert_eq!((second.checks.get(), default.checks.get()), (1, 1));
+    first.available.set(true);
+    first.changed.notify();
+    ready.await.unwrap();
+    assert_eq!(filter.checks.get(), filter_checks);
+    assert_eq!((second.checks.get(), default.checks.get()), (1, 1));
+
+    let before = (first.checks.get(), second.checks.get());
+    first.changed.notify();
+    second.changed.notify();
+    srv.ready().await.unwrap();
+    assert_eq!(
+        (first.checks.get(), second.checks.get()),
+        (before.0 + 1, before.1 + 1)
+    );
+
+    for invalidated in [filter, second, default] {
+        first.available.set(false);
+        first.changed.notify();
+        let mut ready = Box::pin(srv.ready());
+        assert!(ready.as_mut().poll(&mut cx).is_pending());
+        invalidated.available.set(false);
+        invalidated.changed.notify();
+        first.available.set(true);
+        first.waker.borrow_mut().take().unwrap().wake();
+        assert!(ready.as_mut().poll(&mut cx).is_pending());
+        invalidated.available.set(true);
+        invalidated.changed.notify();
+        ready.await.unwrap();
+    }
+
+    default.available.set(false);
+    default.changed.notify();
+    let mut ready = Box::pin(srv.ready());
+    assert!(ready.as_mut().poll(&mut cx).is_pending());
+    srv.shutdown().await;
+    drop(ready);
+}
+
 #[ntex::test]
 async fn test_body() {
     let srv = test::server(async |_| {

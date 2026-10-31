@@ -6,6 +6,10 @@
 
 ## [4.4.2] - 2026-10-30
 
+* web: Aggregate readiness across the filter and all cached route and default
+  handlers. Give each cached service its own readiness scope and recheck
+  notified handlers while retaining constant-time cached readiness.
+
 * Attempt to fix docs.rs build
 
 ## [4.4.1] - 2026-10-27

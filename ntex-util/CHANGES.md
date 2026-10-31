@@ -1,6 +1,8 @@
 # Changes
 
-## [4.5.1] - 2026-10-30
+## [4.5.1] - 2026-10-31
+
+* Make join_all return impl Future
 
 * Forward .bind() for Either services
 
