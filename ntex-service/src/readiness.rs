@@ -18,6 +18,11 @@ thread_local! {
 /// received while already invalid. It does not run for successful checks,
 /// ordinary task wakeups, cached calls, or internal readiness resets.
 ///
+/// The argument is the receiving scope's user data, configured with
+/// [`crate::ServiceBinding::with_data`], or `0` by default. Propagation delivers
+/// each scope's own value, not the originating scope's value. Pipeline roots
+/// always supply `0`. One callback can be shared by scopes with different data.
+///
 /// Clones share one callback identity. Registering the same handle repeatedly on
 /// a scope is idempotent. Repeated notifier subscriptions can invoke it more than
 /// once per notification. Each scope retains its registration until it is
@@ -35,11 +40,11 @@ thread_local! {
 /// or other strong references that would create a reference cycle.
 /// This type is neither `Send` nor `Sync`.
 #[derive(Clone)]
-pub struct ReadyCallback(Rc<dyn Fn()>);
+pub struct ReadyCallback(Rc<dyn Fn(usize)>);
 
 impl ReadyCallback {
     /// Creates an independent callback identity.
-    pub fn new(callback: impl Fn() + 'static) -> Self {
+    pub fn new(callback: impl Fn(usize) + 'static) -> Self {
         Self(Rc::new(callback))
     }
 }
@@ -159,7 +164,7 @@ fn notify_scope(store: &WaitersInner, id: usize, epoch: u64, direct: bool, callb
         }
         if callbacks {
             for callback in s.callbacks.borrow().iter() {
-                (callback.0)();
+                (callback.0)(s.data.get());
             }
         }
     });
@@ -194,15 +199,15 @@ impl Drop for NotifyObservers<'_> {
 
 /// Wakers taken from observers, woken in order on drop.
 ///
-/// Does not allocate for up to two wakers.
+/// Does not allocate for up to eight wakers.
 #[derive(Default)]
 struct Wakers {
-    inline: [Option<Waker>; 2],
+    inline: [Option<Waker>; 8],
     rest: Vec<Waker>,
 }
 
 impl Wakers {
-    /// Queues a waker for delivery on drop, using inline storage for the first two.
+    /// Queues a waker for delivery on drop, using inline storage for the first eight.
     fn push(&mut self, waker: Waker) {
         if let Some(slot) = self.inline.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(waker);
@@ -545,6 +550,13 @@ impl ReadyScope {
         source.0.borrow_mut().push(endpoint);
     }
 
+    /// Sets the callback payload before forwarding service binding.
+    ///
+    /// Does not invalidate readiness. Panics if the scope is unbound or retired.
+    pub(crate) fn set_data(&self, data: usize) {
+        self.with(|s| s.data.set(data));
+    }
+
     /// Retains a callback until scope retirement, deduplicating its shared identity.
     ///
     /// Panics if the scope is unbound, retired, or currently delivering callbacks.
@@ -684,6 +696,7 @@ impl ReadyScope {
 #[derive(Debug)]
 struct ScopeInner {
     owners: Cell<usize>,
+    data: Cell<usize>,
     generation: Cell<Generation>,
     ready: Cell<bool>,
     checking: Cell<bool>,
@@ -700,6 +713,7 @@ impl Default for ScopeInner {
     fn default() -> Self {
         Self {
             owners: Cell::new(1),
+            data: Cell::new(0),
             generation: Cell::default(),
             ready: Cell::default(),
             checking: Cell::default(),

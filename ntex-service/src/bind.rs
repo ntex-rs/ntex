@@ -109,6 +109,8 @@ impl<'a> BindCtx<'a> {
     /// Raw services share this scope; a [`crate::ServiceBinding`] owns its own.
     /// Repeated registration of the same handle is idempotent. See
     /// [`ReadyCallback`] for notification and lifetime semantics.
+    /// The callback receives this scope's data from
+    /// [`crate::ServiceBinding::with_data`], or `0` by default.
     ///
     /// # Panics
     ///

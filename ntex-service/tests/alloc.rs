@@ -110,6 +110,7 @@ struct Gate {
     checks: Cell<usize>,
     active: Cell<usize>,
     notifications: Cell<usize>,
+    data_sum: Cell<usize>,
 }
 
 struct Probe(Rc<Gate>, ReadyCallback);
@@ -154,8 +155,9 @@ fn probe() -> (Probe, Rc<Gate>) {
     let gate = Rc::new(Gate::default());
     gate.available.set(true);
     let captured = gate.clone();
-    let callback = ReadyCallback::new(move || {
+    let callback = ReadyCallback::new(move |data| {
         captured.notifications.set(captured.notifications.get() + 1);
+        captured.data_sum.set(captured.data_sum.get() + data);
     });
     (Probe(gate.clone(), callback), gate)
 }
@@ -163,12 +165,18 @@ fn probe() -> (Probe, Rc<Gate>) {
 /// STATEMENT: Constructing an unbound service binding does not allocate readiness storage.
 ///
 /// HOW:
-/// - Create the service before measurement and wrap it without binding it to a pipeline.
+/// - Create services before measurement and wrap them with default or explicit callback data.
 /// - Require zero allocations for the wrapper and no readiness checks.
 #[test]
 fn unbound_service_binding_does_not_allocate() {
     let (svc, gate) = probe();
     let binding = expect_allocs("unbound service binding", 0, || ServiceBinding::new(svc));
+    assert_eq!(gate.checks.get(), 0);
+    drop(binding);
+    let (svc, gate) = probe();
+    let binding = expect_allocs("unbound tagged service binding", 0, || {
+        ServiceBinding::with_data(svc, usize::MAX)
+    });
     assert_eq!(gate.checks.get(), 0);
     drop(binding);
 }
@@ -186,7 +194,7 @@ fn notification_delivery_reuses_registered_callback_storage() {
     let calls = Rc::new(Cell::new(0));
     for _ in 0..64 {
         let captured = calls.clone();
-        pl.on_notify(&ReadyCallback::new(move || {
+        pl.on_notify(&ReadyCallback::new(move |_| {
             captured.set(captured.get() + 1);
         }));
     }
@@ -219,18 +227,21 @@ fn single_scope_notification_does_not_allocate() {
 /// STATEMENT: Scoped dependency notifications allocate no traversal storage, including on their first delivery.
 ///
 /// HOW:
-/// - Share one notifier across one, two, eight, or 64 pipelines with scoped child services.
+/// - Share one notifier and callback across one, two, eight, or 64 pipelines with distinctly tagged child scopes.
 /// - Refresh readiness before each notification without warming notification storage.
-/// - Require zero allocations while every pipeline becomes invalid and every child callback runs.
+/// - Require zero allocations while every pipeline becomes invalid and the callback receives every child's data.
 #[test]
 fn graph_notifications_do_not_allocate() {
     for parents in [1, 2, 8, 64] {
         let (svc, gate) = probe();
         let pipelines: Vec<_> = (0..parents)
-            .map(|_| {
+            .map(|id| {
                 Pipeline::new(
                     10,
-                    Forward(ServiceBinding::new(Probe(svc.0.clone(), svc.1.clone()))),
+                    Forward(ServiceBinding::with_data(
+                        Probe(svc.0.clone(), svc.1.clone()),
+                        id + 1,
+                    )),
                 )
             })
             .collect();
@@ -241,6 +252,7 @@ fn graph_notifications_do_not_allocate() {
             expect_allocs("notify dependency graph", 0, || gate.changed.notify());
             assert!(pipelines.iter().all(|pipeline| !pipeline.is_ready()));
             assert_eq!(gate.notifications.get(), expected);
+            assert_eq!(gate.data_sum.get(), expected * (parents + 1) / 2);
         }
     }
 }
@@ -362,24 +374,38 @@ fn notification_of_many_pending_callers_does_not_allocate() {
     }
 }
 
-/// STATEMENT: Waking a checker with one observer requires no allocation.
+/// STATEMENT: Checker wakes use inline storage for up to eight observers and spill beyond it.
 ///
 /// HOW:
-/// - Park retained readiness and capture the service's checker waker.
-/// - Re-register and wake it twice, measuring zero allocations and one task wake per iteration.
+/// - Park a retained checker with zero, seven, or eight additional callers and capture its waker.
+/// - Re-register and wake them twice, requiring zero allocations up to eight callers and one beyond.
+/// - Verify every caller receives one wake per iteration.
 #[test]
-fn checker_wake_of_single_observer_does_not_allocate() {
-    let parked = Rc::new(RefCell::new(None));
-    let pl = Pipeline::new((), Parked(parked.clone()));
-    let count = Arc::new(WakeCount::default());
-    let waker = Waker::from(count.clone());
-    assert!(pl.poll_ready(&mut Context::from_waker(&waker)).is_pending());
-    let checker = parked.borrow_mut().take().unwrap();
-    // The check registers the checker waker as an observer of the same scope.
-    for wakes in 1..=2 {
-        assert!(pl.poll_ready(&mut Context::from_waker(&waker)).is_pending());
-        expect_allocs("checker wake", 0, || checker.wake_by_ref());
-        assert_eq!(count.0.load(Ordering::Relaxed), wakes);
+fn checker_wake_uses_inline_storage_for_eight_observers() {
+    for observers in [1, 8, 9] {
+        let parked = Rc::new(RefCell::new(None));
+        let pl = Pipeline::new((), Parked(parked.clone()));
+        let bindings: Vec<_> = (1..observers).map(|_| pl.bind()).collect();
+        let count = Arc::new(WakeCount::default());
+        let waker = Waker::from(count.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(pl.poll_ready(&mut cx).is_pending());
+        let mut waiters: Vec<_> = bindings.iter().map(|b| Box::pin(b.ready())).collect();
+        for waiter in &mut waiters {
+            assert!(waiter.as_mut().poll(&mut cx).is_pending());
+        }
+        let checker = parked.borrow_mut().take().unwrap();
+        // The check registers the checker waker as an observer of the same scope.
+        for wakes in 1..=2 {
+            assert!(pl.poll_ready(&mut cx).is_pending());
+            for waiter in &mut waiters {
+                assert!(waiter.as_mut().poll(&mut cx).is_pending());
+            }
+            expect_allocs("checker wake", usize::from(observers > 8), || {
+                checker.wake_by_ref();
+            });
+            assert_eq!(count.0.load(Ordering::Relaxed), wakes * observers);
+        }
     }
 }
 

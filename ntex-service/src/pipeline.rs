@@ -193,6 +193,7 @@ where
     ///
     /// Registration is shared with all bindings and persists until the scope
     /// is dropped. Repeated registration of the same handle is idempotent.
+    /// The callback receives `0` for this root scope.
     /// See [`ReadyCallback`] for notification semantics.
     pub fn on_notify(&self, callback: &ReadyCallback) {
         self.api.on_notify(callback);
@@ -290,6 +291,7 @@ where
     #[inline]
     /// Registers a callback on the shared pipeline scope.
     ///
+    /// The callback receives `0` for this root scope.
     /// Dropping this binding does not remove the registration.
     /// See [`Pipeline::on_notify`] and [`ReadyCallback`] for details.
     pub fn on_notify(&self, callback: &ReadyCallback) {
