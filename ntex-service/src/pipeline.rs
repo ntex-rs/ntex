@@ -52,7 +52,9 @@
 use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
-use crate::{BindCtx, IntoService, ReadyCallback, Service, ServiceCaller, util::BoxFuture};
+use crate::{
+    BindCtx, IntoService, ReadyCallback, ReadyLink, Service, ServiceCaller, util::BoxFuture,
+};
 
 pub use crate::pl_factory::PipelineFactory;
 pub use crate::pl_state::{PipelineState, PipelineStateBinding};
@@ -154,6 +156,8 @@ where
     /// readiness. A pending check is retained by the pipeline, even if this
     /// task stops polling; other callers can continue driving it.
     /// The retained check and its wake sources run on this pipeline's thread.
+    /// Its checker wakers must also be finally dropped on that thread, even
+    /// after the pipeline is dropped; foreign wakes or final drops panic.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>> {
         self.api.poll_ready(cx)
     }
@@ -202,6 +206,14 @@ where
     /// does not rebind the inner service or create another runtime handle.
     pub fn bind_to(&self, ctx: &BindCtx<'_>) {
         self.api.bind_to(ctx);
+    }
+
+    /// Returns an explicit, non-owning endpoint for this pipeline's readiness.
+    ///
+    /// Register with [`BindCtx::subscribe_pipeline`], or use [`Self::bind_to`]
+    /// as shorthand. All pipeline bindings share the same endpoint.
+    pub fn readiness_link(&self) -> ReadyLink {
+        self.api.readiness_link()
     }
 }
 
@@ -290,6 +302,13 @@ where
     /// Call from [`Service::bind`]. See [`Pipeline::bind_to`] for details.
     pub fn bind_to(&self, ctx: &BindCtx<'_>) {
         self.api.bind_to(ctx);
+    }
+
+    /// Returns the shared pipeline's readiness endpoint.
+    ///
+    /// See [`Pipeline::readiness_link`] and [`ReadyLink`].
+    pub fn readiness_link(&self) -> ReadyLink {
+        self.api.readiness_link()
     }
 }
 

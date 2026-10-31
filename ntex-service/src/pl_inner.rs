@@ -1,17 +1,16 @@
-use std::{
-    cell::RefCell, future::Future, future::poll_fn, marker::PhantomPinned, mem, ptr, rc::Rc,
-    task::Context, task::Poll, task::Waker,
-};
+use std::cell::{OnceCell, RefCell};
+use std::task::{Context, Poll, Waker};
+use std::{future::Future, future::poll_fn, marker::PhantomPinned, mem, ptr, rc::Rc};
 
 use crate::readiness::{Generation, ReadyObserver, ReadyScope};
-use crate::{BindCtx, Ctx, ReadyCallback, Service, ctx::WaitersRef, util::BoxFuture};
+use crate::{BindCtx, Ctx, ReadyCallback, ReadyLink, Service, ctx::WaitersRef, util::BoxFuture};
 
 // Pipeline-owned checks can be driven by any waiting caller. Caller-owned
 // checks stay in their caller's future, so cancelling it releases ownership.
 pub(crate) struct PipelineReadiness<E> {
     scope: ReadyScope,
     observer: ReadyObserver,
-    checker_waker: Waker,
+    checker_waker: OnceCell<Waker>,
     checker: RefCell<Checker<E>>,
 }
 
@@ -27,7 +26,7 @@ impl<E> PipelineReadiness<E> {
         Self {
             scope: scope.clone(),
             observer: scope.observer(),
-            checker_waker: scope.checker_waker(),
+            checker_waker: OnceCell::new(),
             checker: RefCell::new(Checker::Idle),
         }
     }
@@ -155,8 +154,10 @@ impl<E> PipelineReadiness<E> {
             .as_mut()
             .unwrap()
             .as_mut()
-            .poll(&mut Context::from_waker(&self.checker_waker))
-        {
+            .poll(&mut Context::from_waker(
+                self.checker_waker
+                    .get_or_init(|| self.scope.checker_waker()),
+            )) {
             Poll::Pending => {
                 guard.retain();
                 return Poll::Pending;
@@ -255,7 +256,11 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
     }
 
     pub(crate) fn bind_to(&self, ctx: &BindCtx<'_>) {
-        ctx.depend_on(self.0.scope());
+        ctx.subscribe_pipeline(&self.readiness_link());
+    }
+
+    pub(crate) fn readiness_link(&self) -> ReadyLink {
+        self.0.scope().readiness_link()
     }
 
     pub(crate) fn on_notify(&self, callback: &ReadyCallback) {

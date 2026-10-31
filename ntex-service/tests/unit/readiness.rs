@@ -1,11 +1,356 @@
+use std::rc::Weak;
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::{pin::pin, task::Context, task::Wake};
 
 use super::*;
 
+impl Endpoint {
+    fn resolve(&self) -> Option<ReadyScope> {
+        ReadyScope::resolve(&self.store, self.scope)
+    }
+}
+
+impl ReadyScope {
+    fn resolve(store: &Rc<WaitersInner>, id: usize) -> Option<Self> {
+        store
+            .scopes
+            .with(id, |s| s.owners.set(s.owners.get() + 1))?;
+        Some(Self(OnceCell::from(ScopeRef {
+            store: store.clone(),
+            id,
+        })))
+    }
+}
+
 thread_local! {
     static ON_WAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::default();
     static ON_DROP: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::default();
+    static STORE: crate::ctx::WaitersRef = crate::ctx::WaitersRef::new();
+}
+
+fn new_scope() -> ReadyScope {
+    STORE.with(|store| {
+        let store = store.scope().bound().store.clone();
+        let id = store.scopes.allocate();
+        ReadyScope(OnceCell::from(ScopeRef { store, id }))
+    })
+}
+
+/// STATEMENT: Root scope zero and monotonic child IDs survive waiter moves and retire promptly.
+///
+/// HOW:
+/// - Bind and retire children, verifying duplicate binding consumes no ID and retired IDs are not reused.
+/// - Move the waiter owner, then drop it while keeping a child, observer, notifier, and checker waker.
+/// - Verify callback and scheduling-waker release, an empty retired store, and inert retained notifier entries and handles.
+#[test]
+fn scope_ids_and_store_lifetime() {
+    let waiters = crate::ctx::WaitersRef::new();
+    assert_eq!(waiters.scope().bound().id, 0);
+    let first = ReadyScope::new();
+    assert!(first.0.get().is_none());
+    waiters.scope().depend_on(&first);
+    assert_eq!(first.bound().id, 1);
+    waiters.scope().depend_on(&first);
+    assert_eq!(first.bound().store.scopes.slots.borrow().len(), 2);
+    drop(first);
+    let child = ReadyScope::new();
+    waiters.scope().depend_on(&child);
+    assert_eq!(child.bound().id, 2);
+    assert!(child.bound().store.scopes.slots.borrow()[1].is_none());
+
+    let source = ReadyNotifier::new();
+    child.subscribe(&source);
+    let observer = child.observer();
+    let checker = child.checker_waker();
+    let counter = Rc::new(Cell::new(0));
+    let weak = Rc::downgrade(&counter);
+    child.on_notify(&ReadyCallback::new(move || counter.set(counter.get() + 1)));
+    let endpoint = child.endpoint();
+    let scheduled = Arc::new(Counter::default());
+    waiters.get()[0] = Some(Waker::from(scheduled.clone()));
+    let waiters = Box::new(waiters);
+    source.notify();
+    assert_eq!(weak.upgrade().unwrap().get(), 1);
+    drop(waiters);
+    assert_eq!(Arc::strong_count(&scheduled), 1);
+    assert!(weak.upgrade().is_none());
+    assert!(endpoint.resolve().is_none());
+    assert!(child.bound().store.scopes.slots.borrow().is_empty());
+    assert_eq!(source.0.borrow().as_slice(), [endpoint]);
+    assert!(!observer.register(Waker::noop()));
+    observer.clear();
+    let remote = checker.clone();
+    assert!(thread::spawn(move || remote.wake()).join().is_err());
+    checker.wake();
+    source.notify();
+}
+
+/// STATEMENT: Explicit links invalidate only the destination scope and ancestors, including internal resets.
+///
+/// HOW:
+/// - Link a foreign root to a nested scope twice and keep an unrelated sibling ready.
+/// - Verify the linked chain is invalidated before its callbacks and observer wakes.
+/// - Verify successful source checks do not validate parents, resets suppress callbacks, and source drop makes saved links inert.
+#[test]
+fn explicit_links_preserve_scopes_and_reset_semantics() {
+    let source_store = crate::ctx::WaitersRef::new();
+    let parent_store = crate::ctx::WaitersRef::new();
+    let parent = parent_store.scope();
+    let destination = ReadyScope::new();
+    let sibling = ReadyScope::new();
+    parent.depend_on(&destination);
+    parent.depend_on(&sibling);
+    {
+        let link = source_store.scope().readiness_link();
+        destination.subscribe_pipeline(&link);
+        destination.subscribe_pipeline(&link.clone());
+    }
+    assert_eq!(
+        source_store
+            .scope()
+            .with(|s| s.external_parents.borrow().len()),
+        1
+    );
+
+    let source = ReadyNotifier::new();
+    source_store.scope().subscribe(&source);
+    let affected = [source_store.scope(), &destination, parent];
+    let endpoints = affected.map(ReadyScope::endpoint);
+    let calls = Rc::new(Cell::new(0));
+    let captured = calls.clone();
+    let captured_endpoints = endpoints.clone();
+    let callback = ReadyCallback::new(move || {
+        for endpoint in &captured_endpoints {
+            assert!(!endpoint.resolve().unwrap().is_ready());
+        }
+        captured.set(captured.get() + 1);
+    });
+    for scope in affected {
+        scope.on_notify(&callback);
+        assert!(scope.set_ready(scope.generation()));
+    }
+    assert!(sibling.set_ready(sibling.generation()));
+    let observer = destination.observer();
+    let wakes = Arc::new(Counter::default());
+    observer.register(&Waker::from(wakes.clone()));
+    ON_WAKE.with_borrow_mut(|slot| {
+        *slot = Some(Box::new(move || {
+            for endpoint in endpoints {
+                assert!(!endpoint.resolve().unwrap().is_ready());
+            }
+        }));
+    });
+    source.notify();
+    assert_eq!(calls.get(), 3);
+    assert_eq!(wakes.wakes(), 1);
+    assert!(sibling.is_ready());
+    assert!(
+        source_store
+            .scope()
+            .set_ready(source_store.scope().generation())
+    );
+    assert!(!destination.is_ready());
+    assert!(!parent.is_ready());
+    for scope in [&destination, parent] {
+        assert!(scope.set_ready(scope.generation()));
+    }
+    source_store.scope().reset_root();
+    assert_eq!(calls.get(), 3);
+    assert!(!destination.is_ready());
+    assert!(!parent.is_ready());
+    assert!(sibling.is_ready());
+    let stale_link = source_store.scope().readiness_link();
+    drop(source_store);
+    for scope in [&destination, parent] {
+        assert!(scope.set_ready(scope.generation()));
+    }
+    destination.subscribe_pipeline(&stale_link);
+    source.notify();
+    assert!(destination.is_ready());
+    assert!(parent.is_ready());
+}
+
+/// STATEMENT: Cross-store diamonds and cycles invalidate each scope once and release either endpoint.
+///
+/// HOW:
+/// - Link three roots cyclically with two paths from the notified leaf to the top.
+/// - Drop destinations, verifying their endpoints expire while notification skips retained stale parents.
+/// - Create a replacement store and verify it is invalidated only after subscribing, then drop the source.
+#[test]
+fn explicit_link_cycles_tolerate_stale_endpoints() {
+    let a = crate::ctx::WaitersRef::new();
+    let b = crate::ctx::WaitersRef::new();
+    let c = crate::ctx::WaitersRef::new();
+    a.scope().subscribe_pipeline(&b.scope().readiness_link());
+    a.scope().subscribe_pipeline(&c.scope().readiness_link());
+    b.scope().subscribe_pipeline(&c.scope().readiness_link());
+    c.scope().subscribe_pipeline(&a.scope().readiness_link());
+    let source = ReadyNotifier::new();
+    c.scope().subscribe(&source);
+    source.notify();
+    for scope in [a.scope(), b.scope(), c.scope()] {
+        assert_eq!(scope.generation().value, 1);
+    }
+    let endpoint_b = b.scope().endpoint();
+    drop(b);
+    assert!(endpoint_b.resolve().is_none());
+    assert_eq!(c.scope().with(|s| s.external_parents.borrow().len()), 2);
+    source.notify();
+    assert_eq!(a.scope().generation().value, 2);
+    assert_eq!(c.scope().generation().value, 2);
+    let endpoint_a = a.scope().endpoint();
+    drop(a);
+    assert!(endpoint_a.resolve().is_none());
+    assert_eq!(c.scope().with(|s| s.external_parents.borrow().len()), 2);
+    let replacement = crate::ctx::WaitersRef::new();
+    assert!(
+        replacement
+            .scope()
+            .set_ready(replacement.scope().generation())
+    );
+    source.notify();
+    assert_eq!(c.scope().generation().value, 3);
+    assert!(replacement.scope().is_ready());
+    replacement
+        .scope()
+        .subscribe_pipeline(&c.scope().readiness_link());
+    source.notify();
+    assert_eq!(c.scope().generation().value, 4);
+    assert_eq!(replacement.scope().generation().value, 1);
+    assert!(!replacement.scope().is_ready());
+    drop(c);
+    assert_eq!(source.0.borrow().len(), 1);
+    source.notify();
+    assert_eq!(replacement.scope().generation().value, 1);
+}
+
+/// STATEMENT: Retired foreign destination scopes leave inert endpoints without affecting replacement scopes.
+///
+/// HOW:
+/// - Subscribe a nested scope to a foreign pipeline, then retire it while its waiter store remains live.
+/// - Keep a replacement scope and its parent ready through notification of the stale subscription.
+/// - Subscribe the replacement twice and verify one new endpoint and invalidation of it and its parent.
+#[test]
+fn explicit_links_skip_retired_local_scopes() {
+    let source_store = crate::ctx::WaitersRef::new();
+    let parent_store = crate::ctx::WaitersRef::new();
+    let destination = ReadyScope::new();
+    parent_store.scope().depend_on(&destination);
+    let link = source_store.scope().readiness_link();
+    destination.subscribe_pipeline(&link);
+    let endpoint = destination.endpoint();
+    drop(destination);
+    assert!(endpoint.resolve().is_none());
+    assert!(
+        source_store
+            .scope()
+            .with(|s| s.external_parents.borrow().as_slice() == [endpoint])
+    );
+
+    let replacement = ReadyScope::new();
+    parent_store.scope().depend_on(&replacement);
+    for scope in [&replacement, parent_store.scope()] {
+        assert!(scope.set_ready(scope.generation()));
+    }
+    let source = ReadyNotifier::new();
+    source_store.scope().subscribe(&source);
+    source.notify();
+    assert!(replacement.is_ready());
+    assert!(parent_store.scope().is_ready());
+    replacement.subscribe_pipeline(&link);
+    replacement.subscribe_pipeline(&link);
+    assert_eq!(
+        source_store
+            .scope()
+            .with(|s| s.external_parents.borrow().len()),
+        2
+    );
+    source.notify();
+    assert!(!replacement.is_ready());
+    assert!(!parent_store.scope().is_ready());
+}
+
+/// STATEMENT: Pipeline link variants share root zero and retain only the store allocation after retirement.
+///
+/// HOW:
+/// - Compare fixed-state, state-taking, and attached bindings with their pipeline's link.
+/// - Drop pipelines before their bindings and verify links expire only after the final runtime handle.
+/// - Drop the remaining link and endpoint and verify the retired store allocation is released.
+#[test]
+fn pipeline_links_retain_only_store_allocations() {
+    let fixed = crate::Pipeline::new((), crate::fn_service(async |(): ()| Ok::<_, ()>(())));
+    let binding = fixed.bind();
+    let link = fixed.readiness_link();
+    assert!(Rc::ptr_eq(&link.store, &binding.readiness_link().store));
+    let store = Rc::downgrade(&link.store);
+    let endpoint = Endpoint {
+        store: link.store.clone(),
+        scope: 0,
+    };
+    drop(fixed);
+    assert!(endpoint.resolve().is_some());
+    drop(binding);
+    assert!(endpoint.resolve().is_none());
+    assert!(store.upgrade().unwrap().scopes.slots.borrow().is_empty());
+    drop((link, endpoint));
+    assert!(store.upgrade().is_none());
+
+    let state =
+        crate::pipeline::PipelineState::<(), _, _, _>::new(crate::fn_service(async |(): ()| {
+            Ok::<_, ()>(())
+        }));
+    let binding = state.bind();
+    let attached = state.bind_state(());
+    let link = state.readiness_link();
+    assert!(Rc::ptr_eq(&link.store, &binding.readiness_link().store));
+    assert!(Rc::ptr_eq(&link.store, &attached.readiness_link().store));
+    let endpoint = Endpoint {
+        store: link.store,
+        scope: 0,
+    };
+    drop((state, binding));
+    assert!(endpoint.resolve().is_some());
+    drop(attached);
+    assert!(endpoint.resolve().is_none());
+}
+
+/// STATEMENT: Callback delivery rejects conflicting scope-table and callback-list mutations.
+///
+/// HOW:
+/// - Attempt child binding or same-scope callback registration from a notification callback.
+/// - Catch the borrow panic and verify neither storage changes nor scope ownership is lost.
+/// - Notify again without the conflicting operation and verify delivery recovers.
+#[test]
+fn callbacks_reject_conflicting_storage_mutations() {
+    for bind_child in [false, true] {
+        let scope = new_scope();
+        let source = ReadyNotifier::new();
+        scope.subscribe(&source);
+        let endpoint = scope.endpoint();
+        let first = Cell::new(true);
+        let calls = Rc::new(Cell::new(0));
+        let captured = calls.clone();
+        scope.on_notify(&ReadyCallback::new(move || {
+            captured.set(captured.get() + 1);
+            if first.replace(false) {
+                let scope = endpoint.resolve().unwrap();
+                if bind_child {
+                    scope.depend_on(&ReadyScope::new());
+                } else {
+                    scope.on_notify(&ReadyCallback::new(|| {}));
+                }
+            }
+        }));
+        let count = scope.bound().store.scopes.slots.borrow().len();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.notify())).is_err()
+        );
+        assert_eq!(scope.bound().store.scopes.slots.borrow().len(), count);
+        assert_eq!(scope.with(|s| s.callbacks.borrow().len()), 1);
+        assert_eq!(scope.with(|s| s.owners.get()), 1);
+        source.notify();
+        assert_eq!(calls.get(), 2);
+    }
 }
 
 #[derive(Default)]
@@ -48,15 +393,15 @@ impl Drop for DropHook {
 ///
 /// HOW:
 /// - Register aliased callbacks in a diamond dependency graph and an unaffected sibling.
-/// - Verify delivery counts, no callback cloning, and callback release when all scopes are dropped.
+/// - Verify delivery counts, unchanged scope ownership, no callback cloning, and release after scope drop.
 #[test]
 fn callbacks_follow_notifications_and_belong_to_scopes() {
     let source = ReadyNotifier::new();
-    let leaf = ReadyScope::new();
-    let left = ReadyScope::new();
-    let right = ReadyScope::new();
-    let root = ReadyScope::new();
-    let sibling = ReadyScope::new();
+    let leaf = new_scope();
+    let left = new_scope();
+    let right = new_scope();
+    let root = new_scope();
+    let sibling = new_scope();
     leaf.subscribe(&source);
     root.subscribe(&source);
     left.depend_on(&leaf);
@@ -71,7 +416,14 @@ fn callbacks_follow_notifications_and_belong_to_scopes() {
     let captured_identity = identity.clone();
     let references = Rc::new(Cell::new(0));
     let captured_references = references.clone();
+    let endpoints = [&leaf, &left, &right, &root, &sibling].map(ReadyScope::endpoint);
     let callback = ReadyCallback::new(move || {
+        for endpoint in &endpoints {
+            endpoint
+                .store
+                .scopes
+                .with(endpoint.scope, |s| assert_eq!(s.owners.get(), 1));
+        }
         assert_eq!(
             captured_identity.get().unwrap().strong_count(),
             captured_references.get(),
@@ -111,171 +463,206 @@ fn callbacks_follow_notifications_and_belong_to_scopes() {
     source.notify();
 }
 
-/// STATEMENT: A notification snapshots callbacks and wakers before reentrant registration.
+/// STATEMENT: Registrations on scopes not yet delivered can take effect in the current notification.
 ///
 /// HOW:
-/// - Register new callbacks and an observer while a notification callback is running.
-/// - Verify new registrations wait for the next notification and repeated aliases stay deduplicated.
+/// - Register child and later-subscriber callbacks from an ancestor callback, plus a child observer waker.
+/// - Subscribe the child twice and verify both deliveries see the new callback without duplicating its registration.
+/// - Notify again and verify registrations and observer delivery remain usable.
 #[test]
-fn notification_freezes_callback_counts_and_wakers_before_reentry() {
+fn notification_delivers_later_registrations_without_snapshots() {
     let source = ReadyNotifier::new();
-    let leaf = ReadyScope::new();
-    let root = ReadyScope::new();
+    let leaf = new_scope();
+    let root = new_scope();
+    let other = new_scope();
     leaf.subscribe(&source);
+    leaf.subscribe(&source);
+    other.subscribe(&source);
     root.depend_on(&leaf);
-    let scopes = [Rc::downgrade(&leaf.0), Rc::downgrade(&root.0)];
+    let scopes = [leaf.endpoint(), other.endpoint()];
     let counter = Arc::new(Counter::default());
     let waker = Waker::from(counter.clone());
     let leaf_observer = leaf.observer();
-    let root_observer = root.observer();
-    assert!(leaf_observer.register(&waker));
-    assert!(root_observer.register(&waker));
 
     let late_calls = Rc::new(Cell::new(0));
     let captured = late_calls.clone();
     let late = ReadyCallback::new(move || captured.set(captured.get() + 1));
-    let captured_source = source.clone();
-    leaf.on_notify(&ReadyCallback::new(move || {
-        let [leaf, root] = scopes.each_ref().map(|s| ReadyScope(s.upgrade().unwrap()));
-        for scope in [&leaf, &root] {
-            assert!(!scope.is_ready());
-            assert!(
-                scope
-                    .0
-                    .observers
-                    .slots
-                    .borrow_mut()
-                    .iter()
-                    .all(|(_, w)| w.is_none())
-            );
-        }
+    root.on_notify(&ReadyCallback::new(move || {
+        let [leaf, other] = scopes.each_ref().map(|s| s.resolve().unwrap());
         leaf.on_notify(&late);
         leaf.on_notify(&late);
-        root.on_notify(&late);
-        leaf.subscribe(&captured_source);
-        root.depend_on(&leaf);
-        assert!(root_observer.register(&waker));
+        other.on_notify(&late);
+        assert!(leaf_observer.register(&waker));
     }));
-    for scope in [&leaf, &root] {
+    for scope in [&leaf, &root, &other] {
         assert!(scope.set_ready(scope.generation()));
     }
 
     source.notify();
-    assert_eq!(
-        late_calls.get(),
-        0,
-        "new registrations wait until next notify"
-    );
-    assert_eq!(counter.wakes(), 2, "do not drain reentrant registrations");
+    assert_eq!(late_calls.get(), 3);
+    assert_eq!(counter.wakes(), 1);
     source.notify();
-    assert_eq!(late_calls.get(), 2);
-    assert_eq!(counter.wakes(), 3);
-    source.notify();
-    assert_eq!(late_calls.get(), 4, "queued aliases remain idempotent");
-    assert_eq!(counter.wakes(), 4);
+    assert_eq!(late_calls.get(), 6);
+    assert_eq!(counter.wakes(), 2);
 }
 
-/// STATEMENT: Reentrant notifications coalesce active callback delivery without losing invalidation.
+/// STATEMENT: Nested notifications and resets are rejected even for another source and store.
 ///
 /// HOW:
-/// - Notify recursively from a callback after marking its scope ready again.
-/// - Check generation advances, stale completion rejection, and delivery to an inactive ancestor.
+/// - Attempt a foreign source notification or readiness reset from a callback.
+/// - Catch the borrow panic and verify the foreign scope's readiness and generation are unchanged.
+/// - Deliver both sources afterward to verify the notification epoch guard recovers.
 #[test]
-fn callbacks_coalesce_reentry_without_losing_invalidation() {
-    let source = ReadyNotifier::new();
-    let scope = ReadyScope::new();
-    let root = ReadyScope::new();
-    root.depend_on(&scope);
-    scope.subscribe(&source);
-    let calls = Rc::new(Cell::new(0));
-    let captured = calls.clone();
-    let nested = source.clone();
-    let weak = Rc::downgrade(&scope.0);
-    let in_callback = Cell::new(false);
-    scope.on_notify(&ReadyCallback::new(move || {
-        assert!(!in_callback.replace(true), "delivery must be coalesced");
-        captured.set(captured.get() + 1);
-        let scope = ReadyScope(weak.upgrade().unwrap());
-        let before = scope.generation();
-        assert!(scope.set_ready(before));
-        nested.notify();
-        assert!(!scope.is_ready());
+fn nested_notifications_and_resets_panic() {
+    for reset in [false, true] {
+        let source = ReadyNotifier::new();
+        let scope = new_scope();
+        scope.subscribe(&source);
+        let foreign = crate::ctx::WaitersRef::new();
+        let nested = ReadyNotifier::new();
+        foreign.scope().subscribe(&nested);
+        let before = foreign.scope().generation();
+        assert!(foreign.scope().set_ready(before));
+        let endpoint = foreign.scope().endpoint();
+        let captured_source = nested.clone();
+        let first = Cell::new(true);
+        let calls = Rc::new(Cell::new(0));
+        let captured = calls.clone();
+        scope.on_notify(&ReadyCallback::new(move || {
+            captured.set(captured.get() + 1);
+            if first.replace(false) {
+                if reset {
+                    endpoint.resolve().unwrap().reset_root();
+                } else {
+                    captured_source.notify();
+                }
+            }
+        }));
         assert!(
-            !scope.set_ready(before),
-            "nested invalidation must advance generation"
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.notify())).is_err()
         );
-        in_callback.set(false);
-    }));
-    let root_calls = Rc::new(Cell::new(0));
-    let captured = root_calls.clone();
-    root.on_notify(&ReadyCallback::new(move || {
-        captured.set(captured.get() + 1);
-    }));
-    let before = scope.generation();
-    source.notify();
-    assert_eq!(calls.get(), 1);
-    assert_eq!(
-        root_calls.get(),
-        2,
-        "inactive scopes still receive nested notifications"
-    );
-    assert_eq!(scope.generation().value, before.value + 2);
-    source.notify();
-    assert_eq!(calls.get(), 2, "delivery resumes after the previous batch");
-    assert_eq!(root_calls.get(), 4);
-    assert_eq!(scope.generation().value, before.value + 4);
+        assert!(foreign.scope().is_ready());
+        assert!(foreign.scope().is_current(before));
+        source.notify();
+        assert_eq!(calls.get(), 2);
+        nested.notify();
+        assert!(!foreign.scope().is_ready());
+        assert!(!foreign.scope().is_current(before));
+    }
 }
 
-/// STATEMENT: A callback panic still wakes invalidated observers and retains reentrant registrations.
+/// STATEMENT: A callback panic wakes visited scopes while leaving later subscribers untouched.
 ///
 /// HOW:
-/// - Register a callback that adds another callback and panics during notification.
-/// - Catch the panic, check all observers woke, then disable the panic and verify later delivery.
+/// - Panic in an ancestor callback with observers on the ancestor, its child, and a later subscriber.
+/// - Verify ancestor and child wakes, skipped callbacks, and unchanged readiness of the unvisited subscriber.
+/// - Disable the panic and notify again, verifying complete delivery and wake recovery.
 #[test]
 fn callback_panic_still_wakes_invalidated_observers() {
     let source = ReadyNotifier::new();
-    let scope = ReadyScope::new();
+    let scope = new_scope();
+    let parent = new_scope();
+    let other = new_scope();
+    parent.depend_on(&scope);
     scope.subscribe(&source);
+    other.subscribe(&source);
     let panicking = Rc::new(Cell::new(true));
     let captured = panicking.clone();
-    let late_calls = Rc::new(Cell::new(0));
-    let captured_late = late_calls.clone();
-    let late = ReadyCallback::new(move || captured_late.set(captured_late.get() + 1));
-    let weak = Rc::downgrade(&scope.0);
-    scope.on_notify(&ReadyCallback::new(move || {
-        ReadyScope(weak.upgrade().unwrap()).on_notify(&late);
+    parent.on_notify(&ReadyCallback::new(move || {
         assert!(!captured.get(), "callback panic");
     }));
     let calls = Rc::new(Cell::new(0));
     let captured = calls.clone();
-    scope.on_notify(&ReadyCallback::new(move || {
+    let callback = ReadyCallback::new(move || {
         captured.set(captured.get() + 1);
-    }));
+    });
+    scope.on_notify(&callback);
+    parent.on_notify(&callback);
     let counter = Arc::new(Counter::default());
     let waker = Waker::from(counter.clone());
-    let observers = [scope.observer(), scope.observer(), scope.observer()];
+    let observers = [
+        scope.observer(),
+        parent.observer(),
+        parent.observer(),
+        parent.observer(),
+        other.observer(),
+    ];
     for observer in &observers {
         assert!(observer.register(&waker));
     }
-    assert!(scope.set_ready(scope.generation()));
+    for scope in [&scope, &parent, &other] {
+        assert!(scope.set_ready(scope.generation()));
+    }
+    let unvisited = other.generation();
 
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.notify())).is_err());
     assert!(!scope.is_ready());
-    assert_eq!(counter.wakes(), 3);
+    assert!(!parent.is_ready());
+    assert!(other.is_ready());
+    assert!(other.is_current(unvisited));
+    assert_eq!(counter.wakes(), 4);
     assert_eq!(calls.get(), 0);
-    assert_eq!(late_calls.get(), 0);
     panicking.set(false);
     for observer in &observers {
         assert!(observer.register(&waker));
     }
     source.notify();
-    assert_eq!(counter.wakes(), 6);
-    assert_eq!(calls.get(), 1);
-    assert_eq!(
-        late_calls.get(),
-        1,
-        "panic cleanup retains new registrations"
-    );
+    assert_eq!(counter.wakes(), 9);
+    assert_eq!(calls.get(), 2);
+    assert!(!other.is_ready());
+}
+
+/// STATEMENT: Same-source notification and subscription reentry panic without retaining affected scopes.
+///
+/// HOW:
+/// - Attempt each reentrant operation from a child callback after invalidating its parent.
+/// - Catch the borrow panic, verify observer delivery and unchanged scope ownership, then notify successfully again.
+/// - Retire the child and verify later notifications skip its stale endpoint.
+#[test]
+fn notifier_reentry_panics_without_retaining_scopes() {
+    for subscribe in [false, true] {
+        let source = ReadyNotifier::new();
+        let scope = new_scope();
+        let parent = new_scope();
+        parent.depend_on(&scope);
+        scope.subscribe(&source);
+        let endpoint = scope.endpoint();
+        let captured_endpoint = endpoint.clone();
+        let reenter = Cell::new(true);
+        let calls = Rc::new(Cell::new(0));
+        let captured_calls = calls.clone();
+        let captured_source = source.clone();
+        scope.on_notify(&ReadyCallback::new(move || {
+            captured_calls.set(captured_calls.get() + 1);
+            if reenter.replace(false) {
+                if subscribe {
+                    captured_endpoint
+                        .resolve()
+                        .unwrap()
+                        .subscribe(&captured_source);
+                } else {
+                    captured_source.notify();
+                }
+            }
+        }));
+        let observer = parent.observer();
+        let counter = Arc::new(Counter::default());
+        assert!(observer.register(&Waker::from(counter.clone())));
+        assert!(parent.set_ready(parent.generation()));
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.notify())).is_err()
+        );
+        assert!(!parent.is_ready());
+        assert_eq!(counter.wakes(), 1);
+        assert_eq!(scope.with(|s| s.owners.get()), 1);
+        assert_eq!(source.0.borrow().len(), 1);
+        source.notify();
+        assert_eq!(calls.get(), 2);
+        drop(scope);
+        assert!(endpoint.resolve().is_none());
+        source.notify();
+        assert_eq!(calls.get(), 2);
+    }
 }
 
 /// STATEMENT: Notification during a check's first poll cannot be lost before observer registration.
@@ -286,7 +673,7 @@ fn callback_panic_still_wakes_invalidated_observers() {
 #[test]
 fn first_poll_notification_is_not_lost_before_observer_registration() {
     let source = ReadyNotifier::new();
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     let counter = Arc::new(Counter::default());
     let waker = Waker::from(counter.clone());
     let mut cx = Context::from_waker(&waker);
@@ -322,7 +709,7 @@ fn first_poll_notification_is_not_lost_before_observer_registration() {
 #[test]
 fn self_invalidating_check_yields() {
     let source = ReadyNotifier::new();
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     scope.subscribe(&source);
     let counter = Arc::new(Counter::default());
     let waker = Waker::from(counter.clone());
@@ -354,7 +741,7 @@ fn self_invalidating_check_yields() {
 #[test]
 fn reentrant_handoff_invalidation_rechecks_before_returning_success() {
     let source = ReadyNotifier::new();
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     scope.subscribe(&source);
     let observer = scope.observer();
     let waker = Waker::from(Arc::new(Counter::default()));
@@ -378,20 +765,24 @@ fn reentrant_handoff_invalidation_rechecks_before_returning_success() {
 /// STATEMENT: Subscriptions persist across successes and reject stale generations without erasing newer readiness.
 ///
 /// HOW:
-/// - Subscribe through aliased handles and verify registration deduplication.
+/// - Subscribe through aliased handles and verify both registrations invalidate and invoke callbacks.
 /// - Notify repeatedly and check generation validity, stale completions, and persistence after alias drops.
 #[test]
 fn persistent_subscriptions_and_generation_checks() {
     let source = ReadyNotifier::new();
     let alias = source.clone();
     let independent = ReadyNotifier::default();
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     let scope_alias = scope.clone();
     assert!(!scope.is_ready());
     scope.subscribe(&source);
     scope_alias.subscribe(&alias);
-    assert_eq!(source.0.scopes.borrow().len(), 1);
-    assert_eq!(scope.0.sources.borrow().len(), 1);
+    assert_eq!(source.0.borrow().len(), 2);
+    let calls = Rc::new(Cell::new(0));
+    let captured = calls.clone();
+    scope.on_notify(&ReadyCallback::new(move || {
+        captured.set(captured.get() + 1);
+    }));
 
     let first = scope.generation();
     assert!(scope.set_ready(first));
@@ -401,11 +792,15 @@ fn persistent_subscriptions_and_generation_checks() {
     assert!(scope.is_current(first));
 
     alias.notify();
+    assert_eq!(scope.generation().value, first.value + 2);
+    assert_eq!(calls.get(), 2);
     assert!(!scope_alias.is_ready());
     assert!(scope.is_directly_invalidated(first));
     assert!(!scope.set_ready(first));
     let pending = scope.generation();
     source.notify();
+    assert_eq!(scope.generation().value, pending.value + 2);
+    assert_eq!(calls.get(), 4);
     assert!(!scope.is_current(pending));
     assert!(scope.is_directly_invalidated(pending));
     assert!(!scope.set_ready(pending));
@@ -420,6 +815,7 @@ fn persistent_subscriptions_and_generation_checks() {
     drop(scope_alias);
     source.notify();
     assert!(!scope.is_ready(), "subscriptions outlive successful checks");
+    assert_eq!(calls.get(), 6);
 }
 
 /// STATEMENT: Dependency invalidation reaches shared ancestors once without invalidating unrelated siblings.
@@ -427,14 +823,15 @@ fn persistent_subscriptions_and_generation_checks() {
 /// HOW:
 /// - Build a diamond graph with duplicate and self dependencies plus a sibling.
 /// - Notify the leaf, then directly subscribe the root, checking generations and direct-invalidation flags.
+/// - Duplicate both direct subscriptions and verify they repeat without redelivering shared ancestors.
 #[test]
 fn dependency_fanout_preserves_siblings() {
     let source = ReadyNotifier::new();
-    let leaf = ReadyScope::new();
-    let sibling = ReadyScope::new();
-    let left = ReadyScope::new();
-    let right = ReadyScope::new();
-    let root = ReadyScope::new();
+    let leaf = new_scope();
+    let sibling = new_scope();
+    let left = new_scope();
+    let right = new_scope();
+    let root = new_scope();
     leaf.subscribe(&source);
     assert!(leaf.set_ready(leaf.generation()));
     left.depend_on(&leaf);
@@ -445,8 +842,9 @@ fn dependency_fanout_preserves_siblings() {
     root.depend_on(&left);
     root.depend_on(&right);
     root.depend_on(&root);
-    assert_eq!(leaf.0.parents.borrow().len(), 2);
-    assert_eq!(left.0.children.borrow().len(), 2);
+    assert_eq!(leaf.with(|s| s.parents.borrow().len()), 2);
+    left.assert_dependency(&leaf);
+    left.assert_dependency(&sibling);
 
     for scope in [&sibling, &left, &right, &root] {
         assert!(scope.set_ready(scope.generation()));
@@ -460,7 +858,7 @@ fn dependency_fanout_preserves_siblings() {
         assert!(!scope.set_ready(before));
         assert_eq!(
             scope.is_directly_invalidated(before),
-            Rc::ptr_eq(&scope.0, &leaf.0)
+            scope.endpoint() == leaf.endpoint()
         );
     }
     assert!(sibling.is_ready());
@@ -475,27 +873,40 @@ fn dependency_fanout_preserves_siblings() {
     assert_eq!(root.generation().value, pending.value + 1);
     assert!(!left.is_directly_invalidated(left_pending));
     assert!(sibling.is_ready());
+
+    leaf.subscribe(&source);
+    root.subscribe(&source);
+    let snapshots = [&leaf, &left, &right, &root].map(|scope| (scope, scope.generation()));
+    source.notify();
+    for (scope, before) in snapshots {
+        let direct = scope.endpoint() == leaf.endpoint() || scope.endpoint() == root.endpoint();
+        assert_eq!(
+            scope.generation().value,
+            before.value + if direct { 2 } else { 1 }
+        );
+        assert_eq!(scope.is_directly_invalidated(before), direct);
+    }
 }
 
 /// STATEMENT: Wide dependency fanout deduplicates shared ancestors during notification.
 ///
 /// HOW:
-/// - Build more leaves than the linear-dedup threshold with overlapping paths to two ancestors.
+/// - Build 64 leaves with overlapping paths to two ancestors.
 /// - Notify once and verify one root callback and one generation advance per ancestor.
 #[test]
 fn wide_fanout_invalidates_shared_ancestors_once() {
     let source = ReadyNotifier::new();
-    let root = ReadyScope::new();
-    let mid = ReadyScope::new();
+    let root = new_scope();
+    let mid = new_scope();
     let calls = Rc::new(Cell::new(0));
     let captured = calls.clone();
     root.on_notify(&ReadyCallback::new(move || {
         captured.set(captured.get() + 1);
     }));
     root.depend_on(&mid);
-    let leaves: Vec<_> = (0..LINEAR_DEDUP * 2)
+    let leaves: Vec<_> = (0..64)
         .map(|idx| {
-            let leaf = ReadyScope::new();
+            let leaf = new_scope();
             leaf.subscribe(&source);
             // Reach `root` both directly and through `mid`.
             if idx % 2 == 0 { &root } else { &mid }.depend_on(&leaf);
@@ -513,17 +924,18 @@ fn wide_fanout_invalidates_shared_ancestors_once() {
     assert!(leaves.iter().all(|leaf| !leaf.is_ready()));
 }
 
-/// STATEMENT: All affected scopes are invalidated and their wakers extracted before any reentrant wake.
+/// STATEMENT: Notifications deliver each scope's callbacks and wakes before reaching later subscribers.
 ///
 /// HOW:
-/// - Wake an observer that inspects the whole graph, changes registrations, and notifies again.
-/// - Verify no observer borrow remains held and both notification generations reach every scope.
+/// - Subscribe two children sharing an ancestor and register callbacks and observers on all three.
+/// - Inspect the first ancestor wake and verify the later child is still ready with its observer registered.
+/// - Verify callback-before-wake ordering per scope and one invalidation per scope.
 #[test]
-fn all_invalidation_precedes_reentrant_wakes() {
+fn notification_delivers_before_later_subscribers() {
     let source = ReadyNotifier::new();
-    let leaf = ReadyScope::new();
-    let other = ReadyScope::new();
-    let root = ReadyScope::new();
+    let leaf = new_scope();
+    let other = new_scope();
+    let root = new_scope();
     leaf.subscribe(&source);
     other.subscribe(&source);
     root.depend_on(&leaf);
@@ -539,45 +951,42 @@ fn all_invalidation_precedes_reentrant_wakes() {
     for scope in [&leaf, &other, &root] {
         assert!(scope.set_ready(scope.generation()));
     }
+    for (scope, wakes) in [(&root, 0), (&leaf, 1), (&other, 2)] {
+        let captured = counter.clone();
+        scope.on_notify(&ReadyCallback::new(move || {
+            assert_eq!(captured.wakes(), wakes);
+        }));
+    }
 
     let ran = Rc::new(Cell::new(false));
     let hook_ran = ran.clone();
-    let hook_source = source.clone();
-    let hook_leaf = leaf.clone();
-    let hook_other = other.clone();
-    let hook_root = root.clone();
+    let endpoints = [&leaf, &other, &root].map(ReadyScope::endpoint);
     ON_WAKE.with_borrow_mut(|slot| {
         *slot = Some(Box::new(move || {
-            for scope in [&hook_leaf, &hook_other, &hook_root] {
+            let [leaf, other, root] = endpoints.each_ref().map(|e| e.resolve().unwrap());
+            for scope in [&leaf, &root] {
                 assert!(!scope.is_ready());
                 assert_eq!(scope.generation().value, 1);
-                assert!(
-                    scope
-                        .0
-                        .observers
+            }
+            assert!(other.is_ready());
+            assert_eq!(other.generation().value, 0);
+            for scope in [&leaf, &other] {
+                assert!(scope.with(|s| {
+                    s.observers
                         .slots
                         .borrow_mut()
                         .iter()
-                        .all(|(_, w)| w.is_none())
-                );
+                        .any(|(_, w)| w.is_some())
+                }));
             }
-            let before = hook_root.generation();
-            assert!(root_observer.register(&waker));
-            hook_leaf.subscribe(&hook_source);
-            hook_root.depend_on(&hook_other);
-            drop(other_observer);
-            hook_source.notify();
-            assert!(!hook_root.is_current(before));
-            assert!(!hook_root.is_directly_invalidated(before));
-            assert!(!hook_root.set_ready(before));
             hook_ran.set(true);
         }));
     });
     source.notify();
     assert!(ran.get());
-    assert_eq!(counter.wakes(), 4);
+    assert_eq!(counter.wakes(), 3);
     for scope in [&leaf, &other, &root] {
-        assert_eq!(scope.generation().value, 2);
+        assert_eq!(scope.generation().value, 1);
     }
 }
 
@@ -589,7 +998,7 @@ fn all_invalidation_precedes_reentrant_wakes() {
 #[test]
 fn observers_update_coalesce_and_unregister() {
     let source = ReadyNotifier::new();
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     scope.subscribe(&source);
     let first = Arc::new(Counter::default());
     let latest = Arc::new(Counter::default());
@@ -620,7 +1029,7 @@ fn observers_update_coalesce_and_unregister() {
     source.notify();
     assert_eq!(latest.wakes(), 2);
     drop(observer);
-    assert!(scope.0.observers.slots.borrow_mut().is_empty());
+    assert!(scope.with(|s| s.observers.slots.borrow_mut().is_empty()));
     assert!(scope.set_ready(scope.generation()));
     source.notify();
     assert!(
@@ -637,8 +1046,8 @@ fn observers_update_coalesce_and_unregister() {
 #[test]
 fn scheduling_wakes_do_not_invalidate() {
     let source = ReadyNotifier::new();
-    let child = ReadyScope::new();
-    let parent = ReadyScope::new();
+    let child = new_scope();
+    let parent = new_scope();
     child.subscribe(&source);
     parent.depend_on(&child);
     let counter = Arc::new(Counter::default());
@@ -679,25 +1088,23 @@ fn observer_storage_stays_local() {
     let _ = <ReadyObservers as AmbiguousIfSendOrSync<_>>::check;
 }
 
-/// STATEMENT: A stale checker waker cannot wake a new scope reusing its registry slot.
+/// STATEMENT: Retired scope IDs are never reused and stale checker wakers cannot wake new scopes.
 ///
 /// HOW:
-/// - Drop a scope, create another in the same slot, and compare stale and current checker wakes.
-/// - Verify registry cleanup and harmless remote wakes after both scopes are gone.
+/// - Drop a scope, create another in the same store, and verify its ID increased.
+/// - Compare stale and current checker wakes and verify remote wakes are rejected even after retirement.
 #[test]
-fn stale_checker_cannot_wake_reused_registry_slot() {
-    let before = CHECKERS.with_borrow(slab::Slab::len);
-    let scope = ReadyScope::new();
+fn stale_checker_cannot_wake_new_scope() {
+    let scope = new_scope();
     let stale = scope.checker_waker();
-    let idx = scope.0.observers.checker.get().unwrap().idx;
-    let storage = Rc::downgrade(&scope.0.observers);
+    let endpoint = scope.endpoint();
     drop(scope);
-    assert!(storage.upgrade().is_none());
-    assert_eq!(CHECKERS.with_borrow(slab::Slab::len), before);
+    assert!(endpoint.resolve().is_none());
 
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     let checker = scope.checker_waker();
-    assert_eq!(scope.0.observers.checker.get().unwrap().idx, idx);
+    assert!(Rc::ptr_eq(&scope.endpoint().store, &endpoint.store));
+    assert!(scope.endpoint().scope > endpoint.scope);
     let observer = scope.observer();
     let counter = Arc::new(Counter::default());
     assert!(observer.register(&Waker::from(counter.clone())));
@@ -706,32 +1113,30 @@ fn stale_checker_cannot_wake_reused_registry_slot() {
     checker.wake_by_ref();
     assert_eq!(counter.wakes(), 1);
     drop(scope);
-    assert_eq!(CHECKERS.with_borrow(slab::Slab::len), before);
-    thread::spawn(move || {
-        stale.wake();
-        checker.wake();
-    })
-    .join()
-    .unwrap();
+    assert!(!observer.register(Waker::noop()));
+    for waker in [&stale, &checker] {
+        let remote = waker.clone();
+        assert!(thread::spawn(move || remote.wake()).join().is_err());
+    }
 }
 
-/// STATEMENT: Checker wake delivery permits reentrant registry creation and destruction.
+/// STATEMENT: Checker wake delivery permits reentrant scope creation and destruction.
 ///
 /// HOW:
 /// - Install a wake hook that drops its owning scope and creates and drops another checker.
 /// - Wake the original checker and verify delivery completes and the original storage is released.
 #[test]
-fn checker_wake_can_reenter_registry() {
-    let scope = ReadyScope::new();
+fn checker_wake_can_reenter_scope_storage() {
+    let scope = new_scope();
     let checker = scope.checker_waker();
-    let storage = Rc::downgrade(&scope.0.observers);
+    let endpoint = scope.endpoint();
     let observer = scope.observer();
     let counter = Arc::new(Counter::default());
     assert!(observer.register(&Waker::from(counter.clone())));
     ON_WAKE.with_borrow_mut(|slot| {
         *slot = Some(Box::new(move || {
             drop(scope);
-            let nested = ReadyScope::new();
+            let nested = new_scope();
             let checker = nested.checker_waker();
             drop(nested);
             checker.wake();
@@ -739,16 +1144,16 @@ fn checker_wake_can_reenter_registry() {
     });
     checker.wake();
     assert_eq!(counter.wakes(), 1);
-    assert!(storage.upgrade().is_none());
+    assert!(endpoint.resolve().is_none());
 }
 
-/// STATEMENT: Checker wakers remain safe after owner-thread exit and during TLS registry teardown.
+/// STATEMENT: Checker wakers remain safe during owner-thread teardown after their store retires.
 ///
 /// HOW:
-/// - Keep a scope and wake-on-drop guard in TLS initialized before the checker registry.
-/// - Exit the thread, then wake the checker retained by the joining thread.
+/// - Keep a scope and wake-on-drop guard in TLS initialized before its waiter store.
+/// - Exit the thread and verify the guard can wake and drop its retired checker locally.
 #[test]
-fn checker_outlives_owner_thread_and_registry_teardown() {
+fn checker_wakes_during_owner_thread_teardown() {
     struct WakeOnDrop(Waker);
 
     impl Drop for WakeOnDrop {
@@ -762,28 +1167,26 @@ fn checker_outlives_owner_thread_and_registry_teardown() {
             const { RefCell::new(None) };
     }
 
-    let checker = thread::spawn(|| {
-        // Initialize this slot first so the registry is destroyed before it.
+    thread::spawn(|| {
+        // Initialize this slot first so the waiter store is retired before it.
         LATE_SCOPE.with(|slot| {
-            let scope = ReadyScope::new();
+            let scope = new_scope();
             let checker = scope.checker_waker();
-            *slot.borrow_mut() = Some((WakeOnDrop(checker.clone()), scope));
-            checker
-        })
+            *slot.borrow_mut() = Some((WakeOnDrop(checker), scope));
+        });
     })
     .join()
     .unwrap();
-    checker.wake();
 }
 
 /// STATEMENT: Remote checker wakes reject live thread-local observer access before borrowing it.
 ///
 /// HOW:
 /// - Hold an observer-storage borrow while another thread calls `wake` and `wake_by_ref`.
-/// - Check the owner-thread panic, successful later local delivery, and safe remote wake after teardown.
+/// - Check the owner-thread panic, successful later local delivery, and rejection of remote wake after teardown.
 #[test]
 fn checker_wakes_reject_remote_access_before_borrowing() {
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     let checker = scope.checker_waker();
     let observer = scope.observer();
     let counter = Arc::new(Counter::default());
@@ -792,7 +1195,13 @@ fn checker_wakes_reject_remote_access_before_borrowing() {
     for consume in [false, true] {
         assert!(observer.register(&waker));
         let before = counter.wakes();
-        let borrowed = scope.0.observers.slots.borrow_mut();
+        let slots = scope.bound().store.scopes.slots.borrow();
+        let borrowed = slots[scope.bound().id]
+            .as_ref()
+            .unwrap()
+            .observers
+            .slots
+            .borrow_mut();
         let remote = checker.clone();
         let error = thread::spawn(move || {
             if consume {
@@ -808,13 +1217,49 @@ fn checker_wakes_reject_remote_access_before_borrowing() {
             Some("ntex-service readiness observers can only be accessed on their owning thread")
         );
         drop(borrowed);
+        drop(slots);
         assert_eq!(counter.wakes(), before);
         checker.wake_by_ref();
         assert_eq!(counter.wakes(), before + 1);
     }
 
     drop(scope);
-    thread::spawn(move || checker.wake()).join().unwrap();
+    let remote = checker.clone();
+    assert!(thread::spawn(move || remote.wake()).join().is_err());
+    checker.wake();
+}
+
+/// STATEMENT: Foreign final checker destruction panics without dropping its thread-local Rc, including while unwinding.
+///
+/// HOW:
+/// - Retire a scope and move its last checker waker to another thread for drop or wake.
+/// - Verify a single panic and an unchanged store reference count after foreign destruction.
+/// - Reclaim the deliberately leaked reference on its owner thread to leave no test allocation behind.
+#[test]
+fn checker_final_drop_rejects_remote_rc_destruction() {
+    for operation in 0..3 {
+        let scope = new_scope();
+        let store = scope.bound().store.clone();
+        let checker = scope.checker_waker();
+        drop(scope);
+        let references = Rc::strong_count(&store);
+        let error = thread::spawn(move || match operation {
+            0 => drop(checker),
+            1 => checker.wake(),
+            _ => checker.wake_by_ref(),
+        })
+        .join()
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<&str>().copied(),
+            Some("ntex-service readiness observers can only be accessed on their owning thread")
+        );
+        assert_eq!(Rc::strong_count(&store), references);
+        // SAFETY: Foreign destruction leaked exactly the checker's Rc; reclaim
+        // that strong reference on its owner while `store` keeps the allocation live.
+        unsafe { Rc::decrement_strong_count(Rc::as_ptr(&store)) };
+        assert_eq!(Rc::strong_count(&store), references - 1);
+    }
 }
 
 /// STATEMENT: Remote checker cloning and dropping can race with local observer reuse and teardown.
@@ -824,11 +1269,11 @@ fn checker_wakes_reject_remote_access_before_borrowing() {
 /// - Verify survivor wake counts, unchanged readiness, and storage release after scope teardown.
 #[test]
 fn checker_waker_clone_and_drop_race_local_observer_lifecycle() {
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     let before = scope.generation();
     assert!(scope.set_ready(before));
     let checker = scope.checker_waker();
-    let storage = Rc::downgrade(&scope.0.observers);
+    let endpoint = scope.endpoint();
     let iterations = if cfg!(miri) { 16 } else { 256 };
 
     std::thread::scope(|threads| {
@@ -880,7 +1325,7 @@ fn checker_waker_clone_and_drop_race_local_observer_lifecycle() {
         command.send(()).unwrap();
         completed.recv().unwrap();
         worker.join().unwrap();
-        assert!(storage.upgrade().is_none());
+        assert!(endpoint.resolve().is_none());
         assert!(!observer.register(Waker::noop()));
         observer.clear();
         drop(observer);
@@ -888,64 +1333,85 @@ fn checker_waker_clone_and_drop_race_local_observer_lifecycle() {
     checker.wake_by_ref();
 }
 
-/// STATEMENT: Dropping either endpoint removes notifier and dependency registrations without leaks.
+/// STATEMENT: Scope and notifier resources are released while stale parent IDs and notifier endpoints remain harmless.
 ///
 /// HOW:
-/// - Drop temporary sources, children, and parents while checking reciprocal registration counts.
-/// - Drop the last scope alias and verify weak storage expires and stale observers become inert.
+/// - Drop sources and scopes, checking notifier release, retired IDs, and retained parent IDs and endpoints.
+/// - Drop the last scope alias and verify its ID is retired and stale observers become inert.
+/// - Create a replacement parent and verify child notifications reach it only after explicit binding.
 #[test]
-fn registration_cleanup_at_both_endpoints() {
+fn registration_cleanup_tolerates_stale_parent_ids() {
     let source = ReadyNotifier::new();
-    let parent = ReadyScope::new();
-    let child = ReadyScope::new();
+    let parent = new_scope();
+    let child = new_scope();
     parent.subscribe(&source);
     parent.depend_on(&child);
     let temporary_source = ReadyNotifier::new();
     let source_alias = temporary_source.clone();
     parent.subscribe(&temporary_source);
+    let weak_source = Rc::downgrade(&source_alias.0);
     drop(temporary_source);
-    assert_eq!(parent.0.sources.borrow().len(), 2);
+    assert!(weak_source.upgrade().is_some());
     drop(source_alias);
-    assert_eq!(parent.0.sources.borrow().len(), 1);
-    let temporary_child = ReadyScope::new();
+    assert!(weak_source.upgrade().is_none());
+    let temporary_child = new_scope();
     parent.depend_on(&temporary_child);
+    let temporary_endpoint = temporary_child.endpoint();
     drop(temporary_child);
-    assert_eq!(parent.0.children.borrow().len(), 1);
-    let temporary_parent = ReadyScope::new();
+    assert!(temporary_endpoint.resolve().is_none());
+    let temporary_parent = new_scope();
     temporary_parent.depend_on(&child);
     drop(temporary_parent);
-    assert_eq!(child.0.parents.borrow().len(), 1);
+    assert_eq!(child.with(|s| s.parents.borrow().len()), 2);
 
     let observer = parent.observer();
     let checker_waker = parent.checker_waker();
-    let observers = Rc::downgrade(&parent.0.observers);
     assert!(observer.register(&checker_waker));
-    let weak = Rc::downgrade(&parent.0);
+    let endpoint = parent.endpoint();
     let alias = parent.clone();
     drop(parent);
-    assert!(weak.upgrade().is_some());
-    assert_eq!(source.0.scopes.borrow().len(), 1);
+    assert!(endpoint.resolve().is_some());
+    assert_eq!(source.0.borrow().len(), 1);
     drop(alias);
-    assert!(weak.upgrade().is_none());
-    assert!(observers.upgrade().is_none());
+    assert!(endpoint.resolve().is_none());
     checker_waker.wake_by_ref();
-    assert!(source.0.scopes.borrow().is_empty());
-    assert!(child.0.parents.borrow().is_empty());
+    assert_eq!(source.0.borrow().as_slice(), [endpoint]);
+    assert_eq!(child.with(|s| s.parents.borrow().len()), 2);
     assert!(!observer.register(Waker::noop()));
     drop(observer);
     source.notify();
+
+    let replacement = new_scope();
+    let child_source = ReadyNotifier::new();
+    child.subscribe(&child_source);
+    assert!(replacement.set_ready(replacement.generation()));
+    source.notify();
+    assert!(replacement.is_ready());
+    child_source.notify();
+    assert!(replacement.is_ready());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            replacement.assert_dependency(&child);
+        }))
+        .is_err()
+    );
+    replacement.depend_on(&child);
+    replacement.assert_dependency(&child);
+    child_source.notify();
+    assert!(!replacement.is_ready());
 }
 
-/// STATEMENT: Cyclic weak dependencies terminate notification and do not retain dropped scopes.
+/// STATEMENT: Cyclic ID dependencies terminate notification and do not retain dropped scopes.
 ///
 /// HOW:
 /// - Connect two scopes cyclically, subscribe one, and verify one invalidation per scope.
-/// - Drop each scope and check weak handles and reciprocal registrations are cleared.
+/// - Drop one scope and notify its survivor through a stale parent ID without resurrecting the retired scope.
+/// - Drop the survivor and verify both endpoints expire while stale notifier entries remain safe to notify.
 #[test]
-fn weak_dependency_cycles_terminate_and_do_not_leak() {
+fn dependency_cycles_terminate_and_do_not_leak() {
     let source = ReadyNotifier::new();
-    let a = ReadyScope::new();
-    let b = ReadyScope::new();
+    let a = new_scope();
+    let b = new_scope();
     a.depend_on(&b);
     b.depend_on(&a);
     a.subscribe(&source);
@@ -953,15 +1419,18 @@ fn weak_dependency_cycles_terminate_and_do_not_leak() {
     source.notify();
     assert_eq!(a.generation().value, before.value + 1);
     assert_eq!(b.generation().value, before.value + 1);
-    let weak_a = Rc::downgrade(&a.0);
-    let weak_b = Rc::downgrade(&b.0);
+    let endpoint_a = a.endpoint();
+    let endpoint_b = b.endpoint();
     drop(a);
-    assert!(weak_a.upgrade().is_none());
-    assert!(b.0.parents.borrow().is_empty());
-    assert!(b.0.children.borrow().is_empty());
+    assert!(endpoint_a.resolve().is_none());
+    assert_eq!(b.with(|s| s.parents.borrow().len()), 1);
+    b.subscribe(&source);
+    source.notify();
+    assert_eq!(b.generation().value, before.value + 2);
     drop(b);
-    assert!(weak_b.upgrade().is_none());
-    assert!(source.0.scopes.borrow().is_empty());
+    assert!(endpoint_b.resolve().is_none());
+    assert_eq!(source.0.borrow().as_slice(), [endpoint_a, endpoint_b]);
+    source.notify();
 }
 
 /// STATEMENT: Replacing or dropping an observer waker permits reentrant registration and notification.
@@ -972,7 +1441,7 @@ fn weak_dependency_cycles_terminate_and_do_not_leak() {
 #[test]
 fn waker_drop_can_reenter_registration_and_notification() {
     let source = ReadyNotifier::new();
-    let scope = ReadyScope::new();
+    let scope = new_scope();
     scope.subscribe(&source);
     let observer = scope.observer();
     assert!(observer.register(&Waker::from(Arc::new(DropHook))));
@@ -981,7 +1450,7 @@ fn waker_drop_can_reenter_registration_and_notification() {
     let hook_scope = scope.clone();
     ON_DROP.with_borrow_mut(|slot| {
         *slot = Some(Box::new(move || {
-            assert_eq!(hook_scope.0.observers.slots.borrow_mut().len(), 1);
+            assert_eq!(hook_scope.with(|s| s.observers.slots.borrow_mut().len()), 1);
             hook_source.notify();
         }));
     });
@@ -993,7 +1462,7 @@ fn waker_drop_can_reenter_registration_and_notification() {
     let hook_ran = ran.clone();
     ON_DROP.with_borrow_mut(|slot| {
         *slot = Some(Box::new(move || {
-            assert!(scope.0.observers.slots.borrow_mut().is_empty());
+            assert!(scope.with(|s| s.observers.slots.borrow_mut().is_empty()));
             let observer = scope.observer();
             assert!(observer.register(Waker::noop()));
             source.notify();

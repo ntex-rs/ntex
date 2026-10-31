@@ -6,6 +6,10 @@
 
 ## [4.4.2] - 2026-10-30
 
+* service: Expose `ReadyLink` and explicit cross-pipeline readiness subscriptions.
+  `ServiceBinding` scopes are now allocated in their first pipeline; share a
+  `Pipeline` or `PipelineState` rather than a binding across separate pipelines.
+
 * web: Aggregate readiness across the filter and all cached route and default
   handlers. Give each cached service its own readiness scope and recheck
   notified handlers while retaining constant-time cached readiness.

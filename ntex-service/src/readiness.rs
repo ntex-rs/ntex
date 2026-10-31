@@ -1,9 +1,14 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::future::{Future, poll_fn};
-use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use std::thread::{self, ThreadId};
-use std::{collections::HashSet, fmt, marker::PhantomData, pin::Pin, rc::Rc, rc::Weak};
+use std::{fmt, marker::PhantomData, mem, pin::Pin, rc::Rc, thread, thread::ThreadId};
+
+use crate::ctx::WaitersInner;
+
+thread_local! {
+    static NOTIFICATION: RefCell<u64> = const { RefCell::new(0) };
+}
 
 /// A reusable callback invoked when a readiness scope receives a notification.
 ///
@@ -14,17 +19,17 @@ use std::{collections::HashSet, fmt, marker::PhantomData, pin::Pin, rc::Rc, rc::
 /// ordinary task wakeups, cached calls, or internal readiness resets.
 ///
 /// Clones share one callback identity. Registering the same handle repeatedly on
-/// a scope is idempotent; registering it on distinct affected scopes invokes it
-/// once for each scope. Each scope retains its registration until it is dropped,
-/// including across completed or cancelled checks.
+/// a scope is idempotent. Repeated notifier subscriptions can invoke it more than
+/// once per notification. Each scope retains its registration until it is
+/// dropped, including across completed or cancelled checks.
 ///
-/// Callbacks run after all affected scopes are invalidated, outside internal
-/// borrows and locks, and before their observers are woken. Registrations made
-/// during a notification apply to subsequent notifications. A nested
-/// notification still invalidates every affected scope, but skips callback
-/// delivery on scopes already executing callbacks. Registrations made on such
-/// a scope are retained for notifications after its current delivery finishes.
-/// Delivery reuses registered callback storage without cloning callback handles.
+/// Callbacks run after their scope is invalidated and its parents are visited,
+/// before its observers are woken. Later subscribers and unvisited ancestors
+/// may still be ready. Delivery borrows scope and callback storage in place,
+/// without snapshots or cloning callback handles. Registering callbacks on a
+/// scope currently executing callbacks, modifying borrowed scope storage, or
+/// notifying any source during delivery panics. Registrations on other scopes
+/// can take effect in the current notification.
 ///
 /// Captures must be owned. Avoid capturing a pipeline that retains this callback
 /// or other strong references that would create a reference cycle.
@@ -48,13 +53,17 @@ impl fmt::Debug for ReadyCallback {
 /// A source of readiness-change notifications.
 ///
 /// A notification invalidates the cached readiness of subscribed scopes and
-/// their dependent ancestors before waking any observers. It requests another
+/// their dependent ancestors as it visits them, delivering each scope's callbacks
+/// and observer wakes before continuing to later subscribers. It requests another
 /// readiness check; it does not grant readiness or run or drop readiness futures.
 ///
 /// Clones share the same notification source. [`Default`] and [`new`](Self::new)
 /// each create an independent source. Subscriptions belong to readiness scopes
 /// and persist until the scope or source is dropped, even after a readiness
-/// check completes or is cancelled.
+/// check completes or is cancelled. Repeated subscriptions are not deduplicated
+/// and cause repeated invalidations and callback delivery. Entries for dropped
+/// scopes are ignored and remain stored until the source is dropped. These
+/// entries retain waiter-store allocations, but not retired scope resources.
 ///
 /// Notify after any change that can affect readiness, including consuming the
 /// last available slot and releasing capacity. The change and notification must
@@ -63,7 +72,7 @@ impl fmt::Debug for ReadyCallback {
 /// This type is neither `Send` nor `Sync`.
 /// Register sources with [`crate::BindCtx::subscribe`] in [`crate::Service::bind`].
 #[derive(Clone, Debug, Default)]
-pub struct ReadyNotifier(Rc<SourceInner>);
+pub struct ReadyNotifier(Rc<RefCell<Vec<Endpoint>>>);
 
 impl ReadyNotifier {
     /// Creates an independent notification source.
@@ -71,109 +80,115 @@ impl ReadyNotifier {
         Self::default()
     }
 
-    /// Invalidates all subscribed readiness scopes and their ancestors, invokes
-    /// their registered [`ReadyCallback`]s, then wakes their observers.
+    /// Visits subscribed scopes in registration order, invalidating each scope,
+    /// recursively visiting its parents, then invoking its [`ReadyCallback`]s
+    /// and waking its observers. Directly subscribed ancestors are deferred to
+    /// their own subscription entries.
     ///
     /// Every notification advances the affected scopes' generations, including
     /// scopes that are already invalid or have a pending readiness check.
-    /// Callback delivery is coalesced on scopes already executing callbacks.
+    /// Shared ancestors are visited once; duplicate direct subscriptions still
+    /// invalidate and deliver callbacks repeatedly. Traversal uses stack space
+    /// proportional to dependency depth, without allocating traversal buffers.
     ///
-    /// A callback panic propagates and skips remaining callbacks, but observers
-    /// are still woken during unwinding. Wakers must not panic: a panicking
-    /// waker skips the remaining wakers, and aborts if already unwinding.
+    /// A callback panic propagates, waking already-invalidated scopes during
+    /// unwinding; unvisited scopes remain untouched. Wakers must not panic:
+    /// a panicking waker skips its remaining siblings and can abort if another
+    /// waker panics during unwinding.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any readiness notification or internal readiness reset is
+    /// already being delivered on this thread. Subscribing to this source or
+    /// mutating borrowed scope or callback storage during delivery also panics.
     pub fn notify(&self) {
-        let scopes = self.0.scopes.borrow();
-        if let [scope] = scopes.as_slice() {
-            let scope = scope.upgrade();
-            drop(scopes);
-            if let Some(scope) = scope {
-                invalidate_scope(scope, true);
+        with_notification(|epoch| {
+            let scopes = self.0.borrow();
+            // Direct subscribers must not also be delivered as ancestors.
+            for endpoint in &*scopes {
+                endpoint
+                    .store
+                    .scopes
+                    .with(endpoint.scope, |s| s.direct_epoch.set(epoch));
             }
-        } else {
-            let affected: Vec<_> = scopes
-                .iter()
-                .filter_map(Weak::upgrade)
-                .map(|scope| (scope, 0))
-                .collect();
-            drop(scopes);
-            invalidate_scopes(affected, true);
+            for endpoint in &*scopes {
+                notify_scope(&endpoint.store, endpoint.scope, epoch, true, true);
+            }
+        });
+    }
+}
+
+/// Runs one notification or reset with a fresh thread-local traversal epoch.
+///
+/// Holds the epoch's mutable borrow until delivery finishes, including unwinding.
+///
+/// # Panics
+///
+/// Panics on nested delivery on this thread or when the epoch counter overflows.
+fn with_notification(f: impl FnOnce(u64)) {
+    NOTIFICATION.with_borrow_mut(|epoch| {
+        *epoch = epoch
+            .checked_add(1)
+            .expect("readiness notification epoch exhausted");
+        f(*epoch);
+    });
+}
+
+/// Invalidates a live scope, visits its parents, then delivers callbacks and wakes.
+///
+/// Missing IDs are ignored. Indirect visits skip scopes already visited or marked
+/// for direct delivery in this epoch; duplicate direct visits remain effective.
+/// Setting `callbacks` to false suppresses callbacks throughout the traversal.
+///
+/// Scope and parent storage remain borrowed during recursion and delivery.
+/// Already-invalidated scopes wake their observers even if a callback panics;
+/// unvisited scopes remain untouched.
+fn notify_scope(store: &WaitersInner, id: usize, epoch: u64, direct: bool, callbacks: bool) {
+    store.scopes.with(id, |s| {
+        if !direct && (s.notify_epoch.get() == epoch || s.direct_epoch.get() == epoch) {
+            return;
         }
-    }
-}
-
-/// Invalidates one directly affected scope without allocating graph state when
-/// it has no dependent ancestors.
-fn invalidate_scope(scope: Rc<ScopeInner>, notify_callbacks: bool) {
-    if !scope.parents.borrow().is_empty() {
-        return invalidate_scopes(vec![(scope, 0)], notify_callbacks);
-    }
-    scope.invalidate(true);
-    notify_scopes(&mut [(scope, 0)], notify_callbacks);
-}
-
-/// Affected graphs up to this size are deduplicated by linear scan.
-const LINEAR_DEDUP: usize = 32;
-
-fn invalidate_scopes(mut affected: Vec<(Rc<ScopeInner>, usize)>, notify_callbacks: bool) {
-    let direct = affected.len();
-    let mut visited: Option<HashSet<_, foldhash::fast::RandomState>> = None;
-
-    let mut idx = 0;
-    while idx < affected.len() {
-        let scope = Rc::clone(&affected[idx].0);
-        scope.invalidate(idx < direct);
-        for parent in scope.parents.borrow().iter().filter_map(Weak::upgrade) {
-            let ptr = Rc::as_ptr(&parent);
-            let new = if let Some(visited) = visited.as_mut() {
-                visited.insert(ptr)
-            } else if affected.len() < LINEAR_DEDUP {
-                !affected.iter().any(|(s, _)| Rc::as_ptr(s) == ptr)
-            } else {
-                let mut set: HashSet<_, _> = affected.iter().map(|(s, _)| Rc::as_ptr(s)).collect();
-                let new = set.insert(ptr);
-                visited = Some(set);
-                new
-            };
-            if new {
-                affected.push((parent, 0));
+        s.notify_epoch.set(epoch);
+        s.invalidate(direct);
+        let _wake = NotifyObservers(&s.observers);
+        for &parent in s.parents.borrow().iter() {
+            notify_scope(store, parent, epoch, false, callbacks);
+        }
+        for parent in s.external_parents.borrow().iter() {
+            notify_scope(&parent.store, parent.scope, epoch, false, callbacks);
+        }
+        if callbacks {
+            for callback in s.callbacks.borrow().iter() {
+                (callback.0)();
             }
         }
-        idx += 1;
-    }
-    notify_scopes(&mut affected, notify_callbacks);
+    });
 }
 
-/// Runs callbacks of invalidated scopes, then wakes their observers, even if a
-/// callback panics.
-fn notify_scopes(affected: &mut [(Rc<ScopeInner>, usize)], notify_callbacks: bool) {
-    // Freeze callback counts and drain wakers before user code can register again.
-    let mut wakers = Wakers::default();
-    for (scope, count) in &mut *affected {
-        if notify_callbacks {
-            *count = scope.callbacks.borrow().len();
-        }
-        scope.observers.take_wakers(&mut wakers, None);
-    }
-    for (scope, count) in &*affected {
-        scope.notify_callbacks(*count);
-    }
-}
+struct NotifyObservers<'a>(&'a ReadyObservers);
 
-struct NotifyCallbacks<'a> {
-    scope: &'a ScopeInner,
-    callbacks: Vec<ReadyCallback>,
-}
-
-impl Drop for NotifyCallbacks<'_> {
+impl Drop for NotifyObservers<'_> {
+    /// Takes and wakes observer slots in place, skipping the scope's own checker.
+    ///
+    /// Uses the initial slab capacity as a bound rather than snapshotting wakers.
+    /// Releases each slot borrow before waking; a waker panic stops this pass.
     fn drop(&mut self) {
-        let mut pending = self.scope.callbacks.borrow_mut();
-        for callback in pending.drain(..) {
-            if !self.callbacks.iter().any(|c| Rc::ptr_eq(&c.0, &callback.0)) {
-                self.callbacks.push(callback);
+        // The local checker only forwards to these same slots.
+        let skip = self.0.checker.get().map(|c| Arc::as_ptr(c).cast());
+        let capacity = self.0.slots.borrow().capacity();
+        for idx in 0..capacity {
+            let waker = self
+                .0
+                .slots
+                .borrow_mut()
+                .get_mut(idx)
+                .and_then(Option::take);
+            if let Some(waker) = waker
+                && Some(waker.data()) != skip
+            {
+                waker.wake();
             }
         }
-        std::mem::swap(&mut *pending, &mut self.callbacks);
-        self.scope.notifying.set(false);
     }
 }
 
@@ -187,6 +202,7 @@ struct Wakers {
 }
 
 impl Wakers {
+    /// Queues a waker for delivery on drop, using inline storage for the first two.
     fn push(&mut self, waker: Waker) {
         if let Some(slot) = self.inline.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(waker);
@@ -197,6 +213,7 @@ impl Wakers {
 }
 
 impl Drop for Wakers {
+    /// Wakes queued tasks in insertion order; a panic skips remaining delivery.
     fn drop(&mut self) {
         for slot in &mut self.inline {
             if let Some(waker) = slot.take() {
@@ -209,40 +226,131 @@ impl Drop for Wakers {
     }
 }
 
-#[derive(Debug, Default)]
-struct SourceInner {
-    scopes: RefCell<Vec<Weak<ScopeInner>>>,
-}
-
-impl Drop for SourceInner {
-    fn drop(&mut self) {
-        let ptr = std::ptr::from_ref(self);
-        unlink(self.scopes.get_mut(), ptr, |scope| &scope.sources);
-    }
-}
-
-/// Adds `item` unless already linked, returns whether it was added.
-fn link<T>(links: &RefCell<Vec<Weak<T>>>, item: &Rc<T>) -> bool {
+/// Appends a dependency edge if absent, returning whether it was inserted.
+///
+/// Panics if the edge list is already borrowed.
+fn link<T: PartialEq>(links: &RefCell<Vec<T>>, item: T) -> bool {
     let mut links = links.borrow_mut();
-    let new = !contains(&links, item);
+    let new = !links.contains(&item);
     if new {
-        links.push(Rc::downgrade(item));
+        links.push(item);
     }
     new
 }
 
-fn contains<T>(links: &[Weak<T>], item: &Rc<T>) -> bool {
-    links.iter().any(|w| w.as_ptr() == Rc::as_ptr(item))
+/// An explicit subscription endpoint for another pipeline's readiness.
+///
+/// Obtain a link with [`crate::Pipeline::readiness_link`] and register it with
+/// [`crate::BindCtx::subscribe_pipeline`]. Invalidation of the source pipeline
+/// invalidates the subscribing scope and its ancestors, including internal
+/// resets. A link does not check readiness or retain the source pipeline.
+/// The enclosing service must still await the source pipeline's readiness.
+///
+/// Registrations belong to the subscribing scope, not this handle. Dropping a
+/// temporary link does not unsubscribe it. Links become inert when their source
+/// pipeline is dropped. Links and registrations retain the waiter-store
+/// allocation, but not retired scope resources. This type is neither `Send` nor
+/// `Sync`.
+#[derive(Clone)]
+pub struct ReadyLink {
+    store: Rc<WaitersInner>,
 }
 
-/// Drops the links, removing `ptr` from each live item's back-links.
-fn unlink<T, U>(
-    links: &mut Vec<Weak<T>>,
-    ptr: *const U,
-    back: impl Fn(&T) -> &RefCell<Vec<Weak<U>>>,
-) {
-    for item in links.drain(..).filter_map(|w| w.upgrade()) {
-        back(&item).borrow_mut().retain(|w| w.as_ptr() != ptr);
+impl fmt::Debug for ReadyLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadyLink")
+            .field("store", &Rc::as_ptr(&self.store))
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+struct Endpoint {
+    store: Rc<WaitersInner>,
+    scope: usize,
+}
+
+impl PartialEq for Endpoint {
+    /// Compares scope IDs within the same waiter-store allocation.
+    fn eq(&self, other: &Self) -> bool {
+        self.scope == other.scope && Rc::ptr_eq(&self.store, &other.store)
+    }
+}
+
+impl fmt::Debug for Endpoint {
+    /// Formats the store address and scope ID without accessing scope storage.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Endpoint")
+            .field("store", &Rc::as_ptr(&self.store))
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
+/// The append-only scope table owned by a pipeline's waiter store.
+#[derive(Debug)]
+pub(crate) struct ScopeStore {
+    slots: RefCell<Vec<Option<ScopeInner>>>,
+}
+
+impl Default for ScopeStore {
+    /// Creates root ID `0` with one owner reserved for the initial root handle.
+    fn default() -> Self {
+        Self {
+            slots: RefCell::new(vec![Some(ScopeInner::default())]),
+        }
+    }
+}
+
+impl ScopeStore {
+    /// Appends an unready scope with one owner and returns its never-reused ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the store is retired or its scope table is already borrowed.
+    fn allocate(&self) -> usize {
+        let mut slots = self.slots.borrow_mut();
+        assert!(!slots.is_empty(), "readiness store has been retired");
+        let id = slots.len();
+        slots.push(Some(ScopeInner::default()));
+        id
+    }
+
+    /// Runs `f` with a live scope, returning `None` for missing or retired IDs.
+    ///
+    /// Keeps the table immutably borrowed throughout `f`; allocating or retiring
+    /// scopes during the closure panics.
+    fn with<R>(&self, id: usize, f: impl FnOnce(&ScopeInner) -> R) -> Option<R> {
+        self.slots.borrow().get(id).and_then(Option::as_ref).map(f)
+    }
+
+    /// Releases one logical scope owner, ignoring already-retired IDs.
+    ///
+    /// The last child owner removes its slot. The last root owner retires the
+    /// entire table, closing all checkers before dropping scope resources.
+    /// Retained endpoints keep only the waiter-store allocation alive.
+    ///
+    /// # Panics
+    ///
+    /// Panics if retirement requires mutating a borrowed scope table.
+    fn release(&self, id: usize) {
+        if self.with(id, |s| {
+            s.owners.set(s.owners.get() - 1);
+            s.owners.get() == 0
+        }) != Some(true)
+        {
+            return;
+        }
+        if id == 0 {
+            let slots = self.slots.take();
+            // Close every checker before dropping reentrant callback captures or wakers.
+            for scope in slots.iter().flatten() {
+                scope.observers.close();
+            }
+        } else {
+            let scope = self.slots.borrow_mut()[id].take().unwrap();
+            scope.observers.close();
+        }
     }
 }
 
@@ -254,89 +362,278 @@ pub(crate) struct Generation {
 }
 
 impl From<Generation> for () {
+    /// Discards the snapshot when a caller only needs readiness completion.
     fn from(_: Generation) {}
 }
 
-/// A stable, shared readiness domain. Cloning aliases the same cache and graph.
+/// A lazily bound local scope handle; all scope data lives in its waiter store.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct ReadyScope(Rc<ScopeInner>);
+pub(crate) struct ReadyScope(OnceCell<ScopeRef>);
+
+#[derive(Debug)]
+struct ScopeRef {
+    store: Rc<WaitersInner>,
+    id: usize,
+}
+
+impl Clone for ScopeRef {
+    /// Acquires another logical owner of this live scope and clones its store.
+    ///
+    /// Panics if the scope has been retired.
+    fn clone(&self) -> Self {
+        self.store
+            .scopes
+            .with(self.id, |s| s.owners.set(s.owners.get() + 1))
+            .expect("readiness scope has been retired");
+        Self {
+            store: self.store.clone(),
+            id: self.id,
+        }
+    }
+}
+
+impl Drop for ScopeRef {
+    /// Releases logical ownership, retiring the scope on its last owner.
+    fn drop(&mut self) {
+        self.store.scopes.release(self.id);
+    }
+}
 
 impl ReadyScope {
+    /// Creates an unbound handle without allocating a scope or waiter store.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub(crate) fn generation(&self) -> Generation {
-        self.0.generation.get()
+    /// Adopts the initial owner of the store's preallocated root ID `0`.
+    ///
+    /// Does not increment the owner count; use cloning for additional handles.
+    pub(crate) fn root(store: Rc<WaitersInner>) -> Self {
+        Self(OnceCell::from(ScopeRef { store, id: 0 }))
     }
 
+    /// Returns the assigned store and ID without checking whether the scope is live.
+    ///
+    /// Panics if service binding has not assigned this handle to a store.
+    fn bound(&self) -> &ScopeRef {
+        self.0
+            .get()
+            .expect("ServiceBinding must be registered by Service::bind before use")
+    }
+
+    /// Accesses this scope while holding an immutable borrow of its store's table.
+    ///
+    /// Panics if the handle is unbound or the scope is retired. The closure must
+    /// not allocate or retire scopes in the borrowed table.
+    fn with<R>(&self, f: impl FnOnce(&ScopeInner) -> R) -> R {
+        let scope = self.bound();
+        scope
+            .store
+            .scopes
+            .with(scope.id, f)
+            .expect("readiness scope has been retired")
+    }
+
+    /// Returns an endpoint retaining the store allocation, not a logical scope owner.
+    ///
+    /// Panics if this handle is unbound; retired scopes can still produce endpoints.
+    fn endpoint(&self) -> Endpoint {
+        let scope = self.bound();
+        Endpoint {
+            store: scope.store.clone(),
+            scope: scope.id,
+        }
+    }
+
+    /// Returns an explicit subscription link for this pipeline root.
+    ///
+    /// Panics if the handle is unbound or its scope ID is not `0`.
+    pub(crate) fn readiness_link(&self) -> ReadyLink {
+        assert_eq!(self.bound().id, 0);
+        ReadyLink {
+            store: self.bound().store.clone(),
+        }
+    }
+
+    /// Makes invalidation of the linked source root propagate to this scope.
+    ///
+    /// Deduplicates dependency edges, ignores root self-links, and does nothing
+    /// for retired sources. Same-store edges use local IDs; foreign edges retain
+    /// a destination endpoint without acquiring a logical scope owner.
+    ///
+    /// Panics if the source is live but this handle is unbound, or if registration
+    /// conflicts with a borrow of the source's parent list.
+    pub(crate) fn subscribe_pipeline(&self, source_link: &ReadyLink) {
+        source_link.store.scopes.with(0, |source| {
+            let scope = self.bound();
+            if Rc::ptr_eq(&scope.store, &source_link.store) {
+                if scope.id != 0 {
+                    link(&source.parents, scope.id);
+                }
+            } else {
+                link(&source.external_parents, self.endpoint());
+            }
+        });
+    }
+
+    /// Returns the live scope's validation and direct-invalidation snapshot.
+    pub(crate) fn generation(&self) -> Generation {
+        self.with(|s| s.generation.get())
+    }
+
+    /// Returns whether no invalidation has occurred since the supplied snapshot.
     pub(crate) fn is_current(&self, generation: Generation) -> bool {
         self.generation() == generation
     }
 
-    /// Only direct invalidation requires restarting an outstanding check.
+    /// Returns whether direct invalidation has occurred since the snapshot.
+    ///
+    /// Invalidation propagated from a child changes the validation generation,
+    /// but only direct invalidation requires restarting an outstanding check.
     pub(crate) fn is_directly_invalidated(&self, generation: Generation) -> bool {
         self.generation().direct != generation.direct
     }
 
+    /// Returns cached readiness, or false for an unbound or retired scope.
     pub(crate) fn is_ready(&self) -> bool {
-        self.0.ready.get()
+        self.0.get().is_some_and(|scope| {
+            scope
+                .store
+                .scopes
+                .with(scope.id, |s| s.ready.get())
+                .unwrap_or(false)
+        })
     }
 
+    /// Directly invalidates this scope and visits its parents without callbacks.
+    ///
+    /// Wakes affected observers without running or dropping readiness futures.
+    /// Despite the name, this also supports nested scopes during service creation.
+    ///
+    /// Panics if this handle is unbound or another notification or reset is being
+    /// delivered on this thread. Retired scopes are ignored.
     pub(crate) fn reset_root(&self) {
-        invalidate_scope(self.0.clone(), false);
+        let scope = self.bound();
+        with_notification(|epoch| {
+            scope
+                .store
+                .scopes
+                .with(scope.id, |s| s.direct_epoch.set(epoch));
+            notify_scope(&scope.store, scope.id, epoch, true, false);
+        });
     }
 
     /// Records a successful check only if no dependency changed while checking.
+    ///
+    /// Returns false for a stale snapshot. Does not validate parents, invoke
+    /// callbacks, or wake observers.
     pub(crate) fn set_ready(&self, generation: Generation) -> bool {
         if self.is_current(generation) {
-            self.0.ready.set(true);
+            self.with(|s| s.ready.set(true));
             true
         } else {
             false
         }
     }
 
-    /// Subscribes during initialization of the service using this source.
+    /// Appends a persistent notifier subscription during service initialization.
+    ///
+    /// Does not deduplicate: repeated subscriptions cause repeated direct delivery.
+    /// Panics if this handle is unbound or the source is delivering a notification.
     pub(crate) fn subscribe(&self, source: &ReadyNotifier) {
-        if link(&self.0.sources, &source.0) {
-            source.0.scopes.borrow_mut().push(Rc::downgrade(&self.0));
-        }
+        let endpoint = self.endpoint();
+        source.0.borrow_mut().push(endpoint);
     }
 
+    /// Retains a callback until scope retirement, deduplicating its shared identity.
+    ///
+    /// Panics if the scope is unbound, retired, or currently delivering callbacks.
     pub(crate) fn on_notify(&self, callback: &ReadyCallback) {
-        let mut callbacks = self.0.callbacks.borrow_mut();
-        if !callbacks.iter().any(|c| Rc::ptr_eq(&c.0, &callback.0)) {
-            callbacks.push(callback.clone());
-        }
+        self.with(|s| {
+            let mut callbacks = s.callbacks.borrow_mut();
+            if !callbacks.iter().any(|c| Rc::ptr_eq(&c.0, &callback.0)) {
+                callbacks.push(callback.clone());
+            }
+        });
     }
 
-    /// Registers a child during service binding.
+    /// Binds an unbound child to this store and records this scope as its parent.
+    ///
+    /// Invalidation propagates from child to parent. Repeated edges and
+    /// self-dependencies are ignored; stale parent IDs need no cleanup.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this handle is unbound, the child belongs to another store, or
+    /// allocation or registration conflicts with borrowed scope or parent storage.
     pub(crate) fn depend_on(&self, child: &Self) {
-        if !Rc::ptr_eq(&self.0, &child.0) && link(&self.0.children, &child.0) {
-            child.0.parents.borrow_mut().push(Rc::downgrade(&self.0));
+        let parent = self.bound();
+        let child = child.0.get_or_init(|| {
+            let id = parent.store.scopes.allocate();
+            ScopeRef {
+                store: parent.store.clone(),
+                id,
+            }
+        });
+        assert!(
+            Rc::ptr_eq(&parent.store, &child.store),
+            "ServiceBinding cannot be shared across pipelines; use ReadyLink with a shared Pipeline"
+        );
+        if parent.id != child.id {
+            parent
+                .store
+                .scopes
+                .with(child.id, |s| link(&s.parents, parent.id));
         }
     }
 
+    /// Verifies that the child is this scope or records this scope as a local parent.
+    ///
+    /// Panics for unbound handles, foreign stores, or missing dependency edges.
     pub(crate) fn assert_dependency(&self, child: &Self) {
         assert!(
-            Rc::ptr_eq(&self.0, &child.0) || contains(&self.0.children.borrow(), &child.0),
+            child.0.get().is_some_and(|child| {
+                let parent = self.bound();
+                Rc::ptr_eq(&parent.store, &child.store)
+                    && (parent.id == child.id
+                        || parent
+                            .store
+                            .scopes
+                            .with(child.id, |s| s.parents.borrow().contains(&parent.id))
+                            == Some(true))
+            }),
             "ServiceBinding must be registered by Service::bind before use"
         );
     }
 
+    /// Allocates an empty observer slot for one independently waiting task.
+    ///
+    /// The returned handle removes its slot on drop without retaining the scope.
+    /// A waker is installed separately with [`ReadyObserver::register`].
     pub(crate) fn observer(&self) -> ReadyObserver {
         ReadyObserver {
-            scope: Rc::downgrade(&self.0),
-            idx: self.0.observers.slots.borrow_mut().insert(None),
+            store: self.bound().store.clone(),
+            scope: self.bound().id,
+            idx: self.with(|s| s.observers.slots.borrow_mut().insert(None)),
         }
     }
 
+    /// Returns the scope's shared, lazily allocated observer-forwarding waker.
+    ///
+    /// Waking it schedules observers without invalidating readiness and must
+    /// happen on the owning thread, even after the scope has been retired.
     pub(crate) fn checker_waker(&self) -> Waker {
-        self.0.observers.checker_waker()
+        let endpoint = self.endpoint();
+        self.with(|s| s.observers.checker_waker(endpoint))
     }
 
     /// Drives or joins a shared check without allocating on a cached success.
+    ///
+    /// Only the current owner runs `check`; other callers wait for its result or
+    /// cancellation. Successful checks cache readiness only for a current
+    /// generation, while errors return to the owner without being cached.
+    /// Completion or cancellation releases ownership and wakes waiting callers,
+    /// which recheck the cache before claiming ownership themselves.
     pub(crate) async fn check<F, Fut, E>(&self, mut check: F) -> Result<(), E>
     where
         F: FnMut() -> Fut,
@@ -355,7 +652,7 @@ impl ReadyScope {
                 observer.register(cx.waker());
                 if self.is_ready() {
                     Poll::Ready(None)
-                } else if self.0.checking.replace(true) {
+                } else if self.with(|s| s.checking.replace(true)) {
                     Poll::Pending
                 } else {
                     Poll::Ready(Some(CheckOwner(self)))
@@ -375,128 +672,54 @@ impl ReadyScope {
     }
 
     /// Schedules observers without changing cached readiness or generations.
+    ///
+    /// Takes their wakers into a buffer and wakes them after releasing scope and
+    /// observer-storage borrows. Observer slots remain available for registration.
     pub(crate) fn wake_observers(&self) {
-        self.0.observers.take_wakers(&mut Wakers::default(), None);
+        let mut wakers = Wakers::default();
+        self.with(|s| s.observers.take_wakers(&mut wakers, None));
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ScopeInner {
+    owners: Cell<usize>,
     generation: Cell<Generation>,
     ready: Cell<bool>,
     checking: Cell<bool>,
-    notifying: Cell<bool>,
+    notify_epoch: Cell<u64>,
+    direct_epoch: Cell<u64>,
     callbacks: RefCell<Vec<ReadyCallback>>,
-    sources: RefCell<Vec<Weak<SourceInner>>>,
-    parents: RefCell<Vec<Weak<Self>>>,
-    children: RefCell<Vec<Weak<Self>>>,
-    observers: Rc<ReadyObservers>,
+    parents: RefCell<Vec<usize>>,
+    external_parents: RefCell<Vec<Endpoint>>,
+    observers: ReadyObservers,
 }
 
-thread_local! {
-    static THREAD_ID: ThreadId = thread::current().id();
-    static CHECKERS: RefCell<slab::Slab<Weak<ReadyObservers>>> = RefCell::default();
-}
-
-#[derive(Debug, Default)]
-struct ReadyObservers {
-    slots: RefCell<slab::Slab<Option<Waker>>>,
-    checker: OnceCell<Arc<CheckerWake>>,
-    _local: PhantomData<Rc<()>>,
-}
-
-impl ReadyObservers {
-    fn checker_waker(self: &Rc<Self>) -> Waker {
-        let checker = self.checker.get_or_init(|| {
-            let idx = CHECKERS.with_borrow_mut(|slots| slots.insert(Rc::downgrade(self)));
-            Arc::new(CheckerWake {
-                owner: THREAD_ID.with(|id| *id),
-                idx,
-                closed: AtomicBool::new(false),
-            })
-        });
-        Waker::from(checker.clone())
-    }
-
-    /// Takes registered wakers, except those with `skip` data.
-    fn take_wakers(&self, wakers: &mut Wakers, skip: Option<*const ()>) {
-        // Waker clone/drop/wake may reenter; keep them outside the borrow.
-        for (_, waker) in self.slots.borrow_mut().iter_mut() {
-            if let Some(waker) = waker.take_if(|waker| Some(waker.data()) != skip) {
-                wakers.push(waker);
-            }
+impl Default for ScopeInner {
+    /// Creates an unready scope with one owner and no registrations or dependencies.
+    fn default() -> Self {
+        Self {
+            owners: Cell::new(1),
+            generation: Cell::default(),
+            ready: Cell::default(),
+            checking: Cell::default(),
+            notify_epoch: Cell::default(),
+            direct_epoch: Cell::default(),
+            callbacks: RefCell::default(),
+            parents: RefCell::default(),
+            external_parents: RefCell::default(),
+            observers: ReadyObservers::default(),
         }
-    }
-}
-
-impl Drop for ReadyObservers {
-    fn drop(&mut self) {
-        if let Some(checker) = self.checker.get() {
-            // Invalidate old wakers before their registry slot can be reused.
-            checker.closed.store(true, Ordering::Release);
-            // The registry may already be destroyed during thread-local teardown.
-            let _ = CHECKERS.try_with(|slots| slots.borrow_mut().remove(checker.idx));
-        }
-    }
-}
-
-// Only thread-safe routing metadata escapes the local observer storage.
-#[derive(Debug)]
-struct CheckerWake {
-    owner: ThreadId,
-    idx: usize,
-    closed: AtomicBool,
-}
-
-impl Wake for CheckerWake {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        if self.closed.load(Ordering::Acquire) {
-            return;
-        }
-        assert!(
-            THREAD_ID.with(|id| *id == self.owner),
-            "ntex-service readiness observers can only be accessed on their owning thread"
-        );
-        // Local destructors may wake a checker after the registry is destroyed.
-        if let Ok(Some(observers)) =
-            CHECKERS.try_with(|slots| slots.borrow().get(self.idx).and_then(Weak::upgrade))
-        {
-            // Checks polled by this waker register it too. Waking it would only
-            // repeat this pass, so it stays registered for later notifications.
-            let this = Arc::as_ptr(self).cast::<()>();
-            observers.take_wakers(&mut Wakers::default(), Some(this));
-        }
-    }
-}
-
-struct CheckOwner<'a>(&'a ReadyScope);
-
-impl Drop for CheckOwner<'_> {
-    fn drop(&mut self) {
-        self.0.0.checking.set(false);
-        self.0.wake_observers();
     }
 }
 
 impl ScopeInner {
-    fn notify_callbacks(&self, count: usize) {
-        if count == 0 || self.notifying.replace(true) {
-            return;
-        }
-        // Moving the existing storage out leaves room for reentrant registrations.
-        let callbacks = NotifyCallbacks {
-            scope: self,
-            callbacks: self.callbacks.take(),
-        };
-        for callback in callbacks.callbacks.iter().take(count) {
-            (callback.0)();
-        }
-    }
-
+    /// Advances the validation generation and clears cached readiness.
+    ///
+    /// Direct invalidation also advances the restart marker for pending checks.
+    /// Does not traverse dependencies or deliver callbacks or wakes.
+    ///
+    /// Panics when the generation counter overflows.
     fn invalidate(&self, direct: bool) {
         let mut generation = self.generation.get();
         generation.value = generation
@@ -511,56 +734,198 @@ impl ScopeInner {
     }
 }
 
-impl Drop for ScopeInner {
+#[derive(Debug, Default)]
+struct ReadyObservers {
+    slots: RefCell<slab::Slab<Option<Waker>>>,
+    checker: OnceCell<Arc<CheckerWake>>,
+    _local: PhantomData<Rc<()>>,
+}
+
+impl ReadyObservers {
+    /// Returns the cached checker waker, creating it for this scope's endpoint.
+    ///
+    /// The endpoint must identify the scope owning these observers. Its waker
+    /// forwards wakes only on the thread that first creates it.
+    fn checker_waker(&self, endpoint: Endpoint) -> Waker {
+        let checker = self.checker.get_or_init(|| {
+            Arc::new(CheckerWake {
+                owner: thread::current().id(),
+                endpoint: mem::ManuallyDrop::new(endpoint),
+                closed: Cell::new(false),
+            })
+        });
+        Waker::from(checker.clone())
+    }
+
+    /// Disables any cached checker without waking tasks or removing observer slots.
+    ///
+    /// Repeated calls are harmless; retained closed wakers still enforce ownership.
+    fn close(&self) {
+        if let Some(checker) = self.checker.get() {
+            checker.closed.set(true);
+        }
+    }
+
+    /// Moves registered wakers into the delivery buffer without removing slots.
+    ///
+    /// Wakers matching `skip` data remain registered. Drop the buffer only after
+    /// releasing scope and observer borrows, since delivery may reenter.
+    fn take_wakers(&self, wakers: &mut Wakers, skip: Option<*const ()>) {
+        // Waker clone/drop/wake may reenter; keep them outside the borrow.
+        for (_, waker) in self.slots.borrow_mut().iter_mut() {
+            if let Some(waker) = waker.take_if(|waker| Some(waker.data()) != skip) {
+                wakers.push(waker);
+            }
+        }
+    }
+}
+
+impl Drop for ReadyObservers {
+    /// Closes the cached checker before destroying the observer storage.
     fn drop(&mut self) {
-        let ptr = std::ptr::from_ref(self);
-        unlink(self.sources.get_mut(), ptr, |source| &source.scopes);
-        unlink(self.children.get_mut(), ptr, |child| &child.parents);
-        unlink(self.parents.get_mut(), ptr, |parent| &parent.children);
+        self.close();
+    }
+}
+
+struct CheckerWake {
+    owner: ThreadId,
+    closed: Cell<bool>,
+    endpoint: mem::ManuallyDrop<Endpoint>,
+}
+
+// SAFETY: Arc reference counts are atomic. The Rc endpoint is accessed and
+// destroyed only on its owning thread; rejected destruction leaves it intact.
+unsafe impl Send for CheckerWake {}
+// SAFETY: The Cell and Rc endpoint are accessed only on the owning thread.
+// Foreign-thread access, including Debug, only reads the immutable owner ID.
+unsafe impl Sync for CheckerWake {}
+
+impl CheckerWake {
+    /// Checks thread ownership without accessing the thread-local endpoint.
+    fn is_owner(&self) -> bool {
+        thread::current().id() == self.owner
+    }
+}
+
+impl fmt::Debug for CheckerWake {
+    /// Formats only thread-safe metadata without inspecting the local endpoint.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckerWake")
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for CheckerWake {
+    /// Drops the endpoint only on its owning thread.
+    ///
+    /// Foreign-thread destruction leaks the endpoint and panics unless already
+    /// unwinding, avoiding non-atomic reference-count access and a second panic.
+    fn drop(&mut self) {
+        if self.is_owner() {
+            // SAFETY: The owner thread is the only thread that touches this Rc.
+            unsafe { mem::ManuallyDrop::drop(&mut self.endpoint) };
+        } else if !thread::panicking() {
+            // Never drop the Rc on this thread, even while unwinding.
+            panic!("ntex-service readiness observers can only be accessed on their owning thread");
+        }
+    }
+}
+
+impl Wake for CheckerWake {
+    /// Consumes this handle and forwards to owner-thread observer delivery.
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    /// Wakes observers without invalidating readiness or waking this checker again.
+    ///
+    /// Closed checkers and retired scopes are ignored after checking ownership.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a foreign thread, even if the checker has already been closed.
+    fn wake_by_ref(self: &Arc<Self>) {
+        assert!(
+            self.is_owner(),
+            "ntex-service readiness observers can only be accessed on their owning thread"
+        );
+        if self.closed.get() {
+            return;
+        }
+        // Checks polled by this waker register it too. Waking it would only
+        // repeat this pass, so it stays registered for later notifications.
+        let this = Arc::as_ptr(self).cast::<()>();
+        let mut wakers = Wakers::default();
+        self.endpoint.store.scopes.with(self.endpoint.scope, |s| {
+            s.observers.take_wakers(&mut wakers, Some(this));
+        });
+    }
+}
+
+struct CheckOwner<'a>(&'a ReadyScope);
+
+impl Drop for CheckOwner<'_> {
+    /// Releases shared-check ownership and wakes observers to retry or use the cache.
+    fn drop(&mut self) {
+        self.0.with(|s| s.checking.set(false));
+        self.0.wake_observers();
     }
 }
 
 /// One task's registration, independent of the scope's persistent subscriptions.
 #[derive(Debug)]
 pub(crate) struct ReadyObserver {
-    scope: Weak<ScopeInner>,
+    store: Rc<WaitersInner>,
+    scope: usize,
     idx: usize,
 }
 
 impl ReadyObserver {
+    /// Clears this task's waker without removing its reusable observer slot.
+    ///
+    /// Retired scopes are ignored; the removed waker is dropped outside all borrows.
     pub(crate) fn clear(&self) {
-        if let Some(scope) = self.scope.upgrade() {
-            let waker = scope.observers.slots.borrow_mut()[self.idx].take();
-            drop(waker);
-        }
+        let waker = self.store.scopes.with(self.scope, |s| {
+            s.observers.slots.borrow_mut()[self.idx].take()
+        });
+        drop(waker);
     }
 
-    /// Registers before checking readiness; returns false if the scope is gone.
+    /// Registers this task's waker before checking readiness to avoid missed wakes.
+    ///
+    /// Reuses an equivalent waker; otherwise clones and drops wakers outside
+    /// storage borrows. Returns false if the scope retires before registration.
     pub(crate) fn register(&self, waker: &Waker) -> bool {
-        let Some(scope) = self.scope.upgrade() else {
+        let Some(registered) = self.store.scopes.with(self.scope, |s| {
+            s.observers.slots.borrow()[self.idx]
+                .as_ref()
+                .is_some_and(|prev| prev.will_wake(waker))
+        }) else {
             return false;
         };
-        if scope.observers.slots.borrow_mut()[self.idx]
-            .as_ref()
-            .is_some_and(|prev| prev.will_wake(waker))
-        {
+        if registered {
             return true;
         }
 
         // Waker clone/drop implementations can reenter, just like wake.
-        let waker = waker.clone();
-        let previous = scope.observers.slots.borrow_mut()[self.idx].replace(waker);
+        let mut waker = Some(waker.clone());
+        let previous = self.store.scopes.with(self.scope, |s| {
+            std::mem::replace(&mut s.observers.slots.borrow_mut()[self.idx], waker.take())
+        });
+        let registered = previous.is_some();
         drop(previous);
-        true
+        registered
     }
 }
 
 impl Drop for ReadyObserver {
+    /// Removes the task's slot if still live, dropping its waker outside all borrows.
     fn drop(&mut self) {
-        if let Some(scope) = self.scope.upgrade() {
-            let waker = scope.observers.slots.borrow_mut().remove(self.idx);
-            drop(waker);
-        }
+        let waker = self.store.scopes.with(self.scope, |s| {
+            s.observers.slots.borrow_mut().remove(self.idx)
+        });
+        drop(waker);
     }
 }
 
@@ -582,6 +947,10 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<(), E>>,
 {
+    /// Creates an idle runner without invoking the check factory until polled.
+    ///
+    /// Does not acquire shared-check ownership or populate the readiness cache;
+    /// callers handle those steps when caching a successful generation.
     pub(crate) fn new(scope: &'a ReadyScope, check: F) -> Self {
         Self {
             scope,
@@ -592,6 +961,7 @@ where
         }
     }
 
+    /// Returns the scope whose invalidations govern this runner's checks.
     pub(crate) fn scope(&self) -> &'a ReadyScope {
         self.scope
     }
@@ -604,7 +974,12 @@ where
 {
     type Output = Result<Generation, E>;
 
-    /// Polls the check. After completion, the next poll starts a new check.
+    /// Polls until a successful check belongs to an unchanged generation.
+    ///
+    /// Direct invalidation replaces an outstanding check. Propagated invalidation
+    /// lets it finish, but retries stale successes; errors return without retry.
+    /// Repeated invalidation yields to the executor instead of spinning.
+    /// After completion, the next poll starts a new check.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: `fut` is pinned in place and only dropped in place.
         let this = unsafe { self.get_unchecked_mut() };
