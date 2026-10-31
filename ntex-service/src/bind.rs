@@ -106,11 +106,11 @@ impl<'a> BindCtx<'a> {
 
     /// Registers a callback for notifications reaching this readiness scope.
     ///
-    /// Raw services share this scope; a [`crate::ServiceBinding`] owns its own.
+    /// Raw services share this scope; a [`crate::ReadyBinding`] owns its own.
     /// Repeated registration of the same handle is idempotent. See
     /// [`ReadyCallback`] for notification and lifetime semantics.
     /// The callback receives this scope's data from
-    /// [`crate::ServiceBinding::with_data`], or `0` by default.
+    /// [`crate::ReadyBinding::with_data`], or `0` by default.
     ///
     /// # Panics
     ///
@@ -121,7 +121,7 @@ impl<'a> BindCtx<'a> {
 
     /// Binds a child service to this readiness scope.
     ///
-    /// Raw services share this scope. A [`crate::ServiceBinding`] uses its own
+    /// Raw services share this scope. A [`crate::ReadyBinding`] uses its own
     /// scope and registers it as a dependency of this one.
     /// Use explicit type arguments when the child has multiple [`Service`]
     /// implementations.

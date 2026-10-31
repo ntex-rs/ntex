@@ -323,7 +323,7 @@ async fn test_ready_after_shutdown() {
 ///
 /// HOW:
 /// - Construct a service whose readiness condition has not been released.
-/// - Complete poll_shutdown and verify poll_ready also completes.
+/// - Complete `poll_shutdown` and verify `poll_ready` also completes.
 #[ntex::test]
 async fn test_pipeline_binding_after_shutdown() {
     let cnt = Rc::new(Cell::new(0));

@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::error::{Failure, IntoFailure};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::{Identity, ServiceBinding, ServiceChainFactory};
+use crate::service::{Identity, ReadyBinding, ServiceChainFactory};
 use crate::{Ctx, IntoServiceFactory, Middleware, Service, ServiceFactory, factory};
 
 use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
@@ -687,7 +687,7 @@ where
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         let filter = self.filter.create(st).await?;
         let default = if let Some(ref default) = self.default {
-            Some(ServiceBinding::new(default.create(st).await?))
+            Some(ReadyBinding::new(default.create(st).await?))
         } else {
             None
         };
@@ -710,7 +710,7 @@ where
 pub struct ResourceService<St: State, In, Out, F> {
     filter: F,
     routes: Vec<RouteService<St, Out>>,
-    default: Option<ServiceBinding<HttpHandler<St, Out>>>,
+    default: Option<ReadyBinding<HttpHandler<St, Out>>>,
     ph: PhantomData<In>,
 }
 

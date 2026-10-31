@@ -16,7 +16,7 @@
 //! by all handles until a subscribed [`crate::ReadyNotifier`] invalidates it;
 //! neither a call nor a different state value consumes that success.
 //! Independent readiness gates require separate pipelines or
-//! [`crate::ServiceBinding`] wrappers.
+//! [`crate::ReadyBinding`] wrappers.
 //!
 //! Pipelines and their handles are local to a thread. Services whose readiness
 //! changes must subscribe in [`Service::bind`] and notify on those changes;

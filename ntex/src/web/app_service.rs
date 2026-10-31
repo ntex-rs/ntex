@@ -4,7 +4,8 @@ use crate::error::Failure;
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::cfg::{Cfg, Configuration};
-use crate::service::{ReadyCallback, ReadyNotifier, ServiceBinding, ServiceChainFactory, boxed};
+use crate::service::{ReadyBinding, ReadyCallback, ReadyNotifier, ServiceChainFactory, boxed};
+use crate::util::OnDropFn;
 use crate::{BindCtx, Ctx, Middleware, Service, ServiceFactory, factory, util::HashMap};
 
 use super::config::WebAppConfig;
@@ -231,11 +232,11 @@ where
 #[derive(derive_more::Debug)]
 #[debug("Router")]
 pub struct WebServiceRouter<St: State, In, Out, F> {
-    filter: ServiceBinding<CachedService<F>>,
+    filter: ReadyBinding<CachedService<F>>,
     router: Rc<Router<HttpService<St, Out>, Guards>>,
     default: HttpService<St, Out>,
-    cache: RefCell<HashMap<usize, Rc<ServiceBinding<CachedService<HttpHandler<St, Out>>>>>>,
-    cache_default: RefCell<Option<Rc<ServiceBinding<CachedService<HttpHandler<St, Out>>>>>>,
+    cache: RefCell<HashMap<usize, Rc<ReadyBinding<CachedService<HttpHandler<St, Out>>>>>>,
+    cache_default: RefCell<Option<Rc<ReadyBinding<CachedService<HttpHandler<St, Out>>>>>>,
     readiness: Rc<RouterReadiness>,
     ph: PhantomData<In>,
 }
@@ -247,7 +248,7 @@ impl<St: State, In, Out, F> WebServiceRouter<St, In, Out, F> {
         default: HttpService<St, Out>,
     ) -> Self {
         let readiness = RouterReadiness::new();
-        let filter = ServiceBinding::with_data(
+        let filter = ReadyBinding::with_data(
             CachedService::new(usize::MAX, filter, &readiness),
             usize::MAX,
         );
@@ -304,10 +305,11 @@ where
                 if let Some(id) = id {
                     let hnd = self.cache.borrow().get(&id).cloned();
                     if let Some(hnd) = hnd {
-                        if let Err(err) = ctx.ready(&hnd).await {
+                        let pending = OnDropFn::new(|| {
                             self.readiness.unknown.borrow_mut().push(id);
-                            return Err(err);
-                        }
+                        });
+                        ctx.ready(&hnd).await?;
+                        pending.cancel();
                     }
                 } else {
                     break;
@@ -349,7 +351,7 @@ where
             svc
         } else if let Ok(service) = ctx
             .create(&factory(sf.clone()).apply(CachedServiceMiddleware(
-                id.map(|id| id.get() as usize).unwrap_or(usize::MAX),
+                id.map_or(usize::MAX, |id| id.get() as usize),
                 self.readiness.clone(),
             )))
             .await
@@ -416,7 +418,7 @@ impl RouterReadiness {
                 .checked_add(1)
                 .expect("router readiness revision exhausted"),
         );
-        if id != 0 {
+        if id != usize::MAX {
             self.unknown.borrow_mut().push(id);
         }
     }
@@ -425,10 +427,10 @@ impl RouterReadiness {
 struct CachedServiceMiddleware(usize, Rc<RouterReadiness>);
 
 impl<S, St> Middleware<S, St> for CachedServiceMiddleware {
-    type Service = ServiceBinding<CachedService<S>>;
+    type Service = ReadyBinding<CachedService<S>>;
 
     fn create(&self, _: &St, service: S) -> Self::Service {
-        ServiceBinding::with_data(CachedService::new(self.0, service, &self.1), self.0)
+        ReadyBinding::with_data(CachedService::new(self.0, service, &self.1), self.0)
     }
 }
 
@@ -621,7 +623,7 @@ mod tests {
             {
                 let unknown = router.readiness.unknown.borrow();
                 assert!(!unknown.is_empty());
-                assert!(unknown.iter().all(|tag| *tag == id + 1));
+                assert!(unknown.iter().all(|tag| *tag == id));
             }
             probe.call(None).await.unwrap();
             assert!(router.readiness.unknown.borrow().is_empty());

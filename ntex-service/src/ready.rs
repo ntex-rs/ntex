@@ -1,6 +1,6 @@
 use crate::{
-    Ctx, IntoService, IntoServiceFactory, Service, ServiceBinding, ServiceChain,
-    ServiceChainFactory, ServiceFactory,
+    Ctx, IntoService, IntoServiceFactory, ReadyBinding, Service, ServiceChain, ServiceChainFactory,
+    ServiceFactory,
 };
 
 /// Wraps a service with independent, notification-invalidated readiness.
@@ -29,7 +29,7 @@ where
     S: Service<St, Req>,
 {
     crate::service(Ready {
-        service: ServiceBinding::new(service.into_service()),
+        service: ReadyBinding::new(service.into_service()),
     })
 }
 
@@ -56,7 +56,7 @@ where
 /// readiness check.
 #[derive(Debug, Clone)]
 pub struct Ready<S> {
-    service: ServiceBinding<S>,
+    service: ReadyBinding<S>,
 }
 
 impl<S, St, Req> Service<St, Req> for Ready<S>
@@ -102,7 +102,7 @@ where
     #[inline]
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         Ok(Ready {
-            service: ServiceBinding::new(self.factory.create(st).await?),
+            service: ReadyBinding::new(self.factory.create(st).await?),
         })
     }
 }

@@ -2,11 +2,15 @@
 
 ## [4.5.0] - Unreleased
 
+* service: Rename `ServiceBinding` and `ServiceBindingMiddleware` to
+  `ReadyBinding` and `ReadyBindingMiddleware`, retaining both old names as
+  deprecated compatibility aliases.
+
 * web: Share one readiness callback across each router's cached handlers, filter,
   and default service, identifying handlers through per-scope callback data.
 
 * service: Expose `ReadyLink` and explicit cross-pipeline readiness subscriptions.
-  `ServiceBinding` scopes are now allocated in their first pipeline; share a
+  `ReadyBinding` scopes are now allocated in their first pipeline; share a
   `Pipeline` or `PipelineState` rather than a binding across separate pipelines.
 
 * web: Aggregate readiness across the filter and all cached route and default

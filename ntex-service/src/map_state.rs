@@ -36,7 +36,7 @@ where
 /// A service that substitutes fixed state for the outer pipeline state.
 ///
 /// Readiness and lifecycle subscriptions retain the wrapped service's scope.
-/// Cloning follows the wrapped service: a [`crate::ServiceBinding`] clone gets
+/// Cloning follows the wrapped service: a [`crate::ReadyBinding`] clone gets
 /// fresh readiness, while an explicitly shared handle keeps its existing gate.
 pub struct MapState<S, St> {
     s: S,

@@ -20,6 +20,7 @@ use std::rc::Rc;
 mod and_then;
 mod apply;
 mod bind;
+mod binding;
 pub mod boxed;
 pub mod cfg;
 mod chain;
@@ -35,7 +36,6 @@ mod map_state;
 mod middleware;
 mod readiness;
 mod ready;
-mod service_binding;
 pub mod state;
 mod then;
 mod util;
@@ -47,6 +47,7 @@ mod pl_state;
 
 pub use crate::apply::{apply_fn, apply_fn_factory};
 pub use crate::bind::BindCtx;
+pub use crate::binding::{ReadyBinding, ReadyBindingMiddleware};
 pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, service};
 pub use crate::ctx::Ctx;
 pub use crate::fn_service::{fn_factory, fn_service, fn_service_st};
@@ -55,8 +56,15 @@ pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
 pub use crate::readiness::{ReadyCallback, ReadyLink, ReadyNotifier};
 pub use crate::ready::{ready, ready_factory};
-pub use crate::service_binding::{ServiceBinding, ServiceBindingMiddleware};
 pub use crate::state::{RequestState, State};
+
+/// Backward-compatible name for [`ReadyBinding`].
+#[deprecated(since = "5.5.0", note = "use ReadyBinding instead")]
+pub type ServiceBinding<S> = ReadyBinding<S>;
+
+/// Backward-compatible name for [`ReadyBindingMiddleware`].
+#[deprecated(since = "5.5.0", note = "use ReadyBindingMiddleware instead")]
+pub type ServiceBindingMiddleware = ReadyBindingMiddleware;
 
 #[allow(unused_variables)]
 /// An asynchronous operation from a request to a response.
@@ -169,7 +177,7 @@ pub trait Service<St, Req> {
     /// Pipeline readiness is coordinated across all services in a composed
     /// chain. A request is dispatched only when the chain is ready.
     ///
-    /// A [`Pipeline`] or [`ServiceBinding`] caches success until a subscribed
+    /// A [`Pipeline`] or [`ReadyBinding`] caches success until a subscribed
     /// [`ReadyNotifier`] invalidates it; calls do not consume that success.
     /// Subscribe in [`Self::bind`] and notify on every readiness-changing
     /// transition, including consuming or releasing capacity and external

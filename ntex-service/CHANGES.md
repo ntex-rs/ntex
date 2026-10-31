@@ -2,8 +2,12 @@
 
 ## [5.5.0] - 2026-10-31
 
+* Rename `ServiceBinding` to `ReadyBinding` and `ServiceBindingMiddleware` to
+  `ReadyBindingMiddleware`, retaining both old names as deprecated aliases.
+  The middleware alias also preserves its value constructor and unit-struct patterns
+
 * Change `ReadyCallback` to accept the receiving scope's `usize` data.
-  Configure data with `ServiceBinding::with_data(service, data)`; unconfigured
+  Configure data with `ReadyBinding::with_data(service, data)`; unconfigured
   scopes and pipeline roots pass zero. Cloned bindings preserve their data
 
 * Store readiness scopes by monotonically allocated local IDs in the pipeline's
@@ -25,7 +29,7 @@
   `BindCtx::subscribe_pipeline()` for explicit cross-pipeline readiness
   subscriptions; `bind_to()` remains shorthand
 
-* Allocate `ServiceBinding` scopes on first binding. Sharing a binding is limited
+* Allocate `ReadyBinding` scopes on first binding. Sharing a binding is limited
   to one pipeline; use a shared `Pipeline` or `PipelineState` and readiness links
   for cross-pipeline gates. Cloning a binding creates a fresh unbound scope
 
