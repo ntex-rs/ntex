@@ -7,7 +7,6 @@ use urly::Url;
 
 use super::encoder::is_bodyless;
 use crate::http::config::HttpServiceConfig;
-use crate::http::helpers::is_valid_target;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::{HeaderItem, error::DecodeError, header::HeaderMap, request::Request};
 use crate::util::{ByteString, Bytes, BytesMut};
@@ -219,7 +218,7 @@ impl<T: MessageType> MessageDecoder<T> {
         if inner.val.is_none() {
             // the parser resumes from `line_st`, so data of an incomplete
             // start line is not scanned again on the next read
-            match T::decode(src, &mut inner.line, &mut inner.line_st)? {
+            match T::decode(src, &mut inner.line, &mut inner.line_st, &inner.cfg)? {
                 Poll::Ready(_) if len - src.len() > max_line => {
                     return Err(DecodeError::StartLineTooLong(len - src.len()));
                 }
@@ -392,6 +391,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
         src: &mut BytesMut,
         parser: &mut Self::Parser,
         st: &mut httparse::State,
+        cfg: &HttpServiceConfig,
     ) -> Result<Poll<Self>, DecodeError>;
 
     fn set_payload_length(
@@ -542,65 +542,26 @@ impl MessageType for Request {
         src: &mut BytesMut,
         req: &mut httparse::Request,
         st: &mut httparse::State,
+        cfg: &HttpServiceConfig,
     ) -> Result<Poll<Self>, DecodeError> {
         match req.parse_with_state(src, st)? {
             Status::Complete(pos) => {
                 let method = Method::from_bytes(&src[req.method.start..req.method.end])
                     .map_err(|_| DecodeError::Method)?;
-                let target = &src[req.path.start..req.path.end];
-                if !is_valid_target(target) {
-                    return Err(DecodeError::Uri);
-                }
-                // asterisk-form is only used for a server-wide `OPTIONS` request,
-                // see RFC 9112 section 3.2.4
-                if target == b"*" && method != Method::OPTIONS {
-                    return Err(DecodeError::Uri);
-                }
                 // the target is split off `src` directly, the rest of the
                 // request line is skipped
                 src.advance_to(req.path.start);
                 let target = src.split_to(req.path.end - req.path.start);
                 src.advance_to(pos - req.path.end);
-                let uri = if method == Method::CONNECT {
-                    // authority-form is used only, and always, for `CONNECT`, see
-                    // RFC 9112 section 3.2.3
-                    let target = str::from_utf8(&target).map_err(|_| DecodeError::Uri)?;
-                    let uri = Url::parse(target)?;
-                    if uri.authority().is_some_and(|a| a.userinfo().is_some()) {
-                        return Err(DecodeError::Uri);
-                    }
-                    uri
-                } else {
-                    // origin-form, absolute-form or asterisk-form
-                    let asterisk = &target[..] == b"*";
-                    let uri = if target.starts_with(b"//") {
-                        // origin-form path, not a network-path reference
-                        let target = str::from_utf8(&target).map_err(|_| DecodeError::Uri)?;
-                        Url::try_from(format!("/.{target}"))?
-                    } else {
-                        // SAFETY: a valid target is ASCII
-                        let target = unsafe { ByteString::from_bytes_unchecked(target) };
-                        // reuses the buffer if the target is normalized
-                        Url::try_from(target)?
-                    };
-                    let valid = if uri.is_absolute() {
-                        // userinfo is deprecated, see RFC 9110 section 4.2.4
-                        uri.host().is_some()
-                            && uri.authority().is_some_and(|a| a.userinfo().is_none())
-                    } else {
-                        uri.authority().is_none()
-                            && (uri.path().as_str().starts_with('/') || asterisk)
-                    };
-                    if !valid {
-                        return Err(DecodeError::Uri);
-                    }
-                    uri
-                };
+                let mut uri = Url::parse_target(target)?;
                 let version = if req.version == 1 {
                     Version::HTTP_11
                 } else {
                     Version::HTTP_10
                 };
+                if cfg.normalize_target {
+                    crate::http::helpers::normalize_request_target(&method, version, &mut uri)?;
+                }
 
                 let mut msg = Request::new();
                 let head = msg.head_mut();
@@ -689,6 +650,7 @@ impl MessageType for ResponseHead {
         src: &mut BytesMut,
         res: &mut httparse::Response,
         st: &mut httparse::State,
+        _: &HttpServiceConfig,
     ) -> Result<Poll<Self>, DecodeError> {
         match res.parse_with_state(src, st)? {
             Status::Complete(pos) => {
@@ -1388,52 +1350,66 @@ mod tests {
         }};
     }
 
+    /// STATEMENT: Opt-in decoding accepts asterisk-form only for OPTIONS.
+    ///
+    /// HOW:
+    /// - Preserve `*` by default for OPTIONS and other methods.
+    /// - Enable target processing and check that only OPTIONS is accepted.
     #[test]
-    /// Asterisk-form is only valid for `OPTIONS`, RFC 9112 section 3.2.4.
-    fn test_asterisk_form_only_for_options() {
+    fn test_asterisk_form_validation_opt_in() {
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_request_target_normalization(true))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
         let mut buf = BytesMut::from("OPTIONS * HTTP/1.1\r\nhost: a\r\n\r\n");
-        let req = parse_ready!(&mut buf);
+        let req = parse_ready!(&mut buf.clone());
         assert_eq!(req.path(), "*");
+        assert_eq!(reader.decode(&mut buf).unwrap().unwrap().0.path(), "*");
 
         for method in ["GET", "POST", "HEAD", "CONNECT"] {
             let mut buf =
                 BytesMut::from(format!("{method} * HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
-            match MessageDecoder::<Request>::default().decode(&mut buf) {
-                Err(DecodeError::Uri) => (),
-                res => panic!("{method}: {res:?}"),
-            }
+            let req = parse_ready!(&mut buf.clone());
+            assert_eq!(req.path(), "*");
+            assert!(reader.decode(&mut buf).is_err(), "{method}");
         }
     }
 
+    /// STATEMENT: Authority-form restrictions and syntax are checked by opt-in decoding.
+    ///
+    /// HOW:
+    /// - Decode CONNECT, absolute targets, userinfo and invalid CONNECT forms.
+    /// - Check opt-in decoding rejects inappropriate methods and malformed authorities.
     #[test]
-    fn test_authority_form_only_for_connect() {
+    fn test_authority_form_validation_opt_in() {
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_request_target_normalization(true))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
         let mut buf = BytesMut::from("CONNECT example.com:443 HTTP/1.1\r\nhost: a\r\n\r\n");
-        let req = parse_ready!(&mut buf);
+        let req = parse_ready!(&mut buf.clone());
         assert_eq!(req.uri().authority().unwrap(), "example.com:443");
+        assert!(reader.decode(&mut buf).unwrap().is_some());
 
         let mut buf = BytesMut::from("GET http://example.com/ HTTP/1.1\r\nhost: a\r\n\r\n");
-        let req = parse_ready!(&mut buf);
+        let req = reader.decode(&mut buf).unwrap().unwrap().0;
         assert_eq!(req.path(), "/");
 
-        // userinfo is rejected in absolute-form
+        // userinfo is rejected only with validation enabled
         let mut buf = BytesMut::from("GET http://u@example.com/ HTTP/1.1\r\nhost: a\r\n\r\n");
-        match MessageDecoder::<Request>::default().decode(&mut buf) {
-            Err(DecodeError::Uri) => (),
-            res => panic!("{res:?}"),
-        }
+        let _ = parse_ready!(&mut buf.clone());
+        assert!(reader.decode(&mut buf).is_err());
 
         for method in ["GET", "POST", "HEAD", "OPTIONS"] {
             let mut buf = BytesMut::from(
                 format!("{method} example.com:443 HTTP/1.1\r\nhost: a\r\n\r\n").as_str(),
             );
-            match MessageDecoder::<Request>::default().decode(&mut buf) {
-                Err(DecodeError::Uri) => (),
-                res => panic!("{method}: {res:?}"),
-            }
+            let _ = parse_ready!(&mut buf.clone());
+            assert!(reader.decode(&mut buf).is_err(), "{method}");
         }
 
         let mut buf = BytesMut::from("CONNECT [::1]:443 HTTP/1.1\r\nhost: a\r\n\r\n");
-        let req = parse_ready!(&mut buf);
+        let req = reader.decode(&mut buf).unwrap().unwrap().0;
         assert_eq!(req.uri().authority().unwrap(), "[::1]:443");
 
         for target in [
@@ -1446,30 +1422,36 @@ mod tests {
         ] {
             let mut buf =
                 BytesMut::from(format!("CONNECT {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
-            match MessageDecoder::<Request>::default().decode(&mut buf) {
-                Err(DecodeError::Uri) => (),
-                res => panic!("{target}: {res:?}"),
-            }
+            let _ = parse_ready!(&mut buf.clone());
+            assert!(reader.decode(&mut buf).is_err(), "{target}");
         }
     }
 
+    /// STATEMENT: HTTP/1 preserves raw targets by default and optionally validates them while decoding.
+    ///
+    /// HOW:
+    /// - Decode dot segments, escapes, browser-compatible characters and double-slash paths.
+    /// - Check raw path/query values and check malformed targets fail only with processing enabled.
     #[test]
     fn test_request_target() {
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_request_target_normalization(true))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
         for (target, path_and_query) in [
-            ("/a/../b", "/b"),
-            ("/a/%2e%2E/b", "/b"),
-            ("/%7e%3b%2f?%7E%3d", "/~;%2F?~%3D"),
-            (
-                "/a[0]|^`{}?a[]=1&b=%00",
-                "/a%5B0%5D%7C%5E%60%7B%7D?a%5B%5D=1&b=%00",
-            ),
+            ("/a/../b", "/a/../b"),
+            ("/a/%2e%2E/b", "/a/%2e%2E/b"),
+            ("/%7e%3b%2f?%7E%3d", "/%7e%3b%2f?%7E%3d"),
+            ("/a[0]|^`{}?a[]=1&b=%00", "/a[0]|^`{}?a[]=1&b=%00"),
             ("//a//b?c", "//a//b?c"),
             ("http://example.com//a", "//a"),
+            ("HTTP://Example.COM/a/../%7e?x=%41", "/a/../%7e?x=%41"),
         ] {
             let mut buf =
                 BytesMut::from(format!("GET {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
-            let req = parse_ready!(&mut buf);
+            let req = parse_ready!(&mut buf.clone());
             assert_eq!(req.uri().path_and_query(), path_and_query, "{target}");
+            assert!(reader.decode(&mut buf).unwrap().is_some(), "{target}");
         }
 
         for target in [
@@ -1489,11 +1471,40 @@ mod tests {
         ] {
             let mut buf =
                 BytesMut::from(format!("GET {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
-            match MessageDecoder::<Request>::default().decode(&mut buf) {
-                Err(DecodeError::Uri) => (),
-                res => panic!("{target}: {res:?}"),
-            }
+            let _ = parse_ready!(&mut buf.clone());
+            assert!(reader.decode(&mut buf).is_err(), "{target}");
         }
+    }
+
+    /// STATEMENT: Opt-in target normalization handles partial reads and rejects expanding URLs.
+    ///
+    /// HOW:
+    /// - Decode a split request line and check normalized scheme, host, port, path and query.
+    /// - Reject a target exceeding the URL limit after encoding, then reuse the decoder successfully.
+    #[test]
+    fn test_request_target_normalization() {
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(
+                HttpServiceConfig::new()
+                    .set_request_target_normalization(true)
+                    .set_max_start_line_size(32 * 1024),
+            )
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from("GET HTTPS://Example.COM:00443/a/../");
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(b"%74est?q=%7e HTTP/1.1\r\n\r\n");
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.uri().as_str(), "https://example.com:443/test?q=~");
+
+        let target = format!("/{}", "[".repeat(22000));
+        let mut buf = BytesMut::from(format!("GET {target} HTTP/1.1\r\n\r\n").as_str());
+        assert!(matches!(reader.decode(&mut buf), Err(DecodeError::Uri)));
+
+        let mut buf = BytesMut::from("GET /.//%74est HTTP/1.1\r\n\r\n");
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.path(), "//test");
+        assert!(req.uri().authority().is_none());
     }
 
     #[test]
@@ -2268,9 +2279,18 @@ mod tests {
         assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
+    /// STATEMENT: HTTP/1 Host validation is opt-in and does not apply to responses.
+    ///
+    /// HOW:
+    /// - Enable validation and check rejection of missing, duplicate and invalid Host headers.
+    /// - Check accepted Host forms and preservation of unchecked headers by default or explicit opt-out.
+    /// - Decode duplicate Host headers in a response with validation enabled.
     #[test]
     fn test_host_validation() {
-        let reader = MessageDecoder::<Request>::default();
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_host_validation(true))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
         for req in [
             "GET / HTTP/1.1\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: a\r\nhost: a\r\n\r\n",
@@ -2315,21 +2335,24 @@ mod tests {
             assert!(reader.decode(&mut buf).unwrap().is_some(), "{req:?}");
         }
 
-        // validation can be disabled
-        let cfg: SharedCfg = SharedCfg::new("test")
+        let disabled_cfg: SharedCfg = SharedCfg::new("test")
             .add(HttpServiceConfig::new().set_host_validation(false))
             .into();
-        let reader = MessageDecoder::<Request>::new(cfg.get());
-        let mut buf = BytesMut::from(
-            "GET / HTTP/1.1\r\n\r\n\
-             GET / HTTP/1.1\r\nhost: a\r\nhost: user@b\r\n\r\n",
-        );
-        assert!(reader.decode(&mut buf).unwrap().is_some());
-        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(req.headers().get_all(header::HOST).count(), 2);
+        for reader in [
+            MessageDecoder::<Request>::default(),
+            MessageDecoder::<Request>::new(disabled_cfg.get()),
+        ] {
+            let mut buf = BytesMut::from(
+                "GET / HTTP/1.1\r\n\r\n\
+                 GET / HTTP/1.1\r\nhost: a\r\nhost: user@b\r\n\r\n",
+            );
+            assert!(reader.decode(&mut buf).unwrap().is_some());
+            let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(req.headers().get_all(header::HOST).count(), 2);
+        }
 
         // responses are not affected
-        let reader = MessageDecoder::<ResponseHead>::default();
+        let reader = MessageDecoder::<ResponseHead>::new(cfg.get());
         let mut buf = BytesMut::from("HTTP/1.1 200 OK\r\nhost: a\r\nhost: b\r\n\r\n");
         assert!(reader.decode(&mut buf).unwrap().is_some());
     }

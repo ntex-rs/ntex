@@ -2,6 +2,48 @@ use serde::Serialize;
 
 use crate::util::{Bytes, BytesMut};
 
+/// Checks target syntax and the method/protocol's target form without rewriting it.
+pub(crate) fn is_valid_target(
+    method: &super::Method,
+    version: super::Version,
+    uri: &urly::Url,
+) -> bool {
+    if uri.validate_target().is_err() {
+        return false;
+    }
+    if method == super::Method::CONNECT {
+        !uri.is_absolute()
+            && uri.authority().is_some()
+            && uri.path().is_empty()
+            && uri.query().is_none()
+    } else if version != super::Version::HTTP_2 && uri.is_absolute() {
+        uri.authority().is_some()
+    } else {
+        (version == super::Version::HTTP_2 || uri.authority().is_none())
+            && (uri.path().as_str().starts_with('/')
+                || (uri.path() == "*" && uri.query().is_none() && method == super::Method::OPTIONS))
+    }
+}
+
+/// Validates the HTTP target form before normalizing its components.
+pub(crate) fn normalize_request_target(
+    method: &super::Method,
+    version: super::Version,
+    uri: &mut urly::Url,
+) -> Result<(), super::error::DecodeError> {
+    if !is_valid_target(method, version, uri) {
+        return Err(super::error::DecodeError::InvalidInput(
+            "invalid request-target",
+        ));
+    }
+    if version == super::Version::HTTP_2 && uri.path() == "*" {
+        *uri = urly::Url::from_static("*");
+    } else {
+        uri.normalize()?;
+    }
+    Ok(())
+}
+
 /// Serializes `value` as JSON.
 ///
 /// The JSON is written into the buffer that becomes the body, it is not
@@ -26,40 +68,6 @@ pub(crate) fn take_trimmed(buf: &mut BytesMut) -> Bytes {
     } else {
         buf.take()
     }
-}
-
-/// Checks a request-target before it is parsed and normalized.
-///
-/// Rejects invalid percent-encoding, a fragment, non-ASCII bytes, characters
-/// that are never sent unencoded (`"`, `<`, `>`, `\`, whitespace and controls)
-/// and an encoded NUL (`%00`) before the query, see RFC 9112 section 3.2.
-/// Brackets, braces, `|`, `^` and a backtick, which browsers send unencoded,
-/// are accepted and get percent-encoded by `Url` parsing.
-pub(crate) fn is_valid_target(target: &[u8]) -> bool {
-    let mut path = true;
-    let mut i = 0;
-    while let Some(&b) = target.get(i) {
-        match b {
-            b'%' => {
-                let (Some(&hi), Some(&lo)) = (target.get(i + 1), target.get(i + 2)) else {
-                    return false;
-                };
-                if !hi.is_ascii_hexdigit()
-                    || !lo.is_ascii_hexdigit()
-                    || (path && hi == b'0' && lo == b'0')
-                {
-                    return false;
-                }
-                i += 3;
-                continue;
-            }
-            b'?' => path = false,
-            b'#' | b'"' | b'<' | b'>' | b'\\' | 0..=b' ' | 0x7f.. => return false,
-            _ => (),
-        }
-        i += 1;
-    }
-    true
 }
 
 /// Appends `name=value` of a cookie to a `Cookie` header value.
@@ -98,41 +106,6 @@ mod tests {
         assert_eq!(body, [2; 512][..]);
         assert_ne!(body.as_ptr(), ptr);
         assert!(buf.is_empty());
-    }
-
-    #[test]
-    fn valid_target() {
-        for target in [
-            "/",
-            "*",
-            "example.com:443",
-            "http://example.com/a%2Fb?c",
-            "/a[0]|^`{}?a[]=1&q=a|b%00",
-            "/a%2e%2E/%41",
-        ] {
-            assert!(is_valid_target(target.as_bytes()), "{target}");
-        }
-        for target in [
-            "/a#f",
-            "/a?b#f",
-            "/a%zz",
-            "/a%",
-            "/a%4",
-            "/a?%g0",
-            "/a\"",
-            "/a<",
-            "/a>",
-            "/a\\b",
-            "/a b",
-            "/a\x7f",
-            "/ü",
-            "/a%00",
-            "http://h/%00",
-            "%00",
-        ] {
-            assert!(!is_valid_target(target.as_bytes()), "{target}");
-        }
-        assert!(!is_valid_target(b"/a\xff"));
     }
 
     #[test]

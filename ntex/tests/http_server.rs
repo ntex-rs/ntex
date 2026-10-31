@@ -55,6 +55,207 @@ async fn test_h1() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: Opt-in HTTP/1 decoding normalizes targets before application filters and routing.
+///
+/// HOW:
+/// - Send raw, absolute and double-slash targets with transport normalization disabled or enabled.
+/// - Check filters, guards and handlers agree on the expected target and routing path.
+#[ntex::test]
+async fn test_h1_request_target_normalization() {
+    use ntex::web::{self, App, HttpRequest, WebRequest};
+
+    for (target, enabled, expected) in [
+        ("/old/../%74est?q=%7e", false, "/old/../%74est?q=%7e"),
+        ("/old/../%74est?q=%7e", true, "/test?q=~"),
+        ("//test", true, "//test"),
+        ("/.//test", true, "//test"),
+        ("/.//%74est", true, "//test"),
+        (
+            "HTTPS://Example.COM:00443/old/../%74est?q=%7e",
+            true,
+            "/test?q=~",
+        ),
+    ] {
+        let cfg = HttpServiceConfig::new();
+        let cfg = if enabled {
+            cfg.set_request_target_normalization(true)
+        } else {
+            cfg
+        };
+        let srv = test::server_with_config(
+            async move |_| {
+                HttpService::h1(
+                    App::default()
+                        .filter(async move |req: WebRequest<()>| {
+                            assert_eq!(req.uri().path_and_query(), expected);
+                            if req.uri().authority().is_some() {
+                                assert_eq!(req.connection_info().host(), "example.com:443");
+                                assert_eq!(req.connection_info().scheme(), "https");
+                            }
+                            Ok::<_, Infallible>(req)
+                        })
+                        .service(
+                            web::resource(["/test", "/old/../test", "//test"])
+                                .guard(web::guard::fn_guard(move |head| {
+                                    head.uri.path_and_query() == expected
+                                }))
+                                .to(async |req: HttpRequest| {
+                                    assert_eq!(req.match_info().get_ref().path(), req.path());
+                                    req.uri().path_and_query().as_str().to_owned()
+                                }),
+                        ),
+                )
+            },
+            SharedCfg::new("SRV").add(cfg),
+        );
+        let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+        stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
+        stream.set_write_timeout(Some(TEN_SECONDS)).unwrap();
+        write!(
+            stream,
+            "GET {target} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert_eq!(response.split_once("\r\n\r\n").unwrap().1, expected);
+    }
+}
+
+/// STATEMENT: HTTP/1 target and Host-header validation are independently opt-in.
+///
+/// HOW:
+/// - Send malformed escapes, fragments, authorities and asterisk forms over raw TCP.
+/// - Require successful fallback responses by default and `400` with normalization enabled.
+/// - Check rejected requests never enter application middleware.
+/// - Send an invalid Host header with either target setting and require `400` only
+///   when transport Host validation is enabled.
+#[ntex::test]
+async fn test_h1_request_target_validation() {
+    use ntex::web::{App, WebRequest, middleware::DefaultHeaders};
+
+    for (enabled, validate_host) in [(false, false), (false, true), (true, false), (true, true)] {
+        let cfg = HttpServiceConfig::new();
+        let cfg = if enabled {
+            cfg.set_request_target_normalization(true)
+        } else {
+            cfg
+        };
+        let cfg = if validate_host {
+            cfg.set_host_validation(true)
+        } else {
+            cfg
+        };
+        let srv = test::server_with_config(
+            async move |_| {
+                HttpService::h1(
+                    App::default()
+                        .middleware(DefaultHeaders::new().header("x-app", "called"))
+                        .default_service(async |req: WebRequest<()>| {
+                            Ok::<_, Infallible>(req.into_response(Response::Ok()))
+                        }),
+                )
+            },
+            SharedCfg::new("SRV").add(cfg),
+        );
+        for (target, host) in [
+            ("/bad%zz", "localhost"),
+            ("/a#fragment", "localhost"),
+            ("http://host:bad/path", "localhost"),
+            ("*", "localhost"),
+            ("/", "invalid/host"),
+        ] {
+            let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+            stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
+            stream.set_write_timeout(Some(TEN_SECONDS)).unwrap();
+            write!(
+                stream,
+                "GET {target} HTTP/1.1\r\nhost: {host}\r\nconnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            let rejected = if host == "invalid/host" {
+                validate_host
+            } else {
+                enabled
+            };
+            let status = if rejected { 400 } else { 200 };
+            assert!(
+                response.starts_with(&format!("HTTP/1.1 {status} ")),
+                "{target}: {response}"
+            );
+            assert_eq!(
+                response.contains("\r\nx-app: called\r\n"),
+                !rejected,
+                "{response}"
+            );
+        }
+    }
+}
+
+/// STATEMENT: Opt-in HTTP/2 decoding normalizes targets before application filters and routing.
+///
+/// HOW:
+/// - Send unnormalized `:path` values with transport normalization disabled or enabled.
+/// - Check that application filters and handlers receive the raw or canonical path/query.
+#[ntex::test]
+async fn test_h2_request_target_normalization() {
+    use ntex::http::HeaderMap;
+    use ntex::time::timeout;
+    use ntex::web::{self, App, HttpRequest, WebRequest};
+    use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
+
+    for (target, enabled, expected) in [
+        ("/old/../%74est?q=%7e", false, "/old/../%74est?q=%7e"),
+        ("/old/../%74est?q=%7e", true, "/test?q=~"),
+        ("/.//%74est", true, "//test"),
+    ] {
+        let cfg = HttpServiceConfig::new();
+        let cfg = if enabled {
+            cfg.set_request_target_normalization(true)
+        } else {
+            cfg
+        };
+        let srv = test::server_with_config(
+            async move |_| {
+                HttpService::h2(
+                    App::default()
+                        .filter(async move |req: WebRequest<()>| {
+                            assert_eq!(req.uri().path_and_query(), expected);
+                            Ok::<_, Infallible>(req)
+                        })
+                        .service(web::resource(["/test", "/old/../test", "//test"]).to(
+                            async |req: HttpRequest| {
+                                assert_eq!(req.match_info().get_ref().path(), req.path());
+                                req.uri().path_and_query().as_str().to_owned()
+                            },
+                        )),
+                )
+            },
+            SharedCfg::new("SRV").add(cfg),
+        );
+        let io = ntex::connect::connect(srv.addr()).await.unwrap();
+        let client = SimpleClient::new(io, false, "localhost".into());
+        let (_snd, rcv) = client
+            .send(Method::GET, target.into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+        let msg = timeout(Seconds(5), rcv.recv()).await.unwrap().unwrap();
+        assert!(
+            matches!(msg.kind, MessageKind::Headers { ref pseudo, .. }
+                if pseudo.status == Some(StatusCode::OK)),
+            "{msg:?}"
+        );
+        let msg = timeout(Seconds(5), rcv.recv()).await.unwrap().unwrap();
+        assert!(
+            matches!(msg.kind, MessageKind::Eof(StreamEof::Data(ref data, _)) if data == expected),
+            "{msg:?}"
+        );
+    }
+}
+
 /// STATEMENT: `HttpService::new` recognizes HTTP/1.1 requests and supplies a nonzero date year.
 ///
 /// HOW:
@@ -1898,46 +2099,66 @@ async fn test_h2_request_payload_ends_after_error() {
     );
 }
 
-/// STATEMENT: A malformed HTTP/2 request URI is rejected without closing the connection.
+/// STATEMENT: Opt-in HTTP/2 target validation rejects malformed targets without closing connections.
 ///
 /// HOW:
-/// - Send a URI containing a space with both closed and open request bodies.
-/// - Verify each receives a final `400` response and the connection remains open.
-/// - Send a valid request on the same connection and verify `200 OK`.
+/// - Send malformed paths and authorities to a lower-level HTTP service with open/closed bodies.
+/// - Require `400` only when validation is enabled, including for delimiters inside an authority.
+/// - Check OPTIONS retains its asterisk path and valid requests still succeed on the same connection.
 #[ntex::test]
 async fn test_h2_malformed_request_uri() {
     use ntex::http::HeaderMap;
+    use ntex::time::timeout;
     use ntex_h2::{MessageKind, client::SimpleClient};
 
-    let srv = test_server(async |_| {
-        HttpService::h2(async |_: Request| Ok::<_, io::Error>(Response::Ok().body("ok")))
-    });
-
-    let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, false, "localhost".into());
-    for (method, eof) in [(Method::GET, true), (Method::POST, false)] {
-        let (_snd, rcv) = client
-            .send(method, "/a b".into(), HeaderMap::default(), eof)
-            .await
-            .unwrap();
-        let msg = rcv.recv().await.unwrap();
-        let MessageKind::Headers { pseudo, eof, .. } = msg.kind else {
-            panic!("unexpected message: {msg:?}")
+    for enabled in [false, true] {
+        let cfg = HttpServiceConfig::new();
+        let cfg = if enabled {
+            cfg.set_request_target_normalization(true)
+        } else {
+            cfg
         };
-        assert_eq!(pseudo.status, Some(StatusCode::BAD_REQUEST));
-        assert!(eof);
+        let srv = test::server_with_config(
+            async |_| {
+                HttpService::h2(async |req: Request| {
+                    if req.method() == Method::OPTIONS {
+                        assert_eq!(req.path(), "*");
+                    }
+                    Ok::<_, io::Error>(Response::Ok().build())
+                })
+            },
+            SharedCfg::new("SRV").add(cfg),
+        );
+        for authority in ["localhost", "host/path"] {
+            let io = ntex::connect::connect(srv.addr()).await.unwrap();
+            let client = SimpleClient::new(io, false, authority.into());
+            for (method, path, eof) in [
+                (Method::GET, "/a b", true),
+                (Method::POST, "/bad%zz", false),
+                (Method::GET, "relative", true),
+                (Method::OPTIONS, "*", true),
+                (Method::GET, "/", true),
+            ] {
+                let (_snd, rcv) = client
+                    .send(method, path.into(), HeaderMap::default(), eof)
+                    .await
+                    .unwrap();
+                let msg = timeout(Seconds(5), rcv.recv()).await.unwrap().unwrap();
+                let MessageKind::Headers { pseudo, eof, .. } = msg.kind else {
+                    panic!("unexpected message: {msg:?}")
+                };
+                let valid = authority == "localhost" && matches!(path, "/" | "*");
+                let expected = if enabled && !valid {
+                    StatusCode::BAD_REQUEST
+                } else {
+                    StatusCode::OK
+                };
+                assert_eq!(pseudo.status, Some(expected), "{authority}{path}");
+                assert!(eof);
+            }
+            assert!(!client.is_closed());
+        }
     }
-    assert!(!client.is_closed());
-
-    let (_snd, rcv) = client
-        .send(Method::GET, "/".into(), HeaderMap::default(), true)
-        .await
-        .unwrap();
-    let msg = rcv.recv().await.unwrap();
-    let MessageKind::Headers { pseudo, .. } = msg.kind else {
-        panic!("unexpected message: {msg:?}")
-    };
-    assert_eq!(pseudo.status, Some(StatusCode::OK));
 }
 
 /// STATEMENT: An HTTP/2 response body error resets only the failing stream.

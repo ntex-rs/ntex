@@ -1,10 +1,12 @@
 //! URL manipulation library with an API inspired by Python's
 //! [yarl](https://yarl.aio-libs.org/).
 //!
-//! [`Url`] is an immutable, cheaply cloneable, normalized URL reference stored
+//! [`Url`] is a cheaply cloneable URL reference stored
 //! in a single [`ByteString`](ntex_bytes::ByteString). Accessors return
-//! borrowed, percent-encoded components with methods to decode them;
-//! modifications return or produce a new normalized URL.
+//! borrowed components with methods to decode them. General-purpose parsing
+//! normalizes URLs; [`Url::parse_target`] preserves unvalidated HTTP request-target
+//! components for later [`Url::validate_target`] and [`Url::normalize`] calls. Component setters
+//! normalize the components they replace, not the rest of a raw target.
 //!
 //! ```
 //! use urly::Url;

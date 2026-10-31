@@ -1,20 +1,20 @@
 use std::{cell::Cell, cell::RefCell, future::poll_fn, io, mem, rc::Rc};
 
 use ntex_h2::{self as h2, control::ExpectResult, frame::StreamId, server};
-use urly::{Authority, Scheme, Url};
+use urly::Url;
 
 use crate::error::{Error, IntoFailure};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
-use crate::http::config::DispatcherConfig;
+use crate::http::config::{DispatcherConfig, HttpServiceConfig};
 use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::helpers::is_valid_target;
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
+use crate::service::cfg::Configuration;
 use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineFactory};
 use crate::service::{Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
-use crate::util::{Bytes, BytesMut, HashMap};
+use crate::util::{Bytes, HashMap};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
@@ -189,6 +189,7 @@ impl Service<(), h2::Control<Error<H2Error>>> for ControlService {
 
 struct PublishService<Err> {
     id: usize,
+    normalize_target: bool,
     io: IoRef,
     svc: Pipeline<Request, Response, Err>,
     control: PipelineBinding<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
@@ -220,6 +221,7 @@ where
     ) -> Self {
         Self {
             id,
+            normalize_target: io.cfg().ctx().get::<HttpServiceConfig>().normalize_target,
             io,
             svc,
             control,
@@ -357,7 +359,7 @@ where
 
         // a malformed request is a stream error, the connection stays open,
         // see RFC 9113 section 8.1.1
-        let Some((method, uri)) = request_uri(&pseudo) else {
+        let Some((method, uri)) = request_uri(&pseudo, self.normalize_target) else {
             log::debug!(
                 "{}: Malformed request on {:?}: {pseudo:?}",
                 self.io.tag(),
@@ -584,76 +586,28 @@ const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 #[allow(clippy::declare_interior_mutable_const)]
 const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
 
-/// Builds the request method and uri from the pseudo headers,
-/// returns `None` for a malformed request.
-fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
+/// Builds the request target, optionally validating and normalizing it before dispatch.
+fn request_uri(pseudo: &h2::frame::PseudoHeaders, normalize: bool) -> Option<(Method, Url)> {
     let method = pseudo.method.clone()?;
-    // userinfo is deprecated, see RFC 9113 section 8.3.1
-    let authority = match pseudo.authority {
-        Some(ref authority) => {
-            // An empty host is "" or ":port"; IPv6 hosts are bracketed.
-            if authority.is_empty() || authority.starts_with(':') || authority.contains('@') {
-                return None;
-            }
-            Some(Authority::new(authority.as_str()).ok()?)
-        }
-        None => None,
-    };
-    let path = pseudo.path.as_ref().map(crate::util::ByteString::as_str);
-    // the same request-target checks as http/1, `Url` parsing is lenient
-    if path.is_some_and(|p| !is_valid_target(p.as_bytes())) {
-        return None;
-    }
-
-    let uri = match (authority, path) {
-        // CONNECT request uses the authority form
-        (Some(authority), None) if method == Method::CONNECT => {
-            Url::parse(authority.as_str()).ok()?
-        }
-        (_, Some("*")) if method == Method::OPTIONS => Url::from_static("*"),
-        (Some(authority), Some(path)) if path.starts_with('/') => {
-            let scheme = Scheme::new(pseudo.scheme.as_ref()?.as_str()).ok()?;
-            Url::try_from(concat(&[scheme.as_str(), "://", authority.as_str(), path])).ok()?
-        }
-        (None, Some(path)) if path.starts_with('/') => {
-            let uri = if path.starts_with("//") {
-                // origin-form path, not a network-path reference
-                Url::try_from(format!("/.{path}")).ok()?
-            } else {
-                // reuses the buffer if the path is normalized
-                Url::try_from(pseudo.path.as_ref()?).ok()?
-            };
-            if uri.authority().is_some() {
-                return None;
-            }
-            uri
-        }
-        _ => return None,
-    };
-    Some((method, uri))
-}
-
-/// Concatenates `pieces` into a buffer that `Url` reuses if the result is
-/// normalized, short strings are stored inline without allocation.
-fn concat(pieces: &[&str]) -> Bytes {
-    const INLINE: usize = 23;
-
-    let len = pieces.iter().map(|p| p.len()).sum::<usize>();
-    if len <= INLINE {
-        let mut buf = [0u8; INLINE];
-        let mut pos = 0;
-        for p in pieces {
-            buf[pos..pos + p.len()].copy_from_slice(p.as_bytes());
-            pos += p.len();
-        }
-        Bytes::copy_from_slice(&buf[..len])
+    let authority = pseudo
+        .authority
+        .as_ref()
+        .map(crate::util::ByteString::as_str);
+    // Mandatory pseudo-header presence and CONNECT combinations are checked by ntex-h2.
+    let (scheme, path) = if method == Method::CONNECT {
+        authority?;
+        (None, "")
     } else {
-        let mut buf = BytesMut::with_capacity(len);
-        for p in pieces {
-            buf.extend_from_slice(p.as_bytes());
-        }
-        buf.freeze()
+        (
+            Some(pseudo.scheme.as_ref()?.as_str()),
+            pseudo.path.as_ref()?.as_str(),
+        )
+    };
+    let mut uri = Url::from_target_parts(scheme, authority, path).ok()?;
+    if normalize {
+        crate::http::helpers::normalize_request_target(&method, Version::HTTP_2, &mut uri).ok()?;
     }
+    Some((method, uri))
 }
 
 /// Checks the case-insensitive `100-continue` expectation, see RFC 9110 section 10.1.1
@@ -704,27 +658,38 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
 mod tests {
     use super::*;
 
+    fn valid_target(pseudo: &h2::frame::PseudoHeaders) -> bool {
+        assert!(request_uri(pseudo, false).is_some());
+        request_uri(pseudo, true).is_some()
+    }
+
+    /// STATEMENT: HTTP/2 target validation and normalization are opt-in during construction.
+    ///
+    /// HOW:
+    /// - Build targets from pseudo headers, including CONNECT, OPTIONS and double-slash paths.
+    /// - Check raw components with processing disabled and reject malformed values when enabled.
+    /// - Check normalization length limits and preservation of OPTIONS asterisk-form.
     #[test]
     fn test_request_uri() {
         let mut pseudo = h2::frame::PseudoHeaders::default();
-        assert!(request_uri(&pseudo).is_none());
+        assert!(request_uri(&pseudo, false).is_none());
 
         // CONNECT uses the authority form
         pseudo.method = Some(Method::CONNECT);
         pseudo.authority = Some("example.com:443".into());
-        let (method, uri) = request_uri(&pseudo).unwrap();
+        let (method, uri) = request_uri(&pseudo, true).unwrap();
         assert_eq!(method, Method::CONNECT);
         assert_eq!(uri.authority().unwrap(), "example.com:443");
 
         for authority in ["bad authority", "u@example.com:443", ":443"] {
             pseudo.authority = Some(authority.into());
-            assert!(request_uri(&pseudo).is_none(), "{authority}");
+            assert!(!valid_target(&pseudo), "{authority}");
         }
 
         // inline and heap buffers
         for authority in ["a.io:1", "very-long-host-name.example.com:8443"] {
             pseudo.authority = Some(authority.into());
-            let (_, uri) = request_uri(&pseudo).unwrap();
+            let (_, uri) = request_uri(&pseudo, false).unwrap();
             assert_eq!(uri.authority().unwrap(), authority);
             assert_eq!(uri.to_string(), format!("//{authority}"));
         }
@@ -733,74 +698,88 @@ mod tests {
         pseudo.method = Some(Method::GET);
         pseudo.authority = Some("example.com".into());
         pseudo.path = Some("/path".into());
-        assert!(request_uri(&pseudo).is_none());
+        assert!(request_uri(&pseudo, false).is_none());
         pseudo.scheme = Some("https".into());
-        let (_, uri) = request_uri(&pseudo).unwrap();
+        let (_, uri) = request_uri(&pseudo, true).unwrap();
         assert_eq!(uri.to_string(), "https://example.com/path");
-        // userinfo and an empty host are rejected
+        // userinfo and an empty host survive parsing but fail validation
         for authority in ["u:p@example.com", ""] {
             pseudo.authority = Some(authority.into());
-            assert!(request_uri(&pseudo).is_none(), "{authority}");
+            assert!(!valid_target(&pseudo), "{authority}");
         }
         pseudo.authority = Some("example.com".into());
 
         // 23 bytes are stored inline, 24 bytes on the heap
         for path in ["/123", "/1234", "/api/v1/users/1?fields=name,email"] {
             pseudo.path = Some(path.into());
-            let (_, uri) = request_uri(&pseudo).unwrap();
+            let (_, uri) = request_uri(&pseudo, false).unwrap();
             assert_eq!(uri.to_string(), format!("https://example.com{path}"));
         }
-        // the buffer is normalized if needed
+        // target components are normalized only when enabled
         pseudo.scheme = Some("HTTPS".into());
         pseudo.authority = Some("Example.COM".into());
         pseudo.path = Some("/a/./b/../c".into());
-        let (_, uri) = request_uri(&pseudo).unwrap();
-        assert_eq!(uri.to_string(), "https://example.com/a/c");
+        let (_, uri) = request_uri(&pseudo, false).unwrap();
+        assert_eq!(uri.to_string(), "HTTPS://Example.COM/a/./b/../c");
+        let (_, uri) = request_uri(&pseudo, true).unwrap();
+        assert_eq!(uri.as_str(), "https://example.com/a/c");
         pseudo.path = Some("/a/./b/../c/long-enough-for-the-heap".into());
-        let (_, uri) = request_uri(&pseudo).unwrap();
+        let (_, uri) = request_uri(&pseudo, false).unwrap();
         assert_eq!(
             uri.to_string(),
-            "https://example.com/a/c/long-enough-for-the-heap"
+            "HTTPS://Example.COM/a/./b/../c/long-enough-for-the-heap"
         );
         pseudo.authority = Some("example.com".into());
         pseudo.path = Some("/path".into());
 
         pseudo.scheme = Some("ht/tp".into());
-        assert!(request_uri(&pseudo).is_none());
+        assert!(!valid_target(&pseudo));
         pseudo.scheme = Some("https".into());
         pseudo.authority = Some("example.com/x?".into());
-        assert!(request_uri(&pseudo).is_none());
+        assert!(!valid_target(&pseudo));
         pseudo.authority = Some("example.com".into());
         pseudo.path = Some("x".into());
-        assert!(request_uri(&pseudo).is_none());
+        assert!(!valid_target(&pseudo));
 
         pseudo.authority = None;
         pseudo.path = Some("/path".into());
-        let (_, uri) = request_uri(&pseudo).unwrap();
+        let (_, uri) = request_uri(&pseudo, true).unwrap();
         assert_eq!(uri.path(), "/path");
         pseudo.path = Some("//example.com/path".into());
-        let (_, uri) = request_uri(&pseudo).unwrap();
+        let (_, uri) = request_uri(&pseudo, true).unwrap();
         assert_eq!(uri.path(), "//example.com/path");
         assert!(uri.authority().is_none());
         pseudo.path = Some("/a b".into());
-        assert!(request_uri(&pseudo).is_none());
+        assert!(!valid_target(&pseudo));
         pseudo.path = Some("/a\x7f".into());
-        assert!(request_uri(&pseudo).is_none());
+        assert!(!valid_target(&pseudo));
         for path in ["/a#f", "/a%zz", "/a\"", "/a%00"] {
             pseudo.path = Some(path.into());
-            assert!(request_uri(&pseudo).is_none(), "{path}");
+            assert!(!valid_target(&pseudo), "{path}");
         }
         pseudo.path = Some("/a%3b/%2e%2e/b?%00".into());
-        let (_, uri) = request_uri(&pseudo).unwrap();
+        let (_, uri) = request_uri(&pseudo, false).unwrap();
+        assert_eq!(uri.path_and_query(), "/a%3b/%2e%2e/b?%00");
+        let (_, uri) = request_uri(&pseudo, true).unwrap();
         assert_eq!(uri.path_and_query(), "/b?%00");
 
+        pseudo.path = Some(format!("/{}", "[".repeat(22000)).into());
+        assert!(request_uri(&pseudo, false).is_some());
+        assert!(request_uri(&pseudo, true).is_none());
+
         pseudo.path = Some("*".into());
-        assert!(request_uri(&pseudo).is_none());
+        assert!(!valid_target(&pseudo));
         pseudo.method = Some(Method::OPTIONS);
-        let (_, uri) = request_uri(&pseudo).unwrap();
+        let (_, uri) = request_uri(&pseudo, true).unwrap();
         assert_eq!(uri.path(), "*");
+        assert_eq!(uri.as_str(), "*");
     }
 
+    /// STATEMENT: HTTP/2 preserves authority boundaries for opt-in transport validation.
+    ///
+    /// HOW:
+    /// - Preserve malformed authorities with processing disabled and reject them when enabled.
+    /// - Accept valid authorities while preserving their case, escapes, port spelling and boundaries.
     #[test]
     fn test_request_uri_authority() {
         for (method, path) in [
@@ -839,38 +818,31 @@ mod tests {
                 "[::1]:65536",
             ] {
                 pseudo.authority = Some(authority.into());
-                assert!(request_uri(&pseudo).is_none(), "{pseudo:?}");
+                let (_, uri) = request_uri(&pseudo, false).unwrap();
+                assert_eq!(uri.authority().unwrap(), authority);
+                assert!(!valid_target(&pseudo), "{pseudo:?}");
             }
-            for (authority, normalized) in [
-                ("example.com", "example.com"),
-                ("Example.COM:00080", "example.com:80"),
-                ("example.com:", "example.com"),
-                ("example.com:0", "example.com:0"),
-                ("example.com:65535", "example.com:65535"),
-                ("%45xample.com:443", "example.com:443"),
-                ("127.0.0.1:8443", "127.0.0.1:8443"),
-                ("[::1]", "[::1]"),
-                ("[0:0:0:0:0:0:0:1]:00443", "[::1]:443"),
+            for authority in [
+                "example.com",
+                "Example.COM:00080",
+                "example.com:",
+                "example.com:0",
+                "example.com:65535",
+                "%45xample.com:443",
+                "127.0.0.1:8443",
+                "[::1]",
+                "[0:0:0:0:0:0:0:1]:00443",
             ] {
                 pseudo.authority = Some(authority.into());
-                let (_, uri) = request_uri(&pseudo).unwrap();
+                let (_, uri) = request_uri(&pseudo, false).unwrap();
                 let expected = match path {
-                    None => format!("//{normalized}"),
-                    Some("*") => "*".to_owned(),
-                    _ => format!("https://{normalized}/path"),
+                    None => format!("//{authority}"),
+                    Some("*") => format!("https://{authority}*"),
+                    _ => format!("https://{authority}/path"),
                 };
                 assert_eq!(uri.as_str(), expected, "{pseudo:?}");
+                assert!(valid_target(&pseudo), "{pseudo:?}");
             }
         }
-    }
-
-    #[test]
-    fn test_concat() {
-        assert_eq!(concat(&[]), "");
-        assert_eq!(concat(&["//", "a.io"]), "//a.io");
-        let inline = "x".repeat(23);
-        assert_eq!(concat(&[&inline[..20], &inline[20..]]), inline.as_str());
-        let heap = "y".repeat(24);
-        assert_eq!(concat(&[&heap[..1], "", &heap[1..]]), heap.as_str());
     }
 }

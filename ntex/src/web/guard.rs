@@ -511,10 +511,16 @@ mod tests {
         assert!(format!("{pred:?}").contains("Host"));
     }
 
+    /// STATEMENT: Host guards use CONNECT authorities, not double-slash origin paths.
+    ///
+    /// HOW:
+    /// - Match an authority-form CONNECT request without a Host header.
+    /// - Check matching/nonmatching hosts and confirm an origin path does not supply a host.
     #[test]
     fn test_host_without_header() {
         let req = TestRequest::default()
-            .uri("//www.rust-lang.org")
+            .method(crate::http::Method::CONNECT)
+            .uri("www.rust-lang.org:443")
             .to_http_request();
 
         let pred = Host("www.rust-lang.org");
@@ -534,6 +540,9 @@ mod tests {
 
         let pred = Host("localhost");
         assert!(!pred.check(req.head()));
+
+        let req = TestRequest::with_uri("//www.rust-lang.org").to_http_request();
+        assert!(!Host("www.rust-lang.org").check(req.head()));
     }
 
     #[test]

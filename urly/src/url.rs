@@ -13,7 +13,7 @@ use crate::query::{self, Fragment, Query, split_pair};
 use crate::quoting::{Component, quote, requote, unquote};
 use crate::{chars::lowercase, host::normalize_host, parse, scheme::Scheme};
 
-/// Normalized URL reference.
+/// URL reference, normalized by the general-purpose parsers.
 ///
 /// The URL is stored in a single shared [`ByteString`]; accessors return
 /// borrowed, percent-encoded components. Parsing is lenient and normalizes the
@@ -27,6 +27,9 @@ use crate::{chars::lowercase, host::normalize_host, parse, scheme::Scheme};
 /// * an empty path of `http`, `https`, `ws` and `wss` URLs becomes `/`
 ///
 /// The normalized URL always passes strict [`Url::validate`].
+/// [`Url::parse_target`] and [`Url::from_target_parts`] instead preserve unvalidated
+/// HTTP request-target components. Use [`Url::validate_target`] before
+/// [`Url::normalize`] to reject malformed targets rather than repair them.
 ///
 /// ```
 /// use urly::Url;
@@ -69,18 +72,33 @@ pub(crate) struct Components<'a> {
     pub(crate) fragment: Option<&'a str>,
 }
 
-/// Assembles normalized components into a URL.
+/// Assembles components into a URL.
 ///
 /// The path is adjusted so the result can be parsed back unambiguously. `orig`
 /// is reused if it is equal to the result.
 pub(crate) fn assemble(c: &Components<'_>, orig: Option<&ByteString>) -> Result<Url, InvalidUrl> {
+    assemble_inner(c, orig, false)
+}
+
+pub(crate) fn assemble_target(
+    c: &Components<'_>,
+    orig: Option<&ByteString>,
+) -> Result<Url, InvalidUrl> {
+    assemble_inner(c, orig, true)
+}
+
+fn assemble_inner(
+    c: &Components<'_>,
+    orig: Option<&ByteString>,
+    target: bool,
+) -> Result<Url, InvalidUrl> {
     let prefix = if c.authority.is_some() {
         if c.path.is_empty() {
             let special = c
                 .scheme
                 .is_some_and(|s| Scheme::from_str_unchecked(s).is_special());
             if special { "/" } else { "" }
-        } else if c.path.starts_with('/') {
+        } else if c.path.starts_with('/') || target {
             ""
         } else {
             "/"
@@ -237,6 +255,95 @@ impl Url {
         parse::parse(src.as_ref(), None)
     }
 
+    /// Parses an HTTP request-target without validating or normalizing its components.
+    ///
+    /// Supports origin-form (including paths starting with `//`), absolute-form,
+    /// authority-form and `*`. The caller must check that the form is appropriate
+    /// for the request method and protocol.
+    ///
+    /// Preserves case, percent escapes, dot segments and browser-compatible
+    /// unescaped path/query characters such as brackets and braces. Only UTF-8,
+    /// nonempty input and the representation's length limit are checked.
+    /// Use [`Url::validate_target`] before normalization to reject malformed
+    /// targets instead of repairing them.
+    ///
+    /// The input buffer is reused except when URL-reference serialization
+    /// requires a prefix (`//` for an authority, `/.` for an origin path starting
+    /// with `//`) or an empty absolute HTTP path needs `/`.
+    /// Use [`Url::normalize`] to opt into the usual normalization.
+    ///
+    /// ```
+    /// use urly::Url;
+    ///
+    /// let mut url = Url::parse_target("/a/../%7euser?q=%41").unwrap();
+    /// assert_eq!(url.path_and_query(), "/a/../%7euser?q=%41");
+    /// url.validate_target().unwrap();
+    /// url.normalize().unwrap();
+    /// assert_eq!(url.path_and_query(), "/~user?q=A");
+    /// ```
+    pub fn parse_target(src: impl Into<Bytes>) -> Result<Url, InvalidUrl> {
+        parse::parse_target(src.into())
+    }
+
+    /// Builds an unvalidated request-target from HTTP/2 pseudo-header components.
+    ///
+    /// Preserves component boundaries even when a value contains delimiters or
+    /// a path does not start with `/`. Such values must not be validated by
+    /// reparsing [`Url::as_str`], which can interpret their boundaries differently.
+    /// Use [`Url::validate_target`] and check the method/protocol form instead.
+    ///
+    /// ```
+    /// use urly::Url;
+    ///
+    /// let url = Url::from_target_parts(Some("https"), Some("host/invalid"), "/path").unwrap();
+    /// assert_eq!(url.authority().unwrap(), "host/invalid");
+    /// assert_eq!(url.path(), "/path");
+    /// assert!(url.validate_target().is_err());
+    /// ```
+    pub fn from_target_parts(
+        scheme: Option<&str>,
+        authority: Option<&str>,
+        path_and_query: &str,
+    ) -> Result<Url, InvalidUrl> {
+        if scheme == Some("") {
+            return Err(InvalidUrl::new(ErrorKind::InvalidScheme));
+        }
+        let (path, query) = crate::chars::split_at_char(path_and_query, '?');
+        assemble_target(
+            &Components {
+                scheme,
+                authority,
+                path,
+                query,
+                fragment: None,
+            },
+            None,
+        )
+    }
+
+    /// Validates request-target characters, scheme and authority without rewriting them.
+    ///
+    /// Rejects malformed escapes, fragments, non-ASCII, whitespace, controls,
+    /// `"`, `<`, `>`, `\`, encoded NULs before the query, userinfo and invalid
+    /// or empty hosts. Browser-compatible unescaped path/query characters such
+    /// as brackets and braces are accepted. The caller must check the method
+    /// and protocol's target-form rules. Error positions refer to [`Url::as_str`].
+    pub fn validate_target(&self) -> Result<(), InvalidUrl> {
+        parse::validate_target(self)
+    }
+
+    /// Normalizes all components in place using the general-purpose parsing rules.
+    ///
+    /// The buffer is reused if unchanged. On failure, such as exceeding the
+    /// length limit after percent-encoding, the original URL is left unchanged.
+    /// This is lenient normalization, not HTTP validation; use [`Url::validate_target`]
+    /// first when malformed request-targets must be rejected.
+    pub fn normalize(&mut self) -> Result<(), InvalidUrl> {
+        let url = parse::normalize(&self.components(), Some(&self.data))?;
+        *self = url;
+        Ok(())
+    }
+
     /// Strictly validates a URI reference according to RFC 3986.
     ///
     /// Unlike parsing, validation does not normalize: whitespace, non-ASCII
@@ -388,7 +495,8 @@ impl Url {
     }
 
     /// Returns the host, if present and not empty. IPv6 addresses include the
-    /// brackets, non-ASCII domains are punycode-encoded.
+    /// brackets. General-purpose parsers punycode-encode non-ASCII domains;
+    /// raw request-targets preserve their original spelling.
     pub fn host(&self) -> Option<&str> {
         (self.host_end > self.host_start).then(|| self.range(self.host_start, self.host_end))
     }
@@ -1027,7 +1135,7 @@ try_from! {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn utf8_error(e: Utf8Error) -> InvalidUrl {
+pub(crate) fn utf8_error(e: Utf8Error) -> InvalidUrl {
     InvalidUrl::at(ErrorKind::InvalidChar('\u{FFFD}'), e.valid_up_to())
 }
 

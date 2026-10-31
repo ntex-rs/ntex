@@ -441,7 +441,7 @@ impl<St> TestRequest<St> {
     }
 
     #[must_use]
-    /// Set HTTP Uri of this request.
+    /// Set the HTTP request-target without validation or normalization, as received by the server.
     pub fn uri(mut self, path: &str) -> Self {
         self.req.uri(path);
         self

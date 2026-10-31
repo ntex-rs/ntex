@@ -13,6 +13,174 @@ fn url(s: &str) -> Url {
     Url::parse_ref(s).unwrap_or_else(|e| panic!("{s:?}: {e}"))
 }
 
+/// STATEMENT: HTTP target parsing preserves components until normalization is requested.
+///
+/// HOW:
+/// - Parse origin, absolute, authority and asterisk targets with non-canonical components.
+/// - Check raw serialization, normalize twice, and check canonical, strictly valid results.
+/// - Check double-slash origin paths remain paths, rather than becoming authorities.
+#[test]
+fn request_target_normalization() {
+    for (target, raw, normalized) in [
+        ("/a/../%7e?%7E=%3d", "/a/../%7e?%7E=%3d", "/~?~=%3D"),
+        ("/%7e%3b%2f?%7E%3d", "/%7e%3b%2f?%7E%3d", "/~;%2F?~%3D"),
+        (
+            "/a[0]|^`{}?a[]=1&b=%00",
+            "/a[0]|^`{}?a[]=1&b=%00",
+            "/a%5B0%5D%7C%5E%60%7B%7D?a%5B%5D=1&b=%00",
+        ),
+        ("//a/../b", "/.//a/../b", "/.//b"),
+        ("/.//a/../b", "/.//a/../b", "/.//b"),
+        (
+            "HTTPS://Example.COM:00443/a/../%7e?q=%41",
+            "HTTPS://Example.COM:00443/a/../%7e?q=%41",
+            "https://example.com:443/~?q=A",
+        ),
+        (
+            "http://Example.COM",
+            "http://Example.COM/",
+            "http://example.com/",
+        ),
+        (
+            "Example.COM:00443",
+            "//Example.COM:00443",
+            "//example.com:443",
+        ),
+        ("example.com:", "//example.com:", "//example.com"),
+        ("%45xample.com:80", "//%45xample.com:80", "//example.com:80"),
+        (
+            "[0:0:0:0:0:0:0:1]:00443",
+            "//[0:0:0:0:0:0:0:1]:00443",
+            "//[::1]:443",
+        ),
+        ("*", "*", "*"),
+    ] {
+        let mut value = Url::parse_target(target).unwrap();
+        assert_eq!(value.as_str(), raw, "{target}");
+        assert!(value.fragment().is_none());
+        if target.starts_with('/') {
+            assert!(value.authority().is_none());
+            assert_eq!(value.path_and_query(), target);
+        }
+        value.validate_target().unwrap();
+        value.normalize().unwrap();
+        assert_eq!(value.as_str(), normalized, "{target}");
+        Url::validate(value.as_str()).unwrap();
+        value.normalize().unwrap();
+        assert_eq!(value.as_str(), normalized, "{target}");
+    }
+}
+
+/// STATEMENT: Raw target parsing defers syntax checks to explicit target validation.
+///
+/// HOW:
+/// - Parse invalid escapes, fragments, controls, non-ASCII, encoded path NULs and authorities.
+/// - Check explicit validation rejects them without modifying their stored values.
+/// - Accept an encoded NUL in a query and valid non-canonical authorities.
+#[test]
+fn request_target_validation() {
+    for target in [
+        "/a#f",
+        "/a?b#f",
+        "/a%zz",
+        "/a%",
+        "/a%4",
+        "/a?%g0",
+        "/a\"",
+        "/a<",
+        "/a>",
+        "/a\\b",
+        "/a b",
+        "/a\x7f",
+        "/ü",
+        "/a%00",
+        "http://h/%00",
+        "%00",
+        "http:///x",
+        "a/b",
+        "http://[::1/",
+        "u@host:443",
+        "http://u@host/",
+        ":443",
+        "host:65536",
+        "host:abc",
+        "[::g]:80",
+        "127.0.0.256",
+        "http://%20/",
+        "http://%31%32%37.0.0.256/",
+        "http://h/path?%zz",
+    ] {
+        let value = Url::parse_target(target).unwrap();
+        assert!(value.validate_target().is_err(), "{target}");
+    }
+    assert!(Url::parse_target("").is_err());
+    assert!(Url::parse_target(Bytes::from_static(b"/a\xff")).is_err());
+    let value = Url::parse_target("HTTPS://Example.COM:00443/a?%00").unwrap();
+    assert_eq!(value.scheme().unwrap(), Scheme::HTTPS);
+    assert_eq!(value.host(), Some("Example.COM"));
+    assert_eq!(value.port().unwrap().as_str(), "00443");
+    assert_eq!(value.port_u16(), Some(443));
+    assert_eq!(value.query().unwrap(), "%00");
+    value.validate_target().unwrap();
+}
+
+/// STATEMENT: Raw pseudo-header assembly preserves boundaries instead of repairing invalid values.
+///
+/// HOW:
+/// - Assemble invalid schemes and authorities containing URL delimiters.
+/// - Check exact components survive and explicit validation rejects their invalid syntax.
+/// - Check a non-origin path and OPTIONS asterisk remain unchanged for method/form validation.
+#[test]
+fn request_target_parts() {
+    for (scheme, authority) in [
+        ("ht/tp", "host"),
+        ("https", "host/path"),
+        ("https", "host?query"),
+        ("https", "host#fragment"),
+        ("https", "host:abc"),
+    ] {
+        let value = Url::from_target_parts(Some(scheme), Some(authority), "/path").unwrap();
+        assert_eq!(value.scheme_str(), Some(scheme));
+        assert_eq!(value.authority().unwrap(), authority);
+        assert_eq!(value.path(), "/path");
+        assert!(value.validate_target().is_err());
+    }
+    for path in ["relative", "*"] {
+        let value = Url::from_target_parts(Some("https"), Some("host"), path).unwrap();
+        assert_eq!(value.authority().unwrap(), "host");
+        assert_eq!(value.path(), path);
+    }
+}
+
+/// STATEMENT: Raw targets reuse their buffer and normalization fails atomically at the URL limit.
+///
+/// HOW:
+/// - Parse a shared, non-canonical target and check its buffer identity.
+/// - Accept the maximum raw length, reject a longer target, and reject encoding expansion.
+/// - Verify failed normalization leaves the original target intact.
+#[test]
+fn request_target_buffer_and_limits() {
+    let data = ByteString::from_static("/long-non-normalized/%7e/a/../b?x=%41");
+    let value = Url::parse_target(&data).unwrap();
+    assert_eq!(value.as_str().as_ptr(), data.as_ptr());
+
+    let limit = format!("/{}", "a".repeat(u16::MAX as usize - 1));
+    let mut value = Url::parse_target(ByteString::from(limit.clone())).unwrap();
+    value.normalize().unwrap();
+    assert_eq!(value.as_str(), limit);
+    assert_eq!(
+        Url::parse_target(ByteString::from(format!("{limit}a")))
+            .unwrap_err()
+            .kind(),
+        ErrorKind::TooLong
+    );
+
+    let expanding = format!("/{}", "[".repeat(22000));
+    let mut value = Url::parse_target(ByteString::from(expanding.clone())).unwrap();
+    assert_eq!(value.normalize().unwrap_err().kind(), ErrorKind::TooLong);
+    assert_eq!(value.as_str(), expanding);
+}
+
 #[test]
 fn normalization() {
     let cases = [

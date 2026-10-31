@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use ntex_bytes::ByteString;
+use ntex_bytes::{ByteString, Bytes};
 
 use crate::authority::{self, offset, parse_port, validate_authority};
 use crate::chars::{self, PATH, QUERY, lowercase, scheme_len, split_at_char};
@@ -10,7 +10,7 @@ use crate::error::{ErrorKind, InvalidUrl};
 use crate::host::normalize_host;
 use crate::quoting::{Component, requote};
 use crate::scheme::Scheme;
-use crate::url::{Components, Url, assemble};
+use crate::url::{Components, Url, assemble, assemble_target};
 
 /// Maximum URL length in bytes.
 pub(crate) const MAX_LEN: usize = u16::MAX as usize;
@@ -99,11 +99,16 @@ fn clean(src: &str) -> Result<(Cow<'_, str>, usize), InvalidUrl> {
 
 fn parse_clean(s: &str, orig: Option<&ByteString>) -> Result<Url, InvalidUrl> {
     let c = split(s);
+    normalize(&c, orig).map_err(|e| {
+        // Authority errors are relative to that component.
+        e.offset(c.authority.map_or(0, |a| offset(s, a)))
+    })
+}
+
+/// Normalizes parsed components, preserving their interpretation.
+pub(crate) fn normalize(c: &Components<'_>, orig: Option<&ByteString>) -> Result<Url, InvalidUrl> {
     let scheme = c.scheme.map(|s| lowercase(s.into()));
-    let authority = c
-        .authority
-        .map(|a| normalize_authority(a).map_err(|e| e.offset(offset(s, a))))
-        .transpose()?;
+    let authority = c.authority.map(normalize_authority).transpose()?;
     let path = normalize_path(c.path);
     let query = c.query.map(|q| requote(q, Component::Query));
     let fragment = c.fragment.map(|f| requote(f, Component::Fragment));
@@ -118,6 +123,85 @@ fn parse_clean(s: &str, orig: Option<&ByteString>) -> Result<Url, InvalidUrl> {
         },
         orig,
     )
+}
+
+/// Parses HTTP request-target forms without validating or normalizing their components.
+pub(crate) fn parse_target(src: Bytes) -> Result<Url, InvalidUrl> {
+    if src.is_empty() {
+        return Err(InvalidUrl::new(ErrorKind::Empty));
+    }
+    if src.len() > MAX_LEN {
+        return Err(InvalidUrl::new(ErrorKind::TooLong));
+    }
+    simdutf8::compat::from_utf8(&src).map_err(crate::url::utf8_error)?;
+    // SAFETY: UTF-8 is checked above; target syntax is checked separately.
+    let src = unsafe { ByteString::from_bytes_unchecked(src) };
+    let c = if src.starts_with('/') || src == "*" {
+        let (path, query) = split_at_char(&src, '?');
+        Components {
+            path,
+            query,
+            ..Components::default()
+        }
+    } else if scheme_len(&src).is_some_and(|n| src[n + 1..].starts_with("//")) {
+        split(&src)
+    } else {
+        Components {
+            authority: Some(&src),
+            ..Components::default()
+        }
+    };
+    assemble_target(&c, Some(&src))
+}
+
+pub(crate) fn validate_target(url: &Url) -> Result<(), InvalidUrl> {
+    let src = url.as_str();
+    validate_target_chars(src.as_bytes())?;
+    if let Some(scheme) = url.scheme_str() {
+        Scheme::new(scheme)?;
+    }
+    if let Some(a) = url.authority() {
+        let a = a.as_str();
+        validate_authority(a).map_err(|e| e.offset(offset(src, a)))?;
+        let (userinfo, host, _) = authority::split(a);
+        if userinfo.is_some() || host.is_empty() {
+            return Err(InvalidUrl::at(ErrorKind::InvalidAuthority, offset(src, a)));
+        }
+        // Encoded hosts must also be valid after decoding, as in normalized parsing.
+        if host.contains('%') {
+            normalize_host(host).map_err(|e| e.offset(offset(src, host)))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_target_chars(target: &[u8]) -> Result<(), InvalidUrl> {
+    let mut path = true;
+    let mut i = 0;
+    while let Some(&b) = target.get(i) {
+        match b {
+            b'%' => {
+                let (Some(&hi), Some(&lo)) = (target.get(i + 1), target.get(i + 2)) else {
+                    return Err(InvalidUrl::at(ErrorKind::InvalidPercentEncoding, i));
+                };
+                if !hi.is_ascii_hexdigit() || !lo.is_ascii_hexdigit() {
+                    return Err(InvalidUrl::at(ErrorKind::InvalidPercentEncoding, i));
+                }
+                if path && hi == b'0' && lo == b'0' {
+                    return Err(InvalidUrl::at(ErrorKind::InvalidChar('\0'), i));
+                }
+                i += 3;
+                continue;
+            }
+            b'?' => path = false,
+            b'#' | b'"' | b'<' | b'>' | b'\\' | 0..=b' ' | 0x7f.. => {
+                return Err(InvalidUrl::at(ErrorKind::InvalidChar(char::from(b)), i));
+            }
+            _ => (),
+        }
+        i += 1;
+    }
+    Ok(())
 }
 
 /// Requotes a path and removes dot segments from absolute paths.

@@ -46,12 +46,14 @@ impl From<Option<usize>> for KeepAlive {
 /// The default configuration enables persistent HTTP/1 connections with a
 /// five-second idle timeout, allows 96 headers, limits the request or status
 /// line to 16 KiB and the message-head buffer to 64 KiB, and applies a
-/// one-second initial request-header timeout.
+/// one-second initial request-header timeout. Request-target validation and
+/// normalization, and HTTP/1 Host-header validation, are disabled by default.
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) headers_vec: bool,
     pub(super) validate_host: bool,
+    pub(super) normalize_target: bool,
     pub(super) max_headers: u16,
     pub(super) max_buf_size: usize,
     pub(super) max_start_line_size: usize,
@@ -108,7 +110,8 @@ impl HttpServiceConfig {
             max_buf_size: 64 * 1024,
             max_start_line_size: 16 * 1024,
             headers_vec: false,
-            validate_host: true,
+            validate_host: false,
+            normalize_target: false,
             payload_read_rate: None,
             write_timeout: Seconds::ZERO,
             half_close: false,
@@ -285,9 +288,37 @@ impl HttpServiceConfig {
     /// header are rejected as well, see
     /// [RFC 9112 section 3.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2).
     /// An empty `Host` value is accepted. This setting does not affect HTTP/2.
-    /// It is enabled by default.
+    /// It is disabled by default.
     pub fn set_host_validation(mut self, enabled: bool) -> Self {
         self.validate_host = enabled;
+        self
+    }
+
+    #[must_use]
+    /// Enables request-target validation and normalization during HTTP decoding.
+    ///
+    /// Both are disabled by default. When enabled, HTTP/1 and HTTP/2 reject
+    /// malformed targets and method-inappropriate forms with `400 Bad Request`,
+    /// then normalize valid targets using [`urly::Url::normalize`].
+    /// Normalization failures also produce `400 Bad Request`.
+    ///
+    /// Processing happens before application middleware, filters, routing and
+    /// lower-level HTTP service handlers. They all receive the normalized URI.
+    /// Application rewrites are not automatically validated or normalized again.
+    ///
+    /// HTTP/1 Host-header validation is controlled separately by
+    /// [`Self::set_host_validation`]. Mandatory protocol checks, UTF-8 and URL
+    /// representation limits remain enforced regardless of these settings.
+    /// The router's existing per-segment percent-decoding is also unchanged.
+    ///
+    /// ```
+    /// use ntex::{SharedCfg, http::HttpServiceConfig};
+    ///
+    /// let config = SharedCfg::new("HTTP")
+    ///     .add(HttpServiceConfig::new().set_request_target_normalization(true));
+    /// ```
+    pub fn set_request_target_normalization(mut self, enabled: bool) -> Self {
+        self.normalize_target = enabled;
         self
     }
 
