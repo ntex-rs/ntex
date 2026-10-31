@@ -28,6 +28,11 @@ async fn wait_for(check: impl Fn() -> bool) -> Result<(), &'static str> {
     Err("the expected condition is not met in time")
 }
 
+/// STATEMENT: `HttpService::h1` serves requests with the peer address available.
+///
+/// HOW:
+/// - Start an HTTP/1 service with a header read deadline and keep-alive disabled.
+/// - Send a `GET`, assert the handler sees a peer address, and verify a successful response.
 #[ntex::test]
 async fn test_h1() {
     let srv = test::server_with_config(
@@ -48,6 +53,11 @@ async fn test_h1() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: `HttpService::new` recognizes HTTP/1.1 requests and supplies a nonzero date year.
+///
+/// HOW:
+/// - Send a `GET` and assert the handler sees a peer address and `Version::HTTP_11`.
+/// - Verify a successful response whose `Date` header does not start with a zero year.
 #[ntex::test]
 async fn test_h1_2() {
     let srv = test::server_with_config(
@@ -73,6 +83,11 @@ async fn test_h1_2() {
     assert!(!hdr.to_str().unwrap().starts_with("000"));
 }
 
+/// STATEMENT: HTTP/1 expectation control can reject a request or permit its body transmission.
+///
+/// HOW:
+/// - Reject an `Expect: 100-continue` request without the accepted query and verify status `412`.
+/// - Accept the query, verify `100 Continue`, then send the body and verify `200 OK`.
 #[ntex::test]
 async fn test_expect_continue() {
     let srv = test::server_with_config(
@@ -127,6 +142,11 @@ async fn test_expect_continue() {
     assert!(data.starts_with("HTTP/1.1 200 OK\r\n"));
 }
 
+/// STATEMENT: HTTP/1 chunked request decoding delivers the complete payload across chunk sizes.
+///
+/// HOW:
+/// - Send random payload chunks of 32768, 32, and 32768 bytes followed by the terminating chunk.
+/// - Sum decoded bytes in the handler and verify the response reports the total sent.
 #[ntex::test]
 async fn test_chunked_payload() {
     let chunk_sizes = [32768, 32, 32768];
@@ -176,6 +196,12 @@ async fn test_chunked_payload() {
     assert_eq!(returned_size, total_size);
 }
 
+/// STATEMENT: Incomplete HTTP/1 headers time out when progress stalls or the total budget expires.
+///
+/// HOW:
+/// - Configure a one-second read period, a two-second budget, and a four-byte minimum rate.
+/// - Keep an incomplete head above the minimum rate and verify it still receives `408`.
+/// - Stall a second incomplete head below the minimum rate and verify another `408`.
 #[ntex::test]
 async fn test_slow_request() {
     const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n";
@@ -226,6 +252,11 @@ async fn test_slow_request() {
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"), "{data:?}");
 }
 
+/// STATEMENT: Header read deadlines apply to later requests on an HTTP/1 keep-alive connection.
+///
+/// HOW:
+/// - Configure a single one-second header read period and complete an initial request.
+/// - Verify `200 OK`, then send an incomplete second head and verify `408 Request Timeout`.
 #[ntex::test]
 async fn test_slow_request2() {
     const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n";
@@ -252,6 +283,11 @@ async fn test_slow_request2() {
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"), "{data:?}");
 }
 
+/// STATEMENT: Sufficient header progress extends the HTTP/1 read deadline.
+///
+/// HOW:
+/// - Send five bytes with a four-byte minimum rate and a one-second initial read period.
+/// - Complete the head after 1.1 seconds, within the total budget, and verify `200 OK`.
 #[ntex::test]
 async fn test_headers_read_rate_extends_timeout() {
     let srv = test::server_with_config(
@@ -273,6 +309,12 @@ async fn test_headers_read_rate_extends_timeout() {
     assert!(data[..len].starts_with(b"HTTP/1.1 200 OK\r\n"));
 }
 
+/// STATEMENT: Header read-rate accounting includes bytes already consumed by the HTTP/1 decoder.
+///
+/// HOW:
+/// - Send a complete request line and a header, leaving only the final blank line outstanding.
+/// - Wait beyond the initial read period and verify no response or connection close occurs.
+/// - Finish the head within the extended budget and verify `200 OK`.
 #[ntex::test]
 async fn test_headers_read_rate_counts_parsed_bytes() {
     let srv = test::server_with_config(
@@ -308,6 +350,11 @@ async fn test_headers_read_rate_counts_parsed_bytes() {
     assert!(data[..len].starts_with(b"HTTP/1.1 200 OK\r\n"));
 }
 
+/// STATEMENT: Sufficient payload progress extends the HTTP/1 body read deadline.
+///
+/// HOW:
+/// - Send half a ten-byte body with a four-byte minimum rate and a one-second read period.
+/// - Send the remaining bytes after 1.1 seconds and verify the consuming handler returns `200 OK`.
 #[ntex::test]
 async fn test_payload_read_rate_extends_timeout() {
     let srv = test::server_with_config(
@@ -335,6 +382,11 @@ async fn test_payload_read_rate_extends_timeout() {
     assert!(data[..len].starts_with(b"HTTP/1.1 200 OK\r\n"));
 }
 
+/// STATEMENT: HTTP/1 rejects a malformed protocol version in the request line.
+///
+/// HOW:
+/// - Send a raw request line containing `HTTP1.1` instead of `HTTP/1.1`.
+/// - Read the response and verify it starts with `400 Bad Request`.
 #[ntex::test]
 async fn test_http1_malformed_request() {
     let srv = test_server(async |_| {
@@ -348,6 +400,11 @@ async fn test_http1_malformed_request() {
     assert!(data.starts_with("HTTP/1.1 400 Bad Request"));
 }
 
+/// STATEMENT: HTTP/1.1 connections accept successive requests with default keep-alive settings.
+///
+/// HOW:
+/// - Send a complete request over a raw TCP connection and verify `200 OK`.
+/// - Reuse that connection for another request and verify a second `200 OK`.
 #[ntex::test]
 async fn test_http1_keepalive() {
     let srv = test_server(async |_| {
@@ -366,6 +423,11 @@ async fn test_http1_keepalive() {
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
+/// STATEMENT: An idle HTTP/1 connection closes after its keep-alive timeout.
+///
+/// HOW:
+/// - Configure a one-second keep-alive timeout and verify a request receives `200 OK`.
+/// - Leave the connection idle and verify the next socket read returns EOF.
 #[ntex::test]
 async fn test_http1_keepalive_timeout() {
     let srv = test::server_with_config(
@@ -386,7 +448,11 @@ async fn test_http1_keepalive_timeout() {
     assert_eq!(res, 0);
 }
 
-/// Keep-alive must occure only while waiting complete request
+/// STATEMENT: Keep-alive expiration does not interrupt an active HTTP/1 response.
+///
+/// HOW:
+/// - Configure a one-second keep-alive timeout and serve a fast request.
+/// - Reuse the connection for a handler delayed by 1.2 seconds and verify both responses are `200`.
 #[ntex::test]
 async fn test_http1_no_keepalive_during_response() {
     let srv = test::server_with_config(
@@ -413,7 +479,12 @@ async fn test_http1_no_keepalive_during_response() {
     }
 }
 
-/// Keep-alive timeout after sending response
+/// STATEMENT: Idle HTTP/1 closure after a response reports a keep-alive disconnect.
+///
+/// HOW:
+/// - Enable header read deadlines and a one-second keep-alive timeout.
+/// - Verify a request succeeds, then wait for socket EOF.
+/// - Assert the control service observed `Control::Disconnect` with `Reason::KeepAlive`.
 #[ntex::test]
 async fn test_http1_keepalive_after_response() {
     let ka = Arc::new(AtomicBool::new(false));
@@ -451,6 +522,11 @@ async fn test_http1_keepalive_after_response() {
     assert!(ka.load(Ordering::Relaxed));
 }
 
+/// STATEMENT: HTTP/1.1 honors a request's `Connection: close` directive.
+///
+/// HOW:
+/// - Send a raw request containing `Connection: close` and verify `200 OK`.
+/// - Verify the following socket read returns EOF.
 #[ntex::test]
 async fn test_http1_keepalive_close() {
     let srv = test_server(async |_| {
@@ -470,6 +546,11 @@ async fn test_http1_keepalive_close() {
     assert_eq!(res, 0);
 }
 
+/// STATEMENT: HTTP/1.0 requests close by default even when the response uses HTTP/1.1.
+///
+/// HOW:
+/// - Send an HTTP/1.0 request without a connection directive.
+/// - Verify an HTTP/1.1 `200 OK` with `Connection: close`, followed by socket EOF.
 #[ntex::test]
 async fn test_http10_keepalive_default_close() {
     let srv = test_server(async |_| {
@@ -489,6 +570,11 @@ async fn test_http10_keepalive_default_close() {
     assert_eq!(res, 0);
 }
 
+/// STATEMENT: HTTP/1.0 connection headers reflect explicit keep-alive or default closure.
+///
+/// HOW:
+/// - Send an HTTP/1.0 request with `Connection: keep-alive` and verify the response echoes it.
+/// - On another connection, omit that directive and verify `Connection: close` followed by EOF.
 #[ntex::test]
 async fn test_http10_keepalive() {
     let srv = test_server(async |_| {
@@ -519,6 +605,11 @@ async fn test_http10_keepalive() {
     assert_eq!(res, 0);
 }
 
+/// STATEMENT: Disabling keep-alive closes HTTP/1.1 connections after their response.
+///
+/// HOW:
+/// - Configure `KeepAlive::Disabled` and send a request without `Connection: close`.
+/// - Verify `200 OK` followed by socket EOF.
 #[ntex::test]
 async fn test_http1_keepalive_disabled() {
     let srv = test::server_with_config(
@@ -537,7 +628,11 @@ async fn test_http1_keepalive_disabled() {
     assert_eq!(res, 0);
 }
 
-/// Payload timer should not fire aftre dispatcher has read whole payload
+/// STATEMENT: A completed HTTP/1 payload no longer triggers its read deadline.
+///
+/// HOW:
+/// - Configure a one-second payload deadline and deliver the head and body in separate reads.
+/// - Read the body in the handler, delay the response by 1.5 seconds, and verify `200 OK`.
 #[ntex::test]
 async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
     let srv = test::server_with_config(
@@ -571,7 +666,11 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
-/// Handle not consumed payload
+/// STATEMENT: An HTTP/1 handler may respond without consuming a delayed request payload.
+///
+/// HOW:
+/// - Install a handler that ignores the body and a control service that panics on protocol errors.
+/// - Send headers declaring a four-byte body, deliver it after a delay, and verify `200 OK`.
 #[cfg(unix)]
 #[ntex::test]
 async fn test_http1_handle_not_consumed_payload() {
@@ -600,7 +699,11 @@ async fn test_http1_handle_not_consumed_payload() {
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
-/// Handle payload errors (keep-alive, disconnects)
+/// STATEMENT: Disconnecting an HTTP/1 client reports an error to its pending payload reader.
+///
+/// HOW:
+/// - Declare a large body without sending it and wait until the handler starts reading.
+/// - Drop the client connection and verify the handler records one payload error.
 #[ntex::test]
 async fn test_http1_handle_payload_errors() {
     let started = Arc::new(AtomicUsize::new(0));
@@ -640,6 +743,12 @@ async fn test_http1_handle_payload_errors() {
         .expect("payload error is not reported");
 }
 
+/// STATEMENT: HTTP/1 response framing respects status-specific content-length rules.
+///
+/// HOW:
+/// - Return `100` and `102` for `GET` and `HEAD`; verify replacement `500` responses with length zero.
+/// - Return `204` and `101` for both methods and verify no `Content-Length` header is sent.
+/// - Return empty `200` and `404` responses to `GET` and verify `Content-Length: 0`.
 #[ntex::test]
 async fn test_content_length() {
     let srv = test_server(async |_| {
@@ -694,6 +803,11 @@ async fn test_content_length() {
     }
 }
 
+/// STATEMENT: Large HTTP/1 response headers do not corrupt the response body.
+///
+/// HOW:
+/// - Return twenty long custom headers together with a body containing ten copies of `STR`.
+/// - Verify success and compare the fully received body with the original bytes.
 #[ntex::test]
 async fn test_h1_headers() {
     let data = STR.repeat(10);
@@ -755,6 +869,11 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World";
 
+/// STATEMENT: HTTP/1 delivers a fixed response body unchanged.
+///
+/// HOW:
+/// - Return `STR` from the request handler and send a `GET`.
+/// - Verify success and compare the complete received body with `STR`.
 #[ntex::test]
 async fn test_h1_body() {
     let srv = test_server(async |_| {
@@ -769,6 +888,11 @@ async fn test_h1_body() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: HTTP/1 `HEAD` responses retain the computed body length without sending body bytes.
+///
+/// HOW:
+/// - Return `STR` without an explicit length and send a `HEAD` request.
+/// - Verify success, `Content-Length` equal to `STR.len()`, and an empty received body.
 #[ntex::test]
 async fn test_h1_head_empty() {
     let srv = test_server(async |_| {
@@ -788,6 +912,11 @@ async fn test_h1_head_empty() {
     assert!(bytes.is_empty());
 }
 
+/// STATEMENT: HTTP/1 `HEAD` preserves an explicit content length while suppressing the body.
+///
+/// HOW:
+/// - Return `STR` with an explicitly configured content length and send a `HEAD`.
+/// - Verify success, the configured `Content-Length`, and an empty received body.
 #[ntex::test]
 async fn test_h1_head_binary() {
     let srv = test_server(async |_| {
@@ -809,6 +938,11 @@ async fn test_h1_head_binary() {
     assert!(bytes.is_empty());
 }
 
+/// STATEMENT: HTTP/1 computes the content length for a fixed-body `HEAD` response.
+///
+/// HOW:
+/// - Return `STR` without explicitly configuring a length and send a `HEAD`.
+/// - Verify success and a `Content-Length` equal to `STR.len()`.
 #[ntex::test]
 async fn test_h1_head_binary2() {
     let srv = test_server(async |_| {
@@ -824,6 +958,11 @@ async fn test_h1_head_binary2() {
     }
 }
 
+/// STATEMENT: HTTP/1 delivers the complete contents of a sized response stream.
+///
+/// HOW:
+/// - Wrap one chunk containing `STR` in a `body::SizedStream` with the matching length.
+/// - Send a `GET`, verify success, and compare the received body with `STR`.
 #[ntex::test]
 async fn test_h1_body_length() {
     let srv = test_server(async |_| {
@@ -841,6 +980,11 @@ async fn test_h1_body_length() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: HTTP/1 supports an explicitly chunked streaming response.
+///
+/// HOW:
+/// - Stream one chunk containing `STR` and explicitly set `Transfer-Encoding: chunked`.
+/// - Verify success, the chunked encoding header, and a decoded body equal to `STR`.
 #[ntex::test]
 async fn test_h1_body_chunked_explicit() {
     let srv = test_server(async |_| {
@@ -873,6 +1017,11 @@ async fn test_h1_body_chunked_explicit() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: HTTP/1 automatically selects chunked encoding for an unsized response stream.
+///
+/// HOW:
+/// - Stream one chunk containing `STR` without setting a transfer-encoding header.
+/// - Verify success, an added `Transfer-Encoding: chunked`, and the complete decoded body.
 #[ntex::test]
 async fn test_h1_body_chunked_implicit() {
     let srv = test_server(async |_| {
@@ -899,6 +1048,11 @@ async fn test_h1_body_chunked_implicit() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: An invalid HTTP/1 response header becomes an internal-server-error response.
+///
+/// HOW:
+/// - Build a response with a `Content-Type` value containing null bytes.
+/// - Verify status `500` and the body `Invalid HTTP header value`.
 #[ntex::test]
 async fn test_h1_response_http_error_handling() {
     let srv = test_server(async |_| {
@@ -920,6 +1074,11 @@ async fn test_h1_response_http_error_handling() {
     assert_eq!(bytes, Bytes::from_static(b"Invalid HTTP header value"));
 }
 
+/// STATEMENT: HTTP/1 converts a service error into its configured response status and body.
+///
+/// HOW:
+/// - Return an `InternalError` configured with `StatusCode::BAD_REQUEST` and the message `error`.
+/// - Verify the client receives status `400` and that exact body.
 #[ntex::test]
 async fn test_h1_service_error() {
     let srv = test_server(async |_| {
@@ -939,7 +1098,11 @@ async fn test_h1_service_error() {
     assert_eq!(bytes, Bytes::from_static(b"error"));
 }
 
-// /// If client drops connection, server must drop pending handling futures
+// /// STATEMENT: Dropping an HTTP/1 client request drops its pending server handler.
+// ///
+// /// HOW:
+// /// - Delay the handler beyond the client timeout and attach a drop counter and notification.
+// /// - Verify the request times out, await the drop notification, and assert one handler drop.
 // #[ntex::test]
 // async fn test_h1_client_drop() -> io::Result<()> {
 // struct SetOnDrop(Arc<AtomicUsize>, Option<::oneshot::Sender<()>>);
@@ -978,6 +1141,12 @@ async fn test_h1_service_error() {
 //     Ok(())
 // }
 
+/// STATEMENT: Graceful shutdown of `HttpService::h1` waits for active requests.
+///
+/// HOW:
+/// - Hold two handlers on separate connections and start `srv.stop(true)`.
+/// - Verify shutdown remains pending while both requests are active.
+/// - Release the handlers, await shutdown completion, and verify the active count reaches zero.
 #[ntex::test]
 async fn test_h1_gracefull_shutdown() {
     let count = Arc::new(AtomicUsize::new(0));
@@ -1073,6 +1242,11 @@ where
     }
 }
 
+/// STATEMENT: HTTP/1 control-service initialization failure does not leak a shutdown blocker.
+///
+/// HOW:
+/// - Use `FailingControl` to reject control-service creation and verify the connection sends no data.
+/// - Request graceful shutdown and verify it completes within five seconds.
 #[ntex::test]
 async fn test_h1_control_init_error_does_not_block_shutdown() {
     let srv = test_server(async |_| {
@@ -1093,6 +1267,12 @@ async fn test_h1_control_init_error_does_not_block_shutdown() {
     );
 }
 
+/// STATEMENT: Graceful shutdown of `HttpService::new` waits for active HTTP/1 requests.
+///
+/// HOW:
+/// - Hold two HTTP/1 handlers on separate connections and start `srv.stop(true)`.
+/// - Verify shutdown remains pending while both requests are active.
+/// - Release the handlers, await shutdown completion, and verify the active count reaches zero.
 #[ntex::test]
 async fn test_h1_gracefull_shutdown_2() {
     let count = Arc::new(AtomicUsize::new(0));
@@ -1154,6 +1334,181 @@ async fn test_h1_gracefull_shutdown_2() {
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
 
+async fn h2_initialized_handler_readiness(path: &'static str) {
+    use std::{cell::Cell, convert::Infallible, future::poll_fn, rc::Rc, task::Poll};
+
+    use ntex::http::HeaderMap;
+    use ntex::service::{BindCtx, Ctx, ReadyNotifier, apply_fn_factory, fn_factory};
+    use ntex::time::timeout;
+    use ntex::web::{self, App, WebRequest};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    struct Gate {
+        available: Cell<bool>,
+        changed: ReadyNotifier,
+        binds: Arc<AtomicUsize>,
+        pending: Arc<AtomicBool>,
+    }
+
+    impl ntex::Service<(), WebRequest<()>> for Gate {
+        type Res = WebRequest<()>;
+        type Error = Infallible;
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            self.binds.fetch_add(1, Ordering::Relaxed);
+            ctx.subscribe(&self.changed);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Infallible> {
+            poll_fn(|_| {
+                if self.available.get() {
+                    Poll::Ready(Ok(()))
+                } else {
+                    self.pending.store(true, Ordering::Release);
+                    Poll::Pending
+                }
+            })
+            .await
+        }
+
+        async fn call(
+            &self,
+            req: WebRequest<()>,
+            _: Ctx<'_, Self>,
+        ) -> Result<WebRequest<()>, Infallible> {
+            Ok(req)
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let binds = Arc::new(AtomicUsize::new(0));
+    let blocked = Arc::new(AtomicBool::new(false));
+    let pending = Arc::new(AtomicBool::new(false));
+    let calls2 = calls.clone();
+    let binds2 = binds.clone();
+    let blocked2 = blocked.clone();
+    let pending2 = pending.clone();
+    let (block_tx, block_rx) = ::oneshot::channel();
+    let (resume_tx, resume_rx) = ::oneshot::channel();
+    let control = Arc::new(Mutex::new(Some((block_rx, resume_rx))));
+
+    let srv = test_server(async move |_| {
+        let gate = Rc::new(Gate {
+            available: Cell::new(true),
+            changed: ReadyNotifier::new(),
+            binds: binds2.clone(),
+            pending: pending2.clone(),
+        });
+        let handler = ntex::factory(fn_factory({
+            let gate = gate.clone();
+            async move |(): &()| Ok::<_, Infallible>(gate.clone())
+        }))
+        .map(|req: WebRequest<()>| req.into_response(Response::Ok()));
+        let app = App::new()
+            .service(web::service("/blocked").build(handler.clone()))
+            .service(web::resource("/ready").to(async || Response::Ok()))
+            .default_service(handler);
+
+        let blocked = blocked2.clone();
+        let (block_rx, resume_rx) = control.lock().unwrap().take().unwrap();
+        rt::spawn(async move {
+            if block_rx.await.is_ok() {
+                gate.available.set(false);
+                gate.changed.notify();
+                blocked.store(true, Ordering::Release);
+                if resume_rx.await.is_ok() {
+                    gate.available.set(true);
+                    gate.changed.notify();
+                }
+            }
+        });
+
+        let calls = calls2.clone();
+        HttpService::h2(apply_fn_factory(app, async move |req: Request, ctx| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            ctx.call(req).await
+        }))
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, false, "localhost".into());
+    for path in ["/ready", path, "/ready"] {
+        let (_snd, rcv) = client
+            .send(Method::GET, path.into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+        let msg = timeout(Seconds(5), rcv.recv()).await.unwrap().unwrap();
+        assert!(
+            matches!(msg.kind, MessageKind::Headers { ref pseudo, eof: true, .. }
+                if pseudo.status == Some(StatusCode::OK)),
+            "{path}: {msg:?}"
+        );
+    }
+    assert_eq!(binds.load(Ordering::Relaxed), 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+
+    block_tx.send(()).unwrap();
+    wait_for(|| blocked.load(Ordering::Acquire)).await.unwrap();
+    let (_first, first) = client
+        .send(Method::GET, "/ready".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+    wait_for(|| pending.load(Ordering::Acquire))
+        .await
+        .expect("the dispatcher did not check the initialized handler's readiness");
+    let (_second, second) = client
+        .send(Method::GET, "/ready".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+    for rcv in [&first, &second] {
+        assert!(
+            timeout(Millis(100), rcv.recv()).await.is_err(),
+            "an unrelated request completed while {path} was not ready"
+        );
+    }
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        3,
+        "the dispatcher entered the application while {path} was not ready"
+    );
+
+    resume_tx.send(()).unwrap();
+    for rcv in [&first, &second] {
+        let msg = timeout(Seconds(5), rcv.recv()).await.unwrap().unwrap();
+        assert!(
+            matches!(msg.kind, MessageKind::Headers { ref pseudo, eof: true, .. }
+                if pseudo.status == Some(StatusCode::OK)),
+            "{msg:?}"
+        );
+    }
+    assert_eq!(calls.load(Ordering::Relaxed), 5);
+    assert_eq!(binds.load(Ordering::Relaxed), 1);
+}
+
+/// STATEMENT: An initialized route's readiness gates HTTP/2 application dispatch for other routes.
+///
+/// HOW:
+/// - Initialize resource zero and a healthy route on one HTTP/2 connection, then cache readiness.
+/// - Notify that resource zero is unavailable and send two requests to the healthy route.
+/// - Observe pending readiness, no responses, and no application entry until recovery is notified.
+/// - Verify both queued requests complete without rebinding the blocked handler.
+#[ntex::test]
+async fn test_h2_initialized_route_readiness_blocks_dispatch() {
+    h2_initialized_handler_readiness("/blocked").await;
+}
+
+/// STATEMENT: An initialized default handler's readiness gates HTTP/2 dispatch to matching routes.
+///
+/// HOW:
+/// - Initialize the fallback and a healthy route on one HTTP/2 connection, then cache readiness.
+/// - Notify that the fallback is unavailable and send two requests matching the healthy route.
+/// - Observe pending readiness, no responses, and no application entry until recovery is notified.
+/// - Verify both queued requests complete without rebinding the default handler.
+#[ntex::test]
+async fn test_h2_initialized_default_readiness_blocks_dispatch() {
+    h2_initialized_handler_readiness("/missing").await;
+}
+
 /// STATEMENT: HTTP/2 keeps delivering request payloads while the application is at capacity.
 ///
 /// HOW:
@@ -1213,6 +1568,12 @@ async fn test_h2_request_readiness_does_not_block_payload() {
     );
 }
 
+/// STATEMENT: Dropping an unfinished HTTP/2 request body after its response resets the stream.
+///
+/// HOW:
+/// - Retain the request payload in a task, read a chunk, then drop it after a delay.
+/// - Verify the response completes while the request body remains open.
+/// - Attempt further payload writes and verify the request stream becomes unwritable.
 #[ntex::test]
 async fn test_h2_request_body_dropped_after_response_resets_stream() {
     use ntex::http::{HeaderMap, Payload};
@@ -1271,8 +1632,11 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
     assert!(reset, "request stream is not reset");
 }
 
-/// The request payload reports the stream reset error and ends after it,
-/// the next read returns `None`.
+/// STATEMENT: An HTTP/2 payload reports its stream reset once, then ends without hanging.
+///
+/// HOW:
+/// - Keep reading the payload after the handler returns, send one chunk, and reset with `CANCEL`.
+/// - Verify the reader finishes with exactly the chunk and the `CANCEL` error, without a timeout.
 #[ntex::test]
 async fn test_h2_request_payload_ends_after_error() {
     use ntex::http::HeaderMap;
@@ -1338,7 +1702,12 @@ async fn test_h2_request_payload_ends_after_error() {
     );
 }
 
-/// A malformed request is a stream error, the connection stays open.
+/// STATEMENT: A malformed HTTP/2 request URI is rejected without closing the connection.
+///
+/// HOW:
+/// - Send a URI containing a space with both closed and open request bodies.
+/// - Verify each receives a final `400` response and the connection remains open.
+/// - Send a valid request on the same connection and verify `200 OK`.
 #[ntex::test]
 async fn test_h2_malformed_request_uri() {
     use ntex::http::HeaderMap;
@@ -1375,7 +1744,12 @@ async fn test_h2_malformed_request_uri() {
     assert_eq!(pseudo.status, Some(StatusCode::OK));
 }
 
-/// A response body error resets only its stream, the connection stays open.
+/// STATEMENT: An HTTP/2 response body error resets only the failing stream.
+///
+/// HOW:
+/// - Start a delayed successful request and a request whose response stream returns an error.
+/// - Verify the failing stream sends `200` headers followed by an `INTERNAL_ERROR` reset.
+/// - Verify the other response completes with its expected body and the connection stays open.
 #[ntex::test]
 async fn test_h2_response_body_error_resets_stream() {
     use ntex::http::HeaderMap;
@@ -1432,7 +1806,11 @@ async fn test_h2_response_body_error_resets_stream() {
     assert!(!client.is_closed());
 }
 
-/// `304 Not Modified` response has no body and no `content-length: 0`.
+/// STATEMENT: HTTP/2 `304 Not Modified` responses omit bodies and content-length headers.
+///
+/// HOW:
+/// - Return `304` responses with empty, fixed, and streaming application bodies.
+/// - Verify each response ends at its headers and contains no `Content-Length`.
 #[ntex::test]
 async fn test_h2_not_modified_has_no_body() {
     use ntex::http::HeaderMap;
@@ -1476,7 +1854,12 @@ async fn test_h2_not_modified_has_no_body() {
     }
 }
 
-/// A sized body ends the stream with its last data frame, a streaming body with an empty one.
+/// STATEMENT: HTTP/2 sized and unsized response bodies use their expected end-stream framing.
+///
+/// HOW:
+/// - Return the same two chunks through a sized stream and an unsized stream.
+/// - Verify successful headers with `Date`, and length six for the sized response.
+/// - Verify the sized stream ends on its last chunk, while the unsized stream ends with empty data.
 #[ntex::test]
 async fn test_h2_response_body_end_stream() {
     use ntex::http::HeaderMap;
@@ -1557,8 +1940,12 @@ fn h2_raw_data(buf: &mut Vec<u8>, data: &[u8], eof: bool) {
     buf.extend_from_slice(data);
 }
 
-/// Empty non-final DATA frames are not flow controlled, they are not queued
-/// as request body chunks.
+/// STATEMENT: HTTP/2 skips empty non-final data frames and resets their count after non-empty data.
+///
+/// HOW:
+/// - Send two groups of nine empty frames, separated and followed by non-empty payload data.
+/// - Verify the handler receives only `a` and `bc`, with no empty chunks.
+/// - Verify the connection remains open and no `GOAWAY` is sent.
 #[ntex::test]
 async fn test_h2_empty_data_frames_are_not_queued() {
     use ntex::util::stream_recv;
@@ -1611,7 +1998,11 @@ async fn test_h2_empty_data_frames_are_not_queued() {
     assert!(!frames.1, "connection is closed");
 }
 
-/// Request trailers are available after the request payload is complete.
+/// STATEMENT: HTTP/2 exposes request trailers after the payload reaches EOF.
+///
+/// HOW:
+/// - Send raw frames carrying `abc` followed by final headers containing `x-trailer: 1`.
+/// - Drain the payload and verify the body plus exactly one trailer with the expected value.
 #[ntex::test]
 async fn test_h2_request_trailers() {
     use ntex::util::stream_recv;
@@ -1682,8 +2073,12 @@ fn h2_raw_read_frames(stream: &mut net::TcpStream) -> (Vec<(u8, Vec<u8>)>, bool)
     (frames, closed)
 }
 
-/// The connection is closed with `ENHANCE_YOUR_CALM` after 10 consecutive
-/// empty non-final DATA frames.
+/// STATEMENT: Ten consecutive empty non-final HTTP/2 data frames trigger connection closure.
+///
+/// HOW:
+/// - Send ten empty frames followed by non-empty final data.
+/// - Verify `GOAWAY` carries `ENHANCE_YOUR_CALM` and the connection closes.
+/// - Verify the trailing data is not delivered as a successfully completed request body.
 #[ntex::test]
 async fn test_h2_empty_data_frames_limit() {
     use ntex::util::stream_recv;
@@ -1732,7 +2127,12 @@ async fn test_h2_empty_data_frames_limit() {
     );
 }
 
-/// The control service handles `Expect: 100-continue`, the default ack sends `100 Continue`.
+/// STATEMENT: HTTP/2 expectation control can permit a body or send a final rejection.
+///
+/// HOW:
+/// - Send `Expect: 100-Continue` and verify non-final `100` headers before transmitting the body.
+/// - Verify the accepted request returns `200` and echoes the body through the final data frame.
+/// - Reject another request and verify a final `417` without `100`, leaving the connection open.
 #[ntex::test]
 async fn test_h2_expect_continue() {
     use ntex::http::{HeaderMap, h2};
@@ -1806,7 +2206,11 @@ async fn test_h2_expect_continue() {
     assert!(!client.is_closed());
 }
 
-/// Failure of the control service resets the stream, the connection stays open.
+/// STATEMENT: HTTP/2 expectation-control failure resets its stream without losing the connection.
+///
+/// HOW:
+/// - Return a control-service error for an `Expect: 100-Continue` request.
+/// - Verify an `INTERNAL_ERROR` stream reset, then successfully send a `GET` on the same connection.
 #[ntex::test]
 async fn test_h2_expect_control_error() {
     use ntex::http::{HeaderMap, h2};
@@ -1858,7 +2262,11 @@ async fn test_h2_expect_control_error() {
     assert_eq!(pseudo.status, Some(StatusCode::OK));
 }
 
-/// Informational response of the application cannot complete the request.
+/// STATEMENT: HTTP/2 replaces informational application responses with an internal server error.
+///
+/// HOW:
+/// - Return `100 Continue` and `101 Switching Protocols` as application responses.
+/// - Verify both requests receive `500 Internal Server Error` headers.
 #[ntex::test]
 async fn test_h2_informational_response_is_replaced() {
     use ntex::http::HeaderMap;
@@ -1890,6 +2298,11 @@ async fn test_h2_informational_response_is_replaced() {
     }
 }
 
+/// STATEMENT: HTTP/1 rejects request lines exceeding its size limit while accepting shorter ones.
+///
+/// HOW:
+/// - Send a request with a path containing 16 KiB of repeated bytes and verify status `414`.
+/// - Shorten the path by twenty bytes, include a host header, and verify status `200`.
 #[ntex::test]
 async fn test_h1_request_line_too_long() {
     let srv = test_server(async |_| {
@@ -1913,6 +2326,11 @@ async fn test_h1_request_line_too_long() {
     assert!(data[..n].starts_with(b"HTTP/1.1 200"));
 }
 
+/// STATEMENT: HTTP/1 distinguishes unsupported transfer codings from malformed coding order.
+///
+/// HOW:
+/// - Send `Transfer-Encoding: gzip, chunked` and verify status `501`.
+/// - Send `Transfer-Encoding: chunked, gzip` and verify status `400`.
 #[ntex::test]
 async fn test_h1_unsupported_transfer_coding() {
     let srv = test_server(async |_| {
@@ -1935,7 +2353,12 @@ async fn test_h1_unsupported_transfer_coding() {
     assert!(data[..n].starts_with(b"HTTP/1.1 400"), "{:?}", &data[..n]);
 }
 
-/// Chunked request trailers are available after the request payload is complete.
+/// STATEMENT: HTTP/1 exposes chunked request trailers without leaking them to a pipelined request.
+///
+/// HOW:
+/// - Pipeline two chunked requests, the first with `x-trailer: 1` and the second without trailers.
+/// - Drain each payload and return its body and trailers in the response.
+/// - Verify the responses contain `abc|x-trailer=1` and `de|`, respectively.
 #[ntex::test]
 async fn test_h1_request_trailers() {
     use ntex::util::stream_recv;
@@ -1987,7 +2410,12 @@ async fn test_h1_request_trailers() {
     assert!(data.ends_with("\r\n\r\nde|"), "{data:?}");
 }
 
-/// A failed transport write stops polling an always ready response body.
+/// STATEMENT: An HTTP/1 peer reset stops polling an always-ready response body.
+///
+/// HOW:
+/// - Serve a body that counts polls and yields data until a large safety limit.
+/// - Read part of the response, then close with unread data to reset the connection.
+/// - Verify the poll count stabilizes below the safety limit and remains unchanged after a delay.
 #[ntex::test]
 async fn test_h1_body_not_polled_after_peer_reset() {
     use std::task::{Context, Poll};
