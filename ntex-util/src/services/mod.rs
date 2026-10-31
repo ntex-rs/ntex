@@ -123,7 +123,7 @@ mod tests {
         let service = Rc::new(Dispatch {
             service,
             bypass,
-            callback: ReadyCallback::new(move || {
+            callback: ReadyCallback::new(move |_| {
                 assert!(!probe.panic_on_notify.replace(false), "notification panic");
             }),
         });

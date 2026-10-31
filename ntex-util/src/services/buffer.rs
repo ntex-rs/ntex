@@ -964,7 +964,7 @@ mod tests {
         let srv = Pipeline::new((), buffer.clone());
         let panic_once = Rc::new(Cell::new(false));
         let flag = panic_once.clone();
-        srv.on_notify(&ReadyCallback::new(move || {
+        srv.on_notify(&ReadyCallback::new(move |_| {
             assert!(!flag.replace(false), "notification panic");
         }));
         let mut cx = Context::from_waker(std::task::Waker::noop());
@@ -1009,7 +1009,7 @@ mod tests {
         assert!(active.as_mut().poll(&mut cx).is_pending());
         let mut queued = Box::pin(srv.call(()));
         assert!(queued.as_mut().poll(&mut cx).is_pending());
-        srv.on_notify(&ReadyCallback::new(|| panic!("shutdown notification")));
+        srv.on_notify(&ReadyCallback::new(|_| panic!("shutdown notification")));
 
         assert!(catch_unwind(AssertUnwindSafe(|| srv.poll_shutdown(&mut cx))).is_err());
         assert_eq!(

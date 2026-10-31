@@ -64,7 +64,7 @@ fn scope_ids_and_store_lifetime() {
     let checker = child.checker_waker();
     let counter = Rc::new(Cell::new(0));
     let weak = Rc::downgrade(&counter);
-    child.on_notify(&ReadyCallback::new(move || counter.set(counter.get() + 1)));
+    child.on_notify(&ReadyCallback::new(move |_| counter.set(counter.get() + 1)));
     let endpoint = child.endpoint();
     let scheduled = Arc::new(Counter::default());
     waiters.get()[0] = Some(Waker::from(scheduled.clone()));
@@ -119,7 +119,7 @@ fn explicit_links_preserve_scopes_and_reset_semantics() {
     let calls = Rc::new(Cell::new(0));
     let captured = calls.clone();
     let captured_endpoints = endpoints.clone();
-    let callback = ReadyCallback::new(move || {
+    let callback = ReadyCallback::new(move |_| {
         for endpoint in &captured_endpoints {
             assert!(!endpoint.resolve().unwrap().is_ready());
         }
@@ -330,14 +330,14 @@ fn callbacks_reject_conflicting_storage_mutations() {
         let first = Cell::new(true);
         let calls = Rc::new(Cell::new(0));
         let captured = calls.clone();
-        scope.on_notify(&ReadyCallback::new(move || {
+        scope.on_notify(&ReadyCallback::new(move |_| {
             captured.set(captured.get() + 1);
             if first.replace(false) {
                 let scope = endpoint.resolve().unwrap();
                 if bind_child {
                     scope.depend_on(&ReadyScope::new());
                 } else {
-                    scope.on_notify(&ReadyCallback::new(|| {}));
+                    scope.on_notify(&ReadyCallback::new(|_| {}));
                 }
             }
         }));
@@ -412,12 +412,12 @@ fn callbacks_follow_notifications_and_belong_to_scopes() {
 
     let calls = Rc::new(Cell::new(0));
     let captured = calls.clone();
-    let identity = Rc::new(std::cell::OnceCell::<Weak<dyn Fn()>>::new());
+    let identity = Rc::new(std::cell::OnceCell::<Weak<dyn Fn(usize)>>::new());
     let captured_identity = identity.clone();
     let references = Rc::new(Cell::new(0));
     let captured_references = references.clone();
     let endpoints = [&leaf, &left, &right, &root, &sibling].map(ReadyScope::endpoint);
-    let callback = ReadyCallback::new(move || {
+    let callback = ReadyCallback::new(move |_| {
         for endpoint in &endpoints {
             endpoint
                 .store
@@ -486,8 +486,8 @@ fn notification_delivers_later_registrations_without_snapshots() {
 
     let late_calls = Rc::new(Cell::new(0));
     let captured = late_calls.clone();
-    let late = ReadyCallback::new(move || captured.set(captured.get() + 1));
-    root.on_notify(&ReadyCallback::new(move || {
+    let late = ReadyCallback::new(move |_| captured.set(captured.get() + 1));
+    root.on_notify(&ReadyCallback::new(move |_| {
         let [leaf, other] = scopes.each_ref().map(|s| s.resolve().unwrap());
         leaf.on_notify(&late);
         leaf.on_notify(&late);
@@ -528,7 +528,7 @@ fn nested_notifications_and_resets_panic() {
         let first = Cell::new(true);
         let calls = Rc::new(Cell::new(0));
         let captured = calls.clone();
-        scope.on_notify(&ReadyCallback::new(move || {
+        scope.on_notify(&ReadyCallback::new(move |_| {
             captured.set(captured.get() + 1);
             if first.replace(false) {
                 if reset {
@@ -568,12 +568,12 @@ fn callback_panic_still_wakes_invalidated_observers() {
     other.subscribe(&source);
     let panicking = Rc::new(Cell::new(true));
     let captured = panicking.clone();
-    parent.on_notify(&ReadyCallback::new(move || {
+    parent.on_notify(&ReadyCallback::new(move |_| {
         assert!(!captured.get(), "callback panic");
     }));
     let calls = Rc::new(Cell::new(0));
     let captured = calls.clone();
-    let callback = ReadyCallback::new(move || {
+    let callback = ReadyCallback::new(move |_| {
         captured.set(captured.get() + 1);
     });
     scope.on_notify(&callback);
@@ -632,7 +632,7 @@ fn notifier_reentry_panics_without_retaining_scopes() {
         let calls = Rc::new(Cell::new(0));
         let captured_calls = calls.clone();
         let captured_source = source.clone();
-        scope.on_notify(&ReadyCallback::new(move || {
+        scope.on_notify(&ReadyCallback::new(move |_| {
             captured_calls.set(captured_calls.get() + 1);
             if reenter.replace(false) {
                 if subscribe {
@@ -780,7 +780,7 @@ fn persistent_subscriptions_and_generation_checks() {
     assert_eq!(source.0.borrow().len(), 2);
     let calls = Rc::new(Cell::new(0));
     let captured = calls.clone();
-    scope.on_notify(&ReadyCallback::new(move || {
+    scope.on_notify(&ReadyCallback::new(move |_| {
         captured.set(captured.get() + 1);
     }));
 
@@ -900,7 +900,7 @@ fn wide_fanout_invalidates_shared_ancestors_once() {
     let mid = new_scope();
     let calls = Rc::new(Cell::new(0));
     let captured = calls.clone();
-    root.on_notify(&ReadyCallback::new(move || {
+    root.on_notify(&ReadyCallback::new(move |_| {
         captured.set(captured.get() + 1);
     }));
     root.depend_on(&mid);
@@ -953,7 +953,7 @@ fn notification_delivers_before_later_subscribers() {
     }
     for (scope, wakes) in [(&root, 0), (&leaf, 1), (&other, 2)] {
         let captured = counter.clone();
-        scope.on_notify(&ReadyCallback::new(move || {
+        scope.on_notify(&ReadyCallback::new(move |_| {
             assert_eq!(captured.wakes(), wakes);
         }));
     }

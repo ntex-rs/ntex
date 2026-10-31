@@ -2,7 +2,7 @@ use std::{cell::Cell, cell::RefCell, marker::PhantomData, mem, rc::Rc};
 
 use crate::error::Failure;
 use crate::http::{Request, Response};
-use crate::router::{Path, ResourceDef, ResourceId, Router};
+use crate::router::{Path, ResourceDef, Router};
 use crate::service::cfg::{Cfg, Configuration};
 use crate::service::{ReadyCallback, ReadyNotifier, ServiceBinding, ServiceChainFactory, boxed};
 use crate::{BindCtx, Ctx, Middleware, Service, ServiceFactory, factory, util::HashMap};
@@ -234,7 +234,7 @@ pub struct WebServiceRouter<St: State, In, Out, F> {
     filter: ServiceBinding<CachedService<F>>,
     router: Rc<Router<HttpService<St, Out>, Guards>>,
     default: HttpService<St, Out>,
-    cache: RefCell<HashMap<ResourceId, Rc<ServiceBinding<CachedService<HttpHandler<St, Out>>>>>>,
+    cache: RefCell<HashMap<usize, Rc<ServiceBinding<CachedService<HttpHandler<St, Out>>>>>>,
     cache_default: RefCell<Option<Rc<ServiceBinding<CachedService<HttpHandler<St, Out>>>>>>,
     readiness: Rc<RouterReadiness>,
     ph: PhantomData<In>,
@@ -247,7 +247,10 @@ impl<St: State, In, Out, F> WebServiceRouter<St, In, Out, F> {
         default: HttpService<St, Out>,
     ) -> Self {
         let readiness = RouterReadiness::new();
-        let filter = ServiceBinding::new(CachedService::new(None, filter, &readiness));
+        let filter = ServiceBinding::with_data(
+            CachedService::new(usize::MAX, filter, &readiness),
+            usize::MAX,
+        );
 
         Self {
             filter,
@@ -298,11 +301,13 @@ where
 
             loop {
                 let id = self.readiness.unknown.borrow_mut().pop();
-                let hnd = id.and_then(|id| self.cache.borrow().get(&id).cloned());
-                if let Some(hnd) = hnd {
-                    if let Err(err) = ctx.ready(&hnd).await {
-                        self.readiness.unknown.borrow_mut().push(id.unwrap());
-                        return Err(err);
+                if let Some(id) = id {
+                    let hnd = self.cache.borrow().get(&id).cloned();
+                    if let Some(hnd) = hnd {
+                        if let Err(err) = ctx.ready(&hnd).await {
+                            self.readiness.unknown.borrow_mut().push(id);
+                            return Err(err);
+                        }
                     }
                 } else {
                     break;
@@ -335,7 +340,7 @@ where
 
         let (sf, id) = res.map_or((&self.default, None), |(sf, id)| (sf, Some(id)));
         let cached = if let Some(id) = id {
-            self.cache.borrow().get(&id).cloned()
+            self.cache.borrow().get(&(id.get() as usize)).cloned()
         } else {
             self.cache_default.borrow().clone()
         };
@@ -343,12 +348,17 @@ where
         let svc = if let Some(svc) = cached {
             svc
         } else if let Ok(service) = ctx
-            .create(&factory(sf.clone()).apply(CachedServiceMiddleware(id, self.readiness.clone())))
+            .create(&factory(sf.clone()).apply(CachedServiceMiddleware(
+                id.map(|id| id.get() as usize).unwrap_or(usize::MAX),
+                self.readiness.clone(),
+            )))
             .await
         {
             let svc = Rc::new(service);
             if let Some(id) = id {
-                self.cache.borrow_mut().insert(id, svc.clone());
+                self.cache
+                    .borrow_mut()
+                    .insert(id.get() as usize, svc.clone());
             } else {
                 *self.cache_default.borrow_mut() = Some(svc.clone());
             }
@@ -376,20 +386,29 @@ struct RouterReadiness {
     ready: Cell<bool>,
     revision: Cell<u64>,
     changed: ReadyNotifier,
-    unknown: RefCell<Vec<ResourceId>>,
+    unknown: RefCell<Vec<usize>>,
+    callback: ReadyCallback,
 }
 
 impl RouterReadiness {
     fn new() -> Rc<Self> {
-        Rc::new(Self {
-            ready: Cell::new(true),
-            revision: Cell::new(0),
-            unknown: RefCell::new(Vec::new()),
-            changed: ReadyNotifier::new(),
+        Rc::<Self>::new_cyclic(|readiness| {
+            let readiness = readiness.clone();
+            Self {
+                ready: Cell::new(true),
+                revision: Cell::new(0),
+                unknown: RefCell::new(Vec::new()),
+                changed: ReadyNotifier::new(),
+                callback: ReadyCallback::new(move |id| {
+                    if let Some(readiness) = readiness.upgrade() {
+                        readiness.set_unknown(id);
+                    }
+                }),
+            }
         })
     }
 
-    fn set_unknown(&self, id: Option<ResourceId>) {
+    fn set_unknown(&self, id: usize) {
         self.ready.set(false);
         self.revision.set(
             self.revision
@@ -397,19 +416,19 @@ impl RouterReadiness {
                 .checked_add(1)
                 .expect("router readiness revision exhausted"),
         );
-        if let Some(id) = id {
+        if id != 0 {
             self.unknown.borrow_mut().push(id);
         }
     }
 }
 
-struct CachedServiceMiddleware(Option<ResourceId>, Rc<RouterReadiness>);
+struct CachedServiceMiddleware(usize, Rc<RouterReadiness>);
 
 impl<S, St> Middleware<S, St> for CachedServiceMiddleware {
     type Service = ServiceBinding<CachedService<S>>;
 
     fn create(&self, _: &St, service: S) -> Self::Service {
-        ServiceBinding::new(CachedService::new(self.0, service, &self.1))
+        ServiceBinding::with_data(CachedService::new(self.0, service, &self.1), self.0)
     }
 }
 
@@ -419,18 +438,12 @@ struct CachedService<S> {
 }
 
 impl<S> CachedService<S> {
-    fn new(id: Option<ResourceId>, service: S, readiness: &Rc<RouterReadiness>) -> Self {
+    fn new(id: usize, service: S, readiness: &Rc<RouterReadiness>) -> Self {
         readiness.set_unknown(id);
         readiness.changed.notify();
-        let readiness = Rc::downgrade(readiness);
-
         CachedService {
             service,
-            changed: ReadyCallback::new(move || {
-                if let Some(readiness) = readiness.upgrade() {
-                    readiness.set_unknown(id);
-                }
-            }),
+            changed: readiness.callback.clone(),
         }
     }
 }
@@ -564,8 +577,9 @@ mod tests {
     ///
     /// HOW:
     /// - Cache many routes and a default, leaving one unavailable route uncreated.
+    /// - Verify cached handlers share the filter's callback without adding weak router captures.
     /// - Probe raw readiness through the same pipeline with both caches mutably borrowed.
-    /// - Notify one route repeatedly and verify only its ID is queued and its service rechecked.
+    /// - Notify resource zero and another route repeatedly, checking their tags and targeted rechecks.
     /// - Invalidate the default and filter independently and verify unaffected entries stay cached.
     #[crate::rt_test]
     async fn cached_readiness_targets_changed_entries() {
@@ -574,6 +588,7 @@ mod tests {
         let gates: Vec<_> = (0..17).map(|_| Rc::new(Gate::default())).collect();
         gates[16].blocked.set(true);
         let router = router(filter.clone(), &gates, default.clone());
+        let captures = Rc::weak_count(&router.readiness);
         let srv = Pipeline::new((), CheckRouter(router.clone()));
         for id in 0..16 {
             srv.call(Some(
@@ -587,6 +602,7 @@ mod tests {
             .unwrap();
         srv.call(None).await.unwrap();
         assert_eq!(gates[16].checks.get(), 0);
+        assert_eq!(Rc::weak_count(&router.readiness), captures);
 
         let probe = srv.bind();
         for _ in 0..3 {
@@ -598,18 +614,20 @@ mod tests {
                 Poll::Ready(Ok(()))
             ));
         }
-        for _ in 0..3 {
-            gates[3].changed.notify();
+        for id in [0, 3] {
+            for _ in 0..3 {
+                gates[id].changed.notify();
+            }
+            {
+                let unknown = router.readiness.unknown.borrow();
+                assert!(!unknown.is_empty());
+                assert!(unknown.iter().all(|tag| *tag == id + 1));
+            }
+            probe.call(None).await.unwrap();
+            assert!(router.readiness.unknown.borrow().is_empty());
         }
-        {
-            let unknown = router.readiness.unknown.borrow();
-            assert!(!unknown.is_empty());
-            assert!(unknown.iter().all(|id| id.get() == 3));
-        }
-        probe.call(None).await.unwrap();
-        assert!(router.readiness.unknown.borrow().is_empty());
         for (id, gate) in gates[..16].iter().enumerate() {
-            assert_eq!(gate.checks.get(), 1 + usize::from(id == 3));
+            assert_eq!(gate.checks.get(), 1 + usize::from(id == 0 || id == 3));
         }
         assert_eq!(filter.checks.get(), 1);
         assert_eq!(default.checks.get(), 1);

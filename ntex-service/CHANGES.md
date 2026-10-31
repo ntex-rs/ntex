@@ -1,6 +1,10 @@
 # Changes
 
-## [5.5.0] - Unreleased
+## [5.5.0] - 2026-10-31
+
+* Change `ReadyCallback` to accept the receiving scope's `usize` data.
+  Configure data with `ServiceBinding::with_data(service, data)`; unconfigured
+  scopes and pipeline roots pass zero. Cloned bindings preserve their data
 
 * Store readiness scopes by monotonically allocated local IDs in the pipeline's
   waiter store, reserving ID zero for the root and retiring resources without

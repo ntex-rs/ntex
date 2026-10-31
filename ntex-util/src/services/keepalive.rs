@@ -279,7 +279,7 @@ mod tests {
     fn notification(p: &Pipeline<usize, usize, TestErr>) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
         let tx = Cell::new(Some(tx));
-        p.on_notify(&ReadyCallback::new(move || {
+        p.on_notify(&ReadyCallback::new(move |_| {
             if let Some(tx) = tx.take() {
                 let _ = tx.send(());
             }
@@ -323,7 +323,7 @@ mod tests {
         let p = Pipeline::new((), svc.clone());
         let notifications = Rc::new(Cell::new(0));
         let count = notifications.clone();
-        p.on_notify(&ReadyCallback::new(move || count.set(count.get() + 1)));
+        p.on_notify(&ReadyCallback::new(move |_| count.set(count.get() + 1)));
         assert_eq!(p.ready().await, Ok(()));
         svc.shared.timer.reset(Millis::ZERO);
         assert_eq!(p.call(1).await, Ok(1));
@@ -399,7 +399,7 @@ mod tests {
             let p = Pipeline::<usize, usize, TestErr>::new((), svc.clone());
             let notifications = Rc::new(Cell::new(0));
             let count = notifications.clone();
-            p.on_notify(&ReadyCallback::new(move || count.set(count.get() + 1)));
+            p.on_notify(&ReadyCallback::new(move |_| count.set(count.get() + 1)));
             p.ready().await.unwrap();
             if shutdown {
                 p.shutdown().await;

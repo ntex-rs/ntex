@@ -501,7 +501,7 @@ mod tests {
         let changed = ReadyNotifier::new();
         let (tx, rx) = channel_with_notifier(changed.clone());
         let srv = Pipeline::new((), SenderService(tx.clone(), changed));
-        let on_drop = ReadyCallback::new(move || {
+        let on_drop = ReadyCallback::new(move |_| {
             assert!(tx.is_closed());
             assert_eq!(
                 tx.poll_ready(&mut Context::from_waker(std::task::Waker::noop())),
@@ -541,7 +541,7 @@ mod tests {
         srv.ready().await.unwrap();
         let armed = Rc::new(Cell::new(true));
         let armed2 = armed.clone();
-        let callback = ReadyCallback::new(move || {
+        let callback = ReadyCallback::new(move |_| {
             assert!(!armed2.replace(false), "callback panic");
         });
         srv.on_notify(&callback);

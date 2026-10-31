@@ -1,10 +1,9 @@
 # Changes
 
-## [4.5.0] - 2026-10-27
+## [4.5.0] - Unreleased
 
-* Add `web::service::method` for allowed method restrictions on web services
-
-## [4.4.2] - 2026-10-30
+* web: Share one readiness callback across each router's cached handlers, filter,
+  and default service, identifying handlers through per-scope callback data.
 
 * service: Expose `ReadyLink` and explicit cross-pipeline readiness subscriptions.
   `ServiceBinding` scopes are now allocated in their first pipeline; share a
@@ -13,6 +12,10 @@
 * web: Aggregate readiness across the filter and all cached route and default
   handlers. Give each cached service its own readiness scope and recheck
   notified handlers while retaining constant-time cached readiness.
+
+* Add `web::service::method` for allowed method restrictions on web services
+
+## [4.4.2] - 2026-10-30
 
 * Attempt to fix docs.rs build
 

@@ -51,7 +51,10 @@ impl<S, St> Middleware<S, St> for ServiceBindingMiddleware {
 /// its scope and forwards binding to the wrapped service; binding the same
 /// instance to another pipeline panics.
 ///
-/// Cloning a binding clones the service into a fresh, unbound scope.
+/// [`Self::with_data`] assigns user data passed to every [`crate::ReadyCallback`]
+/// registered in this binding's scope. The default value is `0`.
+/// Cloning a binding preserves its data and clones the service into a fresh,
+/// unbound scope.
 /// Use [`std::rc::Rc<ServiceBinding<S>>`] to share readiness within one pipeline.
 /// To share a gate across pipelines, use [`crate::Pipeline`] or
 /// [`crate::PipelineState`] and [`crate::ReadyLink`] instead.
@@ -63,16 +66,28 @@ impl<S, St> Middleware<S, St> for ServiceBindingMiddleware {
 pub struct ServiceBinding<S> {
     service: S,
     scope: ReadyScope,
+    data: usize,
 }
 
 impl<S> ServiceBinding<S> {
-    /// Pairs a service with a fresh readiness scope.
+    /// Pairs a service with a fresh readiness scope and callback data `0`.
     ///
     /// Its dependencies are wired when a pipeline or enclosing service binds it.
     pub fn new(service: S) -> Self {
+        Self::with_data(service, 0)
+    }
+
+    /// Pairs a service with a fresh readiness scope and user-defined callback data.
+    ///
+    /// Every callback registered in this scope receives `data`, including when
+    /// notified by a dependency. The value is installed before the inner
+    /// service's [`Service::bind`] hook and is preserved when the binding is
+    /// cloned or rebound. Construction does not allocate readiness storage.
+    pub fn with_data(service: S, data: usize) -> Self {
         Self {
             service,
             scope: ReadyScope::new(),
+            data,
         }
     }
 
@@ -90,7 +105,7 @@ impl<S> ServiceBinding<S> {
 
 impl<S: Clone> Clone for ServiceBinding<S> {
     fn clone(&self) -> Self {
-        Self::new(self.service.clone())
+        Self::with_data(self.service.clone(), self.data)
     }
 }
 
@@ -103,6 +118,7 @@ where
 
     fn bind(&self, ctx: BindCtx<'_>) {
         ctx.depend_on(&self.scope);
+        self.scope.set_data(self.data);
         self.service.bind(BindCtx::new(&self.scope));
     }
 

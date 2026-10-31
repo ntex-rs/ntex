@@ -265,7 +265,7 @@ fn bound_callbacks_observe_their_scope_and_propagated_notifications() {
     for wrapped in [false, true] {
         let calls = Rc::new(Cell::new(0));
         let captured = calls.clone();
-        let callback = ReadyCallback::new(move || captured.set(captured.get() + 1));
+        let callback = ReadyCallback::new(move |_| captured.set(captured.get() + 1));
         let probe = Probe(Rc::new(ProbeState {
             on_notify: Some(callback.clone()),
             available: Cell::new(true),
@@ -314,6 +314,80 @@ fn bound_callbacks_observe_their_scope_and_propagated_notifications() {
     }
 }
 
+/// STATEMENT: A shared callback receives each notified scope's own data, including ancestors and defaults.
+///
+/// HOW:
+/// - Register one callback on a pipeline root, a tagged parent and child, and an untagged binding.
+/// - Notify the child and verify root, parent, and full-width child payloads in propagation order.
+/// - Rebind the child and verify duplicate subscriptions retain its data without duplicating callbacks per visit.
+/// - Notify the untagged binding and verify both it and the root supply zero.
+#[test]
+fn shared_callbacks_receive_each_scopes_data() {
+    let received = Rc::new(RefCell::new(Vec::new()));
+    let captured = received.clone();
+    let callback = ReadyCallback::new(move |data| captured.borrow_mut().push(data));
+    let probe = || {
+        Probe(Rc::new(ProbeState {
+            on_notify: Some(callback.clone()),
+            ..ProbeState::default()
+        }))
+    };
+    let waiters = WaitersRef::new();
+    waiters.scope().on_notify(&callback);
+    let parent = ServiceBinding::with_data(probe(), 41);
+    parent.bind(BindCtx::new(waiters.scope()));
+    let child = ServiceBinding::with_data(probe(), usize::MAX);
+    child.bind(BindCtx::new(&parent.scope));
+    let untagged = ServiceBinding::new(probe());
+    untagged.bind(BindCtx::new(waiters.scope()));
+
+    child.service.0.changed.notify();
+    assert_eq!(*received.borrow(), [0, 41, usize::MAX]);
+    received.borrow_mut().clear();
+
+    child.bind(BindCtx::new(&parent.scope));
+    child.service.0.changed.notify();
+    assert_eq!(*received.borrow(), [0, 41, usize::MAX, usize::MAX]);
+    received.borrow_mut().clear();
+
+    untagged.service.0.changed.notify();
+    assert_eq!(*received.borrow(), [0, 0]);
+}
+
+/// STATEMENT: Cloning a tagged binding preserves callback data without sharing its readiness scope.
+///
+/// HOW:
+/// - Cache a tagged binding, clone it into another pipeline, and require a separate readiness check.
+/// - Notify their shared source and verify both scopes deliver the original payload.
+/// - Drop the first pipeline and verify only the surviving scope still delivers its data.
+#[test]
+fn cloned_bindings_preserve_callback_data() {
+    let received = Rc::new(RefCell::new(Vec::new()));
+    let captured = received.clone();
+    let probe = Probe(Rc::new(ProbeState {
+        on_notify: Some(ReadyCallback::new(move |data| {
+            captured.borrow_mut().push(data);
+        })),
+        available: Cell::new(true),
+        ..ProbeState::default()
+    }));
+    let binding = Rc::new(ServiceBinding::with_data(probe.clone(), 42));
+    let first = Pipeline::new(State(10), binding.clone());
+    assert_eq!(run(first.ready()), Ok(()));
+    assert_eq!(probe.0.starts.get(), 1);
+
+    let second = Pipeline::new(State(20), binding.as_ref().clone());
+    assert_eq!(run(second.ready()), Ok(()));
+    assert_eq!(probe.0.starts.get(), 2);
+    probe.0.changed.notify();
+    assert_eq!(*received.borrow(), [42, 42]);
+    received.borrow_mut().clear();
+
+    drop(first);
+    probe.0.changed.notify();
+    assert_eq!(*received.borrow(), [42]);
+}
+
 /// STATEMENT: Pipeline construction binds services once before any state-dependent runtime operation.
 ///
 /// HOW:
@@ -358,7 +432,7 @@ fn lazy_creation_binds_the_nearest_scope_before_first_use() {
         sibling.bind(BindCtx::new(waiters.scope()));
         let notifications = Rc::new(Cell::new(0));
         let captured = notifications.clone();
-        BindCtx::new(waiters.scope()).on_notify(&ReadyCallback::new(move || {
+        BindCtx::new(waiters.scope()).on_notify(&ReadyCallback::new(move |_| {
             captured.set(captured.get() + 1);
         }));
         assert_eq!(run(ctx.ready(&parent)), Ok(()));
