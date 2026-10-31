@@ -980,12 +980,12 @@ mod tests {
         assert_eq!(attempts.get(), 4);
     }
 
-    /// STATEMENT: Lazily created routes retain independent readiness and bind before dispatch.
+    /// STATEMENT: Lazily created routes bind before dispatch and participate in aggregate readiness.
     ///
     /// HOW:
     /// - Register raw gated services as a route and fallback, then verify lazy binding and waiting.
-    /// - Invalidate the cached route, refresh app readiness, and verify its next call still waits.
-    /// - Call the unrelated fallback while the route is blocked, then verify recovery and shutdown.
+    /// - Invalidate the cached route and verify app readiness and calls to either route wait.
+    /// - Restore the route, verify the filter and fallback retain their caches, then shut down.
     #[crate::rt_test]
     async fn lazy_routes_bind_current_scope_before_dispatch() {
         use std::{future::Future, task::Context, task::Waker};
@@ -1075,21 +1075,23 @@ mod tests {
         let before = filter_checks.get();
         route.available.set(false);
         route.changed.notify();
-        srv.ready().await.unwrap();
-        assert_eq!(filter_checks.get(), before + 1);
+        let mut ready = Box::pin(srv.ready());
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(ready.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(filter_checks.get(), before);
         let mut call = Box::pin(srv.call(TestRequest::with_uri("/test").to_request()));
-        assert!(
-            call.as_mut()
-                .poll(&mut Context::from_waker(Waker::noop()))
-                .is_pending()
-        );
-        let resp = call_service(&srv, TestRequest::with_uri("/missing").to_request()).await;
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        let mut fallback = Box::pin(srv.call(TestRequest::with_uri("/missing").to_request()));
+        assert!(fallback.as_mut().poll(&mut cx).is_pending());
         assert_eq!(default.checks.get(), 2);
         assert_eq!(route.calls.get(), 1);
         route.available.set(true);
         route.changed.notify();
+        ready.await.unwrap();
         assert_eq!(call.await.unwrap().status(), StatusCode::OK);
+        assert_eq!(fallback.await.unwrap().status(), StatusCode::OK);
+        assert_eq!(filter_checks.get(), before);
+        assert_eq!(default.checks.get(), 2);
         assert_eq!((route.binds.get(), default.binds.get()), (1, 1));
         srv.shutdown().await;
         assert_eq!((route.shutdowns.get(), default.shutdowns.get()), (1, 1));
