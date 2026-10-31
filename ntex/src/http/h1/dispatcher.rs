@@ -2516,6 +2516,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Opt-in Host validation rejects invalid requests before calling the service.
+    ///
+    /// HOW:
+    /// - Enable Host validation and send requests with missing, duplicate or invalid Host headers.
+    /// - Require `400`, no service calls and a closed connection.
     #[crate::rt_test]
     async fn test_invalid_host_rejected() {
         for req in [
@@ -2527,10 +2532,18 @@ mod tests {
             client.remote_buffer_cap(4096);
             let calls = Rc::new(Cell::new(0));
             let calls2 = calls.clone();
-            spawn_h1(server, move |_| {
-                calls2.set(calls2.get() + 1);
-                async { Ok::<_, io::Error>(Response::Ok().build()) }
-            });
+            let cfg =
+                SharedCfg::new("TEST").add(HttpServiceConfig::new().set_host_validation(true));
+            crate::rt::spawn(Dispatcher::new(
+                0,
+                nio::Io::new(server, cfg),
+                Pipeline::new((), async move |_: Request| {
+                    calls2.set(calls2.get() + 1);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+                None,
+                DispatcherConfig::default(),
+            ));
 
             client.write(req);
             sleep(Millis(100)).await;

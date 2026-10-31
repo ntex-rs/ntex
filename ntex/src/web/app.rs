@@ -728,6 +728,47 @@ mod tests {
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, HttpRequest, HttpResponse, middleware::DefaultHeaders};
 
+    /// STATEMENT: Applications route the supplied target without automatically normalizing it.
+    ///
+    /// HOW:
+    /// - Route canonical and literal non-canonical paths through `App::new` and `App::default`.
+    /// - Check that dot segments are not collapsed and handlers retain raw path/query spelling.
+    /// - Check that the router's existing segment decoding still matches escaped characters.
+    #[crate::rt_test]
+    async fn test_request_target_preserved() {
+        for app in [App::new(), App::default()] {
+            let srv = init_service(
+                app.route(
+                    "/test",
+                    web::get().to(async |req: HttpRequest| {
+                        assert!(matches!(req.path(), "/test" | "/%74est"));
+                        "canonical"
+                    }),
+                )
+                .route(
+                    "/a/../test",
+                    web::get().to(async |req: HttpRequest| {
+                        assert_eq!(req.path(), "/a/../%74est");
+                        assert_eq!(req.query_string(), "x=%7e");
+                        "raw"
+                    }),
+                ),
+            )
+            .await;
+            for (path, body) in [
+                ("/test", "canonical"),
+                ("/%74est", "canonical"),
+                ("/a/../%74est?x=%7e", "raw"),
+            ] {
+                let res = call_service(&srv, TestRequest::with_uri(path).to_request()).await;
+                assert_eq!(res.status(), StatusCode::OK);
+                assert_eq!(read_body(res).await, body);
+            }
+            let res = call_service(&srv, TestRequest::with_uri("/x/../%74est").to_request()).await;
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        }
+    }
+
     #[crate::rt_test]
     async fn test_default_resource() {
         let srv = App::new()

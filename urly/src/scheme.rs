@@ -6,7 +6,7 @@ use crate::error::{ErrorKind, InvalidUrl};
 /// URL scheme, e.g. `https`.
 ///
 /// Comparison and hashing are ASCII case-insensitive. Schemes of a parsed
-/// [`Url`](crate::Url) are always lowercase.
+/// [`Url`](crate::Url) are lowercase except in raw request-targets.
 #[repr(transparent)]
 pub struct Scheme(str);
 

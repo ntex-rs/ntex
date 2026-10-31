@@ -2,6 +2,17 @@
 
 ## [4.5.0] - 2026-10-31
 
+* web: Make request-target validation and normalization opt-in with
+  `HttpServiceConfig::set_request_target_normalization(true)`. HTTP/1 and HTTP/2
+  validate and normalize during decoding, before application middleware, filters
+  and routing. Both are disabled by default. Mandatory protocol/representation
+  checks remain enabled. Test request builders preserve unvalidated targets;
+  `urly::Url::validate_target()` and `urly::Url::normalize()` remain available
+  for explicit processing.
+
+* http: Disable HTTP/1 Host-header validation by default. Enable it independently
+  of request-target validation with `HttpServiceConfig::set_host_validation(true)`.
+
 * http: Wait for application readiness before reading HTTP/1 request heads,
   pausing transport reads and read deadlines while preserving active payload delivery.
 

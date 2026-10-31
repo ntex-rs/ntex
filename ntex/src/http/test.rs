@@ -1,5 +1,5 @@
 //! Test helpers to use during testing.
-use std::{net, str::FromStr, sync::mpsc, thread, time};
+use std::{net, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
@@ -113,9 +113,9 @@ impl TestRequest {
         self
     }
 
-    /// Set HTTP Uri of this request.
+    /// Set the HTTP request-target without validation or normalization, as received by the server.
     pub fn uri(&mut self, path: &str) -> &mut Self {
-        parts(&mut self.0).uri = Url::from_str(path).unwrap();
+        parts(&mut self.0).uri = Url::parse_target(crate::util::ByteString::from(path)).unwrap();
         self
     }
 

@@ -10,9 +10,12 @@ inspired by Python's [yarl](https://yarl.aio-libs.org/).
 
 [Documentation](https://docs.rs/urly)
 
-`Url` is an immutable, cheaply cloneable, normalized URL reference. It is stored
-in a single `ByteString`, and parsing reuses the input buffer when the input is
-already normalized.
+`Url` is a cheaply cloneable URL reference stored in a single `ByteString`.
+General-purpose parsing normalizes the input, reusing its buffer when possible.
+`Url::parse_target` instead preserves unvalidated HTTP request-target components.
+Use `Url::validate_target` and `Url::normalize` for explicit validation and
+normalization. Component setters normalize what they
+replace, not other components of a raw target.
 
 * Lenient parsing with normalization: percent-encoding, IDNA hosts, dot
   segments and case. `Url::validate` checks strictly against RFC 3986.
@@ -70,6 +73,30 @@ URL is normalized and parsing a normalized URL returns it unchanged:
 
 Accessors return the percent-encoded component; use `decode` for the plain
 value.
+
+HTTP servers can defer validation and normalization:
+
+```rust
+use urly::Url;
+
+let mut target = Url::parse_target("/a/../%7euser?q=%41").unwrap();
+assert_eq!(target.path_and_query(), "/a/../%7euser?q=%41");
+target.validate_target().unwrap();
+target.normalize().unwrap();
+assert_eq!(target.path_and_query(), "/~user?q=A");
+```
+
+`parse_target` accepts origin, absolute, authority and asterisk forms; the HTTP
+server must enforce method-specific form restrictions. Parsing checks only
+UTF-8, nonempty input and representation limits. `validate_target` rejects
+malformed escapes, fragments, forbidden characters, invalid authorities and
+encoded NULs before the query, without rewriting them. It accepts
+browser-compatible unescaped path/query characters. Raw targets need not pass
+strict RFC 3986 validation until validated and normalized.
+
+For HTTP/2, `Url::from_target_parts(scheme, authority, path_and_query)` preserves
+pseudo-header boundaries even when a malformed value contains delimiters.
+Validate those components with `validate_target`, not by reparsing `as_str()`.
 
 ```rust
 use urly::Url;
