@@ -160,6 +160,19 @@ fn probe() -> (Probe, Rc<Gate>) {
     (Probe(gate.clone(), callback), gate)
 }
 
+/// STATEMENT: Constructing an unbound service binding does not allocate readiness storage.
+///
+/// HOW:
+/// - Create the service before measurement and wrap it without binding it to a pipeline.
+/// - Require zero allocations for the wrapper and no readiness checks.
+#[test]
+fn unbound_service_binding_does_not_allocate() {
+    let (svc, gate) = probe();
+    let binding = expect_allocs("unbound service binding", 0, || ServiceBinding::new(svc));
+    assert_eq!(gate.checks.get(), 0);
+    drop(binding);
+}
+
 /// STATEMENT: Registered notification callbacks add no delivery allocations.
 ///
 /// HOW:
@@ -201,6 +214,35 @@ fn single_scope_notification_does_not_allocate() {
     expect_allocs("notify", 0, || gate.changed.notify());
     assert!(!pl.is_ready());
     assert_eq!(gate.notifications.get(), 1);
+}
+
+/// STATEMENT: Scoped dependency notifications allocate no traversal storage, including on their first delivery.
+///
+/// HOW:
+/// - Share one notifier across one, two, eight, or 64 pipelines with scoped child services.
+/// - Refresh readiness before each notification without warming notification storage.
+/// - Require zero allocations while every pipeline becomes invalid and every child callback runs.
+#[test]
+fn graph_notifications_do_not_allocate() {
+    for parents in [1, 2, 8, 64] {
+        let (svc, gate) = probe();
+        let pipelines: Vec<_> = (0..parents)
+            .map(|_| {
+                Pipeline::new(
+                    10,
+                    Forward(ServiceBinding::new(Probe(svc.0.clone(), svc.1.clone()))),
+                )
+            })
+            .collect();
+        for expected in [parents, parents * 2] {
+            for pipeline in &pipelines {
+                complete(pipeline.ready()).unwrap();
+            }
+            expect_allocs("notify dependency graph", 0, || gate.changed.notify());
+            assert!(pipelines.iter().all(|pipeline| !pipeline.is_ready()));
+            assert_eq!(gate.notifications.get(), expected);
+        }
+    }
 }
 
 struct Parked(Rc<RefCell<Option<Waker>>>);
@@ -268,6 +310,54 @@ fn notification_of_single_pending_caller_does_not_allocate() {
             caller.as_mut().poll(&mut cx)
         };
         assert_eq!(result, Poll::Ready(Ok(())));
+        assert_eq!(gate.active.get(), 0);
+    }
+}
+
+/// STATEMENT: Notification wakes many pending observers without allocating a wake buffer.
+///
+/// HOW:
+/// - Park a borrowed or retained checker and eight additional callers on one pipeline.
+/// - Measure the first notification and require zero allocations and a wake for every observer.
+/// - Open the gate and verify all callers complete with no active check remaining.
+#[test]
+fn notification_of_many_pending_callers_does_not_allocate() {
+    for retained in [false, true] {
+        let (svc, gate) = probe();
+        gate.available.set(false);
+        let pl = Pipeline::new(10, svc);
+        let bindings: Vec<_> = (0..8).map(|_| pl.bind()).collect();
+        let count = Arc::new(WakeCount::default());
+        let waker = Waker::from(count.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut owner = pin!(pl.ready());
+        let result = if retained {
+            pl.poll_ready(&mut cx)
+        } else {
+            owner.as_mut().poll(&mut cx)
+        };
+        assert!(result.is_pending());
+        let mut waiters: Vec<_> = bindings.iter().map(|b| Box::pin(b.ready())).collect();
+        for waiter in &mut waiters {
+            assert!(waiter.as_mut().poll(&mut cx).is_pending());
+        }
+        let before = count.0.load(Ordering::Relaxed);
+        expect_allocs("notify many pending callers", 0, || gate.changed.notify());
+        assert_eq!(
+            count.0.load(Ordering::Relaxed),
+            before + if retained { 9 } else { 10 }
+        );
+        gate.available.set(true);
+        gate.changed.notify();
+        let result = if retained {
+            pl.poll_ready(&mut cx)
+        } else {
+            owner.as_mut().poll(&mut cx)
+        };
+        assert_eq!(result, Poll::Ready(Ok(())));
+        for waiter in &mut waiters {
+            assert_eq!(waiter.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+        }
         assert_eq!(gate.active.get(), 0);
     }
 }
@@ -624,17 +714,37 @@ fn invalidation_and_cancellation_preserve_the_shared_checker() {
     );
 }
 
-/// STATEMENT: Parents sharing a child reuse its readiness cache without per-parent cache-hit allocation.
+struct Linked(ntex_service::pipeline::PipelineBinding<usize, usize, ()>);
+
+impl Service<usize, usize> for Linked {
+    type Res = usize;
+    type Error = ();
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.subscribe_pipeline(&self.0.readiness_link());
+    }
+
+    async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), ()> {
+        self.0.ready().await
+    }
+
+    async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, ()> {
+        self.0.call(req).await
+    }
+}
+
+/// STATEMENT: Parents sharing a child pipeline reuse its readiness cache without per-parent cache-hit allocation.
 ///
 /// HOW:
-/// - Warm 16 parent pipelines around one binding and measure repeated readiness and calls.
-/// - Invalidate the child, verify all parents become unready, and observe only one child recheck.
+/// - Link 16 parent pipelines to one state-taking child and measure repeated readiness and calls.
+/// - Require zero readiness allocations and only the two pipeline dispatch boxes for calls.
+/// - Invalidate the child without allocations, verify all parents become unready, and observe one child recheck.
 #[test]
 fn shared_child_cache_hits_do_not_allocate_per_parent() {
     let (svc, gate) = probe();
-    let child = Rc::new(ServiceBinding::new(svc));
+    let child = PipelineState::new(svc);
     let parents: Vec<_> = (0..16)
-        .map(|st| Pipeline::new(st, Forward(child.clone())))
+        .map(|st| Pipeline::new(st, Linked(child.bind_state(st))))
         .collect();
     for parent in &parents {
         complete(parent.ready()).unwrap();
@@ -647,14 +757,14 @@ fn shared_child_cache_hits_do_not_allocate_per_parent() {
                 complete(parent.ready()).unwrap();
             });
             assert_eq!(
-                expect_allocs("shared child cached call", 1, || complete(parent.call(2))),
+                expect_allocs("shared child cached call", 2, || complete(parent.call(2))),
                 Ok(st + 2)
             );
         }
     }
     assert_eq!(gate.checks.get(), 1);
 
-    gate.changed.notify();
+    expect_allocs("notify linked parents", 0, || gate.changed.notify());
     assert!(parents.iter().all(|parent| !parent.is_ready()));
     for parent in &parents {
         complete(parent.ready()).unwrap();
@@ -788,9 +898,9 @@ fn benchmark_readiness() {
 
     for count in [1, 8, 64] {
         let (svc, gate) = probe();
-        let child = Rc::new(ServiceBinding::new(svc));
+        let child = PipelineState::new(svc);
         let parents: Vec<_> = (0..count)
-            .map(|st| Pipeline::new(st, Forward(child.clone())))
+            .map(|st| Pipeline::new(st, Linked(child.bind_state(st))))
             .collect();
         for parent in &parents {
             complete(parent.ready()).unwrap();

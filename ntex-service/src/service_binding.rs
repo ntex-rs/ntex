@@ -46,12 +46,15 @@ impl<S, St> Middleware<S, St> for ServiceBindingMiddleware {
 /// [`BindCtx::subscribe`] in [`Service::bind`] and notify when it changes.
 /// Direct [`Service::call`] also checks this binding's cache through `Ctx`.
 ///
-/// A binding owns its service, not pipeline state. Its readiness describes one
-/// shared gate regardless of the state passed to a check or call. Independent
-/// gates require separate bindings.
+/// A binding owns its service, not pipeline state. Its scope is allocated lazily
+/// in the first pipeline that binds it. Rebinding within that pipeline reuses
+/// its scope and forwards binding to the wrapped service; binding the same
+/// instance to another pipeline panics.
 ///
-/// Cloning a binding clones the service into a fresh, initially invalid scope.
-/// Use [`std::rc::Rc<ServiceBinding<S>>`] to share a service and its readiness.
+/// Cloning a binding clones the service into a fresh, unbound scope.
+/// Use [`std::rc::Rc<ServiceBinding<S>>`] to share readiness within one pipeline.
+/// To share a gate across pipelines, use [`crate::Pipeline`] or
+/// [`crate::PipelineState`] and [`crate::ReadyLink`] instead.
 ///
 /// Every enclosing service must forward [`Service::bind`] to this binding.
 /// Runtime operations panic if the calling scope has not bound it, rather than

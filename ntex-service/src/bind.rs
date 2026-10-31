@@ -1,4 +1,4 @@
-use crate::{ReadyCallback, ReadyNotifier, Service, readiness::ReadyScope};
+use crate::{ReadyCallback, ReadyLink, ReadyNotifier, Service, readiness::ReadyScope};
 
 /// Initialization-only access to a service's readiness dependencies.
 ///
@@ -82,10 +82,26 @@ impl<'a> BindCtx<'a> {
 
     /// Subscribes this scope to a source of readiness changes.
     ///
-    /// Repeated subscriptions are idempotent. They persist until the scope or
-    /// source is dropped, including across completed or cancelled checks.
+    /// Subscriptions are appended without deduplication and persist across
+    /// completed or cancelled checks. Repeated subscriptions cause repeated
+    /// invalidations and callback delivery. Entries for dropped scopes are
+    /// ignored and remain stored until the source is dropped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the source is currently delivering a notification.
     pub fn subscribe(&self, source: &ReadyNotifier) {
         self.scope.subscribe(source);
+    }
+
+    /// Subscribes this scope to another pipeline's readiness invalidations.
+    ///
+    /// Obtain the endpoint with [`crate::Pipeline::readiness_link`]. Repeated
+    /// registration is idempotent and survives dropping the link handle.
+    /// This does not run a readiness check: the service must still await the
+    /// source pipeline's readiness. A dropped source makes the link inert.
+    pub fn subscribe_pipeline(&self, link: &ReadyLink) {
+        self.scope.subscribe_pipeline(link);
     }
 
     /// Registers a callback for notifications reaching this readiness scope.
@@ -93,6 +109,10 @@ impl<'a> BindCtx<'a> {
     /// Raw services share this scope; a [`crate::ServiceBinding`] owns its own.
     /// Repeated registration of the same handle is idempotent. See
     /// [`ReadyCallback`] for notification and lifetime semantics.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this scope is currently executing notification callbacks.
     pub fn on_notify(&self, callback: &ReadyCallback) {
         self.scope.on_notify(callback);
     }

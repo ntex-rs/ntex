@@ -1,5 +1,30 @@
 # Changes
 
+## [5.5.0] - Unreleased
+
+* Store readiness scopes by monotonically allocated local IDs in the pipeline's
+  waiter store, reserving ID zero for the root and retiring resources without
+  reusing IDs
+
+* Keep notifier subscriptions as append-only endpoint lists without
+  deduplication or reverse indexes; retired endpoints are ignored
+
+* Deliver readiness notifications directly through scope IDs without traversal
+  or notification-waker buffers. Each scope is delivered before later
+  subscribers; callback panics leave unvisited scopes untouched. Nested
+  notifications and conflicting scope-storage mutations panic
+
+* Replace the readiness store registry with reference-counted store endpoints.
+  Checker wakers enforce owner-thread wakes and final destruction
+
+* Add `ReadyLink`, `readiness_link()` on pipelines and bindings, and
+  `BindCtx::subscribe_pipeline()` for explicit cross-pipeline readiness
+  subscriptions; `bind_to()` remains shorthand
+
+* Allocate `ServiceBinding` scopes on first binding. Sharing a binding is limited
+  to one pipeline; use a shared `Pipeline` or `PipelineState` and readiness links
+  for cross-pipeline gates. Cloning a binding creates a fresh unbound scope
+
 ## [5.4.0] - 2026-10-30
 
 * Add `ServiceBindingMiddleware` to wrap factory-created services in fresh

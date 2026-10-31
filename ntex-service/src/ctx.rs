@@ -3,7 +3,7 @@ use std::{
     task::Waker,
 };
 
-use crate::readiness::{Generation, ReadyScope, RunCheck};
+use crate::readiness::{Generation, ReadyScope, RunCheck, ScopeStore};
 use crate::{BindCtx, Service, ServiceFactory};
 
 /// Context provided to [`Service`] lifecycle methods.
@@ -30,6 +30,12 @@ pub struct Ctx<'a, Svc: ?Sized, St = ()> {
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
     scope: ReadyScope,
+    inner: Rc<WaitersInner>,
+}
+
+#[derive(Debug)]
+pub(crate) struct WaitersInner {
+    pub(crate) scopes: ScopeStore,
     cur: cell::Cell<u32>,
     running: cell::Cell<bool>,
     shutdown: cell::Cell<bool>,
@@ -45,8 +51,8 @@ impl WaitersRef {
     pub(crate) fn new() -> Self {
         let mut waiters = slab::Slab::with_capacity(4);
         waiters.insert(None);
-        WaitersRef {
-            scope: ReadyScope::new(),
+        let inner = Rc::new(WaitersInner {
+            scopes: ScopeStore::default(),
             cur: cell::Cell::new(u32::MAX),
             running: cell::Cell::new(false),
             shutdown: cell::Cell::new(false),
@@ -54,6 +60,10 @@ impl WaitersRef {
             calls: cell::UnsafeCell::new(slab::Slab::new()),
             wakers: cell::UnsafeCell::new(Vec::default()),
             scratch: cell::RefCell::default(),
+        });
+        WaitersRef {
+            scope: ReadyScope::root(inner.clone()),
+            inner,
         }
     }
 
@@ -235,6 +245,25 @@ impl WaitersRef {
 
     pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown.get()
+    }
+}
+
+impl ops::Deref for WaitersRef {
+    type Target = WaitersInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Drop for WaitersRef {
+    fn drop(&mut self) {
+        // Scope/observer handles can outlive the scheduling owner.
+        let indexes = mem::take(self.get());
+        let calls = mem::take(self.get_calls());
+        let scratch = self.scratch.take();
+        self.get_wakers().clear();
+        drop((indexes, calls, scratch));
     }
 }
 

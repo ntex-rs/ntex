@@ -920,7 +920,7 @@ fn aggregate_success_revalidates_a_child_changed_by_a_later_poll() {
 /// STATEMENT: Aggregate cancellation and readiness errors release child ownership and preserve error precedence.
 ///
 /// HOW:
-/// - Join two aggregate checks, cancel their owner, and verify a woken waiter takes over both children.
+/// - Link a shared aggregate pipeline to two parents, cancel its owner, and verify waiter handoff.
 /// - Fail the second child, recover, then fail the first and verify cleanup and short-circuiting.
 #[test]
 fn aggregate_cancellation_and_errors_release_each_child_checker() {
@@ -934,7 +934,12 @@ fn aggregate_cancellation_and_errors_release_each_child_checker() {
         let b = Probe::new();
         a.0.available.set(false);
         b.0.available.set(false);
-        let service = compose_probes(a.clone(), b.clone(), use_then);
+        let service = PipelineForward {
+            inner: Rc::new(Pipeline::new(
+                State(0),
+                compose_probes(a.clone(), b.clone(), use_then),
+            )),
+        };
         service.bind(BindCtx::new(waiters.scope()));
         service.bind(BindCtx::new(other_waiters.scope()));
         let mut first = Box::pin(ctx.ready(&service));
@@ -1549,22 +1554,19 @@ fn shutdown_cancels_retained_checks_without_bypassing_bound_call_readiness() {
 /// STATEMENT: Reentrant shutdown defers destruction of a readiness future until its active poll returns.
 ///
 /// HOW:
-/// - Trigger shutdown from a wake hook while a readiness poll invalidates itself.
+/// - Trigger shutdown from a readiness hook while the retained checker is being polled.
 /// - Inspect the live checker inside the hook and verify complete cleanup after the poll yields.
 #[test]
 fn reentrant_shutdown_defers_dropping_the_currently_polled_checker() {
     let probe = Probe::new();
-    probe.0.invalidate_ready.set(true);
     let pl = Rc::new(Pipeline::new(State(10), probe.clone()));
     let shutdown = pl.clone();
     let checked = probe.clone();
-    ON_WAKE.with_borrow_mut(|slot| {
-        *slot = Some(Box::new(move || {
-            run(shutdown.shutdown());
-            assert_eq!(checked.0.active.get(), 1);
-            assert_eq!(checked.0.drops.get(), 0);
-        }));
-    });
+    *probe.0.ready_hook.borrow_mut() = Some(Box::new(move || {
+        run(shutdown.shutdown());
+        assert_eq!(checked.0.active.get(), 1);
+        assert_eq!(checked.0.drops.get(), 0);
+    }));
     let waker = Waker::from(Arc::new(Counter::default()));
     let mut cx = Context::from_waker(&waker);
     assert!(pl.poll_ready(&mut cx).is_pending());
@@ -1614,7 +1616,7 @@ fn scheduling_invalidation_is_observed_before_dispatch() {
 /// STATEMENT: Raw, cached, direct, and legacy-bypass calls preserve their target and supplied state.
 ///
 /// HOW:
-/// - Compare raw rechecks with cached binding calls across two parent contexts and states.
+/// - Compare raw rechecks with cached binding calls across two local contexts and states.
 /// - Invalidate and exercise legacy bypass plus direct call recovery, checking results and check counts.
 #[test]
 #[allow(
@@ -1637,10 +1639,8 @@ fn cached_and_raw_calls_keep_their_target_and_state() {
     assert_eq!(run(ctx.ready(&bound)), Ok(()));
     assert_eq!(probe.0.starts.get(), 3);
 
-    let other_waiters = WaitersRef::new();
     let other_st = State(20);
-    let other_ctx = Ctx::<(), State>::new(0, &other_waiters, &other_st);
-    bound.bind(BindCtx::new(other_waiters.scope()));
+    let other_ctx = Ctx::<(), State>::new(0, &waiters, &other_st);
     assert_eq!(run(other_ctx.call(&bound, 5)), Ok(25));
     assert_eq!(probe.0.starts.get(), 3);
     assert_eq!(&*probe.0.states.borrow(), &[10, 10, 10]);
@@ -1794,6 +1794,45 @@ fn nowait_bypasses_transparent_bindings_but_not_nested_context_calls() {
 
 struct Forward<S>(S);
 
+/// STATEMENT: Local binding reuse shares readiness, foreign reuse is rejected, and clones bind independently.
+///
+/// HOW:
+/// - Bind one instance repeatedly in one store, warm its cache, and attempt foreign binding.
+/// - Verify rejection leaves the foreign scope unsubscribed and does not rebind the service.
+/// - Bind a fresh clone to the foreign store and verify an independent readiness check.
+#[test]
+fn bindings_reject_foreign_stores_but_clones_are_unbound() {
+    let local = WaitersRef::new();
+    let foreign = WaitersRef::new();
+    let st = State(0);
+    let probe = Probe::new();
+    let binding = ServiceBinding::new(probe.clone());
+    binding.bind(BindCtx::new(local.scope()));
+    binding.bind(BindCtx::new(local.scope()));
+    let ctx = Ctx::<(), State>::new(0, &local, &st);
+    assert_eq!(run(ctx.ready(&binding)), Ok(()));
+    let before = probe.0.binds.get();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            binding.bind(BindCtx::new(foreign.scope()));
+        }))
+        .is_err()
+    );
+    assert_eq!(probe.0.binds.get(), before);
+    let generation = foreign.scope().generation();
+    probe.0.changed.notify();
+    assert!(foreign.scope().is_current(generation));
+    let clone = binding.clone();
+    clone.bind(BindCtx::new(foreign.scope()));
+    assert_eq!(
+        run(Ctx::<(), State>::new(0, &foreign, &st).ready(&clone)),
+        Ok(())
+    );
+    assert_eq!(probe.0.starts.get(), 2);
+    assert!(!binding.is_ready());
+    assert!(clone.is_ready());
+}
+
 impl<S: Service<State, usize>> Service<State, usize> for Forward<S> {
     type Res = S::Res;
     type Error = S::Error;
@@ -1853,7 +1892,7 @@ fn fresh_clones_and_shared_aliases_retain_cache_hit_dependencies() {
 /// STATEMENT: Shared binding readiness retains one checker across repolls, invalidation, and owner handoff.
 ///
 /// HOW:
-/// - Join three parent contexts, cancel a waiter, notify twice, and cancel the owner.
+/// - Link one bound service's pipeline to three parents, cancel a waiter, notify twice, and cancel the owner.
 /// - Check wake delivery, drop/start counts, unchanged handoff generation, and single-checker completion.
 #[test]
 fn shared_checker_retains_restarts_and_hands_off_pending_work() {
@@ -1866,13 +1905,16 @@ fn shared_checker_retains_restarts_and_hands_off_pending_work() {
     let cancelled_ctx = Ctx::<(), State>::new(0, &cancelled_waiters, &st);
     let probe = Probe::new();
     probe.0.available.set(false);
-    let bound = ServiceBinding::new(probe.clone());
-    bound.bind(BindCtx::new(waiters.scope()));
-    bound.bind(BindCtx::new(other_waiters.scope()));
-    bound.bind(BindCtx::new(cancelled_waiters.scope()));
-    let mut first = Box::pin(ctx.ready(&bound));
-    let mut second = Box::pin(other_ctx.ready(&bound));
-    let mut cancelled = Box::pin(cancelled_ctx.ready(&bound));
+    let bound = Rc::new(ServiceBinding::new(probe.clone()));
+    let forward = PipelineForward {
+        inner: Rc::new(Pipeline::new(State(0), bound.clone())),
+    };
+    forward.bind(BindCtx::new(waiters.scope()));
+    forward.bind(BindCtx::new(other_waiters.scope()));
+    forward.bind(BindCtx::new(cancelled_waiters.scope()));
+    let mut first = Box::pin(ctx.ready(&forward));
+    let mut second = Box::pin(other_ctx.ready(&forward));
+    let mut cancelled = Box::pin(cancelled_ctx.ready(&forward));
     let counter = Arc::new(Counter::default());
     let waker = Waker::from(counter.clone());
     let mut cx = Context::from_waker(&waker);
@@ -2199,14 +2241,15 @@ fn transparent_raw_adapters_do_not_cache_or_repeat_validated_checks() {
 /// STATEMENT: Erased aliases hand off cancelled readiness while preserving mapped state and errors.
 ///
 /// HOW:
-/// - Join a readiness owner and call through aliased erased services, invalidate, then cancel the owner.
+/// - Link an erased service's pipeline to two parents, invalidate, then cancel the readiness owner.
 /// - Verify wake and handoff, mapped failure without dispatch, and shared-cache recovery.
 #[test]
 fn erased_aliases_handoff_cancelled_checks_and_preserve_mapped_errors() {
     let waiters = WaitersRef::new();
     let other_waiters = WaitersRef::new();
-    let ctx = Ctx::<(), ()>::new(0, &waiters, &());
-    let other_ctx = Ctx::<(), ()>::new(0, &other_waiters, &());
+    let st = State(0);
+    let ctx = Ctx::<(), State>::new(0, &waiters, &st);
+    let other_ctx = Ctx::<(), State>::new(0, &other_waiters, &st);
     let probe = Probe::new();
     probe.0.available.set(false);
     let erased: crate::boxed::BoxService<(), usize, usize, &str> =
@@ -2214,7 +2257,11 @@ fn erased_aliases_handoff_cancelled_checks_and_preserve_mapped_errors() {
             State(42),
             ServiceBinding::new(probe.clone()).map_err(|_: Error| "unavailable"),
         ));
-    let alias = erased.clone();
+    let shared = Rc::new(Pipeline::new((), erased));
+    let erased = PipelineForward {
+        inner: shared.clone(),
+    };
+    let alias = PipelineForward { inner: shared };
     erased.bind(BindCtx::new(waiters.scope()));
     alias.bind(BindCtx::new(other_waiters.scope()));
     let mut first = Box::pin(ctx.ready(&erased));
@@ -2250,22 +2297,22 @@ fn erased_aliases_handoff_cancelled_checks_and_preserve_mapped_errors() {
     assert!(probe.0.states.borrow().iter().all(|st| *st == 42));
 }
 
-struct PipelineForward {
-    inner: Rc<Pipeline<usize, usize, Error>>,
+struct PipelineForward<E = Error> {
+    inner: Rc<Pipeline<usize, usize, E>>,
 }
 
-impl Service<State, usize> for PipelineForward {
+impl<E: 'static> Service<State, usize> for PipelineForward<E> {
     type Res = usize;
-    type Error = Error;
+    type Error = E;
 
     fn bind(&self, ctx: BindCtx<'_>) {
-        self.inner.bind_to(&ctx);
+        ctx.subscribe_pipeline(&self.inner.readiness_link());
     }
 
     crate::forward_pl_ready!(State, self.inner);
     crate::forward_pl_shutdown!(State, self.inner);
 
-    async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Error> {
+    async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, E> {
         self.inner.call(req).await
     }
 }

@@ -1,6 +1,8 @@
 use std::{fmt, marker::PhantomPinned, ptr, rc::Rc, task::Context, task::Poll};
 
-use crate::{BindCtx, Ctx, IntoService, ReadyCallback, Service, ctx::WaitersRef, util::BoxFuture};
+use crate::{
+    BindCtx, Ctx, IntoService, ReadyCallback, ReadyLink, Service, ctx::WaitersRef, util::BoxFuture,
+};
 
 use crate::pipeline::PipelineBinding;
 use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness};
@@ -96,6 +98,8 @@ where
     /// readiness. A pending check is retained by the pipeline, even if this
     /// task stops polling; other callers can continue driving it.
     /// The retained check and its wake sources run on this pipeline's thread.
+    /// Its checker wakers must also be finally dropped on that thread, even
+    /// after the pipeline is dropped; foreign wakes or final drops panic.
     ///
     /// # Panics
     ///
@@ -159,7 +163,15 @@ where
     /// invalidate the enclosing scope. Repeated registration is idempotent and
     /// does not rebind the inner service or create another runtime handle.
     pub fn bind_to(&self, ctx: &BindCtx<'_>) {
-        ctx.depend_on(self.api.scope());
+        ctx.subscribe_pipeline(&self.readiness_link());
+    }
+
+    /// Returns this pipeline's readiness endpoint, shared by all state bindings.
+    ///
+    /// Register with [`BindCtx::subscribe_pipeline`]. The link propagates
+    /// invalidation without checking readiness or retaining the pipeline.
+    pub fn readiness_link(&self) -> ReadyLink {
+        self.api.scope().readiness_link()
     }
 }
 
@@ -240,7 +252,14 @@ where
     ///
     /// Call from [`Service::bind`]. See [`PipelineState::bind_to`] for details.
     pub fn bind_to(&self, ctx: &BindCtx<'_>) {
-        ctx.depend_on(self.api.scope());
+        ctx.subscribe_pipeline(&self.readiness_link());
+    }
+
+    /// Returns the shared pipeline's readiness endpoint.
+    ///
+    /// See [`PipelineState::readiness_link`] and [`ReadyLink`].
+    pub fn readiness_link(&self) -> ReadyLink {
+        self.api.scope().readiness_link()
     }
 }
 

@@ -645,7 +645,7 @@ thread_local! {
     static WAKE_NOTIFIER: RefCell<Option<ReadyNotifier>> = const { RefCell::new(None) };
 }
 
-/// Invalidates readiness whenever it is woken.
+/// Invalidates readiness on each wake, except notification feedback.
 struct NotifyingWaker(AtomicUsize);
 
 impl Wake for NotifyingWaker {
@@ -658,7 +658,10 @@ impl Wake for NotifyingWaker {
             self.0.fetch_add(1, Ordering::Relaxed) < 100,
             "readiness spins"
         );
-        WAKE_NOTIFIER.with(|n| n.borrow().as_ref().unwrap().notify());
+        if let Some(source) = WAKE_NOTIFIER.with_borrow_mut(Option::take) {
+            source.notify();
+            WAKE_NOTIFIER.with_borrow_mut(|slot| *slot = Some(source));
+        }
     }
 }
 
@@ -666,6 +669,7 @@ impl Wake for NotifyingWaker {
 ///
 /// HOW:
 /// - Install an owner waker that invalidates the delayed call's nested readiness on each wake.
+/// - Suppress notification feedback in the waker to avoid same-source reentry.
 /// - Resume the call and verify its poll returns Pending with a bounded wake count.
 #[ntex::test]
 async fn call_check_yields_when_waking_owner_invalidates_it() {
@@ -696,5 +700,5 @@ async fn call_check_yields_when_waking_owner_invalidates_it() {
 
     let _ = tx.send(());
     assert!(call.as_mut().poll(&mut noop).is_pending());
-    assert!(wakes.0.load(Ordering::Relaxed) < 10);
+    assert!((2..10).contains(&wakes.0.load(Ordering::Relaxed)));
 }

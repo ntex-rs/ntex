@@ -538,7 +538,7 @@ mod tests {
 
     struct CheckRouter(Rc<TestRouter>);
 
-    impl Service<(), ()> for CheckRouter {
+    impl Service<(), Option<WebRequest<()>>> for CheckRouter {
         type Res = ();
         type Error = WebError;
 
@@ -546,9 +546,17 @@ mod tests {
             ctx.bind::<_, (), WebRequest<()>>(&self.0);
         }
 
-        async fn call(&self, (): (), ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
-            // Exercise the router itself, not the pipeline's readiness cache.
-            ctx.ready::<_, WebRequest<()>>(&self.0).await
+        async fn call(
+            &self,
+            req: Option<WebRequest<()>>,
+            ctx: Ctx<'_, Self>,
+        ) -> Result<(), Self::Error> {
+            if let Some(req) = req {
+                ctx.call(&self.0, req).await.map(|_| ())
+            } else {
+                // Exercise the router itself, not the pipeline's readiness cache.
+                ctx.ready::<_, WebRequest<()>>(&self.0).await
+            }
         }
     }
 
@@ -556,7 +564,7 @@ mod tests {
     ///
     /// HOW:
     /// - Cache many routes and a default, leaving one unavailable route uncreated.
-    /// - Check readiness with both handler caches mutably borrowed to detect cache traversal.
+    /// - Probe raw readiness through the same pipeline with both caches mutably borrowed.
     /// - Notify one route repeatedly and verify only its ID is queued and its service rechecked.
     /// - Invalidate the default and filter independently and verify unaffected entries stay cached.
     #[crate::rt_test]
@@ -566,21 +574,23 @@ mod tests {
         let gates: Vec<_> = (0..17).map(|_| Rc::new(Gate::default())).collect();
         gates[16].blocked.set(true);
         let router = router(filter.clone(), &gates, default.clone());
-        let srv = Pipeline::new((), router.clone());
+        let srv = Pipeline::new((), CheckRouter(router.clone()));
         for id in 0..16 {
-            srv.call(TestRequest::with_uri(&format!("/{id}")).to_srv_request())
-                .await
-                .unwrap();
-        }
-        srv.call(TestRequest::with_uri("/missing").to_srv_request())
+            srv.call(Some(
+                TestRequest::with_uri(&format!("/{id}")).to_srv_request(),
+            ))
             .await
             .unwrap();
-        srv.ready().await.unwrap();
+        }
+        srv.call(Some(TestRequest::with_uri("/missing").to_srv_request()))
+            .await
+            .unwrap();
+        srv.call(None).await.unwrap();
         assert_eq!(gates[16].checks.get(), 0);
 
-        let probe = Pipeline::new((), CheckRouter(router.clone()));
+        let probe = srv.bind();
         for _ in 0..3 {
-            let mut check = pin!(probe.call(()));
+            let mut check = pin!(probe.call(None));
             let _routes = router.cache.borrow_mut();
             let _default = router.cache_default.borrow_mut();
             assert!(matches!(
@@ -596,7 +606,7 @@ mod tests {
             assert!(!unknown.is_empty());
             assert!(unknown.iter().all(|id| id.get() == 3));
         }
-        probe.call(()).await.unwrap();
+        probe.call(None).await.unwrap();
         assert!(router.readiness.unknown.borrow().is_empty());
         for (id, gate) in gates[..16].iter().enumerate() {
             assert_eq!(gate.checks.get(), 1 + usize::from(id == 3));
@@ -605,10 +615,10 @@ mod tests {
         assert_eq!(default.checks.get(), 1);
 
         default.changed.notify();
-        probe.call(()).await.unwrap();
+        probe.call(None).await.unwrap();
         assert_eq!(default.checks.get(), 2);
         filter.changed.notify();
-        let mut check = pin!(probe.call(()));
+        let mut check = pin!(probe.call(None));
         assert!(matches!(
             check.as_mut().poll(&mut Context::from_waker(Waker::noop())),
             Poll::Ready(Ok(()))
@@ -619,7 +629,7 @@ mod tests {
     /// STATEMENT: Pending aggregate checks survive cancellation and ordinary task wakes.
     ///
     /// HOW:
-    /// - Block two cached handlers and start checks from independently bound pipelines.
+    /// - Block two cached handlers and start raw checks through independent handles of one pipeline.
     /// - Cancel the first checker, then release one handler through its ordinary task waker.
     /// - Verify readiness still waits for the handler whose original check was cancelled.
     /// - Recover the remaining handler and verify all dirty work is eventually cleared.
@@ -629,22 +639,22 @@ mod tests {
         let default = Rc::new(Gate::default());
         let gates = [Rc::new(Gate::default()), Rc::new(Gate::default())];
         let router = router(filter.clone(), &gates, default.clone());
-        let srv = Pipeline::new((), router.clone());
+        let srv = Pipeline::new((), CheckRouter(router.clone()));
         for path in ["/0", "/1", "/missing"] {
-            srv.call(TestRequest::with_uri(path).to_srv_request())
+            srv.call(Some(TestRequest::with_uri(path).to_srv_request()))
                 .await
                 .unwrap();
         }
-        srv.ready().await.unwrap();
-        let other = Pipeline::new((), router.clone());
+        srv.call(None).await.unwrap();
+        let other = srv.bind();
         for gate in &gates {
             gate.blocked.set(true);
             gate.changed.notify();
         }
         let mut cx = Context::from_waker(Waker::noop());
-        let mut first = Box::pin(srv.ready());
+        let mut first = Box::pin(srv.call(None));
         assert!(first.as_mut().poll(&mut cx).is_pending());
-        let mut second = Box::pin(other.ready());
+        let mut second = Box::pin(other.call(None));
         assert!(second.as_mut().poll(&mut cx).is_pending());
         assert_eq!((gates[0].checks.get(), gates[1].checks.get()), (2, 2));
         drop(first);
@@ -658,7 +668,7 @@ mod tests {
         gates[1].blocked.set(false);
         gates[1].changed.notify();
         second.await.unwrap();
-        srv.ready().await.unwrap();
+        srv.call(None).await.unwrap();
         assert!(router.readiness.unknown.borrow().is_empty());
         assert_eq!(gates[0].checks.get(), checks);
         assert_eq!(filter.checks.get(), 1);
