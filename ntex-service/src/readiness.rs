@@ -19,7 +19,7 @@ thread_local! {
 /// ordinary task wakeups, cached calls, or internal readiness resets.
 ///
 /// The argument is the receiving scope's user data, configured with
-/// [`crate::ServiceBinding::with_data`], or `0` by default. Propagation delivers
+/// [`crate::ReadyBinding::with_data`], or `0` by default. Propagation delivers
 /// each scope's own value, not the originating scope's value. Pipeline roots
 /// always supply `0`. One callback can be shared by scopes with different data.
 ///
@@ -423,7 +423,7 @@ impl ReadyScope {
     fn bound(&self) -> &ScopeRef {
         self.0
             .get()
-            .expect("ServiceBinding must be registered by Service::bind before use")
+            .expect("ReadyBinding must be registered by Service::bind before use")
     }
 
     /// Accesses this scope while holding an immutable borrow of its store's table.
@@ -589,7 +589,7 @@ impl ReadyScope {
         });
         assert!(
             Rc::ptr_eq(&parent.store, &child.store),
-            "ServiceBinding cannot be shared across pipelines; use ReadyLink with a shared Pipeline"
+            "ReadyBinding cannot be shared across pipelines; use ReadyLink with a shared Pipeline"
         );
         if parent.id != child.id {
             parent
@@ -614,7 +614,7 @@ impl ReadyScope {
                             .with(child.id, |s| s.parents.borrow().contains(&parent.id))
                             == Some(true))
             }),
-            "ServiceBinding must be registered by Service::bind before use"
+            "ReadyBinding must be registered by Service::bind before use"
         );
     }
 

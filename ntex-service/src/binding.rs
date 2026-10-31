@@ -1,11 +1,11 @@
 use crate::{BindCtx, Ctx, Middleware, Service, readiness::ReadyScope};
 
-/// Middleware that wraps each service in a fresh [`ServiceBinding`].
+/// Middleware that wraps each service in a fresh [`ReadyBinding`].
 ///
 /// Each created service gets an independent, notification-invalidated readiness
 /// cache. Successful readiness survives calls and changes to sibling services.
 /// The inner service must subscribe to readiness-change notifications in
-/// [`Service::bind`], as described by [`ServiceBinding`].
+/// [`Service::bind`], as described by [`ReadyBinding`].
 ///
 /// Construction does not retain state, bind the service, or check readiness.
 /// The enclosing pipeline or service must bind the returned wrapper before use.
@@ -13,31 +13,31 @@ use crate::{BindCtx, Ctx, Middleware, Service, readiness::ReadyScope};
 /// # Example
 ///
 /// ```
-/// use ntex_service::{ServiceBindingMiddleware, factory, fn_service};
+/// use ntex_service::{ReadyBindingMiddleware, factory, fn_service};
 ///
 /// # async fn example() {
 /// let factory = factory(fn_service(async |req: u32| Ok::<_, ()>(req + 1)))
-///     .apply(ServiceBindingMiddleware);
+///     .apply(ReadyBindingMiddleware);
 ///
 /// let pipeline = factory.pipeline(()).await.unwrap();
 /// assert_eq!(pipeline.call(1).await, Ok(2));
 /// # }
 /// ```
-#[derive(Copy, Clone, Default, Debug)]
-pub struct ServiceBindingMiddleware;
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
+pub struct ReadyBindingMiddleware;
 
-impl<S, St> Middleware<S, St> for ServiceBindingMiddleware {
-    type Service = ServiceBinding<S>;
+impl<S, St> Middleware<S, St> for ReadyBindingMiddleware {
+    type Service = ReadyBinding<S>;
 
     #[inline]
     fn create(&self, _: &St, service: S) -> Self::Service {
-        ServiceBinding::new(service)
+        ReadyBinding::new(service)
     }
 }
 
 /// A service paired with persistent readiness.
 ///
-/// Construct directly with [`Self::new`] or apply [`ServiceBindingMiddleware`]
+/// Construct directly with [`Self::new`] or apply [`ReadyBindingMiddleware`]
 /// to a factory to wrap each service it creates.
 ///
 /// [`Ctx::ready`] and [`Ctx::call`] reuse the binding's successful readiness
@@ -55,21 +55,21 @@ impl<S, St> Middleware<S, St> for ServiceBindingMiddleware {
 /// registered in this binding's scope. The default value is `0`.
 /// Cloning a binding preserves its data and clones the service into a fresh,
 /// unbound scope.
-/// Use [`std::rc::Rc<ServiceBinding<S>>`] to share readiness within one pipeline.
+/// Use [`std::rc::Rc<ReadyBinding<S>>`] to share readiness within one pipeline.
 /// To share a gate across pipelines, use [`crate::Pipeline`] or
-/// [`crate::PipelineState`] and [`crate::ReadyLink`] instead.
+/// [`crate::pipeline::PipelineState`] and [`crate::ReadyLink`] instead.
 ///
 /// Every enclosing service must forward [`Service::bind`] to this binding.
 /// Runtime operations panic if the calling scope has not bound it, rather than
 /// silently adding a dependency or losing readiness notifications.
 #[derive(Debug)]
-pub struct ServiceBinding<S> {
+pub struct ReadyBinding<S> {
     service: S,
     scope: ReadyScope,
     data: usize,
 }
 
-impl<S> ServiceBinding<S> {
+impl<S> ReadyBinding<S> {
     /// Pairs a service with a fresh readiness scope and callback data `0`.
     ///
     /// Its dependencies are wired when a pipeline or enclosing service binds it.
@@ -103,13 +103,13 @@ impl<S> ServiceBinding<S> {
     }
 }
 
-impl<S: Clone> Clone for ServiceBinding<S> {
+impl<S: Clone> Clone for ReadyBinding<S> {
     fn clone(&self) -> Self {
         Self::with_data(self.service.clone(), self.data)
     }
 }
 
-impl<S, St, Req> Service<St, Req> for ServiceBinding<S>
+impl<S, St, Req> Service<St, Req> for ReadyBinding<S>
 where
     S: Service<St, Req>,
 {
@@ -141,5 +141,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/service_binding.rs"]
+#[path = "../tests/unit/binding.rs"]
 mod tests;

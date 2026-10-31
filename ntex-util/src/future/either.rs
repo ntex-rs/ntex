@@ -180,7 +180,7 @@ where
 mod test {
     use std::{cell::Cell, error::Error as _, future, rc::Rc};
 
-    use ntex_service::{Pipeline, ReadyNotifier, ServiceBinding};
+    use ntex_service::{Pipeline, ReadyBinding, ReadyNotifier};
 
     use super::*;
 
@@ -387,7 +387,7 @@ mod test {
         .await;
     }
 
-    /// STATEMENT: Either branch binds an enclosed `ServiceBinding` before using its readiness scope.
+    /// STATEMENT: Either branch binds an enclosed `ReadyBinding` before using its readiness scope.
     ///
     /// HOW:
     /// - Place a bound service in each branch and construct an enclosing pipeline.
@@ -395,7 +395,7 @@ mod test {
     #[ntex::test]
     async fn bound_service() {
         for left in [true, false] {
-            let inner = ServiceBinding::new(TestService {
+            let inner = ReadyBinding::new(TestService {
                 state: Rc::new(ServiceState::default()),
                 response: 10,
             });

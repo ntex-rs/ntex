@@ -373,7 +373,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     /// Waits until `svc` is ready to process a request.
     ///
-    /// A [`crate::ServiceBinding`] reuses successful readiness until a subscribed
+    /// A [`crate::ReadyBinding`] reuses successful readiness until a subscribed
     /// source changes. A raw service is checked on every invocation.
     pub fn ready<S, Req>(&self, svc: &'a S) -> impl Future<Output = Result<(), S::Error>>
     where
@@ -414,7 +414,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     ///
     /// Uses the nearest upstream scope carried by this context. A valid cache
     /// allows immediate dispatch; otherwise, only `svc` is checked, without
-    /// marking the enclosing scope ready. A [`crate::ServiceBinding`] also
+    /// marking the enclosing scope ready. A [`crate::ReadyBinding`] also
     /// checks its own cache when called directly, independently of this scope.
     /// Calls do not consume cached readiness.
     ///

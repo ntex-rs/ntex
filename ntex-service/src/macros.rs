@@ -41,7 +41,7 @@ macro_rules! forward_pl_bind {
 
 /// An implementation of [`crate::Service::ready`] that forwards readiness checks to a field.
 ///
-/// Preserves the calling context and any wrapped [`crate::ServiceBinding`]'s
+/// Preserves the calling context and any wrapped [`crate::ReadyBinding`]'s
 /// readiness. A raw service field is checked on each forwarded evaluation.
 /// The field must also be wired in `bind`, for example with [`crate::forward_bind!`].
 #[macro_export]

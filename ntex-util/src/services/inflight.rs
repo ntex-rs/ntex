@@ -1,5 +1,5 @@
 //! Middleware for limiting concurrent service calls.
-use ntex_service::{BindCtx, Ctx, Middleware, Service, ServiceBinding};
+use ntex_service::{BindCtx, Ctx, Middleware, ReadyBinding, Service};
 
 use super::counter::Counter;
 
@@ -42,7 +42,7 @@ impl<S, St> Middleware<S, St> for InFlight {
 /// has an independent readiness cache and must notify when its readiness changes.
 pub struct InFlightService<S> {
     count: Counter,
-    service: ServiceBinding<S>,
+    service: ReadyBinding<S>,
 }
 
 impl<S> InFlightService<S> {
@@ -51,7 +51,7 @@ impl<S> InFlightService<S> {
     /// A limit of zero keeps the service permanently unavailable.
     pub fn new(max: usize, service: S) -> Self {
         Self {
-            service: ServiceBinding::new(service),
+            service: ReadyBinding::new(service),
             count: Counter::new(max),
         }
     }

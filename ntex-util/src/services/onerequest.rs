@@ -1,7 +1,7 @@
 //! Middleware that permits one service call at a time.
 use std::{cell::Cell, future::poll_fn, task::Poll};
 
-use ntex_service::{BindCtx, Ctx, Middleware, ReadyNotifier, Service, ServiceBinding};
+use ntex_service::{BindCtx, Ctx, Middleware, ReadyBinding, ReadyNotifier, Service};
 
 use crate::{channel::condition::Condition, future::OnDropFn};
 
@@ -14,7 +14,7 @@ impl<S, St> Middleware<S, St> for OneRequest {
 
     fn create(&self, _: &St, service: S) -> Self::Service {
         OneRequestService {
-            service: ServiceBinding::new(service),
+            service: ReadyBinding::new(service),
             ready: Cell::new(true),
             waiters: Condition::new(),
             changed: ReadyNotifier::new(),
@@ -33,7 +33,7 @@ impl<S, St> Middleware<S, St> for OneRequest {
 #[derive(Debug)]
 pub struct OneRequestService<S> {
     waiters: Condition,
-    service: ServiceBinding<S>,
+    service: ReadyBinding<S>,
     ready: Cell<bool>,
     changed: ReadyNotifier,
 }
@@ -45,7 +45,7 @@ impl<S> OneRequestService<S> {
         S: Service<St, Req>,
     {
         Self {
-            service: ServiceBinding::new(service),
+            service: ReadyBinding::new(service),
             ready: Cell::new(true),
             waiters: Condition::new(),
             changed: ReadyNotifier::new(),

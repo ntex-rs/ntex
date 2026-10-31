@@ -183,17 +183,20 @@ fn compose_probes(
     }
 }
 
-/// STATEMENT: `ServiceBindingMiddleware` gives each factory-created service its own readiness scope.
+/// STATEMENT: `ReadyBindingMiddleware` and its legacy name create independent readiness scopes.
 ///
 /// HOW:
+/// - Expect deprecation when constructing the legacy middleware and using both public type names.
+/// - Match the middleware with its legacy unit-struct pattern before applying it.
 /// - Apply the middleware to a factory returning clones of one probe and create two services.
 /// - Verify binding is deferred to pipeline construction and each service checks readiness once.
 /// - Check repeated calls reuse readiness and calls and shutdown receive each pipeline's state.
 #[test]
 fn binding_middleware_factory_creates_independent_scopes() {
     let probe = Probe::new();
+    let middleware = crate::ReadyBindingMiddleware;
     let factory = crate::apply(
-        ServiceBindingMiddleware,
+        middleware,
         crate::fn_factory(async |_: &State| Ok::<_, ()>(probe.clone())),
     );
     let first = run(factory.create(&State(10))).unwrap();
@@ -227,7 +230,7 @@ fn binding_middleware_factory_creates_independent_scopes() {
 fn binding_middleware_preserves_independent_readiness() {
     let probe = Probe::new();
     let sibling = Probe::new();
-    let bound = ServiceBindingMiddleware.create(&State(10), probe.clone());
+    let bound = ReadyBindingMiddleware.create(&State(10), probe.clone());
     let pipeline = crate::service(bound)
         .and_then(sibling.clone())
         .pipeline(State(10));
@@ -318,10 +321,12 @@ fn bound_callbacks_observe_their_scope_and_propagated_notifications() {
 ///
 /// HOW:
 /// - Register one callback on a pipeline root, a tagged parent and child, and an untagged binding.
+/// - Construct the untagged `ReadyBinding` through `ServiceBinding::new`, expecting deprecation.
 /// - Notify the child and verify root, parent, and full-width child payloads in propagation order.
 /// - Rebind the child and verify duplicate subscriptions retain its data without duplicating callbacks per visit.
 /// - Notify the untagged binding and verify both it and the root supply zero.
 #[test]
+#[expect(deprecated, reason = "verify the deprecated binding constructor")]
 fn shared_callbacks_receive_each_scopes_data() {
     let received = Rc::new(RefCell::new(Vec::new()));
     let captured = received.clone();
@@ -334,11 +339,11 @@ fn shared_callbacks_receive_each_scopes_data() {
     };
     let waiters = WaitersRef::new();
     waiters.scope().on_notify(&callback);
-    let parent = ServiceBinding::with_data(probe(), 41);
+    let parent = ReadyBinding::with_data(probe(), 41);
     parent.bind(BindCtx::new(waiters.scope()));
-    let child = ServiceBinding::with_data(probe(), usize::MAX);
+    let child = ReadyBinding::with_data(probe(), usize::MAX);
     child.bind(BindCtx::new(&parent.scope));
-    let untagged = ServiceBinding::new(probe());
+    let untagged: crate::ReadyBinding<_> = crate::ServiceBinding::new(probe());
     untagged.bind(BindCtx::new(waiters.scope()));
 
     child.service.0.changed.notify();
@@ -357,10 +362,15 @@ fn shared_callbacks_receive_each_scopes_data() {
 /// STATEMENT: Cloning a tagged binding preserves callback data without sharing its readiness scope.
 ///
 /// HOW:
+/// - Expect deprecation when using `ServiceBinding::with_data` and its legacy type name.
 /// - Cache a tagged binding, clone it into another pipeline, and require a separate readiness check.
 /// - Notify their shared source and verify both scopes deliver the original payload.
 /// - Drop the first pipeline and verify only the surviving scope still delivers its data.
 #[test]
+#[expect(
+    deprecated,
+    reason = "verify the deprecated tagged binding compatibility alias"
+)]
 fn cloned_bindings_preserve_callback_data() {
     let received = Rc::new(RefCell::new(Vec::new()));
     let captured = received.clone();
@@ -371,12 +381,14 @@ fn cloned_bindings_preserve_callback_data() {
         available: Cell::new(true),
         ..ProbeState::default()
     }));
-    let binding = Rc::new(ServiceBinding::with_data(probe.clone(), 42));
+    let binding: Rc<crate::ReadyBinding<_>> =
+        Rc::new(crate::ServiceBinding::with_data(probe.clone(), 42));
     let first = Pipeline::new(State(10), binding.clone());
     assert_eq!(run(first.ready()), Ok(()));
     assert_eq!(probe.0.starts.get(), 1);
 
-    let second = Pipeline::new(State(20), binding.as_ref().clone());
+    let cloned: crate::ServiceBinding<_> = binding.as_ref().clone();
+    let second = Pipeline::new(State(20), cloned);
     assert_eq!(run(second.ready()), Ok(()));
     assert_eq!(probe.0.starts.get(), 2);
     probe.0.changed.notify();
@@ -426,8 +438,8 @@ fn lazy_creation_binds_the_nearest_scope_before_first_use() {
         let st = State(10);
         let mapped = State(20);
         let ctx = Ctx::<(), State>::new(0, &waiters, &st);
-        let parent = ServiceBinding::new(Probe::new());
-        let sibling = ServiceBinding::new(Probe::new());
+        let parent = ReadyBinding::new(Probe::new());
+        let sibling = ReadyBinding::new(Probe::new());
         parent.bind(BindCtx::new(waiters.scope()));
         sibling.bind(BindCtx::new(waiters.scope()));
         let notifications = Rc::new(Cell::new(0));
@@ -532,9 +544,9 @@ fn failed_or_cancelled_lazy_creation_does_not_bind_or_invalidate() {
 fn all_sources_and_parent_edges_are_live_before_first_readiness() {
     let waiters = WaitersRef::new();
     let probe = Probe::new();
-    let child = Rc::new(ServiceBinding::new(probe.clone()));
-    let left = ServiceBinding::new(Forward(child.clone()));
-    let right = ServiceBinding::new(Forward(child.clone()));
+    let child = Rc::new(ReadyBinding::new(probe.clone()));
+    let left = ReadyBinding::new(Forward(child.clone()));
+    let right = ReadyBinding::new(Forward(child.clone()));
     left.bind(BindCtx::new(waiters.scope()));
     right.bind(BindCtx::new(waiters.scope()));
     assert_eq!(probe.0.starts.get(), 0);
@@ -568,7 +580,7 @@ fn runtime_operations_reject_missing_parent_binding_without_repair() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     let probe = Probe::new();
-    let child = Rc::new(ServiceBinding::new(probe.clone()));
+    let child = Rc::new(ReadyBinding::new(probe.clone()));
     let pl = Pipeline::new(State(0), child.clone());
     assert_eq!(run(pl.ready()), Ok(()));
     for path in 0..4 {
@@ -588,9 +600,9 @@ fn runtime_operations_reject_missing_parent_binding_without_repair() {
         let panic = result.expect_err("unbound parent must be rejected");
         assert!(
             panic.downcast_ref::<String>().is_some_and(|message| {
-                message.contains("ServiceBinding must be registered by Service::bind")
+                message.contains("ReadyBinding must be registered by Service::bind")
             }) || panic.downcast_ref::<&str>().is_some_and(|message| {
-                message.contains("ServiceBinding must be registered by Service::bind")
+                message.contains("ReadyBinding must be registered by Service::bind")
             })
         );
         assert_eq!(probe.0.binds.get(), 1);
@@ -614,7 +626,7 @@ fn combinators_cache_children_independently_without_consuming_readiness() {
         let ctx = Ctx::<(), State>::new(0, &waiters, &st);
         let a = Probe::new();
         let b = Probe::new();
-        let parent = ServiceBinding::new(compose_probes(a.clone(), b.clone(), use_then));
+        let parent = ReadyBinding::new(compose_probes(a.clone(), b.clone(), use_then));
         parent.bind(BindCtx::new(waiters.scope()));
         assert_eq!(run(ctx.call(&parent, 1)), Ok(21));
         assert_eq!(run(ctx.call(&parent, 2)), Ok(22));
@@ -785,8 +797,8 @@ fn ready_factory_creates_fresh_gates_and_preserves_state_and_errors() {
 #[test]
 fn waiting_child_calls_observe_cache_success_before_an_unrelated_check_finishes() {
     struct Both {
-        a: ServiceBinding<Probe>,
-        b: Rc<ServiceBinding<Probe>>,
+        a: ReadyBinding<Probe>,
+        b: Rc<ReadyBinding<Probe>>,
     }
 
     impl Service<State, usize> for Both {
@@ -814,8 +826,8 @@ fn waiting_child_calls_observe_cache_success_before_an_unrelated_check_finishes(
         let b = Probe::new();
         a.0.available.set(false);
         let pair = Both {
-            a: ServiceBinding::new(a.clone()),
-            b: Rc::new(ServiceBinding::new(b.clone())),
+            a: ReadyBinding::new(a.clone()),
+            b: Rc::new(ReadyBinding::new(b.clone())),
         };
         let erased = crate::boxed::service(crate::map_state(
             State(10),
@@ -926,7 +938,7 @@ fn aggregate_rechecks_completed_children_without_restarting_pending_siblings() {
             let b = Probe::new();
             let (completed, pending) = if completed_first { (&a, &b) } else { (&b, &a) };
             pending.0.available.set(false);
-            let parent = ServiceBinding::new(compose_probes(a.clone(), b.clone(), use_then));
+            let parent = ReadyBinding::new(compose_probes(a.clone(), b.clone(), use_then));
             parent.bind(BindCtx::new(waiters.scope()));
             let mut ready = Box::pin(ctx.ready(&parent));
             let mut cx = Context::from_waker(Waker::noop());
@@ -973,7 +985,7 @@ fn aggregate_success_revalidates_a_child_changed_by_a_later_poll() {
             changed.0.available.set(false);
             changed.0.changed.notify();
         }));
-        let parent = ServiceBinding::new(compose_probes(a.clone(), b.clone(), use_then));
+        let parent = ReadyBinding::new(compose_probes(a.clone(), b.clone(), use_then));
         parent.bind(BindCtx::new(waiters.scope()));
         let mut ready = Box::pin(ctx.ready(&parent));
         let counter = Arc::new(Counter::default());
@@ -1663,7 +1675,7 @@ fn scheduling_invalidation_is_observed_before_dispatch() {
         let waiters = WaitersRef::new();
         let ctx = Ctx::<(), State>::new(0, &waiters, &st);
         let probe = Probe::new();
-        let bound = ServiceBinding::new(probe.clone());
+        let bound = ReadyBinding::new(probe.clone());
         bound.bind(BindCtx::new(waiters.scope()));
         probe.bind(BindCtx::new(waiters.scope()));
         let idx = waiters.insert();
@@ -1702,7 +1714,7 @@ fn cached_and_raw_calls_keep_their_target_and_state() {
     let st = State(10);
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let probe = Probe::new();
-    let bound = ServiceBinding::new(probe.clone());
+    let bound = ReadyBinding::new(probe.clone());
     bound.bind(BindCtx::new(waiters.scope()));
     probe.bind(BindCtx::new(waiters.scope()));
     assert_eq!(run(ctx.call(&probe, 1)), Ok(11));
@@ -1759,7 +1771,7 @@ fn raw_calls_use_the_closest_scope_without_caching_partial_readiness() {
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let a = Probe::new();
     let b = Probe::new();
-    let parent = ServiceBinding::new(RawPair(a.clone(), b.clone()));
+    let parent = ReadyBinding::new(RawPair(a.clone(), b.clone()));
     parent.bind(BindCtx::new(waiters.scope()));
     let child_ctx = ctx.with_scope::<()>(&parent.scope);
     assert_eq!(run(ctx.call(&parent, 1)), Ok(11));
@@ -1791,11 +1803,11 @@ fn bound_calls_do_not_borrow_a_ready_outer_scope() {
     let waiters = WaitersRef::new();
     let st = State(10);
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
-    let parent = ServiceBinding::new(Probe::new());
+    let parent = ReadyBinding::new(Probe::new());
     let child_ctx = ctx.with_scope::<()>(&parent.scope);
     let probe = Probe::new();
     probe.0.fail.set(true);
-    let bound = ServiceBinding::new(probe.clone());
+    let bound = ReadyBinding::new(probe.clone());
     parent.bind(BindCtx::new(waiters.scope()));
     bound.bind(BindCtx::new(&parent.scope));
     assert_eq!(run(ctx.ready(&parent)), Ok(()));
@@ -1828,7 +1840,7 @@ fn nowait_bypasses_transparent_bindings_but_not_nested_context_calls() {
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let probe = Probe::new();
     probe.0.available.set(false);
-    let bound = Rc::new(ServiceBinding::new(ServiceBinding::new(probe.clone())));
+    let bound = Rc::new(ReadyBinding::new(ReadyBinding::new(probe.clone())));
     let erased = crate::boxed::service(crate::map_state(
         State(10),
         Box::new(bound.clone())
@@ -1845,7 +1857,7 @@ fn nowait_bypasses_transparent_bindings_but_not_nested_context_calls() {
     assert_eq!(probe.0.starts.get(), 0, "only the call error is returned");
     probe.0.call_fail.set(false);
 
-    let parent = ServiceBinding::new(Forward(bound));
+    let parent = ReadyBinding::new(Forward(bound));
     parent.bind(BindCtx::new(waiters.scope()));
     let mut call = Box::pin(ctx.call_nowait(&parent, 2));
     let mut cx = Context::from_waker(Waker::noop());
@@ -1880,7 +1892,7 @@ fn bindings_reject_foreign_stores_but_clones_are_unbound() {
     let foreign = WaitersRef::new();
     let st = State(0);
     let probe = Probe::new();
-    let binding = ServiceBinding::new(probe.clone());
+    let binding = ReadyBinding::new(probe.clone());
     binding.bind(BindCtx::new(local.scope()));
     binding.bind(BindCtx::new(local.scope()));
     let ctx = Ctx::<(), State>::new(0, &local, &st);
@@ -1933,7 +1945,7 @@ fn fresh_clones_and_shared_aliases_retain_cache_hit_dependencies() {
     let st = State(0);
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let probe = Probe::new();
-    let bound = ServiceBinding::new(probe.clone());
+    let bound = ReadyBinding::new(probe.clone());
     bound.bind(BindCtx::new(waiters.scope()));
     assert_eq!(run(ctx.ready(&bound)), Ok(()));
     let fresh = bound.clone();
@@ -1945,8 +1957,8 @@ fn fresh_clones_and_shared_aliases_retain_cache_hit_dependencies() {
     let shared = Rc::new(bound);
     let alias = shared.clone();
     assert_eq!(run(ctx.ready(&alias)), Ok(()));
-    let left = ServiceBinding::new(Forward(shared));
-    let right = ServiceBinding::new(Forward(alias));
+    let left = ReadyBinding::new(Forward(shared));
+    let right = ReadyBinding::new(Forward(alias));
     left.bind(BindCtx::new(waiters.scope()));
     right.bind(BindCtx::new(waiters.scope()));
     assert_eq!(run(ctx.ready(&left)), Ok(()));
@@ -1979,7 +1991,7 @@ fn shared_checker_retains_restarts_and_hands_off_pending_work() {
     let cancelled_ctx = Ctx::<(), State>::new(0, &cancelled_waiters, &st);
     let probe = Probe::new();
     probe.0.available.set(false);
-    let bound = Rc::new(ServiceBinding::new(probe.clone()));
+    let bound = Rc::new(ReadyBinding::new(probe.clone()));
     let forward = PipelineForward {
         inner: Rc::new(Pipeline::new(State(0), bound.clone())),
     };
@@ -2066,8 +2078,8 @@ fn raw_pending_checks_observe_notifications_without_caching() {
 }
 
 struct Pair {
-    a: ServiceBinding<Probe>,
-    b: ServiceBinding<Probe>,
+    a: ReadyBinding<Probe>,
+    b: ReadyBinding<Probe>,
     starts: Cell<usize>,
 }
 
@@ -2099,8 +2111,8 @@ fn pipeline_ancestor_invalidation_preserves_pending_siblings() {
     let b = Probe::new();
     b.0.available.set(false);
     let pair = Rc::new(Pair {
-        a: ServiceBinding::new(a.clone()),
-        b: ServiceBinding::new(b.clone()),
+        a: ReadyBinding::new(a.clone()),
+        b: ReadyBinding::new(b.clone()),
         starts: Cell::new(0),
     });
     let pl = Pipeline::new(State(0), pair.clone());
@@ -2139,9 +2151,9 @@ fn ancestor_invalidation_preserves_pending_siblings_and_rechecks_success() {
     let a = Probe::new();
     let b = Probe::new();
     b.0.available.set(false);
-    let parent = ServiceBinding::new(Pair {
-        a: ServiceBinding::new(a.clone()),
-        b: ServiceBinding::new(b.clone()),
+    let parent = ReadyBinding::new(Pair {
+        a: ReadyBinding::new(a.clone()),
+        b: ReadyBinding::new(b.clone()),
         starts: Cell::new(0),
     });
     parent.bind(BindCtx::new(waiters.scope()));
@@ -2184,7 +2196,7 @@ fn stale_success_and_errors_are_not_cached() {
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let probe = Probe::new();
     probe.0.invalidate_ready.set(true);
-    let bound = ServiceBinding::new(probe.clone());
+    let bound = ReadyBinding::new(probe.clone());
     bound.bind(BindCtx::new(waiters.scope()));
     assert_eq!(run(ctx.ready(&bound)), Ok(()));
     assert_eq!(probe.0.starts.get(), 2);
@@ -2216,7 +2228,7 @@ fn call_notifications_gate_the_next_call() {
     let waiters = WaitersRef::new();
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let probe = Probe::new();
-    let bound = ServiceBinding::new(probe.clone());
+    let bound = ReadyBinding::new(probe.clone());
     bound.bind(BindCtx::new(waiters.scope()));
     probe.0.invalidate_call.set(true);
     assert_eq!(run(ctx.call(&bound, 1)), Ok(1));
@@ -2241,7 +2253,7 @@ fn transparent_adapters_preserve_shared_readiness_and_mapped_state() {
     let waiters = WaitersRef::new();
     let ctx = Ctx::<(), ()>::new(0, &waiters, &());
     let probe = Probe::new();
-    let bound = Rc::new(ServiceBinding::new(probe.clone()));
+    let bound = Rc::new(ReadyBinding::new(probe.clone()));
     let mapped = crate::map_state(
         State(10),
         Box::new(bound.clone())
@@ -2252,8 +2264,8 @@ fn transparent_adapters_preserve_shared_readiness_and_mapped_state() {
     let alias = erased.clone();
     erased.bind(BindCtx::new(waiters.scope()));
     assert_eq!(run(ctx.call(&&erased, 1)), Ok(111));
-    let left = ServiceBinding::new(alias);
-    let right = ServiceBinding::new(crate::map_state(State(20), bound.clone()));
+    let left = ReadyBinding::new(alias);
+    let right = ReadyBinding::new(crate::map_state(State(20), bound.clone()));
     left.bind(BindCtx::new(waiters.scope()));
     Service::<(), usize>::bind(&right, BindCtx::new(waiters.scope()));
     assert_eq!(run(ctx.call(&left, 2)), Ok(112));
@@ -2273,7 +2285,7 @@ fn transparent_adapters_preserve_shared_readiness_and_mapped_state() {
     assert!(!left.scope.is_ready());
     assert!(!right.scope.is_ready());
 
-    let mapped = crate::map_state(State(30), ServiceBinding::new(probe.clone()));
+    let mapped = crate::map_state(State(30), ReadyBinding::new(probe.clone()));
     let fresh = mapped.clone();
     Service::<(), usize>::bind(&mapped, BindCtx::new(waiters.scope()));
     Service::<(), usize>::bind(&fresh, BindCtx::new(waiters.scope()));
@@ -2329,7 +2341,7 @@ fn erased_aliases_handoff_cancelled_checks_and_preserve_mapped_errors() {
     let erased: crate::boxed::BoxService<(), usize, usize, &str> =
         crate::boxed::service(crate::map_state(
             State(42),
-            ServiceBinding::new(probe.clone()).map_err(|_: Error| "unavailable"),
+            ReadyBinding::new(probe.clone()).map_err(|_: Error| "unavailable"),
         ));
     let shared = Rc::new(Pipeline::new((), erased));
     let erased = PipelineForward {
@@ -2404,8 +2416,8 @@ fn pipeline_forwarding_links_cached_children_and_shutdown_to_all_ancestors() {
     let probe = Probe::new();
     let pl = Rc::new(Pipeline::new(State(10), probe.clone()));
     assert_eq!(run(pl.ready()), Ok(()));
-    let parent = Rc::new(ServiceBinding::new(PipelineForward { inner: pl.clone() }));
-    let ancestor = Rc::new(ServiceBinding::new(parent.clone()));
+    let parent = Rc::new(ReadyBinding::new(PipelineForward { inner: pl.clone() }));
+    let ancestor = Rc::new(ReadyBinding::new(parent.clone()));
     ancestor.bind(BindCtx::new(waiters.scope()));
     assert_eq!(run(ctx.call(&ancestor, 1)), Ok(11));
     assert_eq!(probe.0.starts.get(), 1);
@@ -2468,10 +2480,10 @@ fn state_binding_forwarding_shares_readiness_without_losing_call_state() {
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let probe = Probe::new();
     let pl = PipelineState::new(probe.clone());
-    let left = ServiceBinding::new(BindingForward {
+    let left = ReadyBinding::new(BindingForward {
         inner: pl.bind_state(State(10)),
     });
-    let right = ServiceBinding::new(BindingForward {
+    let right = ReadyBinding::new(BindingForward {
         inner: pl.bind_state(State(20)),
     });
     left.bind(BindCtx::new(waiters.scope()));
@@ -2529,7 +2541,7 @@ fn shutdown_forwarding_uses_dependencies_bound_before_a_readiness_check() {
     let st = State(0);
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let probe = Probe::new();
-    let parent = ServiceBinding::new(ShutdownForward {
+    let parent = ReadyBinding::new(ShutdownForward {
         inner: Pipeline::new(State(10), probe.clone()),
     });
     parent.bind(BindCtx::new(waiters.scope()));
@@ -2570,10 +2582,10 @@ fn erased_binding_shutdown_subscriptions_reach_a_previously_ready_parent() {
     let st = State(0);
     let ctx = Ctx::<(), State>::new(0, &waiters, &st);
     let probe = Probe::new();
-    let parent = ServiceBinding::new(ShutdownOnly {
+    let parent = ReadyBinding::new(ShutdownOnly {
         inner: crate::boxed::service(crate::map_state(
             State(42),
-            ServiceBinding::new(probe.clone()),
+            ReadyBinding::new(probe.clone()),
         )),
     });
     parent.bind(BindCtx::new(waiters.scope()));
@@ -2603,7 +2615,7 @@ fn erased_mapped_and_apply_contexts_preserve_lifecycle_subscriptions() {
             ctx.call(req).await
         },
     );
-    let bound = ServiceBinding::new(crate::boxed::service(crate::map_state(State(42), applied)));
+    let bound = ReadyBinding::new(crate::boxed::service(crate::map_state(State(42), applied)));
     bound.bind(BindCtx::new(waiters.scope()));
     assert_eq!(run(ctx.ready(&bound)), Ok(()));
     probe.0.changed.notify();

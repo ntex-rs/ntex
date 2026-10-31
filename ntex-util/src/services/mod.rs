@@ -116,17 +116,39 @@ mod tests {
         }
     }
 
+    struct SharedPipeline(Pipeline<(), (), ()>);
+
+    impl Service<(), ()> for SharedPipeline {
+        type Res = ();
+        type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            self.0.bind_to(&ctx);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
+            self.0.ready().await
+        }
+
+        async fn call(&self, req: (), _: Ctx<'_, Self>) -> Result<(), ()> {
+            self.0.call(req).await
+        }
+    }
+
     fn shared<S>(service: S, bypass: bool, probe: Rc<Probe>) -> [Pipeline<(), (), ()>; 2]
     where
         S: Service<(), (), Res = (), Error = ()> + 'static,
     {
-        let service = Rc::new(Dispatch {
-            service,
-            bypass,
-            callback: ReadyCallback::new(move |_| {
-                assert!(!probe.panic_on_notify.replace(false), "notification panic");
-            }),
-        });
+        let service = Rc::new(SharedPipeline(Pipeline::new(
+            (),
+            Dispatch {
+                service,
+                bypass,
+                callback: ReadyCallback::new(move |_| {
+                    assert!(!probe.panic_on_notify.replace(false), "notification panic");
+                }),
+            },
+        )));
         [
             Pipeline::new((), service.clone()),
             Pipeline::new((), service),
@@ -171,7 +193,7 @@ mod tests {
     /// STATEMENT: Limiter capacity notifications do not discard independent inner readiness.
     ///
     /// HOW:
-    /// - Exercise both limiter types through two roots and count readiness checks across calls.
+    /// - Link two roots to one owning pipeline for each limiter and count readiness checks across calls.
     /// - Notify inner pending and ready transitions and verify each causes a new shared check.
     #[ntex::test]
     async fn inner_cache_survives_capacity_notifications() {
@@ -205,7 +227,8 @@ mod tests {
     /// STATEMENT: Shared limiter capacity wakes all roots and is released on cancellation or error.
     ///
     /// HOW:
-    /// - Park calls on two roots, cancel the active call, and verify both registered wakers fire.
+    /// - Link two roots to one limiter pipeline and park a call on each.
+    /// - Cancel the active call and verify both registered wakers fire.
     /// - Complete the successor and an erroring call while checking active counts and cached readiness.
     #[ntex::test]
     async fn shared_capacity_wakes_all_roots_and_releases() {
@@ -256,6 +279,7 @@ mod tests {
     /// STATEMENT: Legacy readiness bypass still checks inner readiness and releases limiter permits.
     ///
     /// HOW:
+    /// - Keep the bypass inside the shared limiter pipeline reached by two linked roots.
     /// - Cancel a call waiting on inner readiness and verify a second root can proceed.
     /// - Exercise inner readiness errors and panics, then verify subsequent calls succeed.
     #[ntex::test]
@@ -297,6 +321,7 @@ mod tests {
     /// STATEMENT: Notification and inner-call panics cannot leak limiter permits or strand waiters.
     ///
     /// HOW:
+    /// - Share each limiter through one owning pipeline linked to two outer roots.
     /// - Catch entry-notification and call panics for both limiters and verify later calls succeed.
     /// - Panic during active-call cancellation under bypass and verify release and waiter wakeup.
     #[ntex::test]

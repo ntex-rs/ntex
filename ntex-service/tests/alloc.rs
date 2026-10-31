@@ -19,7 +19,7 @@ use std::{
 };
 
 use ntex_service::{
-    BindCtx, Ctx, Pipeline, ReadyCallback, ReadyNotifier, Service, ServiceBinding, ServiceCaller,
+    BindCtx, Ctx, Pipeline, ReadyBinding, ReadyCallback, ReadyNotifier, Service, ServiceCaller,
     boxed, map_state, pipeline::PipelineState, ready,
 };
 
@@ -170,12 +170,12 @@ fn probe() -> (Probe, Rc<Gate>) {
 #[test]
 fn unbound_service_binding_does_not_allocate() {
     let (svc, gate) = probe();
-    let binding = expect_allocs("unbound service binding", 0, || ServiceBinding::new(svc));
+    let binding = expect_allocs("unbound service binding", 0, || ReadyBinding::new(svc));
     assert_eq!(gate.checks.get(), 0);
     drop(binding);
     let (svc, gate) = probe();
     let binding = expect_allocs("unbound tagged service binding", 0, || {
-        ServiceBinding::with_data(svc, usize::MAX)
+        ReadyBinding::with_data(svc, usize::MAX)
     });
     assert_eq!(gate.checks.get(), 0);
     drop(binding);
@@ -238,7 +238,7 @@ fn graph_notifications_do_not_allocate() {
             .map(|id| {
                 Pipeline::new(
                     10,
-                    Forward(ServiceBinding::with_data(
+                    Forward(ReadyBinding::with_data(
                         Probe(svc.0.clone(), svc.1.clone()),
                         id + 1,
                     )),
@@ -597,7 +597,7 @@ impl<S: Service<usize, usize>> Service<usize, usize> for Forward<S> {
 #[test]
 fn cached_context_and_wrapper_forwarding_add_no_allocations() {
     let (svc, gate) = probe();
-    let child = ready(map_state(7usize, ServiceBinding::new(svc))).map(|res| res + 1);
+    let child = ready(map_state(7usize, ReadyBinding::new(svc))).map(|res| res + 1);
     let pl = Pipeline::new(10, Forward(child));
     assert_eq!(complete(pl.ready()), Ok(()));
     for _ in 0..4 {
@@ -906,7 +906,7 @@ fn benchmark_readiness() {
     let (svc, gate) = probe();
     let mapped = Pipeline::new(
         10,
-        Forward(ready(map_state(7usize, ServiceBinding::new(svc))).map(|res| res + 1)),
+        Forward(ready(map_state(7usize, ReadyBinding::new(svc))).map(|res| res + 1)),
     );
     complete(mapped.ready()).unwrap();
     bench("mapped-child/call/cache-hit", ITERATIONS, || {
