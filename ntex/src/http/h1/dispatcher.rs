@@ -235,8 +235,34 @@ where
                 return Poll::Ready(self.ctl_svc_disconnect(ServiceDisconnectReason::Shutdown));
             }
 
-            log::trace!("{}: Trying to read http message", self.io.tag());
             self.release_write_timer();
+            match self.service.poll_ready(cx) {
+                Poll::Ready(Ok(())) => (),
+                Poll::Ready(Err(err)) => return Poll::Ready(self.ctl_error(err)),
+                Poll::Pending => {
+                    self.timers.suspend_read(&self.io);
+                    match ready!(self.io.poll_read_pause(cx)) {
+                        IoStatusUpdate::PeerGone(err) => {
+                            return Poll::Ready(self.ctl_peer_gone(err));
+                        }
+                        IoStatusUpdate::WriteBackpressure => {
+                            if let Err(err) = ready!(self.poll_flush_timed(cx)) {
+                                return Poll::Ready(self.ctl_peer_gone(Some(err)));
+                            }
+                        }
+                        IoStatusUpdate::Timeout => {
+                            if self.timers.active.is_write()
+                                && let Err(err) = self.write_timer_expired()
+                            {
+                                return Poll::Ready(self.ctl_peer_gone(Some(err)));
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            log::trace!("{}: Trying to read http message", self.io.tag());
             if !self.io.is_filter_paused() {
                 self.timers.resume_read(&self.io);
             }
@@ -1120,7 +1146,9 @@ mod tests {
     use crate::http::h1::control::Reason;
     use crate::http::{KeepAlive, ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base, testing::IoTest};
-    use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
+    use crate::service::{
+        BindCtx, Ctx, IntoService, ReadyNotifier, Service, cfg::SharedCfg, fn_service,
+    };
     use crate::time::{Millis, Seconds, sleep, timeout};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{client::ClientCodec, codec::Decoder};
@@ -1133,6 +1161,282 @@ mod tests {
             sleep(Millis(step)).await;
             left -= step;
         }
+    }
+
+    #[derive(Default)]
+    struct ReadinessService {
+        available: Cell<bool>,
+        failed: Cell<bool>,
+        calls: Cell<usize>,
+        completed: Cell<usize>,
+        changed: ReadyNotifier,
+    }
+
+    impl Service<(), Request> for ReadinessService {
+        type Res = Response;
+        type Error = io::Error;
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(&self.changed);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), io::Error> {
+            poll_fn(|_| {
+                if self.failed.get() {
+                    Poll::Ready(Err(io::Error::other("readiness failed")))
+                } else if self.available.get() {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await
+        }
+
+        async fn call(&self, mut req: Request, _: Ctx<'_, Self>) -> Result<Response, io::Error> {
+            self.calls.set(self.calls.get() + 1);
+            self.available.set(false);
+            self.changed.notify();
+            let mut body = BytesMut::new();
+            while let Some(chunk) = req.payload().recv().await {
+                body.extend_from_slice(&chunk.unwrap());
+            }
+            self.completed.set(self.completed.get() + 1);
+            Ok(Response::Ok().body(body.freeze()))
+        }
+    }
+
+    /// STATEMENT: HTTP/1 pauses transport reads until application readiness permits a new request.
+    ///
+    /// HOW:
+    /// - Start an unavailable service, poll the dispatcher, and send a complete request.
+    /// - Verify the bytes stay in the transport, with no decoded input or running read timer.
+    /// - Notify readiness, drive the dispatcher, and verify a successful response.
+    /// - Repeat after the first call invalidates readiness to cover keep-alive reuse.
+    #[crate::rt_test]
+    async fn test_readiness_pauses_request_reads() {
+        const REQUEST: &str = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let service = Rc::new(ReadinessService::default());
+        let mut h1 = h1(server, service.clone());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        for calls in 1..=2 {
+            client.write(REQUEST);
+            sleep(Millis(50)).await;
+            assert_eq!(h1.inner.io.read_dst_size(), 0);
+            client.remote_buffer(|buf| assert_eq!(&buf[..], REQUEST.as_bytes()));
+            assert!(matches!(h1.st, State::ReadRequest));
+            assert!(!h1.inner.io.timer_handle().is_set());
+            assert_eq!(service.calls.get(), calls - 1);
+
+            service.available.set(true);
+            service.changed.notify();
+            timeout(
+                Seconds(1),
+                poll_fn(|cx| {
+                    assert!(Pin::new(&mut h1).poll(cx).is_pending());
+                    if service.calls.get() == calls {
+                        Poll::Ready(())
+                    } else {
+                        Poll::Pending
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            let response = timeout(Seconds(1), client.read()).await.unwrap().unwrap();
+            assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        }
+    }
+
+    /// STATEMENT: Pending readiness preserves a partial HTTP/1 head and suspends its read budget.
+    ///
+    /// HOW:
+    /// - Start parsing a head with a ready service and record its read-rate progress.
+    /// - Invalidate readiness, send the final blank line, and verify it stays unread.
+    /// - Verify the read timer is suspended without losing progress, then resume and complete.
+    #[crate::rt_test]
+    async fn test_readiness_pauses_partial_header_timer() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let service = Rc::new(ReadinessService::default());
+        service.available.set(true);
+        let mut h1 = h1(server, service.clone());
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.codec.is_reading_hdrs());
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
+        let progress = h1.inner.timers.progress;
+
+        service.available.set(false);
+        service.changed.notify();
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(!h1.inner.io.timer_handle().is_set());
+        assert!(h1.inner.timers.suspended.is_some());
+        assert_eq!(h1.inner.timers.progress, progress);
+        client.write("\r\n");
+        sleep(Millis(50)).await;
+        client.remote_buffer(|buf| assert_eq!(&buf[..], b"\r\n"));
+        assert_eq!(service.calls.get(), 0);
+
+        service.available.set(true);
+        service.changed.notify();
+        timeout(
+            Seconds(1),
+            poll_fn(|cx| {
+                assert!(Pin::new(&mut h1).poll(cx).is_pending());
+                if service.calls.get() == 1 {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        let response = timeout(Seconds(1), client.read()).await.unwrap().unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    /// STATEMENT: HTTP/1 readiness gates buffered new requests without blocking an active payload.
+    ///
+    /// HOW:
+    /// - Start a body-reading handler that consumes readiness and leave its payload incomplete.
+    /// - Send its body followed by another request in the same transport write.
+    /// - Verify the body response completes while the next head remains buffered and undispatched.
+    /// - Notify recovery and verify the second request completes.
+    #[crate::rt_test]
+    async fn test_readiness_does_not_block_active_payload() {
+        const NEXT: &str = "GET /next HTTP/1.1\r\nhost: localhost\r\n\r\n";
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let service = Rc::new(ReadinessService::default());
+        service.available.set(true);
+        let mut h1 = h1(server, service.clone());
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(service.calls.get(), 1);
+        assert!(!service.available.get());
+
+        client.write(format!("body{NEXT}"));
+        timeout(
+            Seconds(1),
+            poll_fn(|cx| {
+                assert!(Pin::new(&mut h1).poll(cx).is_pending());
+                if service.completed.get() == 1 {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        let response = timeout(Seconds(1), client.read()).await.unwrap().unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with(b"body"));
+        assert_eq!(service.calls.get(), 1);
+        assert!(matches!(h1.st, State::ReadRequest));
+        assert_eq!(h1.inner.io.read_dst_size(), NEXT.len());
+
+        service.available.set(true);
+        service.changed.notify();
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(service.calls.get(), 2);
+        let response = timeout(Seconds(1), client.read()).await.unwrap().unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    /// STATEMENT: HTTP/1 reports readiness failures without first receiving a request head.
+    ///
+    /// HOW:
+    /// - Fail readiness immediately or after an initial pending check, without sending a request.
+    /// - Verify the dispatcher completes with a service close reason and an HTTP `500` response.
+    /// - Assert the application handler is never called.
+    #[crate::rt_test]
+    async fn test_readiness_error_before_request() {
+        for pending in [false, true] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(1024);
+            let service = Rc::new(ReadinessService::default());
+            let mut h1 = h1(server, service.clone());
+            if pending {
+                assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+            }
+            service.failed.set(true);
+            service.changed.notify();
+            timeout(Seconds(5), poll_fn(|cx| Pin::new(&mut h1).poll(cx)))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(h1.inner.io.close_reason(), Some(CloseReason::Service));
+            assert!(client.read_any().starts_with(b"HTTP/1.1 500"));
+            assert_eq!(service.calls.get(), 0);
+        }
+    }
+
+    /// STATEMENT: Pending HTTP/1 readiness does not prevent shutdown or reported transport closure.
+    ///
+    /// HOW:
+    /// - Pause the dispatcher on an unavailable application service.
+    /// - Request service shutdown or close the transport while readiness remains pending.
+    /// - Verify dispatch terminates and the connection closes without an application call.
+    #[crate::rt_test]
+    async fn test_readiness_pause_handles_shutdown_and_close() {
+        for shutdown in [false, true] {
+            let (client, server) = IoTest::create();
+            let service = Rc::new(ReadinessService::default());
+            let mut h1 = h1(server, service.clone());
+            assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+            if shutdown {
+                h1.inner.config.shutdown();
+            } else {
+                h1.inner.io.close();
+            }
+            timeout(Seconds(5), poll_fn(|cx| Pin::new(&mut h1).poll(cx)))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(client.is_closed());
+            assert_eq!(service.calls.get(), 0);
+        }
+    }
+
+    /// STATEMENT: Write backpressure remains bounded while HTTP/1 request reads await readiness.
+    ///
+    /// HOW:
+    /// - Pause on an unavailable service, queue output, and prevent the peer from draining it.
+    /// - Verify the write timer starts, trigger its expiry, and require a write-timeout close.
+    #[crate::rt_test]
+    async fn test_readiness_pause_preserves_write_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let service = Rc::new(ReadinessService::default());
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(
+                server,
+                SharedCfg::new("SVC").add(HttpServiceConfig::new().set_write_timeout(Seconds(1))),
+            ),
+            Pipeline::new((), service.clone()),
+            None,
+            DispatcherConfig::default(),
+        );
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        h1.inner.io.encode_slice(&vec![b'x'; 128 * 1024]).unwrap();
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Write);
+        h1.inner.io.notify_timeout();
+        timeout(Seconds(5), poll_fn(|cx| Pin::new(&mut h1).poll(cx)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(h1.inner.io.close_reason(), Some(CloseReason::WriteTimeout));
+        assert_eq!(service.calls.get(), 0);
     }
 
     #[crate::rt_test]

@@ -11,8 +11,8 @@ use crate::time::Seconds;
 pub(super) struct Timers {
     pub(super) active: Timer,
     pub(super) progress: ReadProgress,
-    /// Unused part of the period of a read timer suspended by a filter
-    /// pause, see [`Timers::suspend_read`].
+    /// Unused part of the period of a read timer suspended by a filter or
+    /// service-readiness pause, see [`Timers::suspend_read`].
     pub(super) suspended: Option<Seconds>,
     /// The write timer is not armed while the filter chain is paused.
     pub(super) write_suspended: bool,
@@ -273,8 +273,8 @@ impl Timers {
     }
 
     /// Suspends a running client, keep-alive or request-head timer while
-    /// the filter chain pauses reading, the peer is not charged for the
-    /// pause. Payload timing is paused.
+    /// filters or service readiness pause reading, the peer is not charged
+    /// for the pause. Payload timing is paused.
     ///
     /// The unused part of the current period is kept.
     pub(super) fn suspend_read(&mut self, io: &IoRef) {
@@ -291,8 +291,8 @@ impl Timers {
         }
     }
 
-    /// Resumes a read timer suspended by a filter pause, a period that
-    /// expired before suspending is checked on resume.
+    /// Resumes a suspended read timer. A period that expired before
+    /// suspending is checked on resume.
     ///
     /// Paused payload timing resumes with the next decoded payload.
     pub(super) fn resume_read(&mut self, io: &IoRef) {

@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
+use std::{cell::Cell, convert::Infallible, future::poll_fn, rc::Rc, task::Poll};
 use std::{future::ready, io, io::Read, io::Write, net};
 
 use futures_util::{future::FutureExt, stream::StreamExt, stream::once};
@@ -9,6 +10,7 @@ use ntex::http::{
     HttpService, HttpServiceConfig, KeepAlive, Method, Request, Response, StatusCode, Version,
 };
 use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
+use ntex::service::{BindCtx, Ctx, ReadyNotifier};
 use ntex::time::{Millis, Seconds, sleep};
 use ntex::{SharedCfg, channel::oneshot, fn_service, rt, util::Bytes, web::error};
 
@@ -1334,51 +1336,228 @@ async fn test_h1_gracefull_shutdown_2() {
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
 
-async fn h2_initialized_handler_readiness(path: &'static str) {
-    use std::{cell::Cell, convert::Infallible, future::poll_fn, rc::Rc, task::Poll};
+struct HandlerReadinessGate {
+    available: Cell<bool>,
+    changed: ReadyNotifier,
+    binds: Arc<AtomicUsize>,
+    pending: Arc<AtomicBool>,
+}
 
+impl ntex::Service<(), ntex::web::WebRequest<()>> for HandlerReadinessGate {
+    type Res = ntex::web::WebRequest<()>;
+    type Error = Infallible;
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.binds.fetch_add(1, Ordering::Relaxed);
+        ctx.subscribe(&self.changed);
+    }
+
+    async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Infallible> {
+        poll_fn(|_| {
+            if self.available.get() {
+                Poll::Ready(Ok(()))
+            } else {
+                self.pending.store(true, Ordering::Release);
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    async fn call(
+        &self,
+        req: ntex::web::WebRequest<()>,
+        _: Ctx<'_, Self>,
+    ) -> Result<Self::Res, Infallible> {
+        Ok(req)
+    }
+}
+
+async fn h1_initialized_handler_readiness(path: &'static str) {
+    use std::io::{BufRead, BufReader};
+
+    use ntex::service::{apply_fn_factory, fn_factory};
+    use ntex::web::{self, App, WebRequest};
+
+    fn read_response(stream: &mut BufReader<net::TcpStream>) {
+        let mut line = String::new();
+        stream.read_line(&mut line).unwrap();
+        assert_eq!(line, "HTTP/1.1 200 OK\r\n");
+        loop {
+            line.clear();
+            assert_ne!(stream.read_line(&mut line).unwrap(), 0);
+            if line == "\r\n" {
+                break;
+            }
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let heads = Arc::new(AtomicUsize::new(0));
+    let binds = Arc::new(AtomicUsize::new(0));
+    let blocked = Arc::new(AtomicBool::new(false));
+    let pending = Arc::new(AtomicBool::new(false));
+    let calls2 = calls.clone();
+    let heads2 = heads.clone();
+    let binds2 = binds.clone();
+    let blocked2 = blocked.clone();
+    let pending2 = pending.clone();
+    let (block_tx, block_rx) = ::oneshot::channel();
+    let (resume_tx, resume_rx) = ::oneshot::channel();
+    let control = Arc::new(Mutex::new(Some((block_rx, resume_rx))));
+
+    let srv = test_server(async move |_| {
+        let gate = Rc::new(HandlerReadinessGate {
+            available: Cell::new(true),
+            changed: ReadyNotifier::new(),
+            binds: binds2.clone(),
+            pending: pending2.clone(),
+        });
+        let handler = ntex::factory(fn_factory({
+            let gate = gate.clone();
+            async move |(): &()| Ok::<_, Infallible>(gate.clone())
+        }))
+        .map(|req: WebRequest<()>| req.into_response(Response::Ok()));
+        let app = App::new()
+            .service(web::service("/blocked").build(handler.clone()))
+            .service(web::resource("/ready").to(async || Response::Ok()))
+            .service(
+                web::resource("/resource")
+                    .route(web::get().to(async || Response::Ok()))
+                    .default_service(handler.clone()),
+            )
+            .default_service(handler);
+
+        let blocked = blocked2.clone();
+        let (block_rx, resume_rx) = control.lock().unwrap().take().unwrap();
+        rt::spawn(async move {
+            if block_rx.await.is_ok() {
+                gate.available.set(false);
+                gate.changed.notify();
+                blocked.store(true, Ordering::Release);
+                if resume_rx.await.is_ok() {
+                    gate.available.set(true);
+                    gate.changed.notify();
+                }
+            }
+        });
+
+        let calls = calls2.clone();
+        let heads = heads2.clone();
+        HttpService::h1(apply_fn_factory(app, async move |req: Request, ctx| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            ctx.call(req).await
+        }))
+        .control(async move |event: Control<_, _>| {
+            if matches!(event, Control::Request(_)) {
+                heads.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok::<_, Infallible>(event.ack())
+        })
+    });
+
+    let stream = net::TcpStream::connect(srv.addr()).unwrap();
+    stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
+    let mut stream = BufReader::new(stream);
+    for path in ["/ready", path, "/ready"] {
+        write!(
+            stream.get_mut(),
+            "GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n"
+        )
+        .unwrap();
+        read_response(&mut stream);
+    }
+    assert_eq!(binds.load(Ordering::Relaxed), 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+    assert_eq!(heads.load(Ordering::Relaxed), 3);
+
+    block_tx.send(()).unwrap();
+    wait_for(|| blocked.load(Ordering::Acquire)).await.unwrap();
+    stream
+        .get_mut()
+        .write_all(
+            b"GET /ready HTTP/1.1\r\nhost: localhost\r\n\r\n\
+              GET /ready HTTP/1.1\r\nhost: localhost\r\n\r\n",
+        )
+        .unwrap();
+    wait_for(|| pending.load(Ordering::Acquire))
+        .await
+        .expect("the dispatcher did not check the initialized handler's readiness");
+    stream
+        .get_ref()
+        .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+        .unwrap();
+    let result = stream.read(&mut [0; 1]);
+    assert!(
+        matches!(result, Err(ref err)
+            if matches!(err.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)),
+        "an unrelated request responded or disconnected while {path} was not ready: {result:?}"
+    );
+    assert_eq!(
+        heads.load(Ordering::Relaxed),
+        3,
+        "the dispatcher decoded a new request while {path} was not ready"
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        3,
+        "the dispatcher entered the application while {path} was not ready"
+    );
+
+    resume_tx.send(()).unwrap();
+    stream
+        .get_ref()
+        .set_read_timeout(Some(TEN_SECONDS))
+        .unwrap();
+    read_response(&mut stream);
+    read_response(&mut stream);
+    assert_eq!(heads.load(Ordering::Relaxed), 5);
+    assert_eq!(calls.load(Ordering::Relaxed), 5);
+    assert_eq!(binds.load(Ordering::Relaxed), 1);
+}
+
+/// STATEMENT: An initialized route's readiness gates HTTP/1 dispatch for other routes.
+///
+/// HOW:
+/// - Initialize resource zero and a healthy route on one HTTP/1.1 connection, then cache readiness.
+/// - Notify that resource zero is unavailable and pipeline two requests to the healthy route.
+/// - Observe pending readiness with no response, new `Control::Request`, or application entry.
+/// - Notify recovery and verify both queued requests complete without rebinding the handler.
+#[ntex::test]
+async fn test_h1_initialized_route_readiness_blocks_dispatch() {
+    h1_initialized_handler_readiness("/blocked").await;
+}
+
+/// STATEMENT: An initialized default handler's readiness gates HTTP/1 dispatch to matching routes.
+///
+/// HOW:
+/// - Initialize the fallback and a healthy route on one HTTP/1.1 connection, then cache readiness.
+/// - Notify that the fallback is unavailable and pipeline two requests to the healthy route.
+/// - Observe pending readiness with no response, new `Control::Request`, or application entry.
+/// - Notify recovery and verify both queued requests complete without rebinding the handler.
+#[ntex::test]
+async fn test_h1_initialized_default_readiness_blocks_dispatch() {
+    h1_initialized_handler_readiness("/missing").await;
+}
+
+/// STATEMENT: An initialized resource fallback gates HTTP/1 dispatch even when never selected.
+///
+/// HOW:
+/// - Match a resource's `GET` route to initialize its fallback without invoking it.
+/// - Mark that fallback unavailable and pipeline two requests to an unrelated healthy route.
+/// - Observe pending readiness with no response, new `Control::Request`, or application entry.
+/// - Notify recovery and verify both requests complete without rebinding the fallback.
+#[ntex::test]
+async fn test_h1_initialized_resource_fallback_readiness_blocks_dispatch() {
+    h1_initialized_handler_readiness("/resource").await;
+}
+
+async fn h2_initialized_handler_readiness(path: &'static str) {
     use ntex::http::HeaderMap;
-    use ntex::service::{BindCtx, Ctx, ReadyNotifier, apply_fn_factory, fn_factory};
+    use ntex::service::{apply_fn_factory, fn_factory};
     use ntex::time::timeout;
     use ntex::web::{self, App, WebRequest};
     use ntex_h2::{MessageKind, client::SimpleClient};
-
-    struct Gate {
-        available: Cell<bool>,
-        changed: ReadyNotifier,
-        binds: Arc<AtomicUsize>,
-        pending: Arc<AtomicBool>,
-    }
-
-    impl ntex::Service<(), WebRequest<()>> for Gate {
-        type Res = WebRequest<()>;
-        type Error = Infallible;
-
-        fn bind(&self, ctx: BindCtx<'_>) {
-            self.binds.fetch_add(1, Ordering::Relaxed);
-            ctx.subscribe(&self.changed);
-        }
-
-        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Infallible> {
-            poll_fn(|_| {
-                if self.available.get() {
-                    Poll::Ready(Ok(()))
-                } else {
-                    self.pending.store(true, Ordering::Release);
-                    Poll::Pending
-                }
-            })
-            .await
-        }
-
-        async fn call(
-            &self,
-            req: WebRequest<()>,
-            _: Ctx<'_, Self>,
-        ) -> Result<WebRequest<()>, Infallible> {
-            Ok(req)
-        }
-    }
 
     let calls = Arc::new(AtomicUsize::new(0));
     let binds = Arc::new(AtomicUsize::new(0));
@@ -1393,7 +1572,7 @@ async fn h2_initialized_handler_readiness(path: &'static str) {
     let control = Arc::new(Mutex::new(Some((block_rx, resume_rx))));
 
     let srv = test_server(async move |_| {
-        let gate = Rc::new(Gate {
+        let gate = Rc::new(HandlerReadinessGate {
             available: Cell::new(true),
             changed: ReadyNotifier::new(),
             binds: binds2.clone(),
@@ -1407,6 +1586,11 @@ async fn h2_initialized_handler_readiness(path: &'static str) {
         let app = App::new()
             .service(web::service("/blocked").build(handler.clone()))
             .service(web::resource("/ready").to(async || Response::Ok()))
+            .service(
+                web::resource("/resource")
+                    .route(web::get().to(async || Response::Ok()))
+                    .default_service(handler.clone()),
+            )
             .default_service(handler);
 
         let blocked = blocked2.clone();
@@ -1507,6 +1691,18 @@ async fn test_h2_initialized_route_readiness_blocks_dispatch() {
 #[ntex::test]
 async fn test_h2_initialized_default_readiness_blocks_dispatch() {
     h2_initialized_handler_readiness("/missing").await;
+}
+
+/// STATEMENT: An initialized resource fallback gates HTTP/2 dispatch even when never selected.
+///
+/// HOW:
+/// - Match a resource's `GET` route to initialize its fallback without invoking it.
+/// - Mark that fallback unavailable and send two requests to an unrelated healthy route.
+/// - Observe pending readiness, no responses, and no application entry until recovery is notified.
+/// - Verify both queued requests complete without rebinding the fallback.
+#[ntex::test]
+async fn test_h2_initialized_resource_fallback_readiness_blocks_dispatch() {
+    h2_initialized_handler_readiness("/resource").await;
 }
 
 /// STATEMENT: HTTP/2 keeps delivering request payloads while the application is at capacity.
