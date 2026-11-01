@@ -1,5 +1,9 @@
 # Changes
 
+## [4.6.1] - 2026-11-01
+
+* Add `QueryItem::into_inner()` to take ownership of the query result
+
 ## [4.6.0] - 2026-10-27
 
 * Store owned runtime-local wake handles in tagged I/O waiters, reusable wake

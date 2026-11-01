@@ -1,7 +1,7 @@
 //! Buffer and shutdown operations shared by client and server rustls sessions.
 use std::{any, io, io::IoSlice, io::Write, ops::Deref, ops::DerefMut, task::Poll};
 
-use ntex_bytes::{BufMut, BytePages};
+use ntex_bytes::{BufMut, BytePages, Bytes};
 use ntex_io::{FilterBuf, types};
 use tls_rustls::{CipherSuite, ConnectionCommon, ProtocolVersion, SideData};
 
@@ -42,11 +42,14 @@ where
             Some(Box::new(PeerCertChain(chain.to_vec())))
         } else if id == any::TypeId::of::<PeerCertDer>() {
             let cert = self.session.peer_certificates()?.first()?;
-            Some(Box::new(PeerCertDer(cert.to_vec())))
+            Some(Box::new(PeerCertDer(Bytes::copy_from_slice(cert))))
         } else if id == any::TypeId::of::<PeerCertChainDer>() {
             let chain = self.session.peer_certificates().filter(|c| !c.is_empty())?;
             Some(Box::new(PeerCertChainDer(
-                chain.iter().map(|cert| cert.to_vec()).collect(),
+                chain
+                    .iter()
+                    .map(|cert| Bytes::copy_from_slice(cert))
+                    .collect(),
             )))
         } else if id == any::TypeId::of::<TlsVersion>() {
             let version = match self.session.protocol_version()? {

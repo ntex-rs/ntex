@@ -194,13 +194,10 @@ mod tests {
         assert!(server.query::<PeerCert>().as_ref().is_none());
         let server_cert = client.query::<PeerCert>().as_ref().map(|c| c.0.clone());
         assert_eq!(server_cert.as_deref(), Some(identity().der()));
-        let der = client.query::<PeerCertDer>().as_ref().map(|c| c.0.clone());
+        let der = client.query::<PeerCertDer>().into_inner().map(|c| c.0);
         assert_eq!(der.as_deref(), Some(identity().der()));
-        let chain = client
-            .query::<PeerCertChainDer>()
-            .as_ref()
-            .map(|c| c.0.clone());
-        assert_eq!(chain, Some(vec![identity().der().to_vec()]));
+        let chain = client.query::<PeerCertChainDer>().into_inner().map(|c| c.0);
+        assert_eq!(chain, Some(vec![Bytes::copy_from_slice(identity().der())]));
         assert!(server.query::<PeerCertDer>().as_ref().is_none());
         assert!(server.query::<PeerCertChainDer>().as_ref().is_none());
 
@@ -306,11 +303,8 @@ mod tests {
         let (client, server) = connected(&config, client_cfg, "localhost").await;
         let peer = server.query::<PeerCert>().as_ref().map(|c| c.0.clone());
         assert_eq!(peer.as_deref(), Some(cert.der()));
-        let chain = server
-            .query::<PeerCertChainDer>()
-            .as_ref()
-            .map(|c| c.0.clone());
-        assert_eq!(chain, Some(vec![cert.der().to_vec()]));
+        let chain = server.query::<PeerCertChainDer>().into_inner().map(|c| c.0);
+        assert_eq!(chain, Some(vec![Bytes::copy_from_slice(cert.der())]));
         client
             .send(Bytes::from_static(b"hello"), &BytesCodec)
             .await
@@ -371,13 +365,10 @@ mod tests {
         .await;
         let (client, _server) = (client.unwrap(), server.unwrap());
 
-        let cert = client.query::<PeerCertDer>().as_ref().map(|c| c.0.clone());
-        assert_eq!(cert.as_ref(), Some(&der[0]));
-        let chain = client
-            .query::<PeerCertChainDer>()
-            .as_ref()
-            .map(|c| c.0.clone());
-        assert_eq!(chain.as_deref(), Some(&der[..]));
+        let cert = client.query::<PeerCertDer>().into_inner().unwrap();
+        assert_eq!(cert.0, der[0][..]);
+        let chain = client.query::<PeerCertChainDer>().into_inner().unwrap();
+        assert_eq!(chain.0, der);
 
         // the client sends its issuer
         let config = ServerConfig::new(identity())
@@ -403,13 +394,10 @@ mod tests {
         )
         .await;
         let (_client, server) = (client.unwrap(), server.unwrap());
-        let cert = server.query::<PeerCertDer>().as_ref().map(|c| c.0.clone());
-        assert_eq!(cert.as_ref(), Some(&der[0]));
-        let chain = server
-            .query::<PeerCertChainDer>()
-            .as_ref()
-            .map(|c| c.0.clone());
-        assert_eq!(chain.as_deref(), Some(&der[..2]));
+        let cert = server.query::<PeerCertDer>().into_inner().unwrap();
+        assert_eq!(cert.0, der[0][..]);
+        let chain = server.query::<PeerCertChainDer>().into_inner().unwrap();
+        assert_eq!(chain.0, der[..2]);
     }
 
     /// STATEMENT: Failed certificate verification, non-TLS input, and handshake disconnects produce errors.

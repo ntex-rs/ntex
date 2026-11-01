@@ -62,6 +62,13 @@ impl<T: any::Any> QueryItem<T> {
         self.item.as_ref().and_then(|v| v.downcast_ref().copied())
     }
 
+    /// Moves the queried value out of this item.
+    ///
+    /// Returns `None` if no provider returned a value of type `T`.
+    pub fn into_inner(self) -> Option<T> {
+        self.item.and_then(|v| v.downcast().ok()).map(|v| *v)
+    }
+
     /// Borrows the queried value.
     ///
     /// Returns `None` if no provider returned a value of type `T`.

@@ -13,7 +13,7 @@
 use std::{any, borrow::ToOwned, cell::Cell, cell::UnsafeCell, cmp, io, ptr, task::Poll};
 
 use foreign_types_shared::ForeignType;
-use ntex_bytes::{BufMut, BytePages, BytesMut};
+use ntex_bytes::{BufMut, BytePages, Bytes, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
 use openssl_sys as ffi;
 use tls_openssl::ssl::{self, NameType, SslStream};
@@ -215,17 +215,17 @@ impl FilterLayer for SslFilter {
             )))
         } else if id == any::TypeId::of::<PeerCertDer>() {
             let cert = self.ssl().peer_certificate()?;
-            Some(Box::new(PeerCertDer(cert.to_der().ok()?)))
+            Some(Box::new(PeerCertDer(Bytes::from(cert.to_der().ok()?))))
         } else if id == any::TypeId::of::<PeerCertChainDer>() {
             let ssl = self.ssl();
             let mut chain = Vec::new();
             for cert in ssl.peer_cert_chain().into_iter().flatten() {
-                chain.push(cert.to_der().ok()?);
+                chain.push(Bytes::from(cert.to_der().ok()?));
             }
             // the chain does not include the client's certificate on the
             // server side
             if let Some(cert) = ssl.peer_certificate() {
-                let cert = cert.to_der().ok()?;
+                let cert = Bytes::from(cert.to_der().ok()?);
                 if chain.first() != Some(&cert) {
                     chain.insert(0, cert);
                 }
@@ -240,7 +240,7 @@ impl FilterLayer for SslFilter {
             Some(Box::new(Servername(name.to_string())))
         } else if id == any::TypeId::of::<PskIdentity>() {
             let psk_id = self.ssl().psk_identity()?;
-            Some(Box::new(PskIdentity(psk_id.to_vec())))
+            Some(Box::new(PskIdentity(Bytes::copy_from_slice(psk_id))))
         } else if id == any::TypeId::of::<TlsVersion>() {
             let version = match self.ssl().version2()? {
                 ssl::SslVersion::TLS1 => TlsVersion::Tls10,
@@ -709,10 +709,10 @@ pub(crate) mod tests {
         )
         .await;
         for io in [client.unwrap(), server.unwrap()] {
-            let cert = io.query::<PeerCertDer>();
-            assert_eq!(cert.as_ref().map(|c| &c.0), Some(&der[0]));
-            let chain = io.query::<PeerCertChainDer>();
-            assert_eq!(chain.as_ref().map(|c| &c.0[..]), Some(&der[..]));
+            let cert = io.query::<PeerCertDer>().into_inner().unwrap();
+            assert_eq!(cert.0, der[0][..]);
+            let chain = io.query::<PeerCertChainDer>().into_inner().unwrap();
+            assert_eq!(chain.0, der);
         }
     }
 
