@@ -25,7 +25,9 @@ mod types;
 mod utils;
 
 pub use self::config::TlsConfig;
-pub use self::types::{PeerCertChainDer, PeerCertDer, PskIdentity, Servername};
+pub use self::types::{
+    PeerCertChainDer, PeerCertDer, PskIdentity, Servername, TlsCipher, TlsVersion,
+};
 
 /// Sets the per-worker soft limit on concurrent TLS handshakes.
 ///
