@@ -2,10 +2,10 @@ use std::{any, io, io::IoSlice, io::Write, ops::Deref, ops::DerefMut, task::Poll
 
 use ntex_bytes::{BufMut, BytePages};
 use ntex_io::{FilterBuf, types};
-use tls_rustls::{ConnectionCommon, SideData};
+use tls_rustls::{CipherSuite, ConnectionCommon, ProtocolVersion, SideData};
 
 use super::{PeerCert, PeerCertChain};
-use crate::{PeerCertChainDer, PeerCertDer};
+use crate::{PeerCertChainDer, PeerCertDer, TlsCipher, TlsVersion};
 
 pub(crate) struct Stream<'a, S> {
     pub(crate) session: &'a mut S,
@@ -40,6 +40,21 @@ where
             Some(Box::new(PeerCertChainDer(
                 chain.iter().map(|cert| cert.to_vec()).collect(),
             )))
+        } else if id == any::TypeId::of::<TlsVersion>() {
+            let version = match self.session.protocol_version()? {
+                ProtocolVersion::TLSv1_0 => TlsVersion::Tls10,
+                ProtocolVersion::TLSv1_1 => TlsVersion::Tls11,
+                ProtocolVersion::TLSv1_2 => TlsVersion::Tls12,
+                ProtocolVersion::TLSv1_3 => TlsVersion::Tls13,
+                _ => return None,
+            };
+            Some(Box::new(version))
+        } else if id == any::TypeId::of::<TlsCipher>() {
+            let suite = self.session.negotiated_cipher_suite()?.suite();
+            Some(Box::new(TlsCipher {
+                id: u16::from(suite),
+                name: cipher_name(suite),
+            }))
         } else {
             None
         }
@@ -196,4 +211,16 @@ fn write_pages<SD: SideData>(
 
     src.advance_to(n);
     Ok(n)
+}
+
+/// IANA name of the cipher suite, rustls prefixes TLS 1.3 suites with `TLS13_`
+fn cipher_name(suite: CipherSuite) -> Option<&'static str> {
+    match suite {
+        CipherSuite::TLS13_AES_128_GCM_SHA256 => Some("TLS_AES_128_GCM_SHA256"),
+        CipherSuite::TLS13_AES_256_GCM_SHA384 => Some("TLS_AES_256_GCM_SHA384"),
+        CipherSuite::TLS13_CHACHA20_POLY1305_SHA256 => Some("TLS_CHACHA20_POLY1305_SHA256"),
+        CipherSuite::TLS13_AES_128_CCM_SHA256 => Some("TLS_AES_128_CCM_SHA256"),
+        CipherSuite::TLS13_AES_128_CCM_8_SHA256 => Some("TLS_AES_128_CCM_8_SHA256"),
+        _ => suite.as_str(),
+    }
 }

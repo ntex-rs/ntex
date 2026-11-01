@@ -40,7 +40,7 @@ mod tests {
     use tls_rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme};
 
     use super::*;
-    use crate::{MAX_SSL_ACCEPT_COUNTER, Servername, TlsConfig};
+    use crate::{MAX_SSL_ACCEPT_COUNTER, Servername, TlsCipher, TlsConfig, TlsVersion};
 
     const CERT: &[u8] = include_bytes!("../../examples/cert.pem");
     const KEY: &[u8] = include_bytes!("../../examples/key.pem");
@@ -152,6 +152,56 @@ mod tests {
         )
         .await;
         (client.unwrap(), server.unwrap())
+    }
+
+    #[ntex::test]
+    async fn version_and_cipher() {
+        let (client, server) = handshake_pair(false, "localhost").await;
+        assert_eq!(
+            client.query::<TlsVersion>().as_ref(),
+            Some(&TlsVersion::Tls13)
+        );
+        assert_eq!(
+            server.query::<TlsVersion>().as_ref(),
+            Some(&TlsVersion::Tls13)
+        );
+        let cipher = *client.query::<TlsCipher>().as_ref().unwrap();
+        assert_eq!(server.query::<TlsCipher>().as_ref(), Some(&cipher));
+        assert_eq!(cipher.id >> 8, 0x13);
+        assert!(cipher.name.unwrap().starts_with("TLS_"));
+        assert!(!cipher.name.unwrap().starts_with("TLS13_"));
+
+        // tls 1.2 suite names are the IANA names
+        let cfg = ClientConfig::builder_with_provider(
+            tls_rustls::crypto::ring::default_provider().into(),
+        )
+        .with_protocol_versions(&[&tls_rustls::version::TLS12])
+        .unwrap()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoVerify))
+        .with_no_client_auth();
+        let (client, server) = pair();
+        let (client, server) = join(
+            TlsClientFilter::create(
+                Io::new(client, SharedCfg::new("CLI")),
+                Arc::new(cfg),
+                ServerName::try_from("localhost".to_string()).unwrap(),
+            ),
+            TlsServerFilter::create(
+                Io::new(server, SharedCfg::new("SRV")),
+                server_config(false),
+                Millis(5_000),
+            ),
+        )
+        .await;
+        let (client, server) = (client.unwrap(), server.unwrap());
+        assert_eq!(
+            client.query::<TlsVersion>().as_ref(),
+            Some(&TlsVersion::Tls12)
+        );
+        let cipher = *server.query::<TlsCipher>().as_ref().unwrap();
+        assert_eq!(client.query::<TlsCipher>().as_ref(), Some(&cipher));
+        assert!(cipher.name.unwrap().starts_with("TLS_ECDHE_"));
     }
 
     #[ntex::test]

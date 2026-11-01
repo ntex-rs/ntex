@@ -26,3 +26,32 @@ pub struct PeerCertDer(pub Vec<u8>);
 /// filters.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PeerCertChainDer(pub Vec<Vec<u8>>);
+
+/// The negotiated TLS protocol version.
+///
+/// Used in conjunction with [`ntex_io::Filter::query`], supported by the
+/// openssl and rustls filters.
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TlsVersion {
+    /// TLS 1.0
+    Tls10,
+    /// TLS 1.1
+    Tls11,
+    /// TLS 1.2
+    Tls12,
+    /// TLS 1.3
+    Tls13,
+}
+
+/// The negotiated cipher suite.
+///
+/// Used in conjunction with [`ntex_io::Filter::query`], supported by the
+/// rustls filter and by the openssl filter with OpenSSL 1.1.1 or newer.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TlsCipher {
+    /// IANA cipher suite id, e.g. `0x1301`
+    pub id: u16,
+    /// IANA cipher suite name, e.g. `TLS_AES_128_GCM_SHA256`
+    pub name: Option<&'static str>,
+}

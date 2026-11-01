@@ -8,7 +8,7 @@ use openssl_sys as ffi;
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
 
-use crate::{PeerCertChainDer, PeerCertDer, PskIdentity, Servername};
+use crate::{PeerCertChainDer, PeerCertDer, PskIdentity, Servername, TlsCipher, TlsVersion};
 
 mod connect;
 pub use self::connect::SslConnector;
@@ -79,6 +79,21 @@ impl SslFilter {
         // the stream exists only inside `with_buffers`, which never calls back
         // into the filter.
         unsafe { (*self.inner.get()).ssl() }
+    }
+
+    #[cfg(ntex_openssl_cipher)]
+    fn cipher(&self) -> Option<TlsCipher> {
+        let cipher = self.ssl().current_cipher()?;
+        Some(TlsCipher {
+            id: u16::from_be_bytes(cipher.protocol_id()),
+            name: cipher.standard_name(),
+        })
+    }
+
+    #[cfg(not(ntex_openssl_cipher))]
+    #[allow(clippy::unused_self)]
+    fn cipher(&self) -> Option<TlsCipher> {
+        None
     }
 
     fn with_buffers<F, R>(&self, buf: &FilterBuf<'_>, f: F) -> R
@@ -178,6 +193,17 @@ impl FilterLayer for SslFilter {
         } else if id == any::TypeId::of::<PskIdentity>() {
             let psk_id = self.ssl().psk_identity()?;
             Some(Box::new(PskIdentity(psk_id.to_vec())))
+        } else if id == any::TypeId::of::<TlsVersion>() {
+            let version = match self.ssl().version2()? {
+                ssl::SslVersion::TLS1 => TlsVersion::Tls10,
+                ssl::SslVersion::TLS1_1 => TlsVersion::Tls11,
+                ssl::SslVersion::TLS1_2 => TlsVersion::Tls12,
+                ssl::SslVersion::TLS1_3 => TlsVersion::Tls13,
+                _ => return None,
+            };
+            Some(Box::new(version))
+        } else if id == any::TypeId::of::<TlsCipher>() {
+            Some(Box::new(self.cipher()?))
         } else {
             None
         }
@@ -355,7 +381,19 @@ fn new_stream<F>(io: &Io<F>, ssl: ssl::Ssl) -> io::Result<SslStream<IoInner>> {
     Ok(SslStream::new(ssl, inner)?)
 }
 
-/// Create openssl connector filter factory
+/// Add the ssl filter to the io stream and run a server handshake
+///
+/// Unlike [`SslAcceptor`], the caller provides a prepared `Ssl`, so per
+/// connection settings such as the certificate can be selected before the
+/// handshake. No handshake timeout or concurrency limit is applied.
+pub async fn accept<F: Filter>(
+    io: Io<F>,
+    ssl: ssl::Ssl,
+) -> Result<Io<Layer<SslFilter, F>>, io::Error> {
+    handshake(io, ssl, true).await
+}
+
+/// Add the ssl filter to the io stream and run a client handshake
 pub async fn connect<F: Filter>(
     io: Io<F>,
     ssl: ssl::Ssl,
@@ -589,6 +627,84 @@ pub(crate) mod tests {
             assert_eq!(cert.as_ref().map(|c| &c.0), Some(&der[0]));
             let chain = io.query::<PeerCertChainDer>();
             assert_eq!(chain.as_ref().map(|c| &c.0[..]), Some(&der[..]));
+        }
+    }
+
+    /// `accept` uses the provided `Ssl` instead of the acceptor's context.
+    #[ntex::test]
+    async fn accept_with_ssl() {
+        let [leaf, intermediate, _] = cert_chain();
+
+        let mut acceptor = ssl::SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
+        acceptor.set_private_key(&leaf.1).unwrap();
+        acceptor.set_certificate(&leaf.0).unwrap();
+        acceptor.set_verify_callback(SslVerifyMode::PEER, |_, _| true);
+        let acceptor = acceptor.build();
+
+        let mut connector = ssl::SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify(SslVerifyMode::NONE);
+        connector.set_private_key(&intermediate.1).unwrap();
+        connector.set_certificate(&intermediate.0).unwrap();
+        let ssl = connector
+            .build()
+            .configure()
+            .unwrap()
+            .into_ssl("localhost")
+            .unwrap();
+
+        let (client, server) = pair();
+        let (client, server) = join(
+            connect(Io::new(client, SharedCfg::new("CLI")), ssl),
+            accept(
+                Io::new(server, SharedCfg::new("SRV")),
+                ssl::Ssl::new(acceptor.context()).unwrap(),
+            ),
+        )
+        .await;
+        let (client, server) = (client.unwrap(), server.unwrap());
+
+        let cert = |c: &X509| c.to_der().unwrap();
+        assert_eq!(
+            client.query::<PeerCert>().as_ref().map(|c| cert(&c.0)),
+            Some(cert(&leaf.0))
+        );
+        assert_eq!(
+            server.query::<PeerCert>().as_ref().map(|c| cert(&c.0)),
+            Some(cert(&intermediate.0))
+        );
+        assert_eq!(
+            server.query::<Servername>().as_ref().map(|s| s.0.as_str()),
+            Some("localhost")
+        );
+
+        for io in [&client, &server] {
+            assert_eq!(io.query::<TlsVersion>().as_ref(), Some(&TlsVersion::Tls13));
+        }
+        #[cfg(ntex_openssl_cipher)]
+        {
+            let cipher = *client.query::<TlsCipher>().as_ref().unwrap();
+            assert_eq!(server.query::<TlsCipher>().as_ref(), Some(&cipher));
+            // TLS 1.3 suites are 0x13XX
+            assert_eq!(cipher.id >> 8, 0x13);
+            assert!(cipher.name.unwrap().starts_with("TLS_AES_"));
+        }
+    }
+
+    #[ntex::test]
+    async fn tls12_version_and_cipher() {
+        let (client, server) = handshake_pair().await;
+        for io in [&client, &server] {
+            assert_eq!(io.query::<TlsVersion>().as_ref(), Some(&TlsVersion::Tls12));
+        }
+        #[cfg(ntex_openssl_cipher)]
+        {
+            let cipher = *client.query::<TlsCipher>().as_ref().unwrap();
+            assert_eq!(server.query::<TlsCipher>().as_ref(), Some(&cipher));
+            // tls 1.2 names are IANA names, not openssl names
+            let name = cipher.name.unwrap();
+            assert!(name.starts_with("TLS_ECDHE_RSA_WITH_"));
+            assert_ne!(ssl::cipher_name(name), "(NONE)");
+            assert_ne!(cipher.id >> 8, 0x13);
         }
     }
 
