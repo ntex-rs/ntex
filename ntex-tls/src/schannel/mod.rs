@@ -22,7 +22,7 @@ mod connect;
 mod context;
 
 use self::context::{Context, Decrypted, HandshakeState};
-use crate::{PeerCertChainDer, PeerCertDer, Servername};
+use crate::{PeerCertChainDer, PeerCertDer, Servername, TlsCipher, TlsVersion};
 
 pub use self::accept::TlsAcceptor;
 pub use self::cert::{CertStoreLocation, Certificate};
@@ -338,6 +338,10 @@ impl FilterLayer for SchannelFilter {
             Some(Box::new(PeerCertChainDer(inner.ctx.peer_cert_chain()?)))
         } else if id == any::TypeId::of::<Servername>() {
             Some(Box::new(Servername(inner.ctx.servername.clone()?)))
+        } else if id == any::TypeId::of::<TlsVersion>() {
+            Some(Box::new(inner.ctx.protocol_version()?))
+        } else if id == any::TypeId::of::<TlsCipher>() {
+            Some(Box::new(inner.ctx.cipher()?))
         } else {
             None
         }
