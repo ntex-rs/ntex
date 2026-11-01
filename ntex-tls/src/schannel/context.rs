@@ -6,7 +6,7 @@
 use std::{borrow::Cow, sync::Arc};
 use std::{cmp, io, mem, ptr, slice};
 
-use ntex_bytes::{BufMut, BytesMut};
+use ntex_bytes::{BufMut, Bytes, BytesMut};
 use windows_sys::Win32::Foundation::{
     CRYPT_E_REVOKED, SEC_E_CERT_EXPIRED, SEC_E_CERT_UNKNOWN, SEC_E_INCOMPLETE_MESSAGE, SEC_E_OK,
     SEC_E_UNTRUSTED_ROOT, SEC_E_WRONG_PRINCIPAL, SEC_I_CONTEXT_EXPIRED, SEC_I_CONTINUE_NEEDED,
@@ -613,7 +613,7 @@ impl Context {
     /// Issuers are ordered by encoded subject/issuer names, not by signature or
     /// trust validation. Unrelated certificates are retained after the matched
     /// issuer sequence.
-    pub(super) fn peer_cert_chain(&self) -> Option<Vec<Vec<u8>>> {
+    pub(super) fn peer_cert_chain(&self) -> Option<Vec<Bytes>> {
         /// Owned certificate and names used to order the peer's store entries.
         struct Entry {
             /// Complete encoded certificate.
@@ -661,7 +661,12 @@ impl Context {
             chain.push(certs.remove(idx));
         }
         chain.extend(certs);
-        Some(chain.into_iter().map(|cert| cert.der).collect())
+        Some(
+            chain
+                .into_iter()
+                .map(|cert| Bytes::from(cert.der))
+                .collect(),
+        )
     }
 
     /// The negotiated protocol version.

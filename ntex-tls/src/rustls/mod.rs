@@ -285,15 +285,18 @@ mod tests {
         );
         let cert = client.query::<PeerCert<'_>>().as_ref().unwrap().0.to_vec();
         assert_eq!(
-            client.query::<crate::PeerCertDer>().as_ref().map(|c| &c.0),
-            Some(&cert)
+            client
+                .query::<crate::PeerCertDer>()
+                .into_inner()
+                .map(|c| c.0),
+            Some(cert.clone().into())
         );
         assert_eq!(
             client
                 .query::<crate::PeerCertChainDer>()
-                .as_ref()
-                .map(|c| &c.0),
-            Some(&vec![cert])
+                .into_inner()
+                .map(|c| c.0),
+            Some(vec![cert.into()])
         );
         assert!(client.query::<Servername>().as_ref().is_none());
         assert_eq!(

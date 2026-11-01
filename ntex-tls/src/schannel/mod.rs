@@ -19,6 +19,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::{any, cell::UnsafeCell, io, mem, ptr, task::Poll};
 
+use ntex_bytes::Bytes;
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
 use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
 use windows_sys::Win32::Foundation::SEC_E_OK;
@@ -394,7 +395,7 @@ impl FilterLayer for SchannelFilter {
         } else if id == any::TypeId::of::<PeerCert>() {
             Some(Box::new(PeerCert(inner.ctx.peer_cert()?)))
         } else if id == any::TypeId::of::<PeerCertDer>() {
-            Some(Box::new(PeerCertDer(inner.ctx.peer_cert()?)))
+            Some(Box::new(PeerCertDer(Bytes::from(inner.ctx.peer_cert()?))))
         } else if id == any::TypeId::of::<PeerCertChainDer>() {
             Some(Box::new(PeerCertChainDer(inner.ctx.peer_cert_chain()?)))
         } else if id == any::TypeId::of::<Servername>() {

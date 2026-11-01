@@ -4,6 +4,8 @@
 //! or the negotiated session has no corresponding information. Reading a
 //! certificate is not a substitute for configuring certificate verification.
 
+use ntex_bytes::Bytes;
+
 /// The pre-shared-key identity reported by OpenSSL.
 ///
 /// Available only when OpenSSL exposes an identity for the session. The rustls
@@ -11,7 +13,7 @@
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PskIdentity(
     /// Identity bytes, not the secret key.
-    pub Vec<u8>,
+    pub Bytes,
 );
 
 /// The DNS server name carried in the TLS SNI extension.
@@ -32,7 +34,7 @@ pub struct Servername(
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PeerCertDer(
     /// DER-encoded leaf certificate.
-    pub Vec<u8>,
+    pub Bytes,
 );
 
 /// The certificates sent by the peer in DER encoding, the end-entity
@@ -45,7 +47,7 @@ pub struct PeerCertDer(
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PeerCertChainDer(
     /// DER-encoded certificates, with the peer's leaf first.
-    pub Vec<Vec<u8>>,
+    pub Vec<Bytes>,
 );
 
 /// The negotiated TLS protocol version.

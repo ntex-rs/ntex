@@ -1,5 +1,10 @@
 # Changes
 
+## [4.6.0] - 2026-11-01
+
+* `PeerCertDer` and `PskIdentity` hold `Bytes`, `PeerCertChainDer` holds
+  `Vec<Bytes>` (breaking)
+
 ## [4.5.0] - 2026-11-01
 
 * openssl: add `accept()` to run a server handshake with a prebuilt `Ssl`
