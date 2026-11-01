@@ -1,11 +1,11 @@
 # Changes
 
-## [4.5.0] - 2026-11-xx
+## [4.5.0] - 2026-11-01
 
 * openssl: add `accept()` to run a server handshake with a prebuilt `Ssl`
 
 * Add library-neutral `TlsVersion` and `TlsCipher` (IANA id and name) io
-  queries, supported by the openssl and rustls filters
+  queries, supported by the openssl, rustls and schannel filters
 
 ## [4.4.0] - 2026-10-21
 

@@ -81,7 +81,7 @@ mod tests {
 
     use super::*;
     use crate::schannel::{Certificate, ClientConfig, PeerCert, connect};
-    use crate::{PeerCertChainDer, PeerCertDer, Servername};
+    use crate::{PeerCertChainDer, PeerCertDer, Servername, TlsCipher, TlsVersion};
 
     const PFX: &[u8] = include_bytes!("../../examples/identity.pfx");
 
@@ -171,6 +171,15 @@ mod tests {
             Some("localhost")
         );
         assert!(client.query::<Servername>().as_ref().is_none());
+        let version = client.query::<TlsVersion>().as_ref().copied();
+        assert!(matches!(
+            version,
+            Some(TlsVersion::Tls12 | TlsVersion::Tls13)
+        ));
+        assert_eq!(server.query::<TlsVersion>().as_ref().copied(), version);
+        let cipher = client.query::<TlsCipher>().as_ref().copied().unwrap();
+        assert!(cipher.name.is_some());
+        assert_eq!(server.query::<TlsCipher>().as_ref(), Some(&cipher));
         // no client certificate requested
         assert!(server.query::<PeerCert>().as_ref().is_none());
         let server_cert = client.query::<PeerCert>().as_ref().map(|c| c.0.clone());
@@ -715,17 +724,32 @@ mod tests {
             ntex::service(TlsAcceptor::new(config.clone())).and_then(async |io: SchannelIo| {
                 let proto = io.query::<HttpProtocol>().as_ref().copied();
                 let name = io.query::<Servername>().as_ref().map(|s| s.0.clone());
+                let version = io.query::<TlsVersion>().as_ref().copied();
+                let cipher = io.query::<TlsCipher>().as_ref().copied();
                 let reply = format!("{proto:?} {name:?}");
                 let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
                 io.send(msg, &BytesCodec).await.unwrap();
                 io.send(Bytes::from(reply), &BytesCodec).await.unwrap();
+                io.send(
+                    Bytes::from(format!(
+                        "|{version:?} {:?} {:?}",
+                        cipher.map(|c| c.id),
+                        cipher.and_then(|c| c.name)
+                    )),
+                    &BytesCodec,
+                )
+                .await
+                .unwrap();
                 io.shutdown().await.unwrap();
                 Ok::<_, io::Error>(())
             })
         });
         let addr = srv.addr();
 
-        for version in [&tls_rustls::version::TLS12, &tls_rustls::version::TLS13] {
+        for (version, expected) in [
+            (&tls_rustls::version::TLS12, TlsVersion::Tls12),
+            (&tls_rustls::version::TLS13, TlsVersion::Tls13),
+        ] {
             let reply = std::thread::spawn(move || {
                 let mut cfg = rustls_config(version);
                 cfg.alpn_protocols = vec![b"h2".to_vec()];
@@ -742,14 +766,22 @@ mod tests {
                 let mut reply = Vec::new();
                 // the server closes with close_notify
                 stream.read_to_end(&mut reply).unwrap();
-                (stream.conn.protocol_version(), reply)
+                let suite = stream.conn.negotiated_cipher_suite().unwrap().suite();
+                (stream.conn.protocol_version(), suite, reply)
             })
             .join()
             .unwrap();
             assert_eq!(reply.0, Some(version.version));
+            // rustls names TLS 1.3 suites `TLS13_*`
+            let name = reply.1.as_str().map(|n| n.replace("TLS13_", "TLS_"));
+            assert!(name.is_some());
             assert_eq!(
-                String::from_utf8(reply.1).unwrap(),
-                "helloSome(Http2) Some(\"localhost\")"
+                String::from_utf8(reply.2).unwrap(),
+                format!(
+                    "helloSome(Http2) Some(\"localhost\")|{:?} {:?} {name:?}",
+                    Some(expected),
+                    Some(u16::from(reply.1)),
+                )
             );
         }
     }

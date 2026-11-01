@@ -17,12 +17,15 @@ use windows_sys::Win32::Security::Authentication::Identity::{
     QueryContextAttributesW, SCHANNEL_ALERT, SCHANNEL_ALERT_TOKEN, SCHANNEL_SHUTDOWN,
     SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA, SECBUFFER_EMPTY, SECBUFFER_EXTRA,
     SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER, SECBUFFER_TOKEN, SECBUFFER_VERSION,
-    SECPKG_ATTR_APPLICATION_PROTOCOL, SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES,
-    SECURITY_NATIVE_DREP, SecApplicationProtocolNegotiationStatus_Success, SecBuffer,
-    SecBufferDesc, SecPkgContext_ApplicationProtocol, SecPkgContext_StreamSizes,
-    SslGetServerIdentity, TLS1_ALERT_BAD_CERTIFICATE, TLS1_ALERT_CERTIFICATE_EXPIRED,
-    TLS1_ALERT_CERTIFICATE_REVOKED, TLS1_ALERT_FATAL, TLS1_ALERT_HANDSHAKE_FAILURE,
-    TLS1_ALERT_UNKNOWN_CA,
+    SECPKG_ATTR_APPLICATION_PROTOCOL, SECPKG_ATTR_CIPHER_INFO, SECPKG_ATTR_CONNECTION_INFO,
+    SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES, SECPKGCONTEXT_CIPHERINFO_V1,
+    SECURITY_NATIVE_DREP, SP_PROT_TLS1_0_CLIENT, SP_PROT_TLS1_0_SERVER, SP_PROT_TLS1_1_CLIENT,
+    SP_PROT_TLS1_1_SERVER, SP_PROT_TLS1_2_CLIENT, SP_PROT_TLS1_2_SERVER, SP_PROT_TLS1_3_CLIENT,
+    SP_PROT_TLS1_3_SERVER, SecApplicationProtocolNegotiationStatus_Success, SecBuffer,
+    SecBufferDesc, SecPkgContext_ApplicationProtocol, SecPkgContext_CipherInfo,
+    SecPkgContext_ConnectionInfo, SecPkgContext_StreamSizes, SslGetServerIdentity,
+    TLS1_ALERT_BAD_CERTIFICATE, TLS1_ALERT_CERTIFICATE_EXPIRED, TLS1_ALERT_CERTIFICATE_REVOKED,
+    TLS1_ALERT_FATAL, TLS1_ALERT_HANDSHAKE_FAILURE, TLS1_ALERT_UNKNOWN_CA,
 };
 use windows_sys::Win32::Security::Credentials::SecHandle;
 use windows_sys::Win32::Security::Cryptography::{
@@ -30,6 +33,7 @@ use windows_sys::Win32::Security::Cryptography::{
 };
 
 use super::{ClientConfig, Credentials, ServerConfig, sspi_error};
+use crate::{TlsCipher, TlsVersion};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Decrypted {
@@ -602,6 +606,47 @@ impl Context {
         chain.extend(certs);
         Some(chain.into_iter().map(|cert| cert.der).collect())
     }
+
+    /// The negotiated protocol version.
+    pub(super) fn protocol_version(&self) -> Option<TlsVersion> {
+        let mut info = SecPkgContext_ConnectionInfo::default();
+        let status = unsafe {
+            QueryContextAttributesW(
+                &raw const self.ctxt,
+                SECPKG_ATTR_CONNECTION_INFO,
+                (&raw mut info).cast(),
+            )
+        };
+        if status == SEC_E_OK {
+            tls_version(info.dwProtocol)
+        } else {
+            None
+        }
+    }
+
+    /// The negotiated cipher suite.
+    pub(super) fn cipher(&self) -> Option<TlsCipher> {
+        let mut info = SecPkgContext_CipherInfo {
+            dwVersion: SECPKGCONTEXT_CIPHERINFO_V1,
+            ..Default::default()
+        };
+        let status = unsafe {
+            QueryContextAttributesW(
+                &raw const self.ctxt,
+                SECPKG_ATTR_CIPHER_INFO,
+                (&raw mut info).cast(),
+            )
+        };
+        if status != SEC_E_OK {
+            return None;
+        }
+        let id = u16::try_from(info.dwCipherSuite).ok()?;
+        Some(TlsCipher {
+            id,
+            name: cipher_name(id),
+        })
+    }
+
     pub(super) fn alpn_protocol(&self) -> Option<&[u8]> {
         self.negotiated_alpn.as_deref()
     }
@@ -679,6 +724,70 @@ const MAX_RECORD: usize = 16 * 1024;
 /// The largest handshake data held back until a message is complete
 const MAX_HELD_HANDSHAKE: usize = 64 * 1024;
 const MAX_HELD_HANDSHAKE_RECORDS: usize = 1024;
+
+/// Protocol version of `SecPkgContext_ConnectionInfo::dwProtocol`.
+fn tls_version(protocol: u32) -> Option<TlsVersion> {
+    match protocol {
+        SP_PROT_TLS1_0_CLIENT | SP_PROT_TLS1_0_SERVER => Some(TlsVersion::Tls10),
+        SP_PROT_TLS1_1_CLIENT | SP_PROT_TLS1_1_SERVER => Some(TlsVersion::Tls11),
+        SP_PROT_TLS1_2_CLIENT | SP_PROT_TLS1_2_SERVER => Some(TlsVersion::Tls12),
+        SP_PROT_TLS1_3_CLIENT | SP_PROT_TLS1_3_SERVER => Some(TlsVersion::Tls13),
+        _ => None,
+    }
+}
+
+/// IANA name of the cipher suites supported by Schannel.
+fn cipher_name(id: u16) -> Option<&'static str> {
+    Some(match id {
+        0x0001 => "TLS_RSA_WITH_NULL_MD5",
+        0x0002 => "TLS_RSA_WITH_NULL_SHA",
+        0x0004 => "TLS_RSA_WITH_RC4_128_MD5",
+        0x0005 => "TLS_RSA_WITH_RC4_128_SHA",
+        0x0009 => "TLS_RSA_WITH_DES_CBC_SHA",
+        0x000A => "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+        0x0012 => "TLS_DHE_DSS_WITH_DES_CBC_SHA",
+        0x0013 => "TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA",
+        0x002F => "TLS_RSA_WITH_AES_128_CBC_SHA",
+        0x0032 => "TLS_DHE_DSS_WITH_AES_128_CBC_SHA",
+        0x0033 => "TLS_DHE_RSA_WITH_AES_128_CBC_SHA",
+        0x0035 => "TLS_RSA_WITH_AES_256_CBC_SHA",
+        0x0038 => "TLS_DHE_DSS_WITH_AES_256_CBC_SHA",
+        0x0039 => "TLS_DHE_RSA_WITH_AES_256_CBC_SHA",
+        0x003B => "TLS_RSA_WITH_NULL_SHA256",
+        0x003C => "TLS_RSA_WITH_AES_128_CBC_SHA256",
+        0x003D => "TLS_RSA_WITH_AES_256_CBC_SHA256",
+        0x0040 => "TLS_DHE_DSS_WITH_AES_128_CBC_SHA256",
+        0x006A => "TLS_DHE_DSS_WITH_AES_256_CBC_SHA256",
+        0x009C => "TLS_RSA_WITH_AES_128_GCM_SHA256",
+        0x009D => "TLS_RSA_WITH_AES_256_GCM_SHA384",
+        0x009E => "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",
+        0x009F => "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",
+        0x00A8 => "TLS_PSK_WITH_AES_128_GCM_SHA256",
+        0x00A9 => "TLS_PSK_WITH_AES_256_GCM_SHA384",
+        0x00AE => "TLS_PSK_WITH_AES_128_CBC_SHA256",
+        0x00AF => "TLS_PSK_WITH_AES_256_CBC_SHA384",
+        0x00B0 => "TLS_PSK_WITH_NULL_SHA256",
+        0x00B1 => "TLS_PSK_WITH_NULL_SHA384",
+        0x1301 => "TLS_AES_128_GCM_SHA256",
+        0x1302 => "TLS_AES_256_GCM_SHA384",
+        0x1303 => "TLS_CHACHA20_POLY1305_SHA256",
+        0xC009 => "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+        0xC00A => "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+        0xC013 => "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+        0xC014 => "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+        0xC023 => "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
+        0xC024 => "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384",
+        0xC027 => "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+        0xC028 => "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384",
+        0xC02B => "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+        0xC02C => "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+        0xC02F => "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        0xC030 => "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        0xCCA8 => "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+        0xCCA9 => "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+        _ => return None,
+    })
+}
 
 /// Alert sent for a failed handshake.
 fn alert_number(status: windows_sys::core::HRESULT) -> u32 {
