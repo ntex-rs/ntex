@@ -996,6 +996,11 @@ mod tests {
     const CONTENT_APPLICATION_DATA: u8 = 23;
     const HANDSHAKE_CLIENT_HELLO: u8 = 1;
 
+    /// STATEMENT: Decrypted payload and extra-byte counts are selected by buffer type, not position.
+    ///
+    /// HOW:
+    /// - Supply reordered security buffers and check the extracted `hello` payload and extra-byte count.
+    /// - Supply an empty data buffer without extras and check for no payload and zero extra bytes.
     #[test]
     fn test_decrypted_parts_by_type() {
         let mut payload = *b"hello";
@@ -1081,6 +1086,12 @@ mod tests {
         msg
     }
 
+    /// STATEMENT: SNI parsing accepts a complete leading `ClientHello`, including fragmented records.
+    ///
+    /// HOW:
+    /// - Split a generated `ClientHello` at several boundaries and check both parsing and context SNI.
+    /// - Check incomplete, misplaced, wrong-type, oversized, and additional handshake messages are rejected.
+    /// - Check non-handshake or incomplete trailing records do not hide an otherwise valid server name.
     #[test]
     fn test_client_hello_servername() {
         let msg = client_hello_message("example.com");
@@ -1128,6 +1139,11 @@ mod tests {
         assert!(client_hello_servername(&[&hello[..], &extra].concat()).is_none());
     }
 
+    /// STATEMENT: Single-record handshakes avoid copying and allocate only an extracted server name.
+    ///
+    /// HOW:
+    /// - Vary record versions, message counts, and trailing application data while counting allocations.
+    /// - Check coalescing leaves bytes unchanged with no allocations, and SNI parsing allocates only on success.
     #[test]
     fn test_single_record_handshake_allocations() {
         let msg = client_hello_message("example.com");
@@ -1157,6 +1173,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Fragmented handshakes are copied only once the full message is available.
+    ///
+    /// HOW:
+    /// - Check each incomplete prefix stays unchanged, returns no completed length, and allocates nothing.
+    /// - Check the complete fragmented message is repacked into one record with exactly one allocation.
     #[test]
     fn test_fragmented_handshake_allocations() {
         let msg = message(HANDSHAKE_CLIENT_HELLO, 300);
@@ -1177,6 +1198,11 @@ mod tests {
         assert_eq!(count, 1, "a complete message is repacked with one copy");
     }
 
+    /// STATEMENT: Certificate validation statuses map to the appropriate TLS alerts.
+    ///
+    /// HOW:
+    /// - Compare alert mappings for untrusted, expired, revoked, wrong-principal, and unknown certificates.
+    /// - Check an internal error falls back to the handshake-failure alert.
     #[test]
     fn test_alert_number() {
         for (status, alert) in [
@@ -1194,6 +1220,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Handshake-prefix length stops before non-handshake records while retaining partial handshake input.
+    ///
+    /// HOW:
+    /// - Combine handshake, change-cipher-spec, alert, and application records and compare prefix lengths.
+    /// - Check incomplete handshake headers and payloads remain included in the reported prefix.
     #[test]
     fn test_handshake_records_len() {
         let hs = record(CONTENT_HANDSHAKE, b"hello");
@@ -1223,6 +1254,11 @@ mod tests {
         assert_eq!(handshake_records_len(&src), src.len());
     }
 
+    /// STATEMENT: Coalescing waits for a complete fragmented message and preserves following records.
+    ///
+    /// HOW:
+    /// - Check every prefix, passing an incomplete first record through but holding incomplete messages.
+    /// - Check complete input becomes one record and trailing change-cipher-spec and partial-header bytes survive.
     #[test]
     fn test_coalesce_waits_for_complete_message() {
         let hello = message(HANDSHAKE_CLIENT_HELLO, 300);
@@ -1250,6 +1286,11 @@ mod tests {
         assert_eq!(coalesce(&src), (Some(full.len()), expected));
     }
 
+    /// STATEMENT: Coalescing separates a completed message from a partial following message.
+    ///
+    /// HOW:
+    /// - Combine a complete message with the first 20 bytes of the next across several records.
+    /// - Check the completed length and preserved partial record, then repeat with a single input record.
     #[test]
     fn test_coalesce_partial_next_message() {
         let mut data = message(HANDSHAKE_CLIENT_HELLO, 100);
@@ -1268,6 +1309,11 @@ mod tests {
         assert_eq!(buf.len(), first + 25);
     }
 
+    /// STATEMENT: Large handshake messages are repacked into records bounded by `MAX_RECORD`.
+    ///
+    /// HOW:
+    /// - Fragment a 40,000-byte message at irregular boundaries and coalesce it.
+    /// - Compare the returned length and bytes with records split at `MAX_RECORD` boundaries.
     #[test]
     fn test_coalesce_large_message() {
         let msg = message(11, 40_000);
@@ -1277,6 +1323,11 @@ mod tests {
         assert_eq!((len, buf), (Some(expected.len()), expected));
     }
 
+    /// STATEMENT: Empty handshake records are rejected without modifying the input.
+    ///
+    /// HOW:
+    /// - Try an empty record alone and after a partial handshake message.
+    /// - Check incomplete headers stay unchanged and complete empty records yield the expected `InvalidData` error.
     #[test]
     fn test_coalesce_empty_record() {
         for prefix in [Vec::new(), record(CONTENT_HANDSHAKE, &[1])] {
@@ -1293,6 +1344,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: The held handshake size limit is enforced from the header and accepts the exact boundary.
+    ///
+    /// HOW:
+    /// - Supply oversized message headers in whole and fragmented form and check the error and unchanged input.
+    /// - Coalesce a message exactly at both size and record-count limits and compare the resulting records.
     #[test]
     fn test_coalesce_message_limit() {
         let msg = message(11, MAX_HELD_HANDSHAKE - 3);
@@ -1313,6 +1369,11 @@ mod tests {
         assert_eq!(coalesce(&src), (Some(expected.len()), expected));
     }
 
+    /// STATEMENT: Reassembly rejects a handshake requiring more than the allowed number of records.
+    ///
+    /// HOW:
+    /// - Fill the record budget with an incomplete message and check it remains buffered unchanged.
+    /// - Add an extra record header or full record and check the 1024-record error preserves input.
     #[test]
     fn test_coalesce_record_limit() {
         let msg = message(11, 2048);
@@ -1335,6 +1396,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Trailing messages and application data do not count toward the current message's size limit.
+    ///
+    /// HOW:
+    /// - Follow a limit-sized message with a partial next message, further handshake records, and application data.
+    /// - Check coalescing returns only the first message's length while preserving every trailing byte.
     #[test]
     fn test_coalesce_limit_preserves_trailing_data() {
         let msg = message(11, MAX_HELD_HANDSHAKE - 4);
@@ -1359,6 +1425,12 @@ mod tests {
         assert_eq!(coalesce(&src), (Some(len), expected));
     }
 
+    /// STATEMENT: Input that does not require handshake reassembly passes through unchanged.
+    ///
+    /// HOW:
+    /// - Exercise complete single-record messages, non-handshake prefixes, partial headers,
+    ///   and an incomplete message followed by an alert.
+    /// - Compare the returned length and bytes with the full original input.
     #[test]
     fn test_coalesce_passes_input_unchanged() {
         let hello = record(CONTENT_HANDSHAKE, &message(HANDSHAKE_CLIENT_HELLO, 50));
@@ -1402,6 +1474,11 @@ mod tests {
         (client, server)
     }
 
+    /// STATEMENT: Encryption gathers plaintext pages into records that tolerate fragmented delivery.
+    ///
+    /// HOW:
+    /// - Encrypt 20,000 bytes held in four pages and check the source drains into two records.
+    /// - Feed ciphertext in 1000-byte chunks and verify all input is consumed and plaintext is unchanged.
     #[test]
     fn test_encrypt_records_span_pages() {
         let (mut client, mut server) = established();
@@ -1429,6 +1506,11 @@ mod tests {
         assert_eq!(plain, &data[..]);
     }
 
+    /// STATEMENT: Record iteration yields only complete records and does not reinterpret payload bytes as headers.
+    ///
+    /// HOW:
+    /// - Parse concatenated records followed by a partial header and compare their types and payload lengths.
+    /// - Check a header-like payload byte remains data and an incomplete payload yields no record.
     #[test]
     fn test_records() {
         let hello = record(CONTENT_HANDSHAKE, &message(HANDSHAKE_CLIENT_HELLO, 50));

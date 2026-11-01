@@ -154,6 +154,11 @@ mod tests {
         (client.unwrap(), server.unwrap())
     }
 
+    /// STATEMENT: TLS version and cipher queries expose matching negotiated metadata.
+    ///
+    /// HOW:
+    /// - Handshake with default protocols and check TLS 1.3, matching cipher IDs, and IANA names.
+    /// - Restrict the client to TLS 1.2 and check its version and both peers' matching cipher.
     #[ntex::test]
     async fn version_and_cipher() {
         let (client, server) = handshake_pair(false, "localhost").await;
@@ -204,6 +209,12 @@ mod tests {
         assert!(cipher.name.unwrap().starts_with("TLS_ECDHE_"));
     }
 
+    /// STATEMENT: rustls services expose negotiated metadata and carry data through clean shutdown.
+    ///
+    /// HOW:
+    /// - Connect an in-memory client and acceptor with `h2`, checking ALPN, SNI, certificate
+    ///   representations, and absent client certificates and unsupported queries.
+    /// - Receive 256 KiB on the server, check a reply, then verify shutdown yields peer EOF.
     #[ntex::test]
     async fn acceptor_and_connector() {
         let (client, server) = pair();
@@ -293,6 +304,11 @@ mod tests {
         res.unwrap();
     }
 
+    /// STATEMENT: A connection without ALPN defaults to HTTP/1 and an IP host sends no SNI.
+    ///
+    /// HOW:
+    /// - Handshake with ALPN disabled and `127.0.0.1` as the host.
+    /// - Check the client's HTTP protocol and the absence of the server's `Servername`.
     #[ntex::test]
     async fn without_alpn_and_sni() {
         let (client, server) = handshake_pair(false, "127.0.0.1").await;
@@ -304,6 +320,11 @@ mod tests {
         assert!(server.query::<Servername>().as_ref().is_none());
     }
 
+    /// STATEMENT: Shutdown succeeds after a peer disconnects without sending `close_notify`.
+    ///
+    /// HOW:
+    /// - Complete a handshake, drop the server, and check the client receives EOF.
+    /// - Await client shutdown and assert it succeeds.
     #[ntex::test]
     async fn shutdown_after_peer_disconnect() {
         let (client, server) = handshake_pair(false, "localhost").await;
@@ -313,6 +334,12 @@ mod tests {
         client.shutdown().await.unwrap();
     }
 
+    /// STATEMENT: Peer-close notifications release TLS borrows before waking reentrant shutdown.
+    ///
+    /// HOW:
+    /// - Close each side in turn using a transport with an inline wake hook.
+    /// - Check the hook sees no TLS borrow, pending data is delivered in both directions,
+    ///   and both transports reach closed status.
     #[ntex::test]
     async fn peer_close_inline_waker() {
         use crate::utils::testing;
@@ -341,7 +368,11 @@ mod tests {
         }
     }
 
-    /// Draining the input must not report a transport EOF to rustls.
+    /// STATEMENT: Draining buffered input does not report a transport EOF to rustls.
+    ///
+    /// HOW:
+    /// - Exchange and verify 100-byte and 40,000-byte messages through manually driven transports.
+    /// - Read each drained session directly and check for `WouldBlock`, not `UnexpectedEof`.
     #[ntex::test]
     async fn read_keeps_session_open() {
         use crate::utils::testing;
@@ -383,6 +414,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A stalled server handshake fails with the configured timeout.
+    ///
+    /// HOW:
+    /// - Keep the peer open without sending handshake data and configure a 50 ms timeout.
+    /// - Call the acceptor and check for `TimedOut`.
     #[ntex::test]
     async fn handshake_timeout() {
         let (_client, server) = pair();
@@ -394,6 +430,11 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 
+    /// STATEMENT: Peer disconnects during handshakes propagate through server and connector errors.
+    ///
+    /// HOW:
+    /// - Close the client during server creation and check for `UnexpectedEof`.
+    /// - Close the server during a connector call and check the call returns an error.
     #[ntex::test]
     async fn handshake_disconnect() {
         let (client, server) = pair();
@@ -421,6 +462,11 @@ mod tests {
         assert!(res.is_err());
     }
 
+    /// STATEMENT: Plain HTTP input is rejected as invalid TLS handshake data.
+    ///
+    /// HOW:
+    /// - Write an HTTP request into an in-memory server transport.
+    /// - Attempt the TLS handshake and check for `InvalidData`.
     #[ntex::test]
     async fn handshake_invalid_data() {
         let (client, server) = pair();
@@ -432,6 +478,11 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    /// STATEMENT: Acceptor readiness waits for handshake capacity and resumes when it is released.
+    ///
+    /// HOW:
+    /// - Set capacity to one and start a stalled handshake through a bound acceptor.
+    /// - Check readiness becomes pending, close the peer, then check failure restores readiness.
     #[ntex::test]
     async fn acceptor_waits_for_capacity() {
         MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(1));
@@ -458,7 +509,12 @@ mod tests {
         MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(256));
     }
 
-    /// Queued pages are batched into records without losing partial writes.
+    /// STATEMENT: Queued pages are batched into TLS records without losing partial writes.
+    ///
+    /// HOW:
+    /// - Queue varied page layouts and tails, then verify a zero session limit preserves input.
+    /// - Enable bounded writes, check the queue drains with the expected record count,
+    ///   and compare the decrypted bytes with all original pages and their tail.
     #[test]
     #[allow(clippy::assert_is_empty)]
     fn write_gathers_pages_into_records() {

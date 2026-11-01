@@ -100,6 +100,11 @@ mod tests {
         }))
     }
 
+    /// STATEMENT: A Schannel connector is ready but reports failure against a non-TLS peer.
+    ///
+    /// HOW:
+    /// - Construct the connector, check its debug name, and await readiness.
+    /// - Call a local service that drops the transport and check the connector returns an error.
     #[ntex::test]
     async fn test_schannel_connect() {
         let server = ntex::server::test_server(async || {
@@ -116,6 +121,11 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// STATEMENT: The Schannel connector negotiates the configured ALPN protocol.
+    ///
+    /// HOW:
+    /// - Connect an in-memory client and server configured to advertise `h2`.
+    /// - Check both handshakes succeed and the client reports HTTP/2.
     #[ntex::test]
     async fn test_schannel_connector() {
         let config = ServerConfig::new(Certificate::from_pkcs12(PFX, "ntex").unwrap())
@@ -146,6 +156,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: The Schannel connector preserves existing transport filters beneath TLS.
+    ///
+    /// HOW:
+    /// - Add a passthrough filter to the connector transport, check readiness, and complete the handshake.
+    /// - Check the resulting layered I/O type and verify request and reply bytes in both directions.
     #[ntex::test]
     async fn test_schannel_filtered_connector() {
         #[derive(Debug)]
@@ -197,7 +212,11 @@ mod tests {
         assert_eq!(client.recv(&BytesCodec).await.unwrap().unwrap(), "reply");
     }
 
-    /// The default configuration verifies the server certificate.
+    /// STATEMENT: The default connector rejects an untrusted server certificate.
+    ///
+    /// HOW:
+    /// - Connect with default client configuration to the in-memory server using the fixture certificate.
+    /// - Check the connector returns `ConnectError::Io` and the server handshake also fails.
     #[ntex::test]
     async fn test_schannel_connector_untrusted() {
         let config = ServerConfig::new(Certificate::from_pkcs12(PFX, "ntex").unwrap()).unwrap();
@@ -217,6 +236,11 @@ mod tests {
         assert!(server.is_err());
     }
 
+    /// STATEMENT: Connector handshakes honor the timeout supplied through shared configuration.
+    ///
+    /// HOW:
+    /// - Configure a 50 ms handshake timeout and connect to an idle in-memory peer.
+    /// - Check the returned `ConnectError::Io` contains `TimedOut`.
     #[ntex::test]
     async fn test_schannel_connector_timeout() {
         let tls_cfg = TlsConfig {

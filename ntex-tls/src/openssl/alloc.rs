@@ -121,6 +121,12 @@ mod shim {
     mod tests {
         use super::*;
 
+        /// STATEMENT: The allocator shim preserves alignment, data, and C allocation semantics.
+        ///
+        /// HOW:
+        /// - Allocate, grow, and shrink a block, checking alignment and retained bytes.
+        /// - Check zero-size and overflowing requests, null-pointer operations, and that
+        ///   a failed reallocation leaves the original bytes intact.
         #[test]
         fn malloc_realloc_free() {
             let (file, line) = (ptr::null(), 0);
@@ -164,6 +170,11 @@ mod shim {
 mod tests {
     use tls_openssl::ssl::{SslConnector, SslMethod};
 
+    /// STATEMENT: Allocator replacement is rejected after OpenSSL has allocated memory.
+    ///
+    /// HOW:
+    /// - Construct and drop an `SslConnector` builder.
+    /// - Confirm `use_global_allocator` returns `false`.
     #[test]
     fn rejected_after_openssl_allocated() {
         drop(SslConnector::builder(SslMethod::tls()).unwrap());

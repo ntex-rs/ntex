@@ -554,6 +554,11 @@ mod tests {
 
     const PFX: &[u8] = include_bytes!("../../examples/identity.pfx");
 
+    /// STATEMENT: Owned-key cleanup frees the handle only when deleting the key fails.
+    ///
+    /// HOW:
+    /// - Inject successful and failing delete/free callbacks and record their calls.
+    /// - Check successful deletion stands alone and failed deletion is followed by one free.
     #[test]
     fn test_delete_owned_key() {
         use std::cell::RefCell;
@@ -604,8 +609,12 @@ mod tests {
         status == 0
     }
 
-    /// Imported keys are persisted under unique names and deleted with the
-    /// certificate.
+    /// STATEMENT: Imported keys have unique names and remain persisted until the last certificate clone drops.
+    ///
+    /// HOW:
+    /// - Import the same PKCS#12 twice and check matching DER, private-key presence, and distinct key names.
+    /// - Drop an original and its clone separately, checking that only the last drop deletes its key.
+    /// - Check the second import retains its independent key until it too is dropped.
     #[test]
     fn test_from_pkcs12() {
         let cert = Certificate::from_pkcs12(PFX, "ntex").unwrap();
@@ -630,12 +639,22 @@ mod tests {
         assert!(!key_exists(&other_name));
     }
 
+    /// STATEMENT: PKCS#12 import rejects incorrect passwords and malformed input.
+    ///
+    /// HOW:
+    /// - Import the fixture with a wrong password and non-PKCS#12 bytes with the correct password.
+    /// - Assert both imports return errors.
     #[test]
     fn test_from_pkcs12_errors() {
         assert!(Certificate::from_pkcs12(PFX, "wrong").is_err());
         assert!(Certificate::from_pkcs12(b"not a pfx", "ntex").is_err());
     }
 
+    /// STATEMENT: PKCS#12 import requires a private key alongside the certificate.
+    ///
+    /// HOW:
+    /// - Use OpenSSL to build a certificate-only PKCS#12 archive.
+    /// - Import it and check for `InvalidInput` with a private-key diagnostic.
     #[cfg(feature = "openssl")]
     #[test]
     fn test_from_pkcs12_no_private_key() {
@@ -652,6 +671,11 @@ mod tests {
         assert!(err.to_string().contains("private key"), "{err}");
     }
 
+    /// STATEMENT: Certificate lookup fails without creating a missing certificate store.
+    ///
+    /// HOW:
+    /// - Look up a certificate by thumbprint and subject in a nonexistent current-user store.
+    /// - Check both lookups fail and a subsequent attempt to open the store also fails.
     #[test]
     fn test_from_store_missing_store() {
         let name = "ntex-no-such-store-3f0c";
@@ -664,6 +688,11 @@ mod tests {
         assert!(Store::open(CertStoreLocation::CurrentUser, name).is_err());
     }
 
+    /// STATEMENT: Store lookup rejects a certificate without a private key.
+    ///
+    /// HOW:
+    /// - Find a current-user root certificate without a private key and read its thumbprint.
+    /// - Look it up through `Certificate::from_store` and check for `InvalidInput`.
     #[test]
     fn test_from_store_no_private_key() {
         use windows_sys::Win32::Security::Cryptography::CERT_SHA1_HASH_PROP_ID;
@@ -696,6 +725,11 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
+    /// STATEMENT: A missing certificate thumbprint is reported as `NotFound`.
+    ///
+    /// HOW:
+    /// - Query the current user's `MY` store with an all-zero thumbprint.
+    /// - Check the lookup error kind is `NotFound`.
     #[test]
     fn test_from_store_not_found() {
         let err =
@@ -703,6 +737,11 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
+    /// STATEMENT: Subject lookup distinguishes a missing certificate from an invalid empty subject.
+    ///
+    /// HOW:
+    /// - Query the current user's `MY` store with a nonexistent subject and check for `NotFound`.
+    /// - Query it with an empty subject and check for `InvalidInput`.
     #[test]
     fn test_from_store_by_subject_not_found() {
         let err = Certificate::from_store_by_subject(

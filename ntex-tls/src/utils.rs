@@ -275,6 +275,10 @@ pub(crate) mod testing {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Only the `h2` ALPN value selects HTTP/2; other values default to HTTP/1.
+    ///
+    /// HOW:
+    /// - Compare `http_protocol` results for `h2`, `http/1.1`, `h2c`, and no ALPN value.
     #[test]
     fn test_http_protocol() {
         assert_eq!(http_protocol(Some(b"h2")), HttpProtocol::Http2);
@@ -283,6 +287,11 @@ mod tests {
         assert_eq!(http_protocol(None), HttpProtocol::Http1);
     }
 
+    /// STATEMENT: Server names discard ports and IPv6 brackets without damaging host literals.
+    ///
+    /// HOW:
+    /// - Check DNS names, IPv4, bracketed and bare IPv6, a scoped IPv6 address, and empty input.
+    /// - Compare each result with the expected host, retaining its IPv6 scope when present.
     #[test]
     fn test_server_name() {
         assert_eq!(server_name("example.com"), "example.com");

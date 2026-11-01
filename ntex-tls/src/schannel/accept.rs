@@ -123,6 +123,12 @@ mod tests {
         io.query::<HttpProtocol>().as_ref().copied()
     }
 
+    /// STATEMENT: Peer-close notifications release TLS borrows before waking reentrant shutdown.
+    ///
+    /// HOW:
+    /// - Close each side in turn using a transport with an inline wake hook.
+    /// - Check the hook sees no TLS borrow, pending data is delivered in both directions,
+    ///   and both transports reach closed status.
     #[ntex::test]
     async fn peer_close_inline_waker() {
         use crate::utils::testing;
@@ -148,6 +154,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Schannel exposes negotiated metadata and carries application data through clean shutdown.
+    ///
+    /// HOW:
+    /// - Handshake a pair and check HTTP/2, SNI, server certificate representations, and absent client certificates.
+    /// - Receive 256 KiB on the server, verify a reply, and check shutdown produces peer EOF.
     #[ntex::test]
     async fn test_accept() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -198,6 +209,11 @@ mod tests {
         res.unwrap();
     }
 
+    /// STATEMENT: ALPN follows server preference and defaults to HTTP/1 when disabled.
+    ///
+    /// HOW:
+    /// - Vary client and server protocol order and check both peers' selected HTTP protocol.
+    /// - Disable server ALPN and connect to an IP host, checking no ALPN or SNI and an HTTP/1 fallback.
     #[ntex::test]
     async fn test_accept_alpn() {
         let cert = identity();
@@ -228,7 +244,11 @@ mod tests {
         assert!(server.query::<Servername>().as_ref().is_none());
     }
 
-    /// The negotiated protocol is kept after post-handshake messages.
+    /// STATEMENT: The negotiated HTTP protocol survives post-handshake session-ticket processing.
+    ///
+    /// HOW:
+    /// - Handshake a pair and exchange `hello` and `reply` after the server's session tickets.
+    /// - Check both peers still report HTTP/2.
     #[ntex::test]
     async fn test_accept_alpn_after_session_ticket() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -250,6 +270,12 @@ mod tests {
         assert_eq!(protocol(&server), Some(HttpProtocol::Http2));
     }
 
+    /// STATEMENT: Requested client certificates are optional and are not sent when unrequested.
+    ///
+    /// HOW:
+    /// - Request a certificate and check the supplied certificate and chain, plus successful data transfer.
+    /// - Repeat without a client certificate and check absent certificate queries and successful transfer.
+    /// - Configure a client certificate without requesting it and check the server sees none.
     #[ntex::test]
     async fn test_accept_client_cert() {
         let cert = identity();
@@ -289,7 +315,11 @@ mod tests {
         assert!(server.query::<PeerCert>().as_ref().is_none());
     }
 
-    /// The peer's chain starts with its certificate followed by the issuers.
+    /// STATEMENT: Peer certificate chains start with the leaf and order available issuers after it.
+    ///
+    /// HOW:
+    /// - Connect to an OpenSSL server that sends issuers out of order and compare the client's ordered DER chain.
+    /// - Accept an OpenSSL client sending its leaf and intermediate, then check the server's leaf and chain queries.
     #[cfg(feature = "openssl")]
     #[ntex::test]
     async fn test_peer_cert_chain() {
@@ -363,6 +393,11 @@ mod tests {
         assert_eq!(chain.as_deref(), Some(&der[..2]));
     }
 
+    /// STATEMENT: Failed certificate verification, non-TLS input, and handshake disconnects produce errors.
+    ///
+    /// HOW:
+    /// - Check an untrusted fixture certificate fails both client and server handshakes.
+    /// - Send HTTP plaintext and check the accept error is not EOF, then close a peer and check `UnexpectedEof`.
     #[ntex::test]
     async fn test_accept_handshake_failure() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -389,6 +424,11 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
+    /// STATEMENT: An empty handshake record fails immediately instead of waiting for more input.
+    ///
+    /// HOW:
+    /// - Send a complete zero-length handshake record and keep the peer connected without a handshake timeout.
+    /// - Bound the test wait and check for `InvalidData` with the empty-record diagnostic.
     #[ntex::test]
     async fn test_accept_empty_handshake_record() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -452,8 +492,11 @@ mod tests {
         assert_eq!(server.recv(&BytesCodec).await.unwrap().unwrap(), "hello");
     }
 
-    /// The `ClientHello` arrives in pieces, Schannel creates the context
-    /// once it is complete.
+    /// STATEMENT: A `ClientHello` delivered in separate transport reads still completes negotiation.
+    ///
+    /// HOW:
+    /// - Send a rustls `ClientHello` in three delayed pieces and finish the handshake within a deadline.
+    /// - Check HTTP/2, server SNI, and successful delivery of `hello`.
     #[ntex::test]
     async fn test_accept_split_client_hello() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -474,7 +517,11 @@ mod tests {
         check_rustls_session(&cli, conn, &server.unwrap()).await;
     }
 
-    /// The `ClientHello` is buffered before the handshake starts.
+    /// STATEMENT: A `ClientHello` already buffered by the transport is consumed by the TLS handshake.
+    ///
+    /// HOW:
+    /// - Write the rustls hello and await a read notification before starting server acceptance.
+    /// - Finish negotiation within a deadline and check HTTP/2, server SNI, and delivery of `hello`.
     #[ntex::test]
     async fn test_accept_buffered_client_hello() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -498,7 +545,11 @@ mod tests {
         check_rustls_session(&cli, conn, &server.unwrap()).await;
     }
 
-    /// The client updates its traffic keys after the handshake.
+    /// STATEMENT: TLS 1.3 traffic-key updates preserve bidirectional application data.
+    ///
+    /// HOW:
+    /// - Complete a rustls-to-Schannel handshake and refresh client keys before each of three messages.
+    /// - Compare every received message and decrypted server reply with the expected round-specific bytes.
     #[ntex::test]
     async fn test_accept_key_update() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -549,6 +600,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: The Schannel acceptor applies the handshake timeout from I/O configuration.
+    ///
+    /// HOW:
+    /// - Keep the peer idle and configure a 50 ms timeout on the server I/O.
+    /// - Check the acceptor's debug name and assert its pipeline call fails with `TimedOut`.
     #[ntex::test]
     async fn test_acceptor_handshake_timeout() {
         let (_cli, srv) = IoTest::create();
@@ -563,6 +619,11 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 
+    /// STATEMENT: Acceptor readiness waits for handshake capacity and resumes when it is released.
+    ///
+    /// HOW:
+    /// - Set capacity to one and start a stalled handshake through a bound acceptor.
+    /// - Check readiness becomes pending, close the peer, then check failure restores readiness.
     #[ntex::test]
     async fn test_acceptor_waits_for_capacity() {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| conns.set_capacity(1));
@@ -642,7 +703,11 @@ mod tests {
         .with_no_client_auth()
     }
 
-    /// A rustls client talks to the acceptor service over TCP.
+    /// STATEMENT: The Schannel acceptor interoperates with rustls over TCP using TLS 1.2 and TLS 1.3.
+    ///
+    /// HOW:
+    /// - Run an acceptor service that echoes a request and reports its negotiated HTTP protocol and SNI.
+    /// - Connect a rustls client for each TLS version and compare the version and complete response through EOF.
     #[ntex::test]
     async fn test_acceptor_rustls_client() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -850,7 +915,11 @@ mod tests {
         );
     }
 
-    /// Every flight arrives in pieces of any size.
+    /// STATEMENT: TLS handshakes tolerate transport fragmentation with optional client-certificate requests.
+    ///
+    /// HOW:
+    /// - Negotiate TLS 1.2 and TLS 1.3 with certificate requests on and off across eight chunk sizes.
+    /// - Check each client finishes and each server exposes HTTP/2 and the expected SNI.
     #[ntex::test]
     async fn test_negotiate_chunked() {
         for request_cert in [false, true] {
@@ -871,7 +940,11 @@ mod tests {
         }
     }
 
-    /// Handshake messages span several TLS records.
+    /// STATEMENT: Handshake messages split across small TLS records still negotiate successfully.
+    ///
+    /// HOW:
+    /// - Limit rustls fragments to 64 bytes for TLS 1.2 and TLS 1.3 and vary transport chunk sizes.
+    /// - Check client completion and the server's HTTP/2 and SNI queries.
     #[ntex::test]
     async fn test_negotiate_fragmented_records() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -888,7 +961,11 @@ mod tests {
         }
     }
 
-    /// The client's key share is not the server's preferred group.
+    /// STATEMENT: TLS 1.3 negotiation succeeds with different client key-exchange group preferences.
+    ///
+    /// HOW:
+    /// - Try P-384-first and P-256-first client group lists with whole-flight and bytewise delivery.
+    /// - Check client completion and the server's HTTP/2 and SNI queries.
     #[ntex::test]
     async fn test_negotiate_key_share() {
         use tls_rustls::crypto::ring::{default_provider, kx_group};
@@ -917,7 +994,11 @@ mod tests {
         }
     }
 
-    /// The client rejects the server's certificate and sends an alert.
+    /// STATEMENT: A client certificate-verification alert terminates the server handshake.
+    ///
+    /// HOW:
+    /// - Use an empty client root store against the fixture certificate for TLS 1.2 and TLS 1.3.
+    /// - Check the client reports rejection and the server returns an error within the negotiation deadline.
     #[ntex::test]
     async fn test_negotiate_client_alert() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -982,7 +1063,11 @@ mod tests {
         fields
     }
 
-    /// The client disconnects at any point of the handshake.
+    /// STATEMENT: Disconnecting at any truncated client-flight boundary fails the server handshake without stalling.
+    ///
+    /// HOW:
+    /// - Capture successful TLS 1.2 and TLS 1.3 flights, then truncate each at every byte offset and close.
+    /// - Run bounded negotiations and check client-closed status and a server error for every case.
     #[ntex::test]
     async fn test_negotiate_truncated() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -1002,7 +1087,12 @@ mod tests {
         }
     }
 
-    /// Any byte of the client's flights is corrupted.
+    /// STATEMENT: Corrupted client flights only leave negotiation waiting when a length field was changed.
+    ///
+    /// HOW:
+    /// - Flip every byte of TLS 1.2 and TLS 1.3 flights, both closing immediately and keeping the peer open.
+    /// - Check immediate-close cases finish, and any open-peer wait corresponds to a length field
+    ///   and ends with `UnexpectedEof` after the peer closes.
     #[ntex::test]
     async fn test_negotiate_corrupted() {
         let config = ServerConfig::new(identity()).unwrap();
@@ -1245,6 +1335,12 @@ mod tests {
         assert!(!peer.pump().await, "{case}");
     }
 
+    /// STATEMENT: Initiated shutdown sends all pending data before `close_notify` and waits for the peer's reply.
+    ///
+    /// HOW:
+    /// - Exercise both Schannel roles with TLS 1.2 and TLS 1.3 using small and 512 KiB payloads.
+    /// - Check the peer receives exact data before closure and shutdown stays pending until reciprocal
+    ///   `close_notify`, then succeeds and closes the transport.
     #[ntex::test]
     async fn test_close_notify_initiated() {
         for (server, version) in roles() {
@@ -1259,7 +1355,11 @@ mod tests {
         }
     }
 
-    /// The peer shuts down, the schannel side responds with `close_notify`.
+    /// STATEMENT: Peer-initiated shutdown delivers pending plaintext and sends a reciprocal `close_notify`.
+    ///
+    /// HOW:
+    /// - For both roles and TLS versions, send `hello` followed by the peer's `close_notify`.
+    /// - Check plaintext, EOF, the reciprocal alert, successful shutdown, and transport closure.
     #[ntex::test]
     async fn test_close_notify_peer_initiated() {
         for (server, version) in roles() {
@@ -1284,7 +1384,11 @@ mod tests {
         }
     }
 
-    /// The schannel side shuts down after a post-handshake key update.
+    /// STATEMENT: TLS 1.3 key updates before or during shutdown do not substitute for the peer's `close_notify`.
+    ///
+    /// HOW:
+    /// - Exercise both Schannel roles with a key update before shutdown and after the local close alert.
+    /// - Check exact pending data, continued waiting for the peer's close alert, and eventual clean shutdown.
     #[ntex::test]
     async fn test_close_notify_after_key_update() {
         for server in [true, false] {
@@ -1299,7 +1403,11 @@ mod tests {
         }
     }
 
-    /// The peer shuts down after a post-handshake key update.
+    /// STATEMENT: A peer key update followed by shutdown preserves plaintext and the close-alert exchange.
+    ///
+    /// HOW:
+    /// - In both Schannel roles, send a TLS 1.3 key update, `hello`, and `close_notify` from the peer.
+    /// - Check `hello` precedes EOF and the peer receives a reciprocal `close_notify`.
     #[ntex::test]
     async fn test_close_notify_peer_after_key_update() {
         for server in [true, false] {
@@ -1466,8 +1574,12 @@ mod tests {
         }
     }
 
-    /// Shutdown during a TLS 1.2 renegotiation sends pending data and
-    /// `close_notify` once the exchange completes.
+    /// STATEMENT: Shutdown during TLS 1.2 renegotiation flushes queued data before the close-alert exchange.
+    ///
+    /// HOW:
+    /// - Start OpenSSL server renegotiation, queue `bye` on the Schannel client, and initiate shutdown.
+    /// - Finish negotiation and check the peer receives exactly `bye` before `close_notify`.
+    /// - Check shutdown remains pending until the peer replies with its own close alert, then succeeds.
     #[cfg(feature = "openssl")]
     #[ntex::test]
     async fn test_close_notify_during_renegotiation() {
@@ -1586,8 +1698,11 @@ mod tests {
         wire.extend(out);
     }
 
-    /// Data is delivered in order in both directions while the peer's data,
-    /// interleaved with key updates, arrives in arbitrary pieces.
+    /// STATEMENT: Bidirectional data stays ordered across TLS 1.3 key updates and fragmented delivery.
+    ///
+    /// HOW:
+    /// - In both Schannel roles, stream tagged chunks in each direction and interleave peer key updates.
+    /// - Deliver peer ciphertext in pseudo-random pieces and compare both complete received byte streams.
     #[ntex::test]
     async fn test_order_key_updates() {
         for server in [true, false] {
@@ -1651,9 +1766,11 @@ mod tests {
         }
     }
 
-    /// Data is delivered in order in both directions across TLS 1.2
-    /// renegotiations started by the server, with and without the server
-    /// sending application data during a renegotiation.
+    /// STATEMENT: Bidirectional data stays ordered across repeated server-initiated TLS 1.2 renegotiations.
+    ///
+    /// HOW:
+    /// - Stream tagged data against an OpenSSL server, both allowing and holding its writes during renegotiation.
+    /// - Check four renegotiations occur and both received byte streams exactly match their inputs.
     #[cfg(feature = "openssl")]
     #[ntex::test]
     async fn test_order_renegotiation() {
@@ -1786,8 +1903,11 @@ mod tests {
         assert_eq!(after.unwrap().unwrap().unwrap(), "after", "{case}");
     }
 
-    /// Application data the peer sends after a TLS 1.2 `HelloRequest` is
-    /// delivered in order and the renegotiation completes.
+    /// STATEMENT: Application data around a TLS 1.2 `HelloRequest` is delivered in order without blocking renegotiation.
+    ///
+    /// HOW:
+    /// - Send `before`, start renegotiation, and send `during` with normal, coalesced, or bytewise delivery.
+    /// - Check `beforeduring`, complete renegotiation, and verify subsequent `ping` and `after` exchanges.
     #[cfg(feature = "openssl")]
     #[ntex::test]
     async fn test_renegotiation_app_data() {
@@ -1810,8 +1930,11 @@ mod tests {
         }
     }
 
-    /// Application data read together with the server's handshake flight
-    /// of a TLS 1.2 renegotiation.
+    /// STATEMENT: Application data coalesced with a TLS 1.2 renegotiation flight is preserved in order.
+    ///
+    /// HOW:
+    /// - Send `before`, start renegotiation, and hold `during` until it can be flushed with the server flight.
+    /// - Check `beforeduring`, complete renegotiation, and verify subsequent `ping` and `after` exchanges.
     #[cfg(feature = "openssl")]
     #[ntex::test]
     async fn test_renegotiation_app_data_with_flight() {
@@ -1830,7 +1953,11 @@ mod tests {
         renegotiation_completes(&io, &mut peer, b"beforeduring", "flight").await;
     }
 
-    /// The peer closes the connection during a TLS 1.2 renegotiation.
+    /// STATEMENT: Peer closure during TLS 1.2 renegotiation delivers pending data and permits clean shutdown.
+    ///
+    /// HOW:
+    /// - Close an OpenSSL peer during renegotiation, varying application data and whether the client flight is awaited.
+    /// - Check the exact `before` or `beforeduring` bytes precede EOF and shutdown succeeds within a deadline.
     #[cfg(feature = "openssl")]
     #[ntex::test]
     async fn test_renegotiation_peer_close_notify() {

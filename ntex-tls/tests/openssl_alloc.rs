@@ -38,6 +38,12 @@ unsafe impl GlobalAlloc for Recording {
 #[global_allocator]
 static GLOBAL: Recording = Recording;
 
+/// STATEMENT: OpenSSL can use the Rust global allocator throughout a TLS connection.
+///
+/// HOW:
+/// - Install the allocator before OpenSSL use and check a 1000-byte allocation includes
+///   the shim's 16-byte header in the recorded allocation size.
+/// - Complete a handshake, transfer 256 KiB in each direction, and check orderly shutdown.
 #[ntex::test]
 async fn openssl_uses_global_allocator() {
     assert!(use_global_allocator());
