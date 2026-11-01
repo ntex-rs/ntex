@@ -1,4 +1,15 @@
-//! An implementation of SSL streams for ntex backed by OpenSSL
+//! TLS services and I/O filters backed by OpenSSL.
+//!
+//! [`SslAcceptor`] and [`SslConnector`] apply [`crate::TlsConfig`] to service
+//! handshakes. The free [`accept()`] and [`connect()`] functions instead accept a
+//! prepared OpenSSL session and apply neither timeout nor concurrency limiting.
+//! Certificates, verification, protocol versions, and ALPN follow the supplied
+//! OpenSSL configuration.
+//!
+//! Filters expose native [`PeerCert`] and [`PeerCertChain`] values as well as
+//! backend-independent DER certificates, SNI, PSK identity, TLS version, and
+//! cipher metadata when available. [`ntex_io::types::HttpProtocol`] reports
+//! HTTP/2 only for negotiated `h2`, otherwise HTTP/1.
 use std::{any, borrow::ToOwned, cell::Cell, cell::UnsafeCell, cmp, io, ptr, task::Poll};
 
 use foreign_types_shared::ForeignType;
@@ -19,23 +30,47 @@ pub use self::accept::SslAcceptor;
 mod alloc;
 pub use self::alloc::use_global_allocator;
 
-/// Connection's peer cert
+/// The peer's end-entity certificate as an owned OpenSSL reference.
+///
+/// The query returns no value if the peer did not supply a certificate.
 #[derive(Debug)]
-pub struct PeerCert(pub X509);
+pub struct PeerCert(
+    /// Reference-counted OpenSSL certificate.
+    pub X509,
+);
 
-/// Connection's peer cert chain
+/// The peer certificate chain with OpenSSL's native chain semantics.
+///
+/// On a client connection the chain includes the server's leaf; on a server
+/// connection OpenSSL omits the client's leaf. Query [`PeerCertChainDer`] for a
+/// backend-independent, leaf-first chain instead. Reading either chain does not
+/// change certificate verification policy.
 #[derive(Debug)]
-pub struct PeerCertChain(pub Vec<X509>);
+pub struct PeerCertChain(
+    /// Owned references to the certificates reported by OpenSSL.
+    pub Vec<X509>,
+);
 
-/// An implementation of SSL streams
+/// Encrypts and decrypts either side of an OpenSSL TLS connection.
+///
+/// Created by the handshake functions or services in this module. The filter
+/// preserves plaintext that OpenSSL cannot yet accept, including during
+/// negotiation, and exchanges `close_notify` during shutdown.
 #[derive(Debug)]
 pub struct SslFilter {
+    /// Stream accessed only within non-reentrant, single-threaded filter operations.
     inner: UnsafeCell<SslStream<IoInner>>,
 }
 
+/// In-memory transport adapter used by OpenSSL's BIO callbacks.
+///
+/// Empty input reports `WouldBlock`, not EOF. Output is queued into pages for
+/// the lower I/O filter; flushing this adapter does not flush the transport.
 #[derive(Debug)]
 struct IoInner {
+    /// Ciphertext temporarily borrowed from the lower filter's read buffer.
     source: Option<BytesMut>,
+    /// Ciphertext produced by OpenSSL and returned to the lower write buffer.
     destination: BytePages,
 }
 
@@ -68,12 +103,16 @@ impl io::Write for IoInner {
 }
 
 impl SslFilter {
+    /// Wraps an initialized stream without starting negotiation.
     fn new(stream: SslStream<IoInner>) -> Self {
         Self {
             inner: UnsafeCell::new(stream),
         }
     }
 
+    /// Borrows session metadata outside an exclusive `with_buffers_inner` scope.
+    ///
+    /// The reference must not overlap any operation that mutably borrows the stream.
     fn ssl(&self) -> &ssl::SslRef {
         // SAFETY: the filter is single-threaded, and a mutable reference to
         // the stream exists only inside `with_buffers`, which never calls back
@@ -81,6 +120,7 @@ impl SslFilter {
         unsafe { (*self.inner.get()).ssl() }
     }
 
+    /// Reads the negotiated IANA cipher identifier and optional standard name.
     #[cfg(ntex_openssl_cipher)]
     fn cipher(&self) -> Option<TlsCipher> {
         let cipher = self.ssl().current_cipher()?;
@@ -90,12 +130,14 @@ impl SslFilter {
         })
     }
 
+    /// Leaves the cipher query unavailable for libraries without the required API.
     #[cfg(not(ntex_openssl_cipher))]
     #[allow(clippy::unused_self)]
     fn cipher(&self) -> Option<TlsCipher> {
         None
     }
 
+    /// Runs a stream operation while reusing the lower filter's current write page.
     fn with_buffers<F, R>(&self, buf: &FilterBuf<'_>, f: F) -> R
     where
         F: FnOnce(&mut SslStream<IoInner>, &FilterBuf<'_>) -> R,
@@ -116,6 +158,11 @@ impl SslFilter {
         self.with_buffers_inner(buf, false, f)
     }
 
+    /// Transfers ciphertext buffers into the adapter for one exclusive stream operation.
+    ///
+    /// Returns unread input, including empty reusable storage, and generated
+    /// output afterward. `f` must not reenter this filter while it borrows the
+    /// stream; notifications that can do so must run after this method returns.
     fn with_buffers_inner<F, R>(&self, buf: &FilterBuf<'_>, reuse_page: bool, f: F) -> R
     where
         F: FnOnce(&mut SslStream<IoInner>, &FilterBuf<'_>) -> R,
@@ -154,6 +201,7 @@ impl SslFilter {
 }
 
 impl FilterLayer for SslFilter {
+    /// Produces owned metadata, normalizing the DER chain to include the peer leaf.
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::HttpProtocol>() {
             let alpn = self.ssl().selected_alpn_protocol();
@@ -209,6 +257,7 @@ impl FilterLayer for SslFilter {
         }
     }
 
+    /// Sends `close_notify` and waits for the peer's alert or transport EOF.
     fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
         let ssl_result = self.with_buffers(buf, |s, _| s.shutdown());
         let result = match ssl_result {
@@ -234,6 +283,7 @@ impl FilterLayer for SslFilter {
         result
     }
 
+    /// Drains decrypted data and closes I/O only after releasing the mutable TLS stream.
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         let mut peer_closed = false;
         let result = self.with_read_buffers(rb, |stream, buf| {
@@ -270,6 +320,7 @@ impl FilterLayer for SslFilter {
         result
     }
 
+    /// Encrypts queued pages, retaining plaintext that needs a later retry.
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
         self.with_buffers(wb, |stream, buf| {
             buf.with_write_buffers(|w_src, _| write_pages(stream, w_src))
@@ -285,6 +336,10 @@ thread_local! {
     static STAGING: Cell<Vec<u8>> = const { Cell::new(Vec::new()) };
 }
 
+/// Encrypts plaintext pages, gathering small adjacent pages into full-sized records.
+///
+/// `WANT_READ` and `WANT_WRITE` consume no input. Gathered bytes needed for a
+/// retry are copied back into `src` before the shared staging storage is reused.
 fn write_pages(stream: &mut SslStream<IoInner>, src: &mut BytePages) -> io::Result<()> {
     let mut staging = Staging(None);
     while let Some(mut page) = src.take() {
@@ -362,6 +417,7 @@ impl Drop for Staging {
     }
 }
 
+/// Creates the BIO-backed stream with read-ahead and the I/O-configured output page size.
 fn new_stream<F>(io: &Io<F>, ssl: ssl::Ssl) -> io::Result<SslStream<IoInner>> {
     // Let OpenSSL pull all buffered ciphertext in one BIO read, instead of
     // reading every record header and body separately.
@@ -381,11 +437,17 @@ fn new_stream<F>(io: &Io<F>, ssl: ssl::Ssl) -> io::Result<SslStream<IoInner>> {
     Ok(SslStream::new(ssl, inner)?)
 }
 
-/// Add the ssl filter to the io stream and run a server handshake
+/// Installs a TLS filter and completes a server handshake.
 ///
 /// Unlike [`SslAcceptor`], the caller provides a prepared `Ssl`, so per
 /// connection settings such as the certificate can be selected before the
 /// handshake. No handshake timeout or concurrency limit is applied.
+/// Existing I/O filters remain below TLS.
+///
+/// # Errors
+///
+/// Returns OpenSSL setup or negotiation errors, transport errors, or
+/// [`io::ErrorKind::UnexpectedEof`] if the peer disconnects before completion.
 pub async fn accept<F: Filter>(
     io: Io<F>,
     ssl: ssl::Ssl,
@@ -393,7 +455,18 @@ pub async fn accept<F: Filter>(
     handshake(io, ssl, true).await
 }
 
-/// Add the ssl filter to the io stream and run a client handshake
+/// Installs a TLS filter and completes a client handshake.
+///
+/// The caller must prepare `ssl`, including its peer-verification and server-name
+/// settings. Unlike [`SslConnector::connect`], this function does not derive
+/// those settings from a host or apply [`crate::TlsConfig`].
+/// No handshake timeout or concurrency limit is applied. Existing filters remain
+/// below TLS.
+///
+/// # Errors
+///
+/// Returns OpenSSL setup or negotiation errors, transport errors, or
+/// [`io::ErrorKind::UnexpectedEof`] if the peer disconnects before completion.
 pub async fn connect<F: Filter>(
     io: Io<F>,
     ssl: ssl::Ssl,
@@ -401,7 +474,10 @@ pub async fn connect<F: Filter>(
     handshake(io, ssl, false).await
 }
 
-/// Add ssl filter to the io stream and drive the handshake to completion
+/// Selects the TLS role, installs the filter, and drives OpenSSL negotiation.
+///
+/// Read notifications may carry both final handshake bytes and EOF, so EOF
+/// becomes an error only if another handshake step still needs input.
 async fn handshake<F: Filter>(
     io: Io<F>,
     mut ssl: ssl::Ssl,
@@ -867,10 +943,55 @@ pub(crate) mod tests {
         assert!(client.recv(&BytesCodec).await.is_err());
     }
 
+    /// STATEMENT: Connector timeout errors use service configuration rather than I/O configuration.
+    ///
+    /// HOW:
+    /// - Return an idle transport with its TLS timeout disabled from a custom connector.
+    /// - Set a 50 ms service timeout and check the bounded call returns `TimedOut` with
+    ///   the service's configured diagnostic identity.
+    #[ntex::test]
+    async fn connector_handshake_timeout() {
+        use std::{cell::RefCell, rc::Rc};
+
+        use ntex_error::{Error, ErrorDiagnostic};
+        use ntex_net::connect::{Connect, ConnectError, Connector};
+        use ntex_service::{Pipeline, fn_service};
+
+        let (client, _server) = pair();
+        let client = Rc::new(RefCell::new(Some(Io::new(
+            client,
+            SharedCfg::new("IO")
+                .service("transport")
+                .add(tls_cfg(Millis::ZERO)),
+        ))));
+        let connector = SslConnector::<Connector<&str>>::new(connector(false)).connector(
+            fn_service(async move |_: Connect<&str>| {
+                Ok::<_, Error<ConnectError>>(client.borrow_mut().take().unwrap())
+            }),
+        );
+        let connector = Pipeline::new(
+            SharedCfg::new("CLI")
+                .service("tls-client")
+                .add(tls_cfg(Millis(50)))
+                .build(),
+            connector,
+        );
+        let err =
+            ntex_util::time::timeout(Millis(1_000), connector.call(Connect::new("localhost")))
+                .await
+                .expect("connector ignored its handshake timeout")
+                .unwrap_err();
+        assert_eq!(err.service(), Some("tls-client"));
+        let ConnectError::Io(err) = &*err else {
+            panic!("unexpected connector error: {err:?}");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
     /// STATEMENT: Handshake failures preserve timeout and disconnect errors and reject non-TLS data.
     ///
     /// HOW:
-    /// - Stall an acceptor with a 50 ms timeout and check for `TimedOut`.
+    /// - Stall an acceptor with a 50 ms timeout and check for `TimedOut` and released capacity.
     /// - Disconnect during server negotiation and check for `UnexpectedEof`; also check
     ///   that plain HTTP input and a disconnected connector peer produce errors.
     #[ntex::test]
@@ -885,6 +1006,7 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        crate::MAX_SSL_ACCEPT_COUNTER.with(|c| assert_eq!(c.total(), 0));
 
         // peer disconnects
         let (client, server) = pair();
@@ -921,8 +1043,11 @@ pub(crate) mod tests {
     /// HOW:
     /// - Set capacity to one and start a stalled handshake through a bound acceptor.
     /// - Check readiness becomes pending, close the peer, then check failure restores readiness.
+    /// - Poll another stalled call, drop it, and check cancellation releases its slot and readiness.
     #[ntex::test]
     async fn acceptor_waits_for_capacity() {
+        use std::future::Future;
+
         use ntex_service::Pipeline;
         use ntex_util::future::lazy;
 
@@ -946,6 +1071,16 @@ pub(crate) mod tests {
         // capacity is released by the failed handshake
         client.close().await;
         assert!(hnd.await.unwrap().is_err());
+        assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_ready());
+
+        let (_client, server) = pair();
+        let io = Io::new(server, SharedCfg::new("SRV").add(tls_cfg(Millis::ZERO)));
+        let mut call = Box::pin(acceptor.call(io));
+        assert!(lazy(|cx| call.as_mut().poll(cx)).await.is_pending());
+        crate::MAX_SSL_ACCEPT_COUNTER.with(|c| assert_eq!(c.total(), 1));
+        assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_pending());
+        drop(call);
+        crate::MAX_SSL_ACCEPT_COUNTER.with(|c| assert_eq!(c.total(), 0));
         assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_ready());
         crate::MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(256));
     }

@@ -1,4 +1,48 @@
-//! An implementations of SSL streams for ntex ecosystem
+//! TLS services and I/O filters for the ntex ecosystem.
+//!
+//! Acceptor services upgrade existing [`ntex_io::Io`] connections on the server
+//! side. Connector services open a transport and perform a client handshake.
+//! Both preserve any filters already installed below TLS.
+//!
+//! # Backends
+//!
+//! No backend is enabled by default:
+//!
+//! - `openssl` exposes OpenSSL acceptors, connectors, and a bidirectional filter.
+//! - `rustls` exposes rustls acceptors, connectors, and client/server filters.
+//!   Supply a crypto provider through rustls configuration; `rustls-ring` enables
+//!   its ring provider and is intended to be used together with `rustls`.
+//! - `schannel` exposes Windows Schannel support on Windows. Protocols, cipher
+//!   suites, and trust defaults depend on the operating system.
+//!
+//! Certificate verification, identities, and ALPN are configured through the
+//! selected backend. [`TlsConfig`] controls service handshake timeouts, while
+//! [`max_concurrent_ssl_accept`] controls acceptor readiness backpressure.
+//! Low-level filter constructors and handshake functions have their own timeout
+//! contracts and do not participate in the acceptor concurrency limit.
+//!
+//! After negotiation, [`ntex_io::IoRef::query`] exposes connection metadata such
+//! as [`PeerCertDer`], [`Servername`], [`TlsVersion`], and [`TlsCipher`].
+//! Metadata availability depends on the backend and negotiated session.
+//!
+//! # Handshake configuration
+//!
+//! Attach this configuration to accepted I/O connections, or use it as the
+//! shared state of a connector service:
+//!
+//! ```
+//! use ntex_service::cfg::SharedCfg;
+//! use ntex_tls::TlsConfig;
+//! use ntex_util::time::Seconds;
+//!
+//! let config: SharedCfg = SharedCfg::new("TLS")
+//!     .add(TlsConfig::new().set_handshake_timeout(Seconds(10)))
+//!     .into();
+//! assert_eq!(
+//!     config.get::<TlsConfig>().handshake_timeout(),
+//!     ntex_util::time::Millis(10_000),
+//! );
+//! ```
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::clone_on_copy,
@@ -20,7 +64,9 @@ pub mod schannel;
 
 use ntex_util::services::Counter;
 
+/// Shared timeout configuration for TLS services.
 mod config;
+/// Backend-independent connection metadata.
 mod types;
 mod utils;
 
@@ -36,22 +82,34 @@ pub use self::types::{
 /// with cached readiness can still start handshakes and exceed the limit.
 /// This controls handshake load but is not a strict admission limit.
 ///
-/// By default the limit is 256.
+/// The counter is shared by all TLS acceptors constructed on the same thread.
+/// This call updates the current thread's counter and the initial limit for
+/// threads whose counters have not yet been initialized. It does not update
+/// counters already initialized on other threads; configure the limit before
+/// starting workers, or update each existing worker separately.
+///
+/// The default is 256. A limit of zero keeps acceptor readiness pending;
+/// it does not mean unlimited capacity. Direct handshake functions do not
+/// acquire slots.
 pub fn max_concurrent_ssl_accept(num: usize) {
     MAX_SSL_ACCEPT.store(num, Ordering::Relaxed);
     MAX_SSL_ACCEPT_COUNTER.with(|counts| counts.set_capacity(num));
 }
 
+/// Initial capacity read when a thread first creates its handshake counter.
 static MAX_SSL_ACCEPT: AtomicUsize = AtomicUsize::new(256);
 
 thread_local! {
+    /// Handshake load shared by acceptors on this thread, independent of other workers.
     static MAX_SSL_ACCEPT_COUNTER: Counter = Counter::new(MAX_SSL_ACCEPT.load(Ordering::Relaxed));
 }
 
-/// Ssl error combinded with service error.
+/// Distinguishes a TLS failure from an application service failure.
 #[derive(Debug)]
 pub enum TlsError<E> {
+    /// TLS setup, handshake, or transport failure.
     Tls(std::io::Error),
+    /// Error returned by the wrapped application service.
     Service(E),
 }
 

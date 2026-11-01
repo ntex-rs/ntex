@@ -1,3 +1,4 @@
+//! Client service that composes transport establishment with an OpenSSL handshake.
 use std::io;
 
 use ntex_error::Error;
@@ -9,13 +10,25 @@ use tls_openssl::ssl::SslConnector as OpensslConnector;
 use crate::{TlsConfig, openssl::SslFilter};
 
 #[derive(Clone, Debug)]
+/// Opens a transport and upgrades it to client-side TLS using OpenSSL.
+///
+/// Accepts [`Connect`] requests with [`SharedCfg`] service state. Binding,
+/// readiness, and shutdown are forwarded to the underlying transport connector.
+/// The [`TlsConfig`] timeout covers TLS negotiation after transport establishment,
+/// not DNS resolution or TCP connection setup.
+///
+/// The service strips ports and IPv6 brackets before configuring the OpenSSL
+/// session's host. Verification, client identity, and ALPN otherwise follow the
+/// supplied OpenSSL connector.
 pub struct SslConnector<S> {
+    /// Service responsible for producing the underlying I/O.
     svc: S,
+    /// OpenSSL policy used to configure each client session.
     openssl: OpensslConnector,
 }
 
 impl<A: Address> SslConnector<Connector<A>> {
-    /// Construct new `SslConnector` factory
+    /// Creates a TLS connector using the default network connector.
     pub fn new(openssl: OpensslConnector) -> Self {
         SslConnector {
             openssl,
@@ -23,7 +36,10 @@ impl<A: Address> SslConnector<Connector<A>> {
         }
     }
 
-    /// Use connector to open connections.
+    /// Replaces the default transport connector without changing the TLS policy.
+    ///
+    /// The replacement receives the original request and shared service state.
+    /// Any filters on its returned I/O remain below TLS.
     pub fn connector<F, S>(self, f: impl IntoService<S, SharedCfg, Connect<A>>) -> SslConnector<S>
     where
         S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
@@ -36,7 +52,18 @@ impl<A: Address> SslConnector<Connector<A>> {
 }
 
 impl<S> SslConnector<S> {
-    /// Establish a TLS connection on top of an existing I/O stream.
+    /// Completes a client handshake over existing I/O using this connector's TLS policy.
+    ///
+    /// Does not call the underlying transport service. `host` is passed directly
+    /// to OpenSSL for server-name and verification configuration: supply a DNS
+    /// name or IP address without a port or IPv6 brackets. Existing filters are
+    /// preserved, and the handshake timeout comes from `cfg`'s [`TlsConfig`].
+    ///
+    /// # Errors
+    ///
+    /// OpenSSL configuration failures become [`io::ErrorKind::InvalidInput`].
+    /// Configuration, handshake, timeout, and transport failures are wrapped as
+    /// [`ConnectError`] and tagged with the TLS configuration's service identity.
     pub async fn connect<F: Filter>(
         &self,
         io: Io<F>,
@@ -63,6 +90,7 @@ where
     type Res = Io<Layer<SslFilter, F>>;
     type Error = Error<ConnectError>;
 
+    /// Establishes transport, then upgrades it using the normalized request host.
     async fn call(
         &self,
         req: Connect<A>,

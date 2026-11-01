@@ -1,3 +1,4 @@
+//! Server handshake service with shared per-thread capacity and an I/O-configured timeout.
 use std::{fmt, io};
 
 use ntex_io::{Filter, Io, Layer};
@@ -8,18 +9,24 @@ use super::{SchannelFilter, ServerConfig, accept as accept_io};
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig};
 
 #[derive(Clone)]
-/// Support `TLS` server connections via Windows Schannel
+/// Upgrades existing I/O connections to server-side TLS using Windows Schannel.
 ///
-/// `schannel` feature enables `TlsAcceptor` type
+/// Reads [`TlsConfig`] from each connection's configuration. Readiness observes
+/// the shared per-thread soft limit set by [`crate::max_concurrent_ssl_accept`]
+/// without reserving a slot. Calls hold a slot until completion, error, timeout,
+/// or cancellation; clones share the counter and server credentials.
 ///
-/// Plaintext handshake reassembly has the same input limits as [`accept_io`].
+/// Existing I/O filters are preserved. Plaintext handshake reassembly has the
+/// same input limits as [`super::accept()`].
 pub struct TlsAcceptor {
+    /// Shared server identity and handshake policy.
     config: ServerConfig,
+    /// Thread-local handshake counter shared with other TLS acceptors.
     conns: Counter,
 }
 
 impl TlsAcceptor {
-    /// Create Schannel acceptor service
+    /// Creates an acceptor using the supplied configuration and current thread's counter.
     pub fn new(config: ServerConfig) -> Self {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| TlsAcceptor {
             config,
@@ -38,10 +45,12 @@ impl<F: Filter, St> Service<St, Io<F>> for TlsAcceptor {
     type Res = Io<Layer<SchannelFilter, F>>;
     type Error = io::Error;
 
+    /// Registers capacity-change notifications with the service readiness scope.
     fn bind(&self, ctx: BindCtx<'_>) {
         self.conns.bind(&ctx);
     }
 
+    /// Waits for spare capacity without reserving it.
     async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
@@ -49,6 +58,7 @@ impl<F: Filter, St> Service<St, Io<F>> for TlsAcceptor {
         Ok(())
     }
 
+    /// Counts the handshake and applies the timeout from the connection's registry.
     async fn call(&self, io: Io<F>, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let _guard = self.conns.get();
         let cfg: Cfg<TlsConfig> = io.cfg().ctx().get();

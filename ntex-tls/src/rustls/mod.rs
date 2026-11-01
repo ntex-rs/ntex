@@ -1,4 +1,19 @@
-//! An implementation of TLS streams for ntex backed by rustls
+//! TLS services and filters backed by rustls.
+//!
+//! [`TlsAcceptor`] and [`TlsConnector`] apply [`crate::TlsConfig`] to service
+//! handshakes. [`TlsClientFilter::create`] and [`TlsServerFilter::create`] upgrade
+//! existing I/O directly; only the server constructor takes an explicit timeout.
+//! Neither direct constructor applies acceptor concurrency backpressure.
+//!
+//! Configure certificates, verification, ALPN, and the crypto provider on the
+//! supplied rustls configuration. The filters do not install trust roots or
+//! override those settings.
+//!
+//! Queries expose [`PeerCert`], [`PeerCertChain`], their backend-independent DER
+//! equivalents, [`crate::TlsVersion`], [`crate::TlsCipher`], and
+//! [`ntex_io::types::HttpProtocol`]. Server filters additionally expose received
+//! [`crate::Servername`]. Only `h2` selects HTTP/2; absent or other ALPN values
+//! report HTTP/1.
 use tls_rustls::pki_types::CertificateDer;
 
 mod accept;
@@ -14,13 +29,25 @@ pub use self::server::TlsServerFilter;
 
 use self::stream::Stream;
 
-/// Connection's peer cert
+/// The peer's end-entity certificate as a rustls certificate value.
+///
+/// Filter queries return an owned certificate. No value is returned if the
+/// peer did not supply a certificate.
 #[derive(Debug)]
-pub struct PeerCert<'a>(pub CertificateDer<'a>);
+pub struct PeerCert<'a>(
+    /// DER-encoded certificate; queried values own their bytes.
+    pub CertificateDer<'a>,
+);
 
-/// Connection's peer cert chain
+/// The certificate chain presented by the peer, with its leaf first.
+///
+/// Filter queries return owned certificate values. The chain is not necessarily
+/// complete through a trust root; verification follows the rustls configuration.
 #[derive(Debug)]
-pub struct PeerCertChain<'a>(pub Vec<CertificateDer<'a>>);
+pub struct PeerCertChain<'a>(
+    /// Certificates in the order reported by rustls.
+    pub Vec<CertificateDer<'a>>,
+);
 
 #[cfg(test)]
 mod tests {
@@ -414,11 +441,154 @@ mod tests {
         }
     }
 
+    /// STATEMENT: TLS 1.3 key-update requests produce responses without application writes.
+    ///
+    /// HOW:
+    /// - Drive an in-memory handshake and request a key update from each peer in turn.
+    /// - Transfer each request and check the other filter immediately queues a response.
+    /// - Verify bidirectional plaintext after both key changes.
+    #[ntex::test]
+    async fn key_update_without_application_writes() {
+        use ntex_io::FilterLayer;
+
+        use crate::utils::testing;
+
+        let (client, client_ctx) = testing::io("CLI");
+        let (server, server_ctx) = testing::io("SRV");
+        let (client, server) = testing::handshake(
+            join(
+                TlsClientFilter::create(
+                    client,
+                    client_config(false),
+                    ServerName::try_from("localhost").unwrap(),
+                ),
+                TlsServerFilter::create(server, server_config(false), Millis::ZERO),
+            ),
+            &client_ctx,
+            &server_ctx,
+        );
+        let (client, server) = (client.unwrap(), server.unwrap());
+
+        for client_updates in [true, false] {
+            assert_eq!(testing::transfer(&client_ctx, &server_ctx), 0);
+            assert_eq!(testing::transfer(&server_ctx, &client_ctx), 0);
+            if client_updates {
+                client
+                    .filter()
+                    .stream(|s| s.session.refresh_traffic_keys().unwrap());
+                client
+                    .with_buf(|buf| client.filter().process_write_buf(buf))
+                    .unwrap()
+                    .unwrap();
+                assert!(testing::transfer(&client_ctx, &server_ctx) > 0);
+                assert!(testing::transfer(&server_ctx, &client_ctx) > 0);
+            } else {
+                server
+                    .filter()
+                    .stream(|s| s.session.refresh_traffic_keys().unwrap());
+                server
+                    .with_buf(|buf| server.filter().process_write_buf(buf))
+                    .unwrap()
+                    .unwrap();
+                assert!(testing::transfer(&server_ctx, &client_ctx) > 0);
+                assert!(testing::transfer(&client_ctx, &server_ctx) > 0);
+            }
+
+            client.encode_slice(b"request after key update").unwrap();
+            assert!(testing::transfer(&client_ctx, &server_ctx) > 0);
+            assert_eq!(
+                server.decode(&BytesCodec).unwrap().unwrap(),
+                "request after key update"
+            );
+            server.encode_slice(b"reply after key update").unwrap();
+            assert!(testing::transfer(&server_ctx, &client_ctx) > 0);
+            assert_eq!(
+                client.decode(&BytesCodec).unwrap().unwrap(),
+                "reply after key update"
+            );
+        }
+    }
+
+    /// STATEMENT: An invalid record after negotiation is reported as invalid TLS data.
+    ///
+    /// HOW:
+    /// - Complete a handshake and inject non-TLS bytes through the raw server transport.
+    /// - Check a bounded client receive returns `InvalidData` instead of plaintext or EOF.
+    #[ntex::test]
+    async fn invalid_data_after_handshake() {
+        let (client, server) = pair();
+        let peer = server.clone();
+        let (client, server) = join(
+            TlsClientFilter::create(
+                Io::new(client, SharedCfg::new("CLI")),
+                client_config(false),
+                ServerName::try_from("localhost").unwrap(),
+            ),
+            TlsServerFilter::create(
+                Io::new(server, SharedCfg::new("SRV")),
+                server_config(false),
+                Millis::ZERO,
+            ),
+        )
+        .await;
+        let (client, _server) = (client.unwrap(), server.unwrap());
+        peer.write(b"garbage garbage garbage");
+        let err = ntex_util::time::timeout(Millis(1_000), client.recv(&BytesCodec))
+            .await
+            .expect("invalid record was not rejected")
+            .unwrap_err();
+        let ntex_util::future::Either::Right(err) = err else {
+            panic!("unexpected codec error: {err:?}");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    /// STATEMENT: Connector timeout errors use service configuration rather than I/O configuration.
+    ///
+    /// HOW:
+    /// - Return an idle transport with its TLS timeout disabled from a custom connector.
+    /// - Set a 50 ms service timeout and check the bounded call returns `TimedOut` with
+    ///   the service's configured diagnostic identity.
+    #[ntex::test]
+    async fn connector_handshake_timeout() {
+        use ntex_error::ErrorDiagnostic;
+
+        let (client, _server) = pair();
+        let client = Rc::new(RefCell::new(Some(Io::new(
+            client,
+            SharedCfg::new("IO")
+                .service("transport")
+                .add(tls_cfg(Millis::ZERO)),
+        ))));
+        let connector = TlsConnector::<Connector<&str>>::from(client_config(false)).connector(
+            fn_service(async move |_: Connect<&str>| {
+                Ok::<_, Error<ConnectError>>(client.borrow_mut().take().unwrap())
+            }),
+        );
+        let connector = Pipeline::new(
+            SharedCfg::new("CLI")
+                .service("tls-client")
+                .add(tls_cfg(Millis(50)))
+                .build(),
+            connector,
+        );
+        let err =
+            ntex_util::time::timeout(Millis(1_000), connector.call(Connect::new("localhost")))
+                .await
+                .expect("connector ignored its handshake timeout")
+                .unwrap_err();
+        assert_eq!(err.service(), Some("tls-client"));
+        let ConnectError::Io(err) = &*err else {
+            panic!("unexpected connector error: {err:?}");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
     /// STATEMENT: A stalled server handshake fails with the configured timeout.
     ///
     /// HOW:
     /// - Keep the peer open without sending handshake data and configure a 50 ms timeout.
-    /// - Call the acceptor and check for `TimedOut`.
+    /// - Call the acceptor and check for `TimedOut` and released handshake capacity.
     #[ntex::test]
     async fn handshake_timeout() {
         let (_client, server) = pair();
@@ -428,6 +598,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        MAX_SSL_ACCEPT_COUNTER.with(|c| assert_eq!(c.total(), 0));
     }
 
     /// STATEMENT: Peer disconnects during handshakes propagate through server and connector errors.
@@ -483,8 +654,11 @@ mod tests {
     /// HOW:
     /// - Set capacity to one and start a stalled handshake through a bound acceptor.
     /// - Check readiness becomes pending, close the peer, then check failure restores readiness.
+    /// - Poll another stalled call, drop it, and check cancellation releases its slot and readiness.
     #[ntex::test]
     async fn acceptor_waits_for_capacity() {
+        use std::future::Future;
+
         MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(1));
         let acceptor = Pipeline::new((), TlsAcceptor::new(server_config(false)));
 
@@ -505,6 +679,16 @@ mod tests {
         // capacity is released by the failed handshake
         client.close().await;
         assert!(hnd.await.unwrap().is_err());
+        assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_ready());
+
+        let (_client, server) = pair();
+        let io = Io::new(server, SharedCfg::new("SRV").add(tls_cfg(Millis::ZERO)));
+        let mut call = Box::pin(acceptor.call(io));
+        assert!(lazy(|cx| call.as_mut().poll(cx)).await.is_pending());
+        MAX_SSL_ACCEPT_COUNTER.with(|c| assert_eq!(c.total(), 1));
+        assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_pending());
+        drop(call);
+        MAX_SSL_ACCEPT_COUNTER.with(|c| assert_eq!(c.total(), 0));
         assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_ready());
         MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(256));
     }

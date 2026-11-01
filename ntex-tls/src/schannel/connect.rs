@@ -1,3 +1,4 @@
+//! Client service that composes transport establishment with a Schannel handshake.
 use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
@@ -7,8 +8,19 @@ use super::{ClientConfig, SchannelFilter, connect as connect_io};
 use crate::TlsConfig;
 
 #[derive(Clone, Debug)]
+/// Opens a transport and upgrades it to client-side TLS using Windows Schannel.
+///
+/// Accepts [`Connect`] requests with [`SharedCfg`] service state. Binding,
+/// readiness, and shutdown are forwarded to the underlying transport connector.
+/// The [`TlsConfig`] timeout covers negotiation after transport establishment,
+/// not DNS resolution or TCP connection setup.
+///
+/// The request host is stripped of its port and IPv6 brackets for Schannel.
+/// Clones share cached credentials and TLS session-resumption state.
 pub struct TlsConnector<Sf> {
+    /// Service responsible for producing the underlying I/O.
     svc: Sf,
+    /// Client authentication, ALPN, and shared credential-cache policy.
     config: ClientConfig,
 }
 
@@ -19,12 +31,15 @@ impl<A: Address> Default for TlsConnector<Connector<A>> {
 }
 
 impl<A: Address> TlsConnector<Connector<A>> {
-    /// Construct new Schannel connector factory.
+    /// Creates a connector with default transport and [`ClientConfig`] settings.
+    ///
+    /// Server verification is enabled, no client certificate is configured, and
+    /// ALPN offers `h2` followed by `http/1.1`.
     pub fn new() -> Self {
         Self::with_config(ClientConfig::default())
     }
 
-    /// Construct new Schannel connector factory with custom configuration.
+    /// Creates a connector with default transport and an explicit TLS policy.
     pub fn with_config(config: ClientConfig) -> Self {
         TlsConnector {
             svc: Connector::default(),
@@ -32,8 +47,9 @@ impl<A: Address> TlsConnector<Connector<A>> {
         }
     }
 
-    /// Use connector to open connections.
+    /// Replaces the default transport connector without changing the TLS policy.
     ///
+    /// The replacement receives the original request and shared service state.
     /// Existing I/O filters are preserved below the Schannel layer.
     pub fn connector<F, S>(self, f: impl IntoService<S, SharedCfg, Connect<A>>) -> TlsConnector<S>
     where
@@ -57,6 +73,7 @@ where
     ntex_service::forward_ready!(SharedCfg, svc);
     ntex_service::forward_shutdown!(SharedCfg, svc);
 
+    /// Establishes transport, then negotiates with the normalized host and configured timeout.
     async fn call(
         &self,
         message: Connect<A>,
