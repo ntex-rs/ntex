@@ -102,6 +102,11 @@ mod tests {
     use ntex_util::future::lazy;
     use tls_rustls::RootCertStore;
 
+    /// STATEMENT: A rustls connector is ready but reports failure against a non-TLS peer.
+    ///
+    /// HOW:
+    /// - Build and clone connectors from owned and shared configuration and check the debug name.
+    /// - Check immediate readiness, then assert a call to a transport-dropping local service fails.
     #[ntex::test]
     async fn test_rustls_connect() {
         let server = ntex::server::test_server(async || {

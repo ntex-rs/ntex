@@ -59,6 +59,11 @@ pub enum TlsError<E> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: The configured handshake limit updates both the global limit and local capacity.
+    ///
+    /// HOW:
+    /// - Set the limit to 256 and check the atomic value.
+    /// - Hold 255 counter guards, then the final guard, and check availability at each step.
     #[test]
     fn max_concurrent_accept() {
         // the default value, other tests use the limit

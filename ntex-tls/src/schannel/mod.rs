@@ -616,8 +616,11 @@ impl std::error::Error for SspiError {}
 mod tests {
     use super::*;
 
-    /// Credentials errors are reported, Schannel rejects a client key that
-    /// is not persisted.
+    /// STATEMENT: Schannel reports a credentials error when a client key is not persisted.
+    ///
+    /// HOW:
+    /// - Generate and import a client certificate using `PKCS12_NO_PERSIST_KEY`.
+    /// - Request outbound credentials and check the underlying `SspiError` is `SEC_E_UNKNOWN_CREDENTIALS`.
     #[cfg(feature = "openssl")]
     #[test]
     fn test_credentials_error_is_reported() {
@@ -682,6 +685,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Client configurations share cached credentials until certificate-validation settings change.
+    ///
+    /// HOW:
+    /// - Compare credential pointers across repeated calls and a configuration clone.
+    /// - Disable validation in a clone and check only that clone gets a different credential allocation.
     #[test]
     fn test_shared_credentials() {
         let cfg = ClientConfig::new();
@@ -695,6 +703,11 @@ mod tests {
         assert!(Arc::ptr_eq(&cred, &cfg.credentials().unwrap()));
     }
 
+    /// STATEMENT: ALPN encoding produces the Schannel header and length-prefixed protocol list.
+    ///
+    /// HOW:
+    /// - Check an empty protocol list produces no buffer.
+    /// - Encode `h2` and `http/1.1` and compare header fields, native-endian lengths, and protocol bytes.
     #[test]
     fn test_alpn_buffer() {
         assert!(alpn_buffer::<&[u8]>(&[]).is_none());
@@ -710,6 +723,10 @@ mod tests {
         assert_eq!(&buf[10..], wire);
     }
 
+    /// STATEMENT: An empty ALPN protocol is rejected by configuration.
+    ///
+    /// HOW:
+    /// - Set an ALPN list containing an empty protocol and require the length-validation panic.
     #[test]
     #[should_panic(expected = "ALPN protocol must be 1..=255 bytes")]
     fn test_alpn_empty_protocol() {

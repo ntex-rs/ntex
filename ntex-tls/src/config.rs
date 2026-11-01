@@ -59,6 +59,11 @@ impl TlsConfig {
 mod tests {
     use super::*;
 
+    /// STATEMENT: The default handshake timeout can be overridden or disabled.
+    ///
+    /// HOW:
+    /// - Check the default five-second timeout, change it to one second, then set it to zero.
+    /// - Compare the reported timeout in milliseconds after each change.
     #[test]
     fn tls_config() {
         let cfg = TlsConfig::default();

@@ -85,6 +85,11 @@ mod tests {
     use ntex_service::Pipeline;
     use tls_openssl::ssl::SslMethod;
 
+    /// STATEMENT: An OpenSSL connector is ready but reports failure against a non-TLS peer.
+    ///
+    /// HOW:
+    /// - Construct and clone the connector, check its debug name, and await readiness.
+    /// - Connect to a local service that drops the transport and assert the call fails.
     #[ntex::test]
     async fn test_openssl_connect() {
         let server = ntex::server::test_server(async || {

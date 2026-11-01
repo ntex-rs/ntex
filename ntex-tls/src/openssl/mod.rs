@@ -550,6 +550,12 @@ pub(crate) mod tests {
         (client.unwrap(), server.unwrap())
     }
 
+    /// STATEMENT: Peer-close notifications release TLS borrows before waking reentrant shutdown.
+    ///
+    /// HOW:
+    /// - Close each side in turn using a transport with an inline wake hook.
+    /// - Check the hook sees no TLS borrow, pending data is delivered in both directions,
+    ///   and both transports reach closed status.
     #[ntex::test]
     async fn peer_close_inline_waker() {
         use crate::utils::testing;
@@ -585,7 +591,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// The chain starts with the peer's certificate on both sides.
+    /// STATEMENT: DER certificate queries return the peer's leaf first on both sides.
+    ///
+    /// HOW:
+    /// - Generate a certificate chain and present its leaf and intermediate from both peers.
+    /// - Compare each peer's `PeerCertDer` and `PeerCertChainDer` with the original DER bytes.
     #[ntex::test]
     async fn peer_cert_der() {
         let [leaf, intermediate, _] = cert_chain();
@@ -630,7 +640,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// `accept` uses the provided `Ssl` instead of the acceptor's context.
+    /// STATEMENT: `accept` uses the supplied `Ssl` configuration and exposes negotiated metadata.
+    ///
+    /// HOW:
+    /// - Supply a server `Ssl` with a generated certificate and request a different client certificate.
+    /// - Check both peer certificates, server SNI, TLS 1.3, and matching cipher metadata when supported.
     #[ntex::test]
     async fn accept_with_ssl() {
         let [leaf, intermediate, _] = cert_chain();
@@ -690,6 +704,11 @@ pub(crate) mod tests {
         }
     }
 
+    /// STATEMENT: TLS 1.2 queries report the negotiated version and IANA cipher names.
+    ///
+    /// HOW:
+    /// - Handshake with the TLS 1.2 configuration and check both peers' version queries.
+    /// - When cipher queries are supported, compare their IDs and validate the IANA name.
     #[ntex::test]
     async fn tls12_version_and_cipher() {
         let (client, server) = handshake_pair().await;
@@ -708,6 +727,12 @@ pub(crate) mod tests {
         }
     }
 
+    /// STATEMENT: OpenSSL services expose negotiated metadata and carry data through clean shutdown.
+    ///
+    /// HOW:
+    /// - Connect in-memory services with `h2` and check ALPN, SNI, the server certificate,
+    ///   and absent PSK identity, client certificates, and unsupported query results.
+    /// - Receive 256 KiB on the server and verify client shutdown yields peer EOF.
     #[ntex::test]
     async fn acceptor_and_connector() {
         use std::{cell::RefCell, rc::Rc};
@@ -774,6 +799,11 @@ pub(crate) mod tests {
         res.unwrap();
     }
 
+    /// STATEMENT: Connections without ALPN or SNI report HTTP/1 and no server name.
+    ///
+    /// HOW:
+    /// - Handshake using a client `Ssl` without ALPN or a configured host name.
+    /// - Check the client's HTTP protocol and the absence of the server's `Servername`.
     #[ntex::test]
     async fn without_alpn_and_sni() {
         let (client, server) = pair();
@@ -797,6 +827,11 @@ pub(crate) mod tests {
         assert!(server.query::<Servername>().as_ref().is_none());
     }
 
+    /// STATEMENT: Shutdown succeeds after a peer disconnects without sending `close_notify`.
+    ///
+    /// HOW:
+    /// - Complete a handshake, drop the server, and check the client receives EOF.
+    /// - Await client shutdown and assert it succeeds.
     #[ntex::test]
     async fn shutdown_after_peer_disconnect() {
         let (client, server) = handshake_pair().await;
@@ -806,6 +841,11 @@ pub(crate) mod tests {
         client.shutdown().await.unwrap();
     }
 
+    /// STATEMENT: Invalid TLS records are rejected after a successful handshake.
+    ///
+    /// HOW:
+    /// - Handshake an in-memory pair, then inject plaintext garbage through the raw server transport.
+    /// - Check that receiving on the TLS client returns an error.
     #[ntex::test]
     async fn invalid_data_after_handshake() {
         let (client, server) = pair();
@@ -827,6 +867,12 @@ pub(crate) mod tests {
         assert!(client.recv(&BytesCodec).await.is_err());
     }
 
+    /// STATEMENT: Handshake failures preserve timeout and disconnect errors and reject non-TLS data.
+    ///
+    /// HOW:
+    /// - Stall an acceptor with a 50 ms timeout and check for `TimedOut`.
+    /// - Disconnect during server negotiation and check for `UnexpectedEof`; also check
+    ///   that plain HTTP input and a disconnected connector peer produce errors.
     #[ntex::test]
     async fn handshake_errors() {
         use ntex_service::Pipeline;
@@ -870,6 +916,11 @@ pub(crate) mod tests {
         assert!(res.is_err());
     }
 
+    /// STATEMENT: Acceptor readiness waits for handshake capacity and resumes when it is released.
+    ///
+    /// HOW:
+    /// - Set capacity to one and start a stalled handshake through a bound acceptor.
+    /// - Check readiness becomes pending, close the peer, then check failure restores readiness.
     #[ntex::test]
     async fn acceptor_waits_for_capacity() {
         use ntex_service::Pipeline;
@@ -899,7 +950,11 @@ pub(crate) mod tests {
         crate::MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(256));
     }
 
-    /// Output written while a handshake is in progress must not be lost.
+    /// STATEMENT: Output queued before the TLS handshake finishes is not lost.
+    ///
+    /// HOW:
+    /// - Encode `hello` before driving the client handshake, then spawn a client read to progress it.
+    /// - Complete the server handshake and check it receives `hello` within a bounded wait.
     #[ntex::test]
     async fn write_during_handshake_is_not_lost() {
         let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
@@ -948,8 +1003,11 @@ pub(crate) mod tests {
         assert_eq!(&item[..], b"hello");
     }
 
-    /// A drained ciphertext buffer goes back to the read buffer cache, a
-    /// dropped one would cost an allocation for every read.
+    /// STATEMENT: A drained ciphertext buffer returns to the read buffer cache.
+    ///
+    /// HOW:
+    /// - Prime the cache with known page allocations, then send and verify `hello`.
+    /// - Allocate two pages again and check one reuses the recorded ciphertext-buffer pointer.
     #[ntex::test]
     async fn drained_source_is_cached() {
         let (client, server) = handshake_pair().await;
@@ -977,8 +1035,11 @@ pub(crate) mod tests {
         );
     }
 
-    /// Buffered output must not look like output produced by reading, that
-    /// would pause reads while the write buffer is full.
+    /// STATEMENT: Already-buffered output does not pause incoming TLS reads under write backpressure.
+    ///
+    /// HOW:
+    /// - Stop the peer reading and queue output above a 64-byte write watermark, including a partial page.
+    /// - Send three client messages and check direct server decoding receives each without lifting a read pause.
     #[ntex::test]
     async fn read_is_not_paused_by_buffered_output() {
         let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
@@ -1098,7 +1159,11 @@ pub(crate) mod tests {
         records
     }
 
-    /// Small pages are joined with following pages into one record.
+    /// STATEMENT: Adjacent small pages are gathered into TLS records without changing plaintext.
+    ///
+    /// HOW:
+    /// - Queue varied page sizes and write them through a handshaken stream.
+    /// - Check the source drains, count the resulting records, and compare decrypted bytes with the input.
     #[test]
     fn write_gathers_pages_into_records() {
         let (mut client, mut server) = stream_pair();
@@ -1135,9 +1200,12 @@ pub(crate) mod tests {
         }
     }
 
-    /// Joined pages that wait for the handshake keep their bytes while
-    /// other writes reuse the staging buffer, also without
-    /// `SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER`.
+    /// STATEMENT: Gathered writes retain their bytes across handshake retries and staging-buffer reuse.
+    ///
+    /// HOW:
+    /// - Queue two pages before the handshake without `SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER`.
+    /// - Write different pages on another stream, finish the first handshake, and retry its write.
+    /// - Check the first queue drains into one record containing exactly its original bytes.
     #[test]
     fn gathered_write_retried_after_handshake() {
         let mut ctx = ssl::SslContext::builder(SslMethod::tls()).unwrap();
