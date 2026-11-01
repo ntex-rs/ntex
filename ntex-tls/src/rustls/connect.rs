@@ -1,3 +1,4 @@
+//! Client service that composes transport establishment with a rustls handshake.
 use std::{fmt, io, sync::Arc};
 
 use ntex_error::Error;
@@ -8,18 +9,36 @@ use tls_rustls::{ClientConfig, pki_types::ServerName};
 
 use crate::{TlsConfig, rustls::TlsClientFilter};
 
-/// Rustls connector factory
+/// Opens a transport and upgrades it to client-side TLS using rustls.
+///
+/// The service accepts [`Connect`] requests with [`SharedCfg`] state. It strips
+/// ports and IPv6 brackets from the request host for rustls server-name handling.
+/// The supplied [`ClientConfig`] determines trust, client identity, and ALPN.
+///
+/// Binding, readiness, and shutdown are forwarded to the underlying connector.
+/// The [`TlsConfig`] timeout starts after that connector returns, so it does not
+/// bound DNS resolution or TCP connection establishment. Handshake errors are
+/// returned as [`ConnectError`] with the TLS configuration's service identity.
 pub struct TlsConnector<S> {
+    /// Service responsible for producing the underlying, possibly filtered, I/O.
     svc: S,
+    /// Shared TLS policy and session configuration.
     config: Arc<ClientConfig>,
 }
 
 impl<A: Address> TlsConnector<Connector<A>> {
+    /// Creates a TLS connector using the default network connector.
+    ///
+    /// Use the `From<Arc<ClientConfig>>` implementation to share an existing
+    /// rustls configuration instead of transferring an owned value.
     pub fn new(config: ClientConfig) -> Self {
         TlsConnector::from(Arc::new(config))
     }
 
-    /// Use connector to open connections.
+    /// Replaces the default transport connector without changing the TLS policy.
+    ///
+    /// The replacement receives the original request and shared service state.
+    /// Any filters on its returned I/O remain below TLS.
     pub fn connector<F, S>(self, f: impl IntoService<S, SharedCfg, Connect<A>>) -> TlsConnector<S>
     where
         S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
@@ -73,6 +92,7 @@ where
     type Res = Io<Layer<TlsClientFilter, F>>;
     type Error = Error<ConnectError>;
 
+    /// Establishes transport first, then validates the server name and times the TLS handshake.
     async fn call(
         &self,
         req: Connect<A>,

@@ -1,4 +1,20 @@
-//! An implementation of TLS streams backed by Windows Schannel.
+//! TLS services and I/O filters backed by Windows Schannel.
+//!
+//! Available on Windows with the `schannel` feature. [`TlsAcceptor`] and
+//! [`TlsConnector`] apply [`crate::TlsConfig`] to service handshakes; the free
+//! [`accept()`] and [`connect()`] functions do not impose a timeout or concurrency
+//! limit. All entry points preserve existing I/O filters below TLS.
+//!
+//! [`ClientConfig`] verifies server certificates and names by default using
+//! Windows policy. [`ServerConfig::request_client_cert`] requests an optional
+//! certificate but leaves its trust validation to the application. Certificate
+//! identities come from a PFX archive or an existing Windows certificate store.
+//!
+//! Protocol versions and cipher suites follow system policy and OS support.
+//! Both configurations offer `h2` and `http/1.1` by default. Metadata queries
+//! expose [`PeerCert`], the backend-independent DER certificate types, received
+//! SNI, TLS version, cipher, and [`ntex_io::types::HttpProtocol`]. Only negotiated
+//! `h2` reports HTTP/2; absent or other ALPN values report HTTP/1.
 #![cfg(windows)]
 use std::sync::{Arc, Mutex, PoisonError};
 use std::{any, cell::UnsafeCell, io, mem, ptr, task::Poll};
@@ -32,6 +48,8 @@ pub use self::connect::TlsConnector;
 ///
 /// Clones share the credentials handle, so connections made with the same
 /// configuration can resume TLS sessions.
+/// Changing the certificate or verification mode creates a separate credential
+/// cache for the modified configuration; existing clones keep their old cache.
 ///
 /// Schannel offers a cached session's protocol version only. After a TLS 1.2
 /// session with a server, the next connection to the same server name offers
@@ -40,10 +58,11 @@ pub use self::connect::TlsConnector;
 /// starts with an empty cache.
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
+    /// Whether Schannel performs automatic certificate and server-name validation.
     verify: bool,
     /// Prebuilt `SECBUFFER_APPLICATION_PROTOCOLS` buffer, `None` disables ALPN.
     alpn: Option<Arc<[u8]>>,
-    /// Client certificate, sent when the server requests one
+    /// Optional client identity, retained for as long as its credentials are in use.
     cert: Option<Certificate>,
     /// Lazily acquired credentials, Schannel caches sessions per credentials handle.
     cred: Arc<Mutex<Option<Arc<Credentials>>>>,
@@ -56,9 +75,10 @@ impl Default for ClientConfig {
 }
 
 impl ClientConfig {
-    /// Construct default Schannel client configuration.
+    /// Constructs a configuration with server verification enabled and no client identity.
     ///
-    /// ALPN offers `h2` and `http/1.1`.
+    /// ALPN offers `h2` and `http/1.1`, in that order. Schannel does not
+    /// automatically choose a client certificate from a Windows store.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -69,7 +89,12 @@ impl ClientConfig {
         }
     }
 
-    /// Accept invalid server certificates and hostnames.
+    /// Controls whether invalid server certificates and hostnames are accepted.
+    ///
+    /// Passing `true` disables automatic peer authentication and permits
+    /// impersonation; use only when authentication is handled separately.
+    /// Passing `false` restores validation. Either call detaches the credential
+    /// cache, leaving other clones unchanged.
     #[must_use]
     pub fn danger_accept_invalid_certs(mut self, accept_invalid_certs: bool) -> Self {
         self.verify = !accept_invalid_certs;
@@ -80,7 +105,7 @@ impl ClientConfig {
 
     /// Set ALPN protocols offered to the server, in preference order.
     ///
-    /// An empty list disables ALPN.
+    /// An empty list disables ALPN. This does not replace the shared credentials.
     ///
     /// # Panics
     ///
@@ -94,7 +119,9 @@ impl ClientConfig {
 
     /// Set the client certificate, sent when the server requests one.
     ///
-    /// Without it, no certificate is sent.
+    /// Without it, no certificate is sent. The certificate and its private key
+    /// are retained by the configuration and acquired credentials. This creates
+    /// a fresh credential cache without changing other clones.
     #[must_use]
     pub fn set_client_cert(mut self, cert: Certificate) -> Self {
         self.cert = Some(cert);
@@ -103,6 +130,10 @@ impl ClientConfig {
         self
     }
 
+    /// Acquires credentials once per shared cache, retaining only successful acquisitions.
+    ///
+    /// The lock serializes initialization across clones and threads; session
+    /// resumption state stays attached to the resulting Schannel handle.
     fn credentials(&self) -> io::Result<Arc<Credentials>> {
         let mut cred = self.cred.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(cred) = &*cred {
@@ -118,18 +149,24 @@ impl ClientConfig {
 ///
 /// Clones share the credentials handle, so Schannel can resume TLS sessions
 /// of connections accepted with the same configuration.
+/// A client certificate is not requested by default, and protocol versions and
+/// cipher suites follow Windows policy.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     /// Prebuilt `SECBUFFER_APPLICATION_PROTOCOLS` buffer, `None` disables ALPN.
     alpn: Option<Arc<[u8]>>,
+    /// Requests proof of client key possession, not certificate trust validation.
     request_client_cert: bool,
+    /// Shared server credentials that retain the configured identity.
     cred: Arc<Credentials>,
 }
 
 impl ServerConfig {
     /// Construct Schannel server configuration with the server certificate.
     ///
-    /// ALPN accepts `h2` and `http/1.1`.
+    /// ALPN accepts `h2` and `http/1.1`, in that order. Client certificates are
+    /// not requested. Credentials are acquired immediately and retain `cert`
+    /// for the lifetime of configurations and connections sharing them.
     ///
     /// # Errors
     ///
@@ -171,8 +208,9 @@ impl ServerConfig {
     }
 }
 
-/// Schannel credentials handle.
+/// Shared Schannel credentials, released when the last configuration or context drops.
 struct Credentials {
+    /// Initialized handle owned by this value and freed by `FreeCredentialsHandle`.
     handle: SecHandle,
     /// Keeps the certificate alive
     _cert: Option<Certificate>,
@@ -202,6 +240,10 @@ impl Credentials {
         Self::acquire(SECPKG_CRED_INBOUND, flags, Some(cert))
     }
 
+    /// Acquires inbound or outbound credentials using the OS-supported configuration structure.
+    ///
+    /// Retains the certificate alongside the handle. Failure is reported
+    /// directly; a modern-credentials error does not trigger a legacy retry.
     fn acquire(direction: u32, flags: u32, cert: Option<Certificate>) -> io::Result<Self> {
         // Schannel keeps its own reference to the certificate
         let mut certs = cert.as_ref().map(|cert| cert.as_ptr().cast_mut());
@@ -288,19 +330,34 @@ impl Drop for Credentials {
     }
 }
 
-/// Connection's peer certificate in DER encoding.
+/// The peer's end-entity certificate in DER encoding.
+///
+/// Equivalent to querying [`PeerCertDer`]. No value is returned if the peer
+/// supplied no certificate. In particular, a requested client certificate
+/// still requires application-level trust validation.
 #[derive(Clone, Debug)]
-pub struct PeerCert(pub Vec<u8>);
+pub struct PeerCert(
+    /// Owned DER-encoded certificate bytes.
+    pub Vec<u8>,
+);
 
 #[derive(Debug)]
-/// An implementation of TLS streams backed by Windows Schannel.
+/// Encrypts and decrypts either side of a Windows Schannel TLS connection.
+///
+/// Created by this module's handshake functions and services. Application
+/// writes wait during post-handshake negotiation. Shutdown sends `close_notify`
+/// after pending writes and waits for peer closure or transport EOF.
 pub struct SchannelFilter {
+    /// Single-threaded state, borrowed only within non-reentrant filter operations.
     inner: UnsafeCell<Schannel>,
 }
 
+/// Per-connection record-processing and handshake state.
 #[derive(Debug)]
 struct Schannel {
+    /// Owns the SSPI context and the credentials keeping its identity alive.
     ctx: Context,
+    /// Controls when records may be decrypted, application writes encrypted, or closure sent.
     state: State,
     /// Handshake error, reported by `connect()` or `accept()` after the alert is flushed
     error: Option<io::Error>,
@@ -308,9 +365,12 @@ struct Schannel {
     peer_closed: bool,
 }
 
+/// Lifecycle governing handshake driving, application writes, and close-alert generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
+    /// Initial negotiation; application writes remain queued.
     Handshaking,
+    /// Established connection able to encrypt application writes.
     Streaming,
     /// `close_notify` has been queued
     Closed,
@@ -321,6 +381,7 @@ enum State {
 }
 
 impl FilterLayer for SchannelFilter {
+    /// Exposes established-session metadata; initial and failed handshakes expose none.
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         let inner = self.inner();
         if matches!(inner.state, State::Handshaking | State::Failed) {
@@ -347,6 +408,7 @@ impl FilterLayer for SchannelFilter {
         }
     }
 
+    /// Defers closure during renegotiation, otherwise sends the alert once and waits for the peer.
     fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
         let inner = self.inner_mut();
         if inner.state == State::Streaming {
@@ -368,6 +430,7 @@ impl FilterLayer for SchannelFilter {
         }
     }
 
+    /// Processes records and releases the state borrow before notifying I/O of peer closure.
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         let (result, peer_closed) = {
             #[cfg(test)]
@@ -389,6 +452,7 @@ impl FilterLayer for SchannelFilter {
         result
     }
 
+    /// Encrypts application data only in the streaming state, preserving it otherwise.
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
         let inner = self.inner_mut();
         if inner.state != State::Streaming {
@@ -399,6 +463,10 @@ impl FilterLayer for SchannelFilter {
 }
 
 impl Schannel {
+    /// Alternates handshake and record processing until more input is needed.
+    ///
+    /// Post-handshake messages may still need SSPI processing after a local
+    /// close alert, but must not reopen the connection for application writes.
     fn process_read_buf(&mut self, rb: &FilterBuf<'_>) -> io::Result<()> {
         loop {
             match self.state {
@@ -426,6 +494,10 @@ impl Schannel {
     }
 
     /// Drives the handshake with buffered input, returns `true` once it is done.
+    ///
+    /// Initial failures that generated an alert are saved until the outer
+    /// handshake driver can flush it. Post-handshake failures propagate
+    /// immediately. Completing renegotiation also resumes queued writes.
     fn handshake(&mut self, rb: &FilterBuf<'_>) -> io::Result<bool> {
         let renegotiating = self.state == State::Renegotiating;
         loop {
@@ -494,38 +566,54 @@ impl Schannel {
         Ok(res)
     }
 
+    /// Measures buffered ciphertext to detect lack of progress during renegotiation.
     fn input_len(rb: &FilterBuf<'_>) -> usize {
         rb.with_read_src(|src| src.as_ref().map_or(0, ntex_bytes::BytesMut::len))
     }
 
+    /// Encrypts pending plaintext into the lower filter's output pages.
     fn encrypt_writes(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
         buf.with_write_buffers(|src, dst| self.ctx.encrypt_pages(src, dst))
     }
 }
 
 impl SchannelFilter {
+    /// Borrows state without overlapping any mutable or reentrant filter operation.
     fn inner(&self) -> &Schannel {
         // SAFETY: the filter is single-threaded and no method re-enters the
         // filter while it holds a reference to the state.
         unsafe { &*self.inner.get() }
     }
 
+    /// Borrows state exclusively; callers must release it before reentrant I/O notifications.
     #[allow(clippy::mut_from_ref)]
     fn inner_mut(&self) -> &mut Schannel {
         // SAFETY: see inner().
         unsafe { &mut *self.inner.get() }
     }
 
+    /// Reports only initial negotiation; post-handshake exchanges are driven by the filter.
     fn is_handshaking(&self) -> bool {
         self.inner().state == State::Handshaking
     }
 
+    /// Transfers a deferred initial-handshake error to the outer driver for alert flushing.
     fn take_error(&self) -> Option<io::Error> {
         self.inner_mut().error.take()
     }
 }
 
 /// Performs a client TLS handshake over `io`.
+///
+/// `domain` is passed to Schannel as the target name for authentication and SNI;
+/// supply a DNS name or IP address without a port or IPv6 brackets. Existing
+/// filters are preserved. No handshake timeout or concurrency limit is applied;
+/// [`TlsConnector`] adds the service-configured timeout.
+///
+/// # Errors
+///
+/// Returns credential-acquisition, verification, negotiation, or transport
+/// errors. Premature transport EOF returns [`io::ErrorKind::UnexpectedEof`].
 pub async fn connect<F: Filter>(
     io: Io<F>,
     domain: &str,
@@ -536,9 +624,17 @@ pub async fn connect<F: Filter>(
 
 /// Performs a server TLS handshake over `io`.
 ///
+/// Preserves existing filters and applies neither a handshake timeout nor the
+/// acceptor concurrency limit. Use [`TlsAcceptor`] for those service policies.
+///
 /// Plaintext handshake reassembly is limited to 64 KiB per message, including
 /// its four-byte header, and 1024 records. Exceeding either limit or receiving an
 /// empty plaintext handshake record fails with [`io::ErrorKind::InvalidData`].
+///
+/// # Errors
+///
+/// Returns negotiation or transport errors in addition to the reassembly errors
+/// above. Premature transport EOF returns [`io::ErrorKind::UnexpectedEof`].
 pub async fn accept<F: Filter>(
     io: Io<F>,
     config: &ServerConfig,
@@ -546,6 +642,7 @@ pub async fn accept<F: Filter>(
     handshake(io, Context::server(config)).await
 }
 
+/// Installs the role-specific context and drives initial negotiation, flushing deferred alerts.
 async fn handshake<F: Filter>(io: Io<F>, ctx: Context) -> io::Result<Io<Layer<SchannelFilter, F>>> {
     let filter = SchannelFilter {
         inner: UnsafeCell::new(Schannel {
@@ -569,6 +666,10 @@ async fn handshake<F: Filter>(io: Io<F>, ctx: Context) -> io::Result<Io<Layer<Sc
 /// ALPN protocols offered or accepted by default.
 const DEFAULT_ALPN: &[&[u8]] = &[b"h2", b"http/1.1"];
 
+/// Encodes ALPN wire names inside a native-endian SSPI application-protocols buffer.
+///
+/// An empty list disables ALPN. Panics for empty or oversized protocol names,
+/// or when the length-prefixed wire list cannot fit in a `u16`.
 fn alpn_buffer<T: AsRef<[u8]>>(protocols: &[T]) -> Option<Arc<[u8]>> {
     // Layout for SECBUFFER_APPLICATION_PROTOCOLS:
     // u32 ProtocolListsSize, then one or more protocol lists.
@@ -597,13 +698,17 @@ fn alpn_buffer<T: AsRef<[u8]>>(protocols: &[T]) -> Option<Arc<[u8]>> {
     Some(buf.into())
 }
 
+/// Wraps an SSPI failure without losing its operation name or HRESULT bits.
 fn sspi_error(context: &'static str, status: windows_sys::core::HRESULT) -> io::Error {
     io::Error::other(SspiError { context, status })
 }
 
+/// Diagnostic payload for an `io::ErrorKind::Other` SSPI failure.
 #[derive(Debug)]
 struct SspiError {
+    /// Operation or queried attribute that failed.
     context: &'static str,
+    /// Original signed HRESULT, formatted as an unsigned hexadecimal value.
     status: windows_sys::core::HRESULT,
 }
 

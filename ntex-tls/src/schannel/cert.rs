@@ -1,3 +1,7 @@
+//! Certificate-store access and ownership of Schannel identities and imported keys.
+//!
+//! PFX imports use isolated persisted CNG keys for Schannel compatibility.
+//! Store lookups borrow existing identities without deleting their private keys.
 use std::{fmt, fmt::Write, io, ptr, sync::Arc};
 
 use windows_sys::Win32::Security::Cryptography::{
@@ -23,7 +27,12 @@ use windows_sys::Win32::Security::Cryptography::{
 /// Identifies a server, see [`ServerConfig`](super::ServerConfig), or a
 /// client, see [`ClientConfig::set_client_cert()`](super::ClientConfig::set_client_cert).
 ///
-/// Clones share the certificate.
+/// Clones share the certificate and keep its associated store alive. Keys
+/// imported with [`Self::from_pkcs12`] are cleaned up after the final owner drops;
+/// keys loaded from system stores remain owned by those stores.
+///
+/// Loading an identity does not validate its certificate chain or guarantee that
+/// the operating system will permit its private key to be used in a handshake.
 #[derive(Clone)]
 pub struct Certificate(Arc<CertContext>);
 
@@ -94,6 +103,11 @@ impl Certificate {
     /// Loads a certificate by its SHA-1 thumbprint from a system store,
     /// for example `"MY"` (Personal).
     ///
+    /// The existing store is opened read-only; a missing store is not created.
+    /// The thumbprint is the raw 20-byte digest, not a hexadecimal string.
+    /// Unlike [`Self::from_store_by_subject`], selection does not filter by
+    /// certificate validity dates. No chain trust validation is performed.
+    ///
     /// # Errors
     ///
     /// Fails if the store cannot be opened, the certificate is not found, or
@@ -145,6 +159,8 @@ impl Certificate {
     /// does not match.
     /// Only currently valid certificates with a private key are considered,
     /// the one that expires last is used.
+    /// The existing store is opened read-only and no chain trust validation is
+    /// performed.
     ///
     /// # Errors
     ///
@@ -201,13 +217,19 @@ impl Certificate {
         })
     }
 
-    /// Certificate in DER encoding.
+    /// Borrows the certificate's DER encoding without its private key.
+    ///
+    /// The returned storage is owned by this certificate context and remains
+    /// valid for the lifetime of the borrow.
     #[must_use]
     pub fn der(&self) -> &[u8] {
         let cert = unsafe { &*self.as_ptr() };
         unsafe { std::slice::from_raw_parts(cert.pbCertEncoded, cert.cbCertEncoded as usize) }
     }
 
+    /// Borrows the context pointer without transferring a Windows reference.
+    ///
+    /// Callers must keep an owning certificate alive while using the pointer.
     pub(super) fn as_ptr(&self) -> *const CERT_CONTEXT {
         self.0.cert
     }
@@ -227,12 +249,17 @@ impl fmt::Debug for Certificate {
 
 /// Owned certificate context, the context keeps its store alive.
 struct CertContext {
+    /// Non-null owned certificate reference, released on drop.
     cert: *const CERT_CONTEXT,
     /// The private key was imported for this context and is deleted with it
     temp_key: bool,
 }
 
 impl CertContext {
+    /// Takes ownership of a valid, non-null Windows certificate reference.
+    ///
+    /// The caller must not free that reference afterward. Existing private keys
+    /// are preserved unless the importer explicitly marks this as a temporary key.
     fn new(cert: *const CERT_CONTEXT) -> Self {
         Self {
             cert,
@@ -258,6 +285,10 @@ impl Drop for CertContext {
 
 /// Persists the in-memory private key of a certificate under a unique name,
 /// the certificate refers to the persisted key afterwards.
+///
+/// `cert` must be a live context with an exportable in-memory CNG key. The
+/// temporary export is zeroed on drop; if attaching the persisted key fails,
+/// deletion of the new key is attempted before returning the original error.
 fn persist_key(cert: *const CERT_CONTEXT) -> io::Result<()> {
     let pkcs8 = export_key(cert)?;
 
@@ -333,6 +364,9 @@ fn persist_key(cert: *const CERT_CONTEXT) -> io::Result<()> {
 }
 
 /// Exports the in-memory private key of a certificate as PKCS #8.
+///
+/// `cert` must remain live throughout the call. Its CNG handle is borrowed, not
+/// released, and the exported plaintext bytes are owned by a zero-on-drop buffer.
 fn export_key(cert: *const CERT_CONTEXT) -> io::Result<SecretBuf> {
     // the handle is owned by the certificate
     let mut key: NCRYPT_KEY_HANDLE = 0;
@@ -389,6 +423,7 @@ fn export_key(cert: *const CERT_CONTEXT) -> io::Result<SecretBuf> {
     Ok(buf)
 }
 
+/// Converts the CNG APIs' zero-success status convention to an I/O result.
 fn hresult(status: windows_sys::core::HRESULT) -> io::Result<()> {
     if status == 0 {
         Ok(())
@@ -408,9 +443,11 @@ impl Drop for SecretBuf {
     }
 }
 
+/// Owned CNG storage-provider handle released with `NCryptFreeObject`.
 struct Provider(NCRYPT_PROV_HANDLE);
 
 impl Provider {
+    /// Opens a provider identified by a live, NUL-terminated UTF-16 name.
     fn open(name: windows_sys::core::PCWSTR) -> io::Result<Self> {
         let mut prov: NCRYPT_PROV_HANDLE = 0;
         hresult(unsafe { NCryptOpenStorageProvider(&raw mut prov, name, 0) })?;
@@ -425,6 +462,10 @@ impl Drop for Provider {
 }
 
 /// Deletes the persisted CNG private key of a certificate, best effort.
+///
+/// `cert` must be live and refer to an importer-owned temporary key. Legacy
+/// providers and missing key metadata are ignored; system-store keys must not
+/// be passed here.
 fn delete_key(cert: *const CERT_CONTEXT) {
     let Some(info) = key_prov_info(cert) else {
         return;
@@ -446,6 +487,7 @@ fn delete_key(cert: *const CERT_CONTEXT) {
     }
 }
 
+/// Consumes an owned key handle, deleting its persisted key or releasing it on failure.
 fn delete_owned_key(key: NCRYPT_KEY_HANDLE) {
     delete_owned_key_with(
         key,
@@ -454,6 +496,10 @@ fn delete_owned_key(key: NCRYPT_KEY_HANDLE) {
     );
 }
 
+/// Implements key deletion with injectable Windows operations.
+///
+/// Successful deletion also frees the handle. On failure, releases the handle
+/// before logging because application logging callbacks can unwind.
 fn delete_owned_key_with(
     key: NCRYPT_KEY_HANDLE,
     delete: impl FnOnce(NCRYPT_KEY_HANDLE) -> windows_sys::core::HRESULT,
@@ -471,6 +517,9 @@ fn delete_owned_key_with(
 }
 
 /// `CRYPT_KEY_PROV_INFO` of a certificate, in an aligned buffer.
+///
+/// `cert` must be live. Embedded string pointers refer into the returned buffer
+/// and must not outlive or be used after moving its contents to another allocation.
 fn key_prov_info(cert: *const CERT_CONTEXT) -> Option<Vec<u64>> {
     let mut len = 0u32;
     if unsafe {
@@ -496,9 +545,11 @@ fn key_prov_info(cert: *const CERT_CONTEXT) -> Option<Vec<u64>> {
     (ok && len as usize >= std::mem::size_of::<CRYPT_KEY_PROV_INFO>()).then_some(buf)
 }
 
+/// Owned certificate-store handle; open certificate contexts can outlive it.
 struct Store(HCERTSTORE);
 
 impl Store {
+    /// Opens an existing system store read-only, never creating a missing store.
     fn open(location: CertStoreLocation, name: &str) -> io::Result<Self> {
         let location = match location {
             CertStoreLocation::CurrentUser => CERT_SYSTEM_STORE_CURRENT_USER,
@@ -531,6 +582,10 @@ impl Drop for Store {
     }
 }
 
+/// Checks a live certificate context for a key handle or provider association.
+///
+/// This examines properties only; it does not open the key or prove that the
+/// current process has permission to use it.
 fn has_private_key(cert: *const CERT_CONTEXT) -> bool {
     [
         CERT_KEY_PROV_INFO_PROP_ID,
@@ -544,6 +599,7 @@ fn has_private_key(cert: *const CERT_CONTEXT) -> bool {
     })
 }
 
+/// Encodes a Windows string and appends its terminating UTF-16 NUL.
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }

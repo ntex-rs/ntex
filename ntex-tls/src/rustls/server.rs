@@ -1,4 +1,4 @@
-//! TLS server filter backed by rustls
+//! Server-side rustls session ownership and filter integration.
 use std::{any, cell::UnsafeCell, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
@@ -8,8 +8,14 @@ use tls_rustls::{ServerConfig, ServerConnection};
 use crate::{Servername, rustls::Stream};
 
 #[derive(Debug)]
-/// An implementation of SSL streams
+/// Encrypts and decrypts a server connection using rustls.
+///
+/// Construct through [`Self::create`] or [`super::TlsAcceptor`]. In addition to
+/// the shared TLS metadata, the filter exposes the client's SNI as
+/// [`Servername`]. Shutdown exchanges `close_notify`, accepting transport EOF
+/// when the peer has already disconnected.
 pub struct TlsServerFilter {
+    /// Single-threaded session; mutable access is scoped to `stream` calls.
     session: UnsafeCell<ServerConnection>,
 }
 
@@ -25,6 +31,7 @@ impl FilterLayer for TlsServerFilter {
         })
     }
 
+    /// Decrypts input, releasing the session borrow before a peer-close notification can reenter.
     fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
         let mut peer_closed = false;
         let result = self.stream(|s| s.process_read_buf(buf, &mut peer_closed));
@@ -45,6 +52,20 @@ impl FilterLayer for TlsServerFilter {
 }
 
 impl TlsServerFilter {
+    /// Installs a server filter and completes the handshake within `timeout`.
+    ///
+    /// Zero disables the deadline. The timeout is supplied directly, not read
+    /// from [`crate::TlsConfig`], and this constructor does not acquire an
+    /// acceptor-capacity slot. Existing filters remain below TLS.
+    ///
+    /// The session's buffering limit is initialized from the I/O write-page
+    /// capacity; certificates and client authentication follow `cfg`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::TimedOut`] on expiration, or an error from
+    /// session creation, negotiation, or transport I/O. Premature transport EOF
+    /// returns [`io::ErrorKind::UnexpectedEof`].
     pub async fn create<F: Filter>(
         io: Io<F>,
         cfg: Arc<ServerConfig>,
@@ -66,10 +87,15 @@ impl TlsServerFilter {
         .await
     }
 
+    /// Observes handshake completion outside any mutable session borrow.
     fn is_handshaking(&self) -> bool {
         unsafe { &*self.session.get() }.is_handshaking()
     }
 
+    /// Gives `f` exclusive access to the session through the shared stream adapter.
+    ///
+    /// The callback must not reenter this filter or trigger a notification that
+    /// does so while the mutable session reference is live.
     pub(super) fn stream<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Stream<'_, ServerConnection>) -> R,

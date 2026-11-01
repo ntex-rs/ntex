@@ -1,4 +1,4 @@
-//! Helpers shared by the tls filters.
+//! Handshake driving, timeout mapping, and metadata normalization shared by TLS backends.
 #![allow(dead_code)]
 use std::{future::Future, io};
 
@@ -10,7 +10,10 @@ use ntex_util::time::{Millis, timeout_checked};
 
 use crate::TlsConfig;
 
-/// Runs a handshake with timeout, zero timeout disables it.
+/// Runs a handshake with a deadline, preserving its original result.
+///
+/// Zero disables the deadline. Expiration drops the handshake future and returns
+/// `TimedOut`; no separate background handshake is left running.
 pub(crate) async fn with_timeout<R>(
     timeout: Millis,
     fut: impl Future<Output = io::Result<R>>,
@@ -23,7 +26,10 @@ pub(crate) async fn with_timeout<R>(
     })
 }
 
-/// Runs a client handshake with the configured timeout.
+/// Runs a client handshake with timeout and configuration-scoped diagnostics.
+///
+/// Maps TLS and timeout errors into `ConnectError` and attaches the TLS service
+/// identity. Transport establishment must already have completed.
 pub(crate) async fn connect<R>(
     cfg: &Cfg<TlsConfig>,
     host: &str,
@@ -45,7 +51,13 @@ pub(crate) async fn connect<R>(
 /// Drives a handshake performed by the filter.
 ///
 /// The filter processes handshake records as they are read and written,
-/// `state` reports whether the handshake is still in progress.
+/// `state` returns `true` while negotiation is in progress and `false` on success.
+/// The callback must release backend state borrows before returning.
+///
+/// Flushes pending output before checking state, and attempts a full alert flush
+/// before returning a reported handshake error. A read carrying EOF gets one
+/// final state check because it may also contain the last handshake flight.
+/// This helper imposes neither a timeout nor a handshake-capacity limit.
 pub(crate) async fn handshake<F>(
     io: &Io<F>,
     state: impl Fn() -> io::Result<bool>,
@@ -72,7 +84,7 @@ pub(crate) async fn handshake<F>(
     }
 }
 
-/// Http protocol of the negotiated alpn protocol.
+/// Maps exactly `h2` to HTTP/2; absent or other ALPN values fall back to HTTP/1.
 pub(crate) fn http_protocol(alpn: Option<&[u8]>) -> HttpProtocol {
     if alpn == Some(b"h2") {
         HttpProtocol::Http2
@@ -84,6 +96,7 @@ pub(crate) fn http_protocol(alpn: Option<&[u8]>) -> HttpProtocol {
 /// Strips the port and IPv6 brackets from a connect host.
 ///
 /// Accepts `host`, `host:port`, `[v6]`, `[v6]:port` and a bare `v6` address.
+/// This is syntactic normalization, not hostname, port, or certificate validation.
 pub(crate) fn server_name(host: &str) -> &str {
     if let Some(rest) = host.strip_prefix('[') {
         rest.split_once(']').map_or(host, |(ip, _)| ip)
@@ -273,7 +286,75 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, pin::pin, task::Poll};
+
+    use ntex_util::future::lazy;
+
     use super::*;
+
+    /// STATEMENT: Clean transport EOF succeeds only if the final handshake state is complete.
+    ///
+    /// HOW:
+    /// - Poll a handshake until it waits for input, then report EOF with completed or pending state.
+    /// - Check completed negotiation succeeds and incomplete negotiation returns `UnexpectedEof`.
+    #[ntex::test]
+    async fn handshake_final_state_at_eof() {
+        for complete in [true, false] {
+            let (io, ctx) = testing::io("TLS");
+            let handshaking = Cell::new(true);
+            let mut handshake = pin!(handshake(&io, || Ok(handshaking.get())));
+            assert!(lazy(|cx| handshake.as_mut().poll(cx)).await.is_pending());
+
+            handshaking.set(!complete);
+            ctx.with_read_buf(|_| Poll::Ready(Ok(0)));
+            let Poll::Ready(result) = lazy(|cx| handshake.as_mut().poll(cx)).await else {
+                panic!("handshake did not finish after EOF");
+            };
+            if complete {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+            }
+        }
+    }
+
+    /// STATEMENT: A handshake error waits for its alert to flush and survives a flush failure.
+    ///
+    /// HOW:
+    /// - Queue alert bytes, report a negotiation error, and check the handshake waits for delivery.
+    /// - Complete or fail the transport write and check the original handshake error is returned.
+    #[ntex::test]
+    async fn handshake_error_flushes_alert() {
+        for write_fails in [false, true] {
+            let (io, ctx) = testing::io("TLS");
+            io.encode_slice(b"alert").unwrap();
+            let failed = Cell::new(false);
+            let mut handshake = pin!(handshake(&io, || {
+                failed.set(true);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "handshake rejected",
+                ))
+            }));
+            assert!(lazy(|cx| handshake.as_mut().poll(cx)).await.is_pending());
+            assert!(failed.get());
+
+            let alert = ctx.with_write_dst(ntex_bytes::BytePages::freeze);
+            assert_eq!(alert.as_ref(), b"alert");
+            assert!(lazy(|cx| handshake.as_mut().poll(cx)).await.is_pending());
+            if write_fails {
+                ctx.update_write_status(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+            } else {
+                ctx.update_write_status(Ok(alert.len()));
+            }
+            let Poll::Ready(result) = lazy(|cx| handshake.as_mut().poll(cx)).await else {
+                panic!("handshake did not finish after alert write");
+            };
+            let err = result.unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(err.to_string(), "handshake rejected");
+        }
+    }
 
     /// STATEMENT: Only the `h2` ALPN value selects HTTP/2; other values default to HTTP/1.
     ///

@@ -2,9 +2,19 @@ use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::time::{Millis, Seconds};
 
 #[derive(Debug)]
-/// Tls service configuration
+/// Handshake timeout shared by TLS acceptor and connector services.
+///
+/// Acceptors obtain this value from the accepted connection's I/O configuration;
+/// connectors obtain it from their [`ntex_service::cfg::SharedCfg`] service state.
+/// The timeout covers TLS negotiation, not the underlying TCP connection attempt
+/// or the lifetime of an established connection.
+///
+/// This does not configure certificates, verification, ALPN, or protocol versions.
+/// Use the selected backend's configuration for those settings.
 pub struct TlsConfig {
+    /// Handshake deadline duration; zero disables the deadline.
     pub(crate) handshake_timeout: Millis,
+    /// Configuration registry context used for service identity and diagnostics.
     pub(crate) config: CfgContext,
 }
 
@@ -28,7 +38,7 @@ impl Configuration for TlsConfig {
 
 impl TlsConfig {
     #[must_use]
-    /// Create instance of `TlsConfig`
+    /// Creates a configuration with a five-second handshake timeout.
     pub fn new() -> Self {
         TlsConfig {
             handshake_timeout: Millis(5_000),
@@ -37,18 +47,19 @@ impl TlsConfig {
     }
 
     #[inline]
-    /// Get tls handshake timeout.
+    /// Returns the handshake timeout; zero means no handshake deadline.
     pub fn handshake_timeout(&self) -> Millis {
         self.handshake_timeout
     }
 
     #[must_use]
-    /// Set tls handshake timeout.
+    /// Sets the handshake timeout using a duration convertible to seconds.
     ///
-    /// Defines a timeout for connection tls handshake negotiation.
-    /// To disable timeout set value to 0.
+    /// Use [`Seconds::ZERO`] to disable the deadline. Expiration is reported as
+    /// [`std::io::ErrorKind::TimedOut`], wrapped in a connector error when applicable.
     ///
-    /// By default handshake timeout is set to 5 seconds.
+    /// The default is five seconds. Low-level handshake functions do not consult
+    /// this configuration unless their documentation explicitly says otherwise.
     pub fn set_handshake_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
         self.handshake_timeout = timeout.into().into();
         self

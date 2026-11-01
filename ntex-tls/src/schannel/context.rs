@@ -1,4 +1,8 @@
-//! Schannel security context.
+//! Owned SSPI context, TLS record processing, and bounded handshake reassembly.
+//!
+//! The filter drives this context synchronously. SSPI output tokens and peer
+//! certificate contexts have distinct Windows owners and are released with their
+//! matching APIs; ciphertext and plaintext leave this module in ntex buffers.
 use std::{borrow::Cow, sync::Arc};
 use std::{cmp, io, mem, ptr, slice};
 
@@ -35,8 +39,10 @@ use windows_sys::Win32::Security::Cryptography::{
 use super::{ClientConfig, Credentials, ServerConfig, sspi_error};
 use crate::{TlsCipher, TlsVersion};
 
+/// Outcome of decrypting a record, including transitions requiring handshake processing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Decrypted {
+    /// Input was consumed or plaintext produced; another record may be available.
     Progress,
     /// Needs more input
     Pending,
@@ -46,13 +52,23 @@ pub(super) enum Decrypted {
     Renegotiate,
 }
 
+/// One client or server connection's SSPI state and negotiated record parameters.
+///
+/// The security context is released before its shared credentials are dropped.
+/// `have_ctxt` distinguishes an acquired handle from the initial zeroed storage.
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct Context {
+    /// Keeps credentials and their certificate/private key alive for this connection.
     cred: Arc<Credentials>,
+    /// Security-context handle, owned only once `have_ctxt` is set.
     ctxt: SecHandle,
+    /// Whether SSPI has initialized a handle that must be deleted.
     have_ctxt: bool,
+    /// Determines the SSPI entry point, target name, and request flags.
     role: Role,
+    /// Encoded ALPN configuration retained while SSPI consumes it.
     alpn: Option<Arc<[u8]>>,
+    /// Record layout cached after the first successful handshake.
     sizes: Option<SecPkgContext_StreamSizes>,
     /// The server asked for a client certificate
     cert_requested: bool,
@@ -69,9 +85,10 @@ pub(super) struct Context {
     awaiting_peer: bool,
 }
 
+/// Role-specific parameters retained across initial and post-handshake SSPI calls.
 #[derive(Debug)]
 enum Role {
-    /// Client with the wide target name
+    /// Client with a NUL-terminated UTF-16 target name.
     Client(Vec<u16>),
     /// Server with `AcceptSecurityContext` flags
     Server(u32),
@@ -86,15 +103,21 @@ impl std::fmt::Debug for Context {
     }
 }
 
+/// Instructions for the filter after one SSPI handshake step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HandshakeState {
+    /// Negotiation succeeded and record parameters are available.
     Done,
+    /// More peer input is required before negotiation can advance.
     NeedRead,
     /// More handshake input is already buffered, call again without reading.
     Continue,
 }
 
 impl Context {
+    /// Acquires shared client credentials and retains the encoded target name.
+    ///
+    /// No handshake traffic is generated until `handshake_step` is called.
     pub(super) fn client(domain: &str, config: &ClientConfig) -> io::Result<Self> {
         let target = domain.encode_utf16().chain(Some(0)).collect();
         Ok(Self::new(
@@ -104,6 +127,7 @@ impl Context {
         ))
     }
 
+    /// Retains server credentials and configures optional client-certificate requests.
     pub(super) fn server(config: &ServerConfig) -> Self {
         let mut flags = ASC_FLAGS;
         if config.request_client_cert {
@@ -116,6 +140,7 @@ impl Context {
         )
     }
 
+    /// Creates uninitialized context storage, enabling plaintext coalescing for servers.
     fn new(cred: Arc<Credentials>, role: Role, alpn: Option<Arc<[u8]>>) -> Self {
         Self {
             cred,
@@ -132,10 +157,20 @@ impl Context {
         }
     }
 
+    /// Selects server-side SSPI handling and input requirements.
     fn is_server(&self) -> bool {
         matches!(self.role, Role::Server(_))
     }
 
+    /// Advances negotiation using buffered ciphertext and appends generated tokens.
+    ///
+    /// Server-side plaintext messages are coalesced before SSPI receives them.
+    /// Consumed input is removed while trailing application data is retained.
+    /// Incomplete messages remain buffered. Fatal failures attempt to generate
+    /// an alert even when SSPI did not return one.
+    ///
+    /// On first completion, caches ALPN and record sizes. Later post-handshake
+    /// exchanges preserve the original ALPN result.
     pub(super) fn handshake_step(
         &mut self,
         mut input: Option<&mut BytesMut>,
@@ -241,6 +276,8 @@ impl Context {
     /// appends the output token to `output`.
     ///
     /// Returns the status and whether a token was produced.
+    /// `input` must be null or describe buffers valid for the duration of the
+    /// call. SSPI-allocated output is copied and freed before returning.
     fn step(
         &mut self,
         input: *const SecBufferDesc,
@@ -291,6 +328,7 @@ impl Context {
         (status, has_token)
     }
 
+    /// Names the role-specific SSPI operation for error diagnostics.
     fn step_name(&self) -> &'static str {
         if self.is_server() {
             "AcceptSecurityContext"
@@ -320,6 +358,9 @@ impl Context {
     }
 
     /// Applies a control token and appends the resulting record to `output`.
+    ///
+    /// `T` must be the Windows-defined token layout matching its discriminator.
+    /// A valid context must already exist.
     fn control_token<T>(
         &mut self,
         token: &mut T,
@@ -345,6 +386,7 @@ impl Context {
         }
     }
 
+    /// Returns cached record overhead and maximum plaintext size, querying SSPI on first use.
     fn query_stream_sizes(&mut self) -> io::Result<SecPkgContext_StreamSizes> {
         if let Some(sizes) = self.sizes {
             return Ok(sizes);
@@ -389,7 +431,7 @@ impl Context {
         src: &mut ntex_bytes::BytePages,
         dst: &mut ntex_bytes::BytePages,
     ) -> io::Result<bool> {
-        // smallest record worth encrypting into the rest of the current page
+        /// Smallest plaintext chunk worth using the remaining destination-page space for.
         const MIN_RECORD: usize = 1024;
 
         let sizes = self.query_stream_sizes()?;
@@ -425,6 +467,9 @@ impl Context {
     /// returns the record length.
     ///
     /// `frame` must be valid for writes of header, `len` and trailer bytes.
+    /// It must not overlap queued source pages, and `src` must contain at least
+    /// `len` bytes. Input is consumed before encryption; an SSPI failure is fatal
+    /// to the connection rather than retryable with the original plaintext.
     fn encrypt_into(
         &mut self,
         src: &mut ntex_bytes::BytePages,
@@ -468,6 +513,11 @@ impl Context {
         Ok(bufs[..3].iter().map(|buf| buf.cbBuffer as usize).sum())
     }
 
+    /// Decrypts one complete record and appends plaintext to `dst`.
+    ///
+    /// Incomplete input is retained unchanged. A post-handshake message returns
+    /// `Renegotiate` so the filter can resume SSPI negotiation; peer closure
+    /// discards trailing ciphertext and returns `Closed`.
     pub(super) fn decrypt(
         &mut self,
         src: &mut BytesMut,
@@ -535,7 +585,7 @@ impl Context {
         })
     }
 
-    /// Certificate context of the peer.
+    /// Acquires an owned peer certificate context, or returns none if unavailable.
     fn remote_cert(&self) -> Option<RemoteCert> {
         let mut cert: *mut CERT_CONTEXT = ptr::null_mut();
         let status = unsafe {
@@ -558,12 +608,19 @@ impl Context {
             .map(|cert| unsafe { cert_der(cert.0) }.to_vec())
     }
 
-    /// The certificates sent by the peer in DER encoding, the end-entity
-    /// certificate first, followed by its issuers.
+    /// Copies the peer leaf and certificates from its associated store into DER.
+    ///
+    /// Issuers are ordered by encoded subject/issuer names, not by signature or
+    /// trust validation. Unrelated certificates are retained after the matched
+    /// issuer sequence.
     pub(super) fn peer_cert_chain(&self) -> Option<Vec<Vec<u8>>> {
+        /// Owned certificate and names used to order the peer's store entries.
         struct Entry {
+            /// Complete encoded certificate.
             der: Vec<u8>,
+            /// Encoded subject name used to match an issuer.
             subject: Vec<u8>,
+            /// Encoded issuer name used to find the next certificate.
             issuer: Vec<u8>,
         }
         let entry = |cert: *const CERT_CONTEXT| unsafe {
@@ -647,10 +704,12 @@ impl Context {
         })
     }
 
+    /// Returns the initial handshake's cached ALPN result, including after session tickets.
     pub(super) fn alpn_protocol(&self) -> Option<&[u8]> {
         self.negotiated_alpn.as_deref()
     }
 
+    /// Copies a successfully negotiated ALPN identifier from the current SSPI context.
     fn query_alpn_protocol(&self) -> Option<Vec<u8>> {
         let mut proto = unsafe { mem::zeroed::<SecPkgContext_ApplicationProtocol>() };
         let status = unsafe {
@@ -681,7 +740,7 @@ impl Drop for Context {
     }
 }
 
-/// Certificate context owned by the caller.
+/// Owned peer certificate reference released with `CertFreeCertificateContext`.
 struct RemoteCert(*const CERT_CONTEXT);
 
 impl Drop for RemoteCert {
@@ -691,10 +750,21 @@ impl Drop for RemoteCert {
 }
 
 /// Encoded certificate of a valid certificate context.
+///
+/// # Safety
+///
+/// `cert` must point to a valid certificate context whose encoded storage remains
+/// live and immutable for the returned lifetime.
 unsafe fn cert_der<'a>(cert: *const CERT_CONTEXT) -> &'a [u8] {
     unsafe { blob((*cert).pbCertEncoded, (*cert).cbCertEncoded) }
 }
 
+/// Borrows a Windows byte blob, treating a null pointer or zero length as empty.
+///
+/// # Safety
+///
+/// Non-null, nonempty storage must be readable for `len` bytes and remain live
+/// and immutable for the returned lifetime.
 unsafe fn blob<'a>(data: *const u8, len: u32) -> &'a [u8] {
     if data.is_null() || len == 0 {
         &[]
@@ -703,6 +773,7 @@ unsafe fn blob<'a>(data: *const u8, len: u32) -> &'a [u8] {
     }
 }
 
+/// Client flags requesting stream confidentiality, sequencing, and allocated error tokens.
 const ISC_FLAGS: u32 = ISC_REQ_SEQUENCE_DETECT
     | ISC_REQ_REPLAY_DETECT
     | ISC_REQ_CONFIDENTIALITY
@@ -710,6 +781,7 @@ const ISC_FLAGS: u32 = ISC_REQ_SEQUENCE_DETECT
     | ISC_REQ_EXTENDED_ERROR
     | ISC_REQ_STREAM;
 
+/// Server stream flags before optional client-certificate authentication is added.
 const ASC_FLAGS: u32 = ASC_REQ_SEQUENCE_DETECT
     | ASC_REQ_REPLAY_DETECT
     | ASC_REQ_CONFIDENTIALITY
@@ -717,12 +789,15 @@ const ASC_FLAGS: u32 = ASC_REQ_SEQUENCE_DETECT
     | ASC_REQ_EXTENDED_ERROR
     | ASC_REQ_STREAM;
 
+/// TLS change-cipher-spec record content type.
 const CONTENT_CHANGE_CIPHER_SPEC: u8 = 20;
+/// TLS handshake record content type.
 const CONTENT_HANDSHAKE: u8 = 22;
 /// The largest plaintext record payload
 const MAX_RECORD: usize = 16 * 1024;
 /// The largest handshake data held back until a message is complete
 const MAX_HELD_HANDSHAKE: usize = 64 * 1024;
+/// Maximum record count scanned while reassembling one plaintext handshake message.
 const MAX_HELD_HANDSHAKE_RECORDS: usize = 1024;
 
 /// Protocol version of `SecPkgContext_ConnectionInfo::dwProtocol`.
@@ -869,6 +944,10 @@ pub(super) fn handshake_records_len(src: &[u8]) -> usize {
 ///
 /// Windows Server 2025 (build 26100) fails with `SEC_E_UNSUPPORTED_FUNCTION`
 /// if a `ClientHello` spread over several records is passed in pieces.
+///
+/// Reassembly bounds apply to the message being held, not the entire flight.
+/// Empty records and exceeded byte/record limits return `InvalidData`. Trailing
+/// incomplete messages and non-handshake records are retained for later steps.
 fn coalesce_handshake_records(src: &mut BytesMut) -> io::Result<Option<usize>> {
     // The records are only scanned until a message is complete, the payload
     // is copied once when they are repacked.
@@ -1005,8 +1084,10 @@ fn message_size([_, a, b, c]: [u8; 4]) -> usize {
     4 + (usize::from(a) << 16 | usize::from(b) << 8 | usize::from(c))
 }
 
-/// Moves a token allocated by `InitializeSecurityContextW` or
-/// `AcceptSecurityContext` to `output`.
+/// Copies an SSPI-allocated token to `output` and frees its Windows allocation.
+///
+/// `buf` must own the token; even a non-null zero-length token is released.
+/// Its pointer must not be used or freed again after this call.
 fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
     if !buf.pvBuffer.is_null() {
         if buf.cbBuffer != 0 {
@@ -1022,6 +1103,9 @@ fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
 
 /// Locate the decrypted payload and the unprocessed input length by buffer type,
 /// `DecryptMessage` does not guarantee the position of output buffers.
+///
+/// Data pointers must reference the still-live decrypted input allocation.
+/// The returned payload must not outlive that allocation or its current contents.
 fn decrypted_parts(bufs: &[SecBuffer]) -> (Option<&[u8]>, usize) {
     let data = bufs
         .iter()
@@ -1041,8 +1125,10 @@ fn extra_len(bufs: &[SecBuffer]) -> usize {
         .map_or(0, |buf| buf.cbBuffer as usize)
 }
 
+/// Empty SSPI slot that may be populated with output-buffer metadata.
 const EMPTY_BUFFER: SecBuffer = sec_buffer(SECBUFFER_EMPTY, 0, ptr::null_mut());
 
+/// Describes borrowed storage without transferring ownership or extending its lifetime.
 const fn sec_buffer(ty: u32, len: u32, ptr: *mut std::ffi::c_void) -> SecBuffer {
     SecBuffer {
         cbBuffer: len,
@@ -1060,6 +1146,7 @@ fn buffer_desc(bufs: &mut [SecBuffer]) -> SecBufferDesc {
     }
 }
 
+/// Converts an ntex buffer length to SSPI's 32-bit length, rejecting overflow.
 fn buffer_len(len: usize) -> io::Result<u32> {
     u32::try_from(len).map_err(|_| io::Error::other("TLS buffer is too large"))
 }
