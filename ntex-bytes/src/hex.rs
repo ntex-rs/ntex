@@ -41,6 +41,10 @@ hex_impl!(UpperHex, BytesMut);
 mod tests {
     use super::*;
 
+    /// STATEMENT: Hex formatting respects lowercase and uppercase digits for `Bytes`.
+    ///
+    /// HOW:
+    /// - Format static `hello world` with `x` and `X` and compare both complete hexadecimal strings.
     #[test]
     fn hex() {
         let b = Bytes::from_static(b"hello world");

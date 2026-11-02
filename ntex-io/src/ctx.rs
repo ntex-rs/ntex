@@ -873,6 +873,10 @@ mod tests {
     use crate::{FilterBuf, FilterLayer, Io, testing::IoTest};
     use ntex_util::future::lazy;
 
+    /// STATEMENT: An `IoContext` exposes an assigned connection ID and identifiable debug output.
+    ///
+    /// HOW:
+    /// - Build a context from a test connection, access its flags, and check its ID and formatting.
     #[ntex::test]
     async fn ctx_basics() {
         let (_, server) = IoTest::create();
@@ -884,6 +888,11 @@ mod tests {
         assert!(format!("{ctx:?}").contains("IoContext"));
     }
 
+    /// STATEMENT: A pending transport read does not signal EOF, unlike a successful zero-byte read.
+    ///
+    /// HOW:
+    /// - Release a read buffer with `Poll::Pending` and check the reader still waits.
+    /// - Release a zero-byte completion and verify paused transport reads and application EOF.
     #[ntex::test]
     async fn pending_read_completion_is_not_eof() {
         let (_, server) = IoTest::create();
@@ -923,6 +932,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: EOF reports buffered input once without discarding unread bytes.
+    ///
+    /// HOW:
+    /// - Deliver five bytes followed by EOF and check the input-available notification.
+    /// - Access the buffer, verify subsequent EOF, and confirm the bytes remain available to decode.
     #[ntex::test]
     async fn eof_reports_available_input_once() {
         let (_, server) = IoTest::create();
@@ -951,6 +965,11 @@ mod tests {
         assert_eq!(state.with_read_dst(BytesMut::take), b"12345");
     }
 
+    /// STATEMENT: Starting shutdown preserves unconsumed input and its readiness signal.
+    ///
+    /// HOW:
+    /// - Deliver bytes, begin shutdown, and check read readiness remains set.
+    /// - Verify the transport receives an empty buffer while application input stays intact.
     #[ntex::test]
     async fn shutdown_keeps_unconsumed_input_visible() {
         let (_, server) = IoTest::create();
@@ -971,6 +990,11 @@ mod tests {
         assert_eq!(state.with_read_dst(BytesMut::take), b"12345");
     }
 
+    /// STATEMENT: Repeated clean EOF completions do not repeat filter EOF processing.
+    ///
+    /// HOW:
+    /// - Report EOF three times through a filter that emits final bytes.
+    /// - Check each completion pauses reads and the final bytes appear only once.
     #[ntex::test]
     async fn clean_eof_is_processed_by_filters_once() {
         let (_, server) = IoTest::create();
@@ -987,6 +1011,11 @@ mod tests {
         assert_eq!(state.with_read_dst(BytesMut::take), b"final");
     }
 
+    /// STATEMENT: Filters can emit final input at EOF before readers observe the terminal notification.
+    ///
+    /// HOW:
+    /// - Register a read notification and report EOF through a filter that emits final bytes.
+    /// - Check one input notification, subsequent EOF, and the final buffered data.
     #[ntex::test]
     async fn clean_eof_is_processed_by_filters() {
         let (_, server) = IoTest::create();
@@ -1034,6 +1063,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A filter error on clean EOF closes the connection and remains the shutdown error.
+    ///
+    /// HOW:
+    /// - Report EOF through a rejecting filter and check inactive, non-terminating state.
+    /// - Complete the requested transport close and verify the filter's error is returned.
     #[ntex::test]
     async fn clean_eof_filter_error_closes_connection() {
         let (_, server) = IoTest::create();
@@ -1058,6 +1092,11 @@ mod tests {
         assert_eq!(err.to_string(), "truncated filtered stream");
     }
 
+    /// STATEMENT: Graceful shutdown does not busy-poll a transport stalled on reads and writes.
+    ///
+    /// HOW:
+    /// - Queue output on a counting stalled transport and request close.
+    /// - Wait 100 milliseconds and assert fewer than ten additional transport polls.
     #[ntex::test]
     async fn filter_shutdown_does_not_spin_on_pending_read() {
         use crate::{Handle, IoStream};
@@ -1123,6 +1162,11 @@ mod tests {
 
     impl crate::Handle for Manual {}
 
+    /// STATEMENT: The transport reuses partially consumed read buffers and preserves their remaining bytes.
+    ///
+    /// HOW:
+    /// - Deliver five bytes through a manual context and consume the first three.
+    /// - Take the remaining buffer, reserve space, append another byte, and verify combined input.
     #[ntex::test]
     async fn take_read_buf_reuses_consumed_buffer() {
         let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default());
@@ -1152,6 +1196,12 @@ mod tests {
         assert_eq!(io.with_read_dst(BytesMut::take), b"456");
     }
 
+    /// STATEMENT: Transport shutdown discards input and treats read errors as EOF rather than termination.
+    ///
+    /// HOW:
+    /// - Enter transport shutdown and deliver bytes through both read-buffer APIs.
+    /// - Check no input reaches the application, pending reads pause, and an error marks EOF.
+    /// - Complete the resulting close request and verify the connection is closed.
     #[ntex::test]
     async fn reads_are_discarded_in_transport_shutdown_phase() {
         let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default());
@@ -1227,6 +1277,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Filter shutdown failures proceed to transport close and retain the original error.
+    ///
+    /// HOW:
+    /// - Close a manually driven connection whose filter rejects shutdown.
+    /// - Check a non-terminating close request, report transport stop, and compare the shutdown error.
     #[ntex::test]
     async fn filter_shutdown_error_skips_to_transport_shutdown() {
         let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default()).add_filter(FailShutdown);
@@ -1246,6 +1301,11 @@ mod tests {
         assert_eq!(err.to_string(), "shutdown failed");
     }
 
+    /// STATEMENT: Read completion through a cloned context stops after connection termination.
+    ///
+    /// HOW:
+    /// - Clone a context, verify shared identity, stop it with an error, and release a successful read.
+    /// - Check the cloned context returns `IoTaskStatus::Stop`.
     #[ntex::test]
     async fn read_after_termination_stops_read_task() {
         let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default());
@@ -1262,6 +1322,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A panic while starting the transport does not leak connection state.
+    ///
+    /// HOW:
+    /// - Capture a weak state reference in a transport that panics during `start`.
+    /// - Catch the panic and verify the weak reference can no longer be upgraded.
     #[test]
     fn start_panic_releases_state() {
         use std::{cell::RefCell, rc::Rc};

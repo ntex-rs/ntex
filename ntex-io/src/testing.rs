@@ -510,6 +510,11 @@ mod tests {
     use super::*;
     use ntex_util::future::lazy;
 
+    /// STATEMENT: `IoTest` distinguishes endpoint clones, simulates pending I/O, and tracks endpoint drops.
+    ///
+    /// HOW:
+    /// - Check endpoint kinds and debug output, force pending reads/writes, and drop original endpoints.
+    /// - Verify drop indicators, remaining pending writes, and a configured peer-address query.
     #[ntex::test]
     async fn basic() {
         let (client, server) = IoTest::create();

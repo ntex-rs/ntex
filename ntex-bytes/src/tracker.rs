@@ -177,6 +177,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Tracker charges and resizes update live bytes while allocation counts follow allocation lifetimes.
+    ///
+    /// HOW:
+    /// - Charge 100 and 50 bytes, grow and shrink one charge, and check snapshots after each operation.
+    /// - Uncharge both allocations and verify zero totals and the empty debug representation.
     #[test]
     fn charge_resize_uncharge() {
         let tracker = BytesTracker::new();
@@ -204,6 +209,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Cloned tracker handles share accounting without counting handles as allocations.
+    ///
+    /// HOW:
+    /// - Compare tracker identities, charge ten bytes, and observe the charge through a clone.
+    /// - Drop the clone, check the charge persists, and uncharge to return the original snapshot to zero.
     #[test]
     fn handles() {
         let tracker = BytesTracker::default();
@@ -221,6 +231,10 @@ mod tests {
         assert_eq!(tracker.snapshot(), snap(0, 0));
     }
 
+    /// STATEMENT: Outstanding allocation charges keep tracker state alive after all public handles drop.
+    ///
+    /// HOW:
+    /// - Charge ten and twenty bytes, drop the tracker handle, and release both charges through the saved inner pointer.
     #[test]
     fn allocation_outlives_handles() {
         let tracker = BytesTracker::new();
@@ -233,6 +247,11 @@ mod tests {
         unsafe { TrackerInner::uncharge(inner, 20) };
     }
 
+    /// STATEMENT: Concurrent tracker operations retain accurate totals and allow charges to outlive thread handles.
+    ///
+    /// HOW:
+    /// - Run four threads repeatedly cloning handles, charging, resizing, and uncharging allocations.
+    /// - Join them, verify one byte and allocation per thread remain, then drop the last handle and release those charges.
     #[test]
     fn concurrent() {
         const THREADS: usize = 4;

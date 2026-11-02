@@ -95,6 +95,10 @@ impl<T: any::Any + fmt::Debug> fmt::Debug for QueryItem<T> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: `PeerAddr` preserves and formats its socket address.
+    ///
+    /// HOW:
+    /// - Convert a loopback address, compare the wrapper and debug output, then extract the address.
     #[test]
     fn peer_addr() {
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
@@ -104,6 +108,11 @@ mod tests {
         assert_eq!(peer.into_inner(), addr);
     }
 
+    /// STATEMENT: `QueryItem` exposes only values matching its requested type.
+    ///
+    /// HOW:
+    /// - Construct matching, mismatched, and absent values and check owned and borrowed access.
+    /// - Verify debug formatting for the matching and absent cases.
     #[test]
     fn query_item() {
         let item = QueryItem::<u32>::new(Some(Box::new(10u32)));

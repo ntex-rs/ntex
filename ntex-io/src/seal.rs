@@ -128,6 +128,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Sealed and macro-forwarding filter wrappers preserve queries, data flow, and shutdown.
+    ///
+    /// HOW:
+    /// - Box a tagged filter chain, seal it, and wrap it with forwarding macros.
+    /// - Check matching and absent queries, exchange bytes in both directions, and verify shutdown.
     #[ntex::test]
     async fn sealed_chain_delegates_to_inner_filter() {
         assert_eq!(format!("{:?}", Sealed(Box::new(NullFilter))), "Sealed");

@@ -613,6 +613,11 @@ mod tests {
     use super::*;
     use crate::BytesMut;
 
+    /// STATEMENT: `BufMut` implementations write expected bytes and report remaining writable capacity.
+    ///
+    /// HOW:
+    /// - Write through vectors, mutable slices, boxed slices, and `BytesMut`, checking bytes, chunk access, and capacity after advancement.
+    /// - Encode integer and floating-point values in both byte orders and compare each exact byte sequence.
     #[test]
     #[allow(clippy::needless_borrow, clippy::too_many_lines)]
     fn buf_mut_tests() {

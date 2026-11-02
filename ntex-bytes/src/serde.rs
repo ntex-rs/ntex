@@ -84,6 +84,10 @@ impl<'de> Deserialize<'de> for Bytes {
 mod tests {
     use super::*;
 
+    /// STATEMENT: JSON string deserialization produces matching `Bytes` contents.
+    ///
+    /// HOW:
+    /// - Parse the JSON string `"nice bytes"` as `Bytes` and compare it with `nice bytes`.
     #[test]
     fn test_serialize() {
         let s: Bytes = serde_json::from_str(r#""nice bytes""#).unwrap();
@@ -92,6 +96,10 @@ mod tests {
         //assert_eq!(s, "nice bytes");
     }
 
+    /// STATEMENT: `Bytes` serializes to a JSON array of numeric byte values.
+    ///
+    /// HOW:
+    /// - Serialize static `nice bytes` and compare the exact decimal byte array string.
     #[test]
     fn test_deserialize() {
         let s = serde_json::to_string(&Bytes::from_static(b"nice bytes")).unwrap();
@@ -100,6 +108,11 @@ mod tests {
         //assert_eq!(s, "[110,105,99,101,32,98,121,116,101,115]");
     }
 
+    /// STATEMENT: `Bytes` deserialization accepts byte buffers, strings, and byte sequences but rejects booleans.
+    ///
+    /// HOW:
+    /// - Deserialize `ab` from byte-buffer, borrowed and owned string, and known- or unknown-length sequence tokens.
+    /// - Check a boolean token reports the expected byte-array type error.
     #[test]
     fn test_de_tokens() {
         use serde_test::{Token, assert_de_tokens, assert_de_tokens_error};
@@ -132,6 +145,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: JSON serialization and deserialization round-trip `Bytes` contents.
+    ///
+    /// HOW:
+    /// - Serialize static `nice bytes`, deserialize the generated JSON as `Bytes`, and compare with the original.
     #[test]
     fn test_json_roundtrip() {
         let b = Bytes::from_static(b"nice bytes");

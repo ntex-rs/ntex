@@ -52,18 +52,30 @@ fn run(hold_first: bool, f: fn() -> Box<dyn Any>) {
     .unwrap();
 }
 
+/// STATEMENT: A sized page can be released at thread exit before or after its thread-local cache is destroyed.
+///
+/// HOW:
+/// - Hold a `hello` page in thread-local storage with both holder registration orders and require each thread to join successfully.
 #[test]
 fn drop_sized_page_on_thread_exit() {
     run(true, sized_page);
     run(false, sized_page);
 }
 
+/// STATEMENT: Multi-page buffers can be released at thread exit in either cache-destruction order.
+///
+/// HOW:
+/// - Hold a 5,000-byte `BytePages` buffer in thread-local storage before and after cache registration and join both threads successfully.
 #[test]
 fn drop_pages_on_thread_exit() {
     run(true, pages);
     run(false, pages);
 }
 
+/// STATEMENT: Thread-local destructors can allocate and use pages even after page caches are destroyed.
+///
+/// HOW:
+/// - Register `AllocOnDrop` in both holder orders and join each thread; its destructor allocates and freezes 100 bytes and checks the contents.
 #[test]
 fn alloc_pages_on_thread_exit() {
     run(true, alloc_on_drop);

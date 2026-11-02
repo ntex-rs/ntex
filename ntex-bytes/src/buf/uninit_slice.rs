@@ -234,6 +234,11 @@ impl_index!(
 mod tests {
     use super::*;
 
+    /// STATEMENT: `UninitSlice` supports standard range indexing and writes through uninitialized-slice views.
+    ///
+    /// HOW:
+    /// - Wrap an eight-byte array, check six range lengths, and write `a` and `b` through both uninitialized accessors.
+    /// - Verify the underlying array begins with `ab`.
     #[test]
     fn index_and_uninit_access() {
         let mut data = [0u8; 8];

@@ -15,6 +15,11 @@ fn inline_cap() -> usize {
 fn is_sync<T: Sync>() {}
 fn is_send<T: Send>() {}
 
+/// STATEMENT: Byte containers have compact 64-bit layouts and a 23-byte zero payload can be stored inline inside `Option`.
+///
+/// HOW:
+/// - Check container, metadata, pointer, and `Arc` sizes, accounting for the `tracker` feature's metadata layout.
+/// - Freeze 23 zero bytes, verify inline storage, wrap in `Some`, and compare the preserved payload.
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn test_size() {
@@ -45,6 +50,10 @@ fn test_size() {
     )
 }
 
+/// STATEMENT: Both immutable and mutable byte buffers implement `Send` and `Sync`.
+///
+/// HOW:
+/// - Instantiate the `is_send` and `is_sync` compile-time trait checks for `Bytes` and `BytesMut`.
 #[test]
 fn test_bounds() {
     is_sync::<Bytes>();
@@ -53,6 +62,10 @@ fn test_bounds() {
     is_send::<BytesMut>();
 }
 
+/// STATEMENT: Slice construction preserves content and supports equality with slices and vectors in both directions.
+///
+/// HOW:
+/// - Construct `Bytes` and `BytesMut` from `abcdefgh` and compare against matching slice and vector representations.
 #[test]
 fn from_slice() {
     let a = Bytes::from(&b"abcdefgh"[..]);
@@ -71,6 +84,10 @@ fn from_slice() {
     assert_eq!(Vec::from(&b"abcdefgh"[..]), a);
 }
 
+/// STATEMENT: Immutable and mutable buffer debug formatting uses the same byte-string notation.
+///
+/// HOW:
+/// - Debug-format `Bytes` and `BytesMut` containing `abcdefg` and compare each with `b"abcdefg"`.
 #[test]
 fn fmt() {
     let a = format!("{:?}", Bytes::from(&b"abcdefg"[..]));
@@ -82,6 +99,10 @@ fn fmt() {
     assert_eq!(a, b);
 }
 
+/// STATEMENT: Mutating a cloned mutable buffer leaves the original bytes unchanged.
+///
+/// HOW:
+/// - Clone `hello`, overwrite the clone's first byte with `x`, and verify the source still equals `hello`.
 #[test]
 fn clone_mut() {
     let buf1 = BytesMut::from("hello");
@@ -92,6 +113,10 @@ fn clone_mut() {
     assert_eq!(buf1, "hello");
 }
 
+/// STATEMENT: Formatted writes append the same bytes whether supplied in one string or consecutive fragments.
+///
+/// HOW:
+/// - Write a repeated string's first 64 bytes into capacity-64 buffers in one call and two 32-byte calls, then compare contents.
 #[allow(clippy::sliced_string_as_bytes)]
 #[test]
 fn fmt_write() {
@@ -108,6 +133,10 @@ fn fmt_write() {
     assert_eq!(b, s[..64].as_bytes());
 }
 
+/// STATEMENT: `BytesMut` supports stream writes and flushing.
+///
+/// HOW:
+/// - Write `abcdefg` through `io::Write`, check the returned length and buffer contents, and unwrap a successful flush.
 #[allow(clippy::sliced_string_as_bytes)]
 #[test]
 fn fmt_io_write() {
@@ -120,6 +149,10 @@ fn fmt_io_write() {
     a.flush().unwrap();
 }
 
+/// STATEMENT: Copied byte buffers report their payload length and recognize empty input.
+///
+/// HOW:
+/// - Construct `Bytes` and `BytesMut` from `abcdefg` and empty slices, checking length seven and empty status respectively.
 #[test]
 fn len() {
     let a = Bytes::from(&b"abcdefg"[..]);
@@ -135,6 +168,11 @@ fn len() {
     assert!(a.is_empty());
 }
 
+/// STATEMENT: Short owned strings and short split prefixes use inline immutable storage.
+///
+/// HOW:
+/// - Convert `abcdefg` and an empty owned string, checking inline kind and emptiness.
+/// - Freeze 35 bytes, split an eight-byte prefix, and verify the prefix is inline.
 #[test]
 fn inline() {
     let a = Bytes::from("abcdefg".to_string());
@@ -149,6 +187,10 @@ fn inline() {
     assert!(b.is_inline());
 }
 
+/// STATEMENT: Range indexing exposes matching slices for immutable and mutable byte buffers.
+///
+/// HOW:
+/// - Construct `hello world` via immutable and two mutable conversion paths and compare each `0..5` range with `hello`.
 #[test]
 fn index() {
     let a = Bytes::from(&b"hello world"[..]);
@@ -161,6 +203,10 @@ fn index() {
     assert_eq!(a[0..5], *b"hello");
 }
 
+/// STATEMENT: `Bytes::slice` handles full, partial, inclusive, unbounded, and empty ranges correctly.
+///
+/// HOW:
+/// - Slice `hello world` using each range form, including empty ranges at the start, middle, and end, and compare expected substrings.
 #[test]
 fn slice() {
     let a = Bytes::from(&b"hello world"[..]);
@@ -190,6 +236,10 @@ fn slice() {
     assert_eq!(b, b"lo world"[..]);
 }
 
+/// STATEMENT: Slicing with an end beyond the visible bytes panics.
+///
+/// HOW:
+/// - Slice `hello world` from five through `inline_cap() + 1` and require a bounds panic.
 #[test]
 #[should_panic]
 fn slice_oob_1() {
@@ -197,6 +247,10 @@ fn slice_oob_1() {
     a.slice(5..(inline_cap() + 1));
 }
 
+/// STATEMENT: Slicing with a range entirely beyond visible bytes panics.
+///
+/// HOW:
+/// - Slice `hello world` from `inline_cap() + 1` through `inline_cap() + 5` and require a bounds panic.
 #[test]
 #[should_panic]
 fn slice_oob_2() {
@@ -204,6 +258,10 @@ fn slice_oob_2() {
     a.slice((inline_cap() + 1)..(inline_cap() + 5));
 }
 
+/// STATEMENT: `split_off` returns a suffix and retains the prefix in the original buffer.
+///
+/// HOW:
+/// - Split `helloworld` at five and compare the original with `hello` and the returned bytes with `world`.
 #[test]
 fn split_off() {
     let mut hello = Bytes::from(&b"helloworld"[..]);
@@ -213,6 +271,10 @@ fn split_off() {
     assert_eq!(world, &b"world"[..]);
 }
 
+/// STATEMENT: Splitting off beyond immutable-buffer length panics.
+///
+/// HOW:
+/// - Call `split_off(inline_cap() + 1)` on `helloworld` and expect a bounds panic.
 #[test]
 #[should_panic]
 fn split_off_oob() {
@@ -224,6 +286,11 @@ const MIN_CAPACITY: usize = 128 - METADATA_SIZE;
 
 const B: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+/// STATEMENT: Splitting at any valid offset partitions copied and vector-backed bytes without losing data.
+///
+/// HOW:
+/// - For every offset in `B`, call `split_off` and `split_to` on slice- and vector-created buffers.
+/// - Check the relevant prefix length and concatenate both halves to recover `B` exactly.
 #[test]
 fn split_off_to_loop() {
     for i in 0..(B.len() + 1) {
@@ -266,6 +333,10 @@ fn split_off_to_loop() {
     }
 }
 
+/// STATEMENT: Prefix splitting returns the requested bytes across inline, vector-backed, and mutable storage.
+///
+/// HOW:
+/// - Split `SHORT` at four and `LONG` at four or thirty using immutable and mutable buffers, checking returned prefixes and retained suffixes.
 #[test]
 fn split_to_1() {
     // Inline
@@ -302,6 +373,10 @@ fn split_to_1() {
     assert_eq!(LONG[..30], b);
 }
 
+/// STATEMENT: Dropping a split prefix does not invalidate the remaining immutable or mutable buffer.
+///
+/// HOW:
+/// - Construct both buffer types from `LONG`, split one byte, compare each remainder with `LONG[1..]`, and drop the prefix.
 #[test]
 fn split_to_2() {
     let mut a = Bytes::from(LONG);
@@ -321,6 +396,10 @@ fn split_to_2() {
     drop(b);
 }
 
+/// STATEMENT: Prefix splitting beyond immutable-buffer length panics.
+///
+/// HOW:
+/// - Call `split_to(inline_cap() + 1)` on immutable `helloworld` and expect a bounds panic.
 #[test]
 #[should_panic]
 fn split_to_oob() {
@@ -328,6 +407,10 @@ fn split_to_oob() {
     hello.split_to(inline_cap() + 1);
 }
 
+/// STATEMENT: Prefix splitting beyond mutable-buffer length panics.
+///
+/// HOW:
+/// - Copy `helloworld` into `BytesMut`, split at `inline_cap() + 1`, and expect a bounds panic.
 #[test]
 #[should_panic]
 fn split_to_oob_mut() {
@@ -335,6 +418,10 @@ fn split_to_oob_mut() {
     hello.split_to(inline_cap() + 1);
 }
 
+/// STATEMENT: Reserved but uninitialized capacity cannot be exposed by prefix splitting.
+///
+/// HOW:
+/// - Allocate an empty capacity-1,024 mutable buffer, call `split_to(128)`, and expect a panic despite sufficient allocation capacity.
 #[test]
 #[should_panic]
 fn split_to_uninitialized() {
@@ -342,6 +429,11 @@ fn split_to_uninitialized() {
     let _other = bytes.split_to(128);
 }
 
+/// STATEMENT: Immutable splitting validates initialized length rather than spare allocation capacity.
+///
+/// HOW:
+/// - Freeze four bytes in a capacity-100 buffer and confirm both split methods accept offset four.
+/// - Catch and verify panics from both methods at offset five.
 #[test]
 fn split_off_to_at_gt_len() {
     fn make_bytes() -> Bytes {
@@ -370,6 +462,11 @@ fn split_off_to_at_gt_len() {
     );
 }
 
+/// STATEMENT: `Bytes` supports content-based borrowing, ordering, equality, iteration, and shared-allocation metadata.
+///
+/// HOW:
+/// - Compare `hello world` against strings, slices, arrays, vectors, and mutable buffers, and check ordering against `g`.
+/// - Clone vector-backed `B` and check reference counts and capacity; collect through iterator forms, truncate to `hello`, and clear.
 #[test]
 #[allow(
     clippy::byte_char_slices,
@@ -465,6 +562,11 @@ fn fns_defined_for_bytes() {
     assert!(bytes.is_empty());
 }
 
+/// STATEMENT: `BytesMut` supports mutable borrowing, content comparisons, iteration, resizing, and explicit visible lengths.
+///
+/// HOW:
+/// - Borrow and compare `hello world` across string and byte containers and collect through borrowed and owned iterators.
+/// - Truncate, clear, resize with `1`, mutate the first byte, and set another buffer's length to one, checking each resulting payload.
 #[test]
 #[allow(clippy::redundant_slicing)]
 fn fns_defined_for_bytes_vec() {
@@ -545,6 +647,10 @@ fn fns_defined_for_bytes_vec() {
     assert_eq!(bytes, "h");
 }
 
+/// STATEMENT: Reserving additional capacity for copied mutable bytes preserves their existing length contribution.
+///
+/// HOW:
+/// - Copy `LONG`, reserve 64 additional bytes, and check capacity equals `LONG.len() + 64`.
 #[test]
 fn reserve_convert() {
     // Vec -> Vec
@@ -553,6 +659,10 @@ fn reserve_convert() {
     assert_eq!(bytes.capacity(), LONG.len() + 64);
 }
 
+/// STATEMENT: Reservation after consuming front bytes sizes the visible capacity for remaining data and requested space.
+///
+/// HOW:
+/// - Fill capacity 16, advance ten bytes, check remaining capacity six, reserve 32, and verify capacity 38.
 #[test]
 fn reserve_recycling() {
     let mut bytes = BytesMut::with_capacity(16);
@@ -564,6 +674,10 @@ fn reserve_recycling() {
     assert_eq!(bytes.capacity(), 38);
 }
 
+/// STATEMENT: Extending an initially zero-capacity mutable buffer grows it to hold an iterator's bytes.
+///
+/// HOW:
+/// - Call `extend` with `LONG` on `BytesMut::with_capacity(0)` and compare the complete contents with `LONG`.
 #[test]
 fn extend_mut() {
     let mut bytes = BytesMut::with_capacity(0);
@@ -571,6 +685,10 @@ fn extend_mut() {
     assert_eq!(*bytes, LONG[..]);
 }
 
+/// STATEMENT: Consecutive slice extensions preserve byte order across short and longer first fragments.
+///
+/// HOW:
+/// - Split `LONG` at offsets three and 34, append both fragments into fresh mutable buffers, and compare each result with `LONG`.
 #[test]
 fn extend_from_slice_mut() {
     for &i in &[3, 34] {
@@ -581,6 +699,10 @@ fn extend_from_slice_mut() {
     }
 }
 
+/// STATEMENT: Static byte storage supports splitting into the expected prefix and suffix.
+///
+/// HOW:
+/// - Construct static `ab`, split off at one, and verify retained `a` and returned `b`.
 #[test]
 fn from_static() {
     let mut a = Bytes::from_static(b"ab");
@@ -590,6 +712,10 @@ fn from_static() {
     assert_eq!(b, b"b"[..]);
 }
 
+/// STATEMENT: Advancing short copied immutable bytes leaves the correct suffix.
+///
+/// HOW:
+/// - Construct `Bytes` from the `hello world` slice, advance six bytes, and compare with `world`.
 #[test]
 fn advance_inline() {
     let mut a = Bytes::from(&b"hello world"[..]);
@@ -597,6 +723,10 @@ fn advance_inline() {
     assert_eq!(a, &b"world"[..]);
 }
 
+/// STATEMENT: Advancing static immutable bytes leaves the correct suffix.
+///
+/// HOW:
+/// - Construct static `hello world`, advance six bytes, and compare with `world`.
 #[test]
 fn advance_static() {
     let mut a = Bytes::from_static(b"hello world");
@@ -604,6 +734,11 @@ fn advance_static() {
     assert_eq!(a, &b"world"[..]);
 }
 
+/// STATEMENT: Mutable-buffer advancement and later reservation preserve the remaining suffix.
+///
+/// HOW:
+/// - Advance a long copied sentence by 16 and four bytes, check each suffix, reserve 1,024 bytes, and check contents again.
+/// - Advance another six bytes and compare the final suffix.
 #[test]
 fn advance_vec() {
     let mut a = BytesMut::copy_from_slice(b"hello world boooo yah world zomg wat wat");
@@ -621,6 +756,10 @@ fn advance_vec() {
     assert_eq!(a, b"d zomg wat wat"[..]);
 }
 
+/// STATEMENT: Advancing mutable bytes beyond their visible length panics.
+///
+/// HOW:
+/// - Copy `hello world`, advance twenty bytes, and require a bounds panic.
 #[test]
 #[should_panic]
 fn advance_past_len_vec() {
@@ -628,6 +767,10 @@ fn advance_past_len_vec() {
     a.advance(20);
 }
 
+/// STATEMENT: Equality between immutable and mutable byte buffers compares contents symmetrically.
+///
+/// HOW:
+/// - Compare matching `The quick red fox` buffers in both directions, then compare a different immutable sentence with the mutable buffer.
 #[test]
 fn partial_eq_bytesvec() {
     let bytes = Bytes::from(&b"The quick red fox"[..]);
@@ -639,6 +782,10 @@ fn partial_eq_bytesvec() {
     assert!(bytesmut != bytes2);
 }
 
+/// STATEMENT: Collecting bytes works for an iterator without an exact size hint.
+///
+/// HOW:
+/// - Scan a repeated `x` iterator down to 100 items while recording expected bytes, collect into `Bytes`, and compare both payloads.
 #[test]
 fn from_iter_no_size_hint() {
     use std::iter;
@@ -666,6 +813,10 @@ fn test_slice_ref(bytes: &Bytes, start: usize, end: usize, expected: &[u8]) {
     assert_eq!(&sub[..], expected);
 }
 
+/// STATEMENT: `slice_ref` returns matching bytes for borrowed subranges, including empty boundary ranges.
+///
+/// HOW:
+/// - Borrow five ranges from `012345678`, pass them through `slice_ref`, and compare empty, prefix, middle, and suffix results.
 #[test]
 fn slice_ref_works() {
     let bytes = Bytes::from(&b"012345678"[..]);
@@ -677,6 +828,10 @@ fn slice_ref_works() {
     test_slice_ref(&bytes, 9, 9, b"");
 }
 
+/// STATEMENT: `slice_ref` accepts an empty subrange borrowed from an empty buffer itself.
+///
+/// HOW:
+/// - Borrow `0..0` from empty `Bytes`, construct its referenced slice, and verify the result is empty.
 #[test]
 fn slice_ref_empty() {
     let bytes = Bytes::from(&b""[..]);
@@ -686,6 +841,10 @@ fn slice_ref_empty() {
     assert_eq!(&sub[..], b"");
 }
 
+/// STATEMENT: `slice_ref` rejects a matching-looking slice from unrelated storage.
+///
+/// HOW:
+/// - Pass four bytes borrowed from a separate literal to `slice_ref` on `012345678` and expect a panic.
 #[test]
 #[should_panic]
 fn slice_ref_catches_not_a_subset() {
@@ -695,6 +854,10 @@ fn slice_ref_catches_not_a_subset() {
     bytes.slice_ref(slice);
 }
 
+/// STATEMENT: An unrelated empty slice is not accepted as a subrange of nonempty bytes.
+///
+/// HOW:
+/// - Pass an empty literal slice to `slice_ref` on `012345678` and expect a panic.
 #[test]
 #[should_panic]
 fn slice_ref_catches_not_an_empty_subset() {
@@ -704,6 +867,10 @@ fn slice_ref_catches_not_an_empty_subset() {
     bytes.slice_ref(slice);
 }
 
+/// STATEMENT: Even an empty buffer rejects an empty referenced slice from unrelated storage.
+///
+/// HOW:
+/// - Copy an empty slice into `Bytes`, pass a separate empty literal to `slice_ref`, and expect a panic.
 #[test]
 #[should_panic]
 fn empty_slice_ref_catches_not_an_empty_subset() {
@@ -713,6 +880,10 @@ fn empty_slice_ref_catches_not_an_empty_subset() {
     bytes.slice_ref(slice);
 }
 
+/// STATEMENT: Freezing mutable bytes preserves payloads and inlines short data.
+///
+/// HOW:
+/// - Freeze copied `12345` and `LONG`, compare data before and after each conversion, and verify the short result is inline.
 #[test]
 fn bytes_vec_freeze() {
     let bytes = BytesMut::copy_from_slice(b"12345");
@@ -727,6 +898,11 @@ fn bytes_vec_freeze() {
     assert_eq!(b, LONG);
 }
 
+/// STATEMENT: Mutable conversions from strings and arrays preserve data and support prefix splitting.
+///
+/// HOW:
+/// - Convert `12345`, split three bytes, and compare both directions of equality for `123` and the retained `45`.
+/// - Convert `[1, 2, 3]` and compare the corresponding byte sequence.
 #[test]
 fn bytes_vec() {
     let mut bytes = BytesMut::from("12345");
@@ -742,6 +918,10 @@ fn bytes_vec() {
     assert_eq!(bytes, b"\x01\x02\x03");
 }
 
+/// STATEMENT: Allocating at the 32-bit capacity limit is rejected when it exceeds the supported maximum.
+///
+/// HOW:
+/// - On a 64-bit target, request `u32::MAX` capacity and expect the `exceeds maximum` panic.
 #[cfg(target_pointer_width = "64")]
 #[test]
 #[should_panic(expected = "exceeds maximum")]
@@ -749,6 +929,10 @@ fn with_capacity_over_u32() {
     let _ = BytesMut::with_capacity(u32::MAX as usize);
 }
 
+/// STATEMENT: Reserving beyond supported allocation capacity panics instead of truncating the request.
+///
+/// HOW:
+/// - On a 64-bit target, reserve `u32::MAX` additional bytes after `hello` and expect the maximum-capacity panic.
 #[cfg(target_pointer_width = "64")]
 #[test]
 #[should_panic(expected = "exceeds maximum")]
@@ -757,6 +941,10 @@ fn reserve_over_u32() {
     buf.reserve(u32::MAX as usize);
 }
 
+/// STATEMENT: Reservation detects arithmetic overflow when adding requested space to live data.
+///
+/// HOW:
+/// - Reserve `usize::MAX` additional bytes after `hello` and expect the buffer-capacity overflow panic.
 #[test]
 #[should_panic(expected = "buffer capacity overflow")]
 fn reserve_overflows_usize() {
@@ -773,6 +961,11 @@ fn fill_low(buf: &mut BytesMut) {
     }
 }
 
+/// STATEMENT: `reserve_more` grows low-space pages through size classes and eventually falls back to ordinary storage.
+///
+/// HOW:
+/// - Check ample spare space is unchanged, then fill below each low threshold and verify successive classes, capacities, lengths, and payloads.
+/// - Grow beyond `Size256` by 64 KiB and grow a shared `Size8` page, checking both the new tail and retained head data.
 #[test]
 fn reserve_more_pages() {
     // the remaining capacity is above the low threshold
@@ -815,6 +1008,11 @@ fn reserve_more_pages() {
     assert_eq!(&head[..], LONG);
 }
 
+/// STATEMENT: `reserve_more` reuses a page's size for small live data and grows the class for larger live data.
+///
+/// HOW:
+/// - Leave 100 bytes after consuming unique and shared `Size8` pages, reserve more, and check class, capacity, data, and retained head bytes.
+/// - Leave more than the half-capacity threshold and verify growth to `Size16` without changing length.
 #[test]
 fn reserve_more_reuses_page() {
     // a unique page with consumed data is compacted in place
@@ -848,6 +1046,11 @@ fn reserve_more_reuses_page() {
     assert_eq!(buf.len(), len);
 }
 
+/// STATEMENT: Ordinary-buffer `reserve_more` uses bounded growth and reclaims consumed unique storage when possible.
+///
+/// HOW:
+/// - Check empty, small, and larger buffers grow by the minimum, doubling, or a 64-KiB step while preserving payloads.
+/// - Consume most of unique buffers and check compaction preserves capacity, then reserve shared storage and verify both split views remain valid.
 #[test]
 fn reserve_more_unset() {
     let mut buf = BytesMut::copy_from_slice(b"");
@@ -907,6 +1110,10 @@ fn reserve_more_unset() {
     assert_eq!(&head[..], LONG);
 }
 
+/// STATEMENT: Setting visible length beyond the 32-bit range cannot silently truncate to fit a small allocation.
+///
+/// HOW:
+/// - On a 64-bit target, set a capacity-64 buffer's length to `(1 << 32) + 5` and expect a panic.
 #[cfg(target_pointer_width = "64")]
 #[test]
 #[should_panic]
@@ -920,6 +1127,11 @@ fn assert_advance_panics(name: &str, f: impl FnOnce()) {
     assert!(res.is_err(), "{name}: advance_to past len must panic");
 }
 
+/// STATEMENT: Advancement and splitting enforce visible bounds across mutable, vector, inline, static, and page storage.
+///
+/// HOW:
+/// - Advance mutable and vector-backed immutable buffers exactly to their ends and verify emptiness.
+/// - Catch overrun panics for those buffers, inline and static bytes, immutable splitting, and a storage-backed `BytePage`.
 #[test]
 fn advance_to_past_len_panics() {
     let long = vec![b'x'; 100];
@@ -960,6 +1172,11 @@ fn advance_to_past_len_panics() {
     });
 }
 
+/// STATEMENT: Truncating and trimming a split immutable view uses its own length rather than its mutable sibling's capacity.
+///
+/// HOW:
+/// - Split 900 bytes from a patterned 1,000-byte buffer and check the tail and allocation capacities.
+/// - Truncate the head to 800, trim it and its clone, and compare both prefixes and the untouched mutable tail.
 #[test]
 fn split_to_view_truncate_and_trimdown() {
     let data: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
@@ -982,6 +1199,11 @@ fn split_to_view_truncate_and_trimdown() {
     assert_eq!(buf, &data[900..]);
 }
 
+/// STATEMENT: Immutable-handle operations remain valid while a mutable sibling updates its disjoint view on another thread.
+///
+/// HOW:
+/// - Split a 256-byte immutable head, then inspect, clone, truncate, and trim it on a spawned thread.
+/// - Append, advance, split, reserve, and shorten the mutable tail concurrently; join and check head data, allocation capacity, and tail length.
 #[test]
 fn bytes_handle_concurrent_with_bytes_mut() {
     let mut buf = BytesMut::with_capacity(1024);
@@ -1009,6 +1231,10 @@ fn bytes_handle_concurrent_with_bytes_mut() {
     assert_eq!(buf.len(), 256 + 16 - 8 - 32 - 1);
 }
 
+/// STATEMENT: Large advancement and split counts are bounds-checked without truncation to 32 bits.
+///
+/// HOW:
+/// - On 64-bit targets, catch panics for `(1 << 32) + 1` advancement or splitting of short mutable buffers and storage- or vector-backed pages.
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn advance_to_does_not_truncate_count() {
@@ -1042,6 +1268,11 @@ fn storage_page(data: &[u8]) -> BytePage {
     page
 }
 
+/// STATEMENT: Page clones have independent views and mutable conversions isolate shared data while reusing unique allocations.
+///
+/// HOW:
+/// - Advance a cloned storage-backed page and check the clone retains all bytes.
+/// - Convert shared clones to mutable buffers, modify and append independently, then verify all payloads and unique-page pointer reuse.
 #[test]
 fn page_clone_is_independent() {
     let data = [b'a'; 64];
@@ -1071,6 +1302,10 @@ fn page_clone_is_independent() {
     assert_eq!(BytesMut::from(p).as_ptr(), ptr);
 }
 
+/// STATEMENT: Cloned page views can advance independently on different threads.
+///
+/// HOW:
+/// - Clone a 64-byte storage page, advance the clone by one on a thread and the source by two, then join and compare their suffixes.
 #[test]
 fn page_clone_across_threads() {
     let data = [b'a'; 64];
@@ -1088,6 +1323,11 @@ fn page_clone_across_threads() {
     assert_eq!(p, &data[2..]);
 }
 
+/// STATEMENT: Native `BufMut::put` grows mutable storage for sources larger than current spare capacity.
+///
+/// HOW:
+/// - Put 5,000 bytes into an empty buffer, then put the same payload as `Bytes` after `ab` in a capacity-16 buffer.
+/// - Compare the complete first payload and both ranges of the second buffer.
 #[test]
 fn buf_mut_put_grows() {
     let data = vec![7u8; 5000];
@@ -1104,6 +1344,11 @@ fn buf_mut_put_grows() {
     assert_eq!(&buf[2..], &data[..]);
 }
 
+/// STATEMENT: Mutable-reference and boxed `BufMut` forwarding preserve growable write behavior.
+///
+/// HOW:
+/// - Through a generic writer, append a 5,000-byte slice twice and two single bytes to `&mut BytesMut` and `Box<BytesMut>`.
+/// - Verify both resulting lengths equal twice the payload length plus two.
 #[test]
 fn buf_mut_forwarding_grow() {
     let data = vec![5u8; 5000];

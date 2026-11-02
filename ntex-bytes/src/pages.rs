@@ -933,6 +933,11 @@ mod tests {
 
     use super::*;
 
+    /// STATEMENT: `BytePage` compares by content across byte and string types and supports consuming reads.
+    ///
+    /// HOW:
+    /// - Compare a vector-backed `hello` page with borrowed and owned equivalents in both directions and reject `hell`.
+    /// - Read it into a three-byte array, checking `hel`, the `lo` remainder, short and exhausted reads, and final emptiness.
     #[test]
     #[allow(clippy::op_ref, clippy::cmp_owned)]
     fn page_eq_and_read() {
@@ -966,6 +971,11 @@ mod tests {
         assert!(page.is_empty());
     }
 
+    /// STATEMENT: Page metadata distinguishes bytes, mutable storage, vector storage, and inline bytes.
+    ///
+    /// HOW:
+    /// - Convert 64-byte `Bytes`, `BytesMut`, and vectors and check their `PageKind` values.
+    /// - Compare inline status for four-byte and 64-byte immutable buffers and a short mutable buffer.
     #[test]
     fn page_info() {
         use crate::info::PageKind;
@@ -983,6 +993,11 @@ mod tests {
         assert!(!BytePage::from(BytesMut::copy_from_slice(&[1; 4][..])).is_inline());
     }
 
+    /// STATEMENT: Appending small data copies into the current page while large data retains its own allocation.
+    ///
+    /// HOW:
+    /// - Append payloads at and above `APPEND_COPY_LIMIT` after a header and check page counts, spare capacity, and storage pointers.
+    /// - Add a trailer, drain pages in order, compare concatenated contents, and verify an empty current page remains reusable.
     #[test]
     fn append_copies_small_and_splits_for_large() {
         let cap = BytePageSize::Size16.capacity();
@@ -1033,6 +1048,11 @@ mod tests {
         assert_eq!(pages.spare(), cap - 1);
     }
 
+    /// STATEMENT: Pages track lengths, page boundaries, conversions, and debug output as data is added and removed.
+    ///
+    /// HOW:
+    /// - Fill `Size8` buffers across page boundaries, append a full page, and check lengths, page counts, spare capacity, and drained contents.
+    /// - Convert byte and string inputs to pages, advance and freeze them, then check debug ordering and clearing.
     #[test]
     fn pages() {
         let cap = BytePageSize::Size8.capacity();
@@ -1144,6 +1164,11 @@ mod tests {
         assert_eq!(pages.is_empty(), len == 0);
     }
 
+    /// STATEMENT: Tracked total length stays consistent with page contents across mixed buffer operations.
+    ///
+    /// HOW:
+    /// - Randomly extend, append, prepend, take, split, move, copy, and write bytes while maintaining an expected length.
+    /// - Check both buffers against their constituent page lengths after each operation, then verify freezing and clearing leave empty buffers.
     #[test]
     fn pages_len_tracking() {
         let mut rng = rand::rng();
@@ -1217,6 +1242,10 @@ mod tests {
         assert!(pages.is_empty());
     }
 
+    /// STATEMENT: A cached page-list allocation does not retain the previous buffer's tracked length.
+    ///
+    /// HOW:
+    /// - Append two 64-byte buffers, drop the `BytePages`, then create another and verify empty length and page consistency.
     #[test]
     fn pages_len_after_cache_reuse() {
         let mut pages = BytePages::new(BytePageSize::Size8);
@@ -1229,6 +1258,11 @@ mod tests {
         assert!(pages.is_empty());
     }
 
+    /// STATEMENT: Copying the current page shares its data while allowing the source to append safely.
+    ///
+    /// HOW:
+    /// - Copy 64 bytes with `copy_to`, take the copied page, and verify it shares the current page's pointer.
+    /// - Append another 64 bytes to the source and drop it, checking the copied page stays unchanged and valid.
     #[test]
     fn pages_copy_to_shares_current() {
         let mut pages = BytePages::new(BytePageSize::Size8);
@@ -1251,6 +1285,11 @@ mod tests {
         assert_eq!(page.as_ref(), &[1; 64][..]);
     }
 
+    /// STATEMENT: Splitting pages preserves writable spare capacity and transfers a whole current page without copying.
+    ///
+    /// HOW:
+    /// - Split a 40-byte head from 64 bytes, append to the tail, and check lengths, contents, spare capacity, and pointer offsets.
+    /// - Repeat with an inline head, a whole-page split, and an empty current page, checking ownership and retained capacity.
     #[test]
     fn pages_split_keeps_current_writable() {
         let mut pages = BytePages::new(BytePageSize::Size8);
@@ -1303,6 +1342,11 @@ mod tests {
         assert_eq!(pages.spare(), remaining + 64);
     }
 
+    /// STATEMENT: `BytePages` mutable-buffer writes grow across page boundaries and account for all written bytes.
+    ///
+    /// HOW:
+    /// - Fill a writable chunk, advance it, write into the next page, and check page counts, length, and remaining writable space.
+    /// - Combine `put` and `Write::write_all`, then freeze and compare the complete payload.
     #[test]
     fn pages_buf_mut_grows() {
         let mut pages = BytePages::new(BytePageSize::Size8);
@@ -1337,6 +1381,11 @@ mod tests {
         assert_eq!(&pages.freeze()[..], &expected[..]);
     }
 
+    /// STATEMENT: Single-byte writes after a full current page allocate usable storage without adding empty pages.
+    ///
+    /// HOW:
+    /// - Fill a current page through `advance_mut`, append signed and unsigned bytes, and check page counts and frozen data.
+    /// - Repeat after appending a large separate payload, verifying all listed pages are nonempty and byte order is preserved.
     #[test]
     fn pages_byte_write_after_full_page() {
         // `advance_mut` leaves a full current page
@@ -1370,6 +1419,10 @@ mod tests {
         assert_eq!(&pages.freeze()[..], &expected[..]);
     }
 
+    /// STATEMENT: Mutable advancement cannot exceed the current page's writable chunk.
+    ///
+    /// HOW:
+    /// - Get a `Size8` buffer's chunk length, advance by one more, and expect the current-page bounds panic.
     #[test]
     #[should_panic(expected = "cannot advance past the current page")]
     fn pages_advance_past_current_page() {
@@ -1378,12 +1431,20 @@ mod tests {
         unsafe { pages.advance_mut(n + 1) };
     }
 
+    /// STATEMENT: Creating `BytePages` with an unspecified page size is rejected.
+    ///
+    /// HOW:
+    /// - Call `BytePages::new` with `BytePageSize::Unset` and expect the page-size panic.
     #[test]
     #[should_panic(expected = "Page size cannot be Unset")]
     fn pages_new_unset() {
         let _ = BytePages::new(BytePageSize::Unset);
     }
 
+    /// STATEMENT: An existing `BytePages` buffer cannot switch to an unspecified page size.
+    ///
+    /// HOW:
+    /// - Create a `Size8` buffer, set its page size to `Unset`, and expect the page-size panic.
     #[test]
     #[should_panic(expected = "Page size cannot be Unset")]
     fn pages_set_page_size_unset() {
@@ -1391,6 +1452,10 @@ mod tests {
         pages.set_page_size(BytePageSize::Unset);
     }
 
+    /// STATEMENT: Caching a large page list does not retain its excessive list capacity.
+    ///
+    /// HOW:
+    /// - Append 200 pages, check list capacity is at least 200, drop the buffer, and verify a new list has smaller capacity.
     #[test]
     fn cached_pages_list_is_shrunk() {
         let mut pages = BytePages::new(BytePageSize::Size4);
@@ -1408,6 +1473,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Single-page conversion reuses unique storage but copies shared storage before making it mutable.
+    ///
+    /// HOW:
+    /// - Convert current pages to `BytesMut` and `Bytes`, checking pointer reuse, contents, and writable spare capacity.
+    /// - Convert unique and shared prepended `Bytes`, checking reuse only for the unique case and source isolation after mutation.
     #[test]
     fn pages_into_bytes_single_page() {
         // the current page
@@ -1446,6 +1516,11 @@ mod tests {
         assert_eq!(&src[..], &[3; 64][..]);
     }
 
+    /// STATEMENT: Converting multiple pages concatenates them in order and converting an empty buffer stays empty.
+    ///
+    /// HOW:
+    /// - Prepend 64 ones and write 64 twos, convert separately to `BytesMut` and `Bytes`, and check each half.
+    /// - Convert empty `Size8` buffers to both destination types and verify emptiness.
     #[test]
     fn pages_into_bytes_multiple_pages() {
         let mut pages = BytePages::new(BytePageSize::Size8);
@@ -1467,6 +1542,11 @@ mod tests {
         assert!(Bytes::from(BytePages::new(BytePageSize::Size8)).is_empty());
     }
 
+    /// STATEMENT: Copied and cloned page buffers retain their original contents when the source grows.
+    ///
+    /// HOW:
+    /// - Copy pages containing `123456`, freeze both, and compare their contents.
+    /// - Repeat with `copy_to` and `clone`, append `7` only to the source, and verify each destination remains `123456`.
     #[test]
     fn pages_copy_to() {
         let mut pages = BytePages::default();
@@ -1501,6 +1581,11 @@ mod tests {
         assert_eq!(p2, b"123456");
     }
 
+    /// STATEMENT: Page splitting, mutable access, borrowing, and byte conversion preserve the requested data ranges.
+    ///
+    /// HOW:
+    /// - Split `123456` within and across pages with `split_to` and `split_into` and check both resulting buffers.
+    /// - Write short and 65,536-byte payloads through `with_bytes_mut`, then check lengths, frozen bytes, and page borrowing/conversion.
     #[test]
     fn pages_methods() {
         // .split_to()
@@ -1558,6 +1643,11 @@ mod tests {
         assert_eq!(b, b"123");
     }
 
+    /// STATEMENT: Cloned pages preserve contents while short storage is copied inline and longer mutable storage is shared.
+    ///
+    /// HOW:
+    /// - Clone `Bytes`, short and long `BytesMut`, and vector-backed pages, checking equal contents and resulting storage variants.
+    /// - Inspect mutable-storage uniqueness before and after cloning and dropping the longer clone.
     #[test]
     fn page_clone() {
         // Bytes storage
@@ -1608,6 +1698,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Splitting a page behaves consistently for immutable, mutable-storage, and vector-backed data.
+    ///
+    /// HOW:
+    /// - Create `123` pages from each storage type, split one byte, and verify the returned `1` and retained `23`.
     #[test]
     fn page_split_to() {
         // Bytes storage
@@ -1629,6 +1723,10 @@ mod tests {
         assert_eq!(p2, b"1");
     }
 
+    /// STATEMENT: Reading a page consumes its bytes and leaves unused destination bytes untouched.
+    ///
+    /// HOW:
+    /// - Read `123` into a ten-byte zeroed array and verify a three-byte read, zero remaining length, and seven trailing zeros.
     #[test]
     fn page_read() {
         use std::io::Read;
@@ -1641,6 +1739,11 @@ mod tests {
         assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
 
+    /// STATEMENT: Page-size updates, prepending, stream writes, and borrowed string appends preserve data.
+    ///
+    /// HOW:
+    /// - Change `Size4` to `Size8`, reject an empty prepend, prepend `a`, write and flush `bc`, and freeze to `abc`.
+    /// - Append a borrowed `ByteString` afterward and verify the next frozen value is `str`.
     #[test]
     fn pages_misc() {
         let mut pages = BytePages::new(BytePageSize::Size4);
@@ -1658,6 +1761,11 @@ mod tests {
         assert_eq!(pages.freeze(), "str");
     }
 
+    /// STATEMENT: Current-page transfer only fills an empty destination and leaves transferred storage writable.
+    ///
+    /// HOW:
+    /// - Attempt to transfer `data` into a destination containing `x` and check both lengths stay unchanged.
+    /// - Transfer into an empty buffer, check source and destination lengths, append `!`, and freeze to `data!`.
     #[test]
     fn pages_try_get_current_from() {
         let mut src = BytePages::new(BytePageSize::Size4);
@@ -1678,6 +1786,11 @@ mod tests {
         assert_eq!(dst.freeze(), "data!");
     }
 
+    /// STATEMENT: The page-list cache enforces its maximum size and skips caching while already in use.
+    ///
+    /// HOW:
+    /// - Drop `CACHE_SIZE + 1` buffers into an empty cache and verify exactly `CACHE_SIZE` lists are retained.
+    /// - Take the cache while dropping another buffer, restore it, and verify no list was added.
     #[test]
     fn pages_drop_cache() {
         CACHE.with(|c| c.set(Some(Box::default())));
@@ -1706,6 +1819,11 @@ mod tests {
         assert_eq!(cached(), 0);
     }
 
+    /// STATEMENT: Page conversions preserve payloads from mutable storage, vectors, and borrowed byte strings.
+    ///
+    /// HOW:
+    /// - Check `Storage` and `Vec` page kinds, convert their 64-byte payloads to `Bytes` or `BytesMut`, and compare contents.
+    /// - Convert a borrowed `ByteString` to a page and check `string` remains intact.
     #[test]
     fn page_conversions() {
         let page = BytePage::from(BytesMut::copy_from_slice([1; 64]));
@@ -1723,6 +1841,11 @@ mod tests {
         assert_eq!(BytePage::from(&s), "string");
     }
 
+    /// STATEMENT: Appending unique storage with spare capacity makes it writable current storage, unlike full or shared pages.
+    ///
+    /// HOW:
+    /// - Append a mutable page containing `a`, write `b`, and check a single page freezes to `ab`.
+    /// - Append full and shared pages followed by `z`, checking page count, total length, and unchanged shared contents.
     #[test]
     fn append_storage_page() {
         // a page with spare capacity becomes the current page
@@ -1758,6 +1881,11 @@ mod tests {
         pages
     }
 
+    /// STATEMENT: Page iteration preserves order and addresses across moves and omits empty current pages.
+    ///
+    /// HOW:
+    /// - Check empty iteration, then collect inline, shared, and current chunks from `mixed_pages` and compare their order and count.
+    /// - Move the buffer into a box and compare chunk addresses, then consume another buffer and verify empty iteration.
     #[test]
     fn iter_pages() {
         let pages = BytePages::default();
@@ -1783,6 +1911,11 @@ mod tests {
         assert_eq!(pages.num_pages(), 0);
     }
 
+    /// STATEMENT: Advancing across pages drops consumed data while retaining the current page's reusable spare capacity.
+    ///
+    /// HOW:
+    /// - Advance by zero, whole pages, and partial pages in `mixed_pages`, checking lengths, page counts, and remaining chunks.
+    /// - Consume the current page, write `next`, and verify its pointer continues after the consumed bytes.
     #[test]
     fn advance_to_pages() {
         let mut pages = mixed_pages();
@@ -1820,6 +1953,11 @@ mod tests {
         assert_eq!(pages.freeze(), "next");
     }
 
+    /// STATEMENT: Moving buffers retains page allocations, destination size settings, and page order without merging small pages.
+    ///
+    /// HOW:
+    /// - Move `mixed_pages` into an empty `Size16` buffer and check source emptiness, destination size, lengths, and non-inline pointers.
+    /// - Move into a populated buffer, compare all chunk boundaries, append again, and verify moving an empty source changes nothing.
     #[test]
     fn move_to_keeps_pages() {
         // into empty pages, the page list is swapped
@@ -1871,6 +2009,10 @@ mod tests {
         assert_eq!(dst.num_pages(), 6);
     }
 
+    /// STATEMENT: Advancing a vector-backed page retains the correct suffix.
+    ///
+    /// HOW:
+    /// - Prepend a vector containing `hello world`, advance six bytes, and verify length five and frozen `world`.
     #[test]
     fn advance_to_vec_page() {
         let mut pages = BytePages::default();
@@ -1880,6 +2022,10 @@ mod tests {
         assert_eq!(pages.freeze(), "world");
     }
 
+    /// STATEMENT: Advancing beyond total page-buffer length panics.
+    ///
+    /// HOW:
+    /// - Build `mixed_pages`, advance by its length plus one, and expect the end-of-buffer bounds panic.
     #[test]
     #[should_panic(expected = "cannot advance past the end of the buffer")]
     fn advance_to_past_end() {

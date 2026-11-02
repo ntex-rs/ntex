@@ -648,6 +648,10 @@ mod tests {
 
     use super::*;
 
+    /// STATEMENT: Buffer backpressure settings determine their half-watermarks.
+    ///
+    /// HOW:
+    /// - Set distinct read and write limits and check each limit and its half.
     #[test]
     fn buffer_configuration() {
         let cfg = IoConfig::new()
@@ -660,6 +664,11 @@ mod tests {
         assert_eq!(cfg.write_half(), 1024);
     }
 
+    /// STATEMENT: Read page sizes can change independently of backpressure limits.
+    ///
+    /// HOW:
+    /// - Check default sizes and limits, then change page ranges and the write limit.
+    /// - Verify the read watermark stays unchanged and the requested sizes are retained.
     #[test]
     fn read_size_configuration() {
         let default = BytePageSize::Size32.capacity();
@@ -686,6 +695,10 @@ mod tests {
         assert_eq!(cfg.read_backpressure(), default);
     }
 
+    /// STATEMENT: Changing read page sizes preserves explicitly configured backpressure.
+    ///
+    /// HOW:
+    /// - Set a 64 KiB read limit, select 4 KiB pages, and check the limit and half-watermark.
     #[test]
     fn read_backpressure_configuration() {
         let cfg = IoConfig::new()
@@ -696,29 +709,49 @@ mod tests {
         assert_eq!(cfg.read_half(), 32 * 1024);
     }
 
+    /// STATEMENT: An unset maximum read page size is rejected.
+    ///
+    /// HOW:
+    /// - Pass `BytePageSize::Unset` as the maximum and expect the page-size panic.
     #[test]
     #[should_panic(expected = "read buffer page size must be set")]
     fn unset_read_size() {
         let _ = IoConfig::new().set_read_size(BytePageSize::Size4, BytePageSize::Unset);
     }
 
+    /// STATEMENT: The minimum read page size cannot exceed the maximum.
+    ///
+    /// HOW:
+    /// - Configure a 16 KiB minimum and 8 KiB maximum and expect the range-validation panic.
     #[test]
     #[should_panic(expected = "read buffer min page size must not be larger than max")]
     fn inverted_read_size() {
         let _ = IoConfig::new().set_read_size(BytePageSize::Size16, BytePageSize::Size8);
     }
+    /// STATEMENT: An unset write page size is rejected.
+    ///
+    /// HOW:
+    /// - Set the write size to `BytePageSize::Unset` and expect the page-size panic.
     #[test]
     #[should_panic(expected = "write buffer page size must be set")]
     fn unset_write_size() {
         let _ = IoConfig::new().set_write_size(BytePageSize::Unset);
     }
 
+    /// STATEMENT: Read backpressure requires a positive watermark.
+    ///
+    /// HOW:
+    /// - Set the read watermark to zero and expect the backpressure-validation panic.
     #[test]
     #[should_panic(expected = "read backpressure must be greater than zero")]
     fn zero_read_backpressure() {
         let _ = IoConfig::new().set_read_backpressure(0);
     }
 
+    /// STATEMENT: Frame read-rate settings retain their values and a zero timeout disables them.
+    ///
+    /// HOW:
+    /// - Configure timeouts and a byte rate, check all fields, then disable with `Seconds::ZERO`.
     #[test]
     fn frame_read_rate_configuration() {
         let cfg = IoConfig::new().set_frame_read_rate(Seconds(1), Seconds(3), 128);
@@ -731,6 +764,11 @@ mod tests {
         assert!(cfg.frame_read_rate().is_none());
     }
 
+    /// STATEMENT: Connection settings and a shared configuration tag remain accessible.
+    ///
+    /// HOW:
+    /// - Check default and overridden timeouts and write size.
+    /// - Put the configuration in `SharedCfg` and verify its tag and keepalive timeout.
     #[test]
     fn config_accessors() {
         let cfg = IoConfig::new();
@@ -752,6 +790,10 @@ mod tests {
         assert_eq!(cfg.keepalive_timeout(), Seconds(7));
     }
 
+    /// STATEMENT: Write timeouts default to disabled and can be enabled and disabled again.
+    ///
+    /// HOW:
+    /// - Check the default, set three seconds, then reset to `Seconds::ZERO`.
     #[test]
     fn write_timeout_configuration() {
         let cfg = IoConfig::new();
@@ -764,18 +806,30 @@ mod tests {
         assert!(cfg.write_timeout().is_zero());
     }
 
+    /// STATEMENT: Write backpressure requires a positive watermark.
+    ///
+    /// HOW:
+    /// - Set the write watermark to zero and expect the backpressure-validation panic.
     #[test]
     #[should_panic(expected = "write backpressure must be greater than zero")]
     fn zero_write_backpressure() {
         let _ = IoConfig::new().set_write_backpressure(0);
     }
 
+    /// STATEMENT: Shutdown timeouts cannot be disabled with a zero duration.
+    ///
+    /// HOW:
+    /// - Set the shutdown timeout to `Seconds::ZERO` and expect the validation panic.
     #[test]
     #[should_panic(expected = "shutdown timeout must be greater than zero")]
     fn zero_shutdown_timeout_is_rejected() {
         let _ = IoConfig::new().set_shutdown_timeout(Seconds::ZERO);
     }
 
+    /// STATEMENT: Buffer tracking supports disabled, per-connection, and shared modes.
+    ///
+    /// HOW:
+    /// - Check the default mode, select each enabled mode, and verify shared tracker identity.
     #[cfg(feature = "tracker")]
     #[test]
     fn buf_tracker() {

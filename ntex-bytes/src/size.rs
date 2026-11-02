@@ -208,6 +208,10 @@ impl BytePageSize {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Page capacities subtract metadata while half-capacity thresholds are capped at 16 KiB.
+    ///
+    /// HOW:
+    /// - Check `capacity` and `half_capacity` for every `BytePageSize`, including the `Size64` defaults for `Unset`.
     #[test]
     fn page_size() {
         const META: usize = stvec::METADATA_SIZE;
@@ -233,6 +237,10 @@ mod tests {
         assert_eq!(BytePageSize::Unset.half_capacity(), 16 * 1024);
     }
 
+    /// STATEMENT: Allocation-size classification recognizes exact page sizes and rejects neighboring or unsupported sizes.
+    ///
+    /// HOW:
+    /// - Round-trip each page allocation size, reject its adjacent byte counts, and check unsupported aligned sizes and extreme values return `Unset`.
     #[test]
     fn page_size_from_alloc_size() {
         const META: usize = stvec::METADATA_SIZE;
@@ -259,6 +267,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Capacity classification chooses the smallest fitting page and rejects requests beyond the largest class.
+    ///
+    /// HOW:
+    /// - Check zero, every exact capacity, and one byte beyond each preceding class.
+    /// - Verify requests exceeding `Size256` and at `usize::MAX` return `Unset`.
     #[test]
     fn page_size_for_capacity() {
         assert_eq!(BytePageSize::for_capacity(0), BytePageSize::Size4);
@@ -276,6 +289,10 @@ mod tests {
         assert_eq!(BytePageSize::for_capacity(usize::MAX), BytePageSize::Unset);
     }
 
+    /// STATEMENT: Page-size navigation follows increasing capacity and saturates at its endpoints.
+    ///
+    /// HOW:
+    /// - Walk `next` from `Size4` to `Unset` and `prev` back to `Size4`, checking endpoint behavior and adjacent capacities.
     #[test]
     fn page_size_next_prev() {
         let mut size = BytePageSize::Size4;

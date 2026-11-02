@@ -2,6 +2,10 @@
 
 use ntex_bytes::Bytes;
 
+/// STATEMENT: `Bytes` debug formatting escapes every byte using the expected byte-string representation.
+///
+/// HOW:
+/// - Construct all byte values from zero through 255 and compare the complete debug string with explicit printable and escaped output.
 #[test]
 fn fmt() {
     let vec: Vec<_> = (0..0x100).map(|b| b as u8).collect();

@@ -15,6 +15,10 @@ const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
 const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
 const BIN2: &[u8] = b"12345678901234561234567890123456";
 
+/// STATEMENT: Connections and their references compare equal to themselves.
+///
+/// HOW:
+/// - Construct a test connection and check equality through both `Io` and `IoRef`.
 #[ntex::test]
 async fn test_basics() {
     let (client, server) = IoTest::create();
@@ -25,6 +29,11 @@ async fn test_basics() {
     assert!(server.io_ref().eq(server.io_ref()));
 }
 
+/// STATEMENT: Receiving reports timeout notifications and still delivers input during write backpressure.
+///
+/// HOW:
+/// - Inject a timeout and check its receive error, then write peer input and enable write backpressure.
+/// - Verify the next receive yields the input bytes.
 #[ntex::test]
 async fn test_recv() {
     let (client, server) = IoTest::create();
@@ -49,8 +58,11 @@ fn read_size_io(min: BytePageSize, max: BytePageSize) -> Io {
     )
 }
 
-/// The read page size starts at the min and grows to fit read batches,
-/// up to the max.
+/// STATEMENT: Read page size grows with accumulated read batches, bounded by the configured maximum.
+///
+/// HOW:
+/// - Track partial, full, zero-byte, and oversized reads from the default minimum size.
+/// - Check intermediate page sizes, allocated capacity, and saturation at the maximum.
 #[ntex::test]
 async fn read_size_grows_with_batch() {
     let io = Io::new(IoTest::create().1, SharedCfg::new("SRV"));
@@ -88,8 +100,11 @@ async fn read_size_grows_with_batch() {
     assert_eq!(st.read_size(), BytePageSize::Size64);
 }
 
-/// The read page size shrinks one step after several small batches in a
-/// row, down to the min.
+/// STATEMENT: Consecutive small batches shrink read pages one step at a time, never below the minimum.
+///
+/// HOW:
+/// - Grow a page, track small batches around the shrink threshold, and interrupt them with a large batch.
+/// - Verify the threshold restarts, then repeated small batches eventually reach the minimum size.
 #[ntex::test]
 async fn read_size_shrinks_after_small_batches() {
     let io = read_size_io(BytePageSize::Size8, BytePageSize::Size64);
@@ -119,7 +134,11 @@ async fn read_size_shrinks_after_small_batches() {
     assert_eq!(st.read_size(), BytePageSize::Size8);
 }
 
-/// Equal min and max read page sizes disable the adaptation.
+/// STATEMENT: Equal minimum and maximum read page sizes disable adaptation.
+///
+/// HOW:
+/// - Configure a fixed page size and track repeated large and small batches.
+/// - Verify the page size remains unchanged throughout.
 #[ntex::test]
 async fn read_size_fixed() {
     let io = read_size_io(BytePageSize::Size16, BytePageSize::Size16);
@@ -135,8 +154,11 @@ async fn read_size_fixed() {
     assert_eq!(st.read_size(), BytePageSize::Size16);
 }
 
-/// Replacing the configuration restarts the read page size at the new
-/// min.
+/// STATEMENT: Replacing configuration resets read adaptation to the new minimum and maximum.
+///
+/// HOW:
+/// - Grow the default page size, replace the size range, and check reset to the new minimum.
+/// - Track another large read and verify growth stops at the new maximum.
 #[ntex::test]
 async fn read_size_reset_by_set_config() {
     let io = Io::new(IoTest::create().1, SharedCfg::new("SRV"));
@@ -154,8 +176,11 @@ async fn read_size_reset_by_set_config() {
     assert_eq!(io.st().read_size(), BytePageSize::Size16);
 }
 
-/// Transport reads drive the read page size, read backpressure does not
-/// depend on it.
+/// STATEMENT: Transport read sizes adapt to traffic independently of the read backpressure watermark.
+///
+/// HOW:
+/// - Receive 100 KiB and verify page growth with an unchanged backpressure limit.
+/// - Receive repeated one-byte messages and check the page size shrinks to the minimum.
 #[ntex::test]
 async fn read_size_follows_transport_reads() {
     let (client, server) = IoTest::create();
@@ -183,8 +208,11 @@ async fn read_size_follows_transport_reads() {
     }
     assert_eq!(io.st().read_size(), BytePageSize::Size4);
 }
-/// Callbacks that hold an `IoRef` must not keep the connection state alive
-/// after the `Io` is dropped.
+/// STATEMENT: Dropping `Io` releases callbacks that retain its connection reference.
+///
+/// HOW:
+/// - Register a callback holding `IoRef`, retain a weak state reference, and drop the connection.
+/// - Close the peer and verify the weak state reference can no longer be upgraded.
 #[ntex::test]
 async fn test_drop_releases_callbacks() {
     struct Cb(#[allow(dead_code)] IoRef);
@@ -204,8 +232,11 @@ async fn test_drop_releases_callbacks() {
     assert!(state.upgrade().is_none());
 }
 
-/// Callbacks registered through a leftover `IoRef` once the `Io` is
-/// dropped, or the connection is closed, must not be stored.
+/// STATEMENT: Dropped or closed connections do not retain newly registered callbacks.
+///
+/// HOW:
+/// - Register through a leftover reference during teardown and verify connection-state release.
+/// - Register after shutdown, attempt callback dispatch, and check no callback runs.
 #[ntex::test]
 async fn test_callbacks_not_registered_after_drop_or_close() {
     struct Cb(#[allow(dead_code)] IoRef, Rc<Cell<usize>>);
@@ -241,7 +272,11 @@ async fn test_callbacks_not_registered_after_drop_or_close() {
     assert_eq!(calls.get(), 0);
 }
 
-/// Callbacks may wake and register waiters.
+/// STATEMENT: Filter callbacks can reenter waiter wake and registration operations.
+///
+/// HOW:
+/// - Trigger a callback that wakes one tag and registers a waiter on another.
+/// - Verify the first waiter completes and the new registration remains independently wakeable.
 #[ntex::test]
 async fn callbacks_reenter_waiters() {
     struct Cb(Rc<Waiter<'static>>);
@@ -267,7 +302,11 @@ async fn callbacks_reenter_waiters() {
     assert!(lazy(|cx| registered.poll_ready(cx)).await.is_ready());
 }
 
-/// Callbacks that drop the `Io` must not keep the connection state alive.
+/// STATEMENT: A callback can drop its owning connection without retaining connection state.
+///
+/// HOW:
+/// - Store `Io` in a callback-owned slot and trigger the callback to empty it.
+/// - Release references, close the peer, and verify the weak state reference expires.
 #[ntex::test]
 async fn callbacks_dropping_io_release_state() {
     struct Cb(Rc<RefCell<Option<Io>>>, #[allow(dead_code)] IoRef);
@@ -321,7 +360,11 @@ impl Drop for Reenter {
     }
 }
 
-/// Wakers may wake other tags when they are woken or dropped.
+/// STATEMENT: Waiter wakers may reenter other tags from wake and drop callbacks.
+///
+/// HOW:
+/// - Register a reentrant waker and trigger it by waking, replacing, and removing its waiter.
+/// - Check the other tag's waiter completes after each action.
 #[ntex::test]
 async fn wakers_reenter_waiters() {
     let (_client, server) = IoTest::create();
@@ -365,6 +408,10 @@ async fn wakers_reenter_waiters() {
     REENTER.set(None);
 }
 
+/// STATEMENT: Stopping a timer clears its pending timeout notification.
+///
+/// HOW:
+/// - Start a timer, inject a timeout, stop the timer, and verify status polling remains pending.
 #[ntex::test]
 async fn test_stop_timer_clears_timeout_notification() {
     let (_client, server) = IoTest::create();
@@ -377,6 +424,11 @@ async fn test_stop_timer_clears_timeout_notification() {
     assert!(lazy(|cx| server.poll_status_update(cx)).await.is_pending());
 }
 
+/// STATEMENT: Exact reads return requested bytes and report `UnexpectedEof` after disconnection.
+///
+/// HOW:
+/// - Read four peer bytes, close the peer during another exact read, and check the error kind.
+/// - Retry after EOF and verify the same error.
 #[ntex::test]
 async fn test_read() {
     let (client, server) = IoTest::create();
@@ -403,6 +455,11 @@ async fn test_read() {
     assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
 }
 
+/// STATEMENT: An incomplete exact read at EOF preserves buffered bytes for a smaller read.
+///
+/// HOW:
+/// - Send two bytes and close, request four bytes, and check `UnexpectedEof`.
+/// - Read the original two bytes successfully, then verify another read reports EOF.
 #[ntex::test]
 async fn test_read_partial_eof() {
     let (client, server) = IoTest::create();
@@ -424,6 +481,10 @@ async fn test_read_partial_eof() {
     assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
 }
 
+/// STATEMENT: Sending a byte frame flushes the encoded payload to the peer.
+///
+/// HOW:
+/// - Send a static payload through `BytesCodec` and compare the peer's received bytes.
 #[ntex::test]
 async fn test_send() {
     let (client, server) = IoTest::create();
@@ -441,6 +502,11 @@ async fn test_send() {
     assert_eq!(item, TEXT);
 }
 
+/// STATEMENT: Read backpressure pauses at the high watermark and resumes at the half-watermark.
+///
+/// HOW:
+/// - Drive read completions manually, consume input around both thresholds, and inspect task wakes and flags.
+/// - Verify byte order through repeated pressure cycles and termination readiness after force-close.
 #[ntex::test]
 async fn read() {
     let io = Io::new(
@@ -594,6 +660,11 @@ async fn read() {
     );
 }
 
+/// STATEMENT: Only explicit force-close requests produce transport termination readiness.
+///
+/// HOW:
+/// - Inject transport errors while active and shutting down and verify close readiness.
+/// - Explicitly terminate another connection and verify read/write termination readiness.
 #[ntex::test]
 async fn only_force_close_reports_terminate() {
     // a transport failure ends the connection, but it is closed gracefully
@@ -638,6 +709,10 @@ async fn only_force_close_reports_terminate() {
     );
 }
 
+/// STATEMENT: Dropping a connection with no outstanding output requests graceful transport closure.
+///
+/// HOW:
+/// - Retain a context, verify no pending output, drop `Io`, and check non-forceful read/write close readiness.
 #[ntex::test]
 async fn drop_closes_gracefully_once_output_is_flushed() {
     // Nothing is left to deliver, so the transport ends the connection with
@@ -658,6 +733,10 @@ async fn drop_closes_gracefully_once_output_is_flushed() {
     );
 }
 
+/// STATEMENT: Dropping a connection with undeliverable output requests transport abort.
+///
+/// HOW:
+/// - Queue output, drop `Io`, and verify force-close state and read/write termination readiness.
 #[ntex::test]
 async fn drop_aborts_when_output_would_be_lost() {
     // The filter chain goes away with the `Io`, so buffered output can
@@ -680,6 +759,11 @@ async fn drop_aborts_when_output_would_be_lost() {
     );
 }
 
+/// STATEMENT: Dropping `Io` empties retained state buffers and discards late read completions.
+///
+/// HOW:
+/// - Buffer input and output, retain the context and reference, then drop the connection.
+/// - Check all buffers are empty before and after late reads through both completion APIs.
 #[ntex::test]
 async fn drop_releases_buffers() {
     // The state can outlive the `Io`, held by the transport while it closes
@@ -708,6 +792,10 @@ async fn drop_releases_buffers() {
     assert_eq!(ioref.0.buffer.read_dst_size(), 0);
 }
 
+/// STATEMENT: Replacing the filter chain during drop preserves a prior force-close request.
+///
+/// HOW:
+/// - Terminate and drop a connection, then verify its retained context still reports termination readiness.
 #[ntex::test]
 async fn force_close_survives_filter_replacement() {
     // Dropping `Io` swaps the chain for `NullFilter`, which cannot see the
@@ -726,6 +814,11 @@ async fn force_close_survives_filter_replacement() {
     );
 }
 
+/// STATEMENT: Read notifications wake the dispatcher and can rearm reads across backpressure cycles.
+///
+/// HOW:
+/// - Register notifications, deliver input up to the watermark, and check readiness and wake flags.
+/// - Rearm while pressured, deliver more input, and verify termination yields an end-of-input notification.
 #[ntex::test]
 async fn read_notify() {
     let io = Io::new(
@@ -827,6 +920,11 @@ async fn read_notify() {
     assert!(matches!(res, Poll::Ready(Ok(None))), "{res:?}");
 }
 
+/// STATEMENT: Read-more polling remains ready while newly received input is available.
+///
+/// HOW:
+/// - Poll an empty connection, send input, await readiness, and verify the buffered payload.
+/// - Send another payload and check consecutive read-more polls are ready.
 #[ntex::test]
 async fn read_more() {
     let (client, server) = IoTest::create();
@@ -851,6 +949,11 @@ async fn read_more() {
     assert!(lazy(|cx| io.poll_read_more(cx)).await.is_ready());
 }
 
+/// STATEMENT: Decoding buffered input releases read backpressure and later input can reenable it.
+///
+/// HOW:
+/// - Fill the configured read watermark, receive the bytes, and check pressure/readiness flags clear.
+/// - Fill it again and verify pressure and read-more availability.
 #[ntex::test]
 async fn read_backpressure() {
     let (client, server) = IoTest::create();
@@ -880,6 +983,11 @@ async fn read_backpressure() {
     assert_eq!(io.read_more().await.unwrap(), Some(()));
 }
 
+/// STATEMENT: Read backpressure metrics track periods, buffered bytes, and cleanup on consumption or drop.
+///
+/// HOW:
+/// - Fill, hold, and consume input while checking pressure counts, gauges, and elapsed pressure time.
+/// - Fill again, drop the connection, and verify gauges clear and pressure time stops advancing.
 #[ntex::test]
 async fn read_backpressure_metrics() {
     let cfg = SharedCfg::new("SRV")
@@ -938,6 +1046,11 @@ async fn read_backpressure_metrics() {
     );
 }
 
+/// STATEMENT: Read-buffer gauges track held pages, move with configuration, and clear after consumption or drop.
+///
+/// HOW:
+/// - Accumulate partial input, verify one page's capacity and byte count, then consume it.
+/// - Buffer more input, switch metric configurations, and check gauge transfer and final cleanup.
 #[ntex::test]
 async fn read_buffer_capacity_metrics() {
     let cfg = |tag| {
@@ -991,6 +1104,11 @@ async fn read_buffer_capacity_metrics() {
     assert_eq!(held(&m2), (0, 0, 0));
 }
 
+/// STATEMENT: Write pressure is counted per period, with buffered bytes and active gauges cleared on drain or drop.
+///
+/// HOW:
+/// - Block peer writes, queue output across the watermark, and verify repeated writes do not recount pressure.
+/// - Unblock and flush, then enter pressure again and drop the connection while checking gauges and duration.
 #[ntex::test]
 async fn write_backpressure_metrics() {
     let cfg = SharedCfg::new("SRV")
@@ -1056,6 +1174,11 @@ async fn write_backpressure_metrics() {
     assert_eq!(m.write_buffered, 0);
 }
 
+/// STATEMENT: I/O metrics distinguish complete and partial eager writes, scheduled batches, and transferred bytes.
+///
+/// HOW:
+/// - Use budgeted transports above and below the eager threshold, including disabled eager writes.
+/// - Check eager/partial/scheduled counters and written bytes, then receive input and check read bytes.
 #[ntex::test]
 async fn write_metrics() {
     #[derive(Debug)]
@@ -1126,6 +1249,11 @@ async fn write_metrics() {
     assert_eq!(metrics.snapshot().bytes_read, BIN.len() as u64);
 }
 
+/// STATEMENT: Close metrics retain the first reason and count each real connection once.
+///
+/// HOW:
+/// - Close connections with competing reasons, taken placeholders, custom reasons, and transport failure.
+/// - Verify total and per-reason counts, including no duplicate count for a taken placeholder.
 #[ntex::test]
 async fn close_reason_metrics() {
     IoMetricsGroup::set_current(IoMetricsGroup::new());
@@ -1176,6 +1304,11 @@ async fn close_reason_metrics() {
     assert_eq!(c.io, 1);
 }
 
+/// STATEMENT: Metrics groups isolate dedicated configurations and refresh cached fallback mappings.
+///
+/// HOW:
+/// - Compare disabled, enabled, and registered configurations and inspect group snapshot identities.
+/// - Replace the current group, then register a configuration from another thread and verify remapping.
 #[ntex::test]
 async fn metrics_group() {
     let group = IoMetricsGroup::new();
@@ -1235,6 +1368,11 @@ async fn metrics_group() {
     ));
 }
 
+/// STATEMENT: Configuration changes transfer active write gauges without transferring historical events.
+///
+/// HOW:
+/// - Enter write backpressure, replace the configuration, and compare old/new pressure and byte gauges.
+/// - Drop the connection and verify cleanup and closure are attributed only to the new configuration.
 #[ntex::test]
 async fn set_config_moves_metrics() {
     let cfg = SharedCfg::new("A")
@@ -1281,6 +1419,11 @@ async fn set_config_moves_metrics() {
     assert_eq!((s1.closed.total, s2.closed.total), (0, 1));
 }
 
+/// STATEMENT: Clearing a filterless read source releases backpressure and resumes transport input.
+///
+/// HOW:
+/// - Fill the read watermark, clear input through `with_read_src`, and check pause/pressure flags clear.
+/// - Send further bytes and verify read readiness returns.
 #[ntex::test]
 async fn read_src_releases_read_backpressure() {
     let (client, server) = IoTest::create();
@@ -1316,6 +1459,11 @@ async fn read_src_releases_read_backpressure() {
     assert!(io.flags().is_read_ready());
 }
 
+/// STATEMENT: Clearing application input through filter-buffer access releases read backpressure.
+///
+/// HOW:
+/// - Fill the read watermark, clear the destination through `with_buf`, and check reads unpause.
+/// - Send additional bytes and verify read readiness resumes.
 #[ntex::test]
 async fn with_buf_releases_read_backpressure() {
     let (client, server) = IoTest::create();
@@ -1354,7 +1502,11 @@ async fn with_buf_releases_read_backpressure() {
     assert!(io.flags().is_read_ready());
 }
 
-/// A cancelled full flush must not suppress the wake of a partial flush.
+/// STATEMENT: A cancelled full flush does not suppress partial-flush wakeups.
+///
+/// HOW:
+/// - Poll a full flush under backpressure, abandon it, and register a partial flush.
+/// - Drain below the release threshold without emptying output and verify the partial flush wakes and completes.
 #[ntex::test]
 async fn cancelled_full_flush_keeps_partial_flush_wake() {
     let io = Io::new(
@@ -1380,6 +1532,11 @@ async fn cancelled_full_flush_keeps_partial_flush_wake() {
     assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_ready());
 }
 
+/// STATEMENT: Write scheduling, backpressure, and flush readiness follow queued-output progress.
+///
+/// HOW:
+/// - Queue bytes across the watermark, run scheduled writes, and drain output in stages.
+/// - Check task wakes, pressure notifications, partial/full flush flags, and termination errors.
 #[ntex::test]
 async fn write() {
     let io = Io::new(
@@ -1522,6 +1679,10 @@ async fn write() {
     ));
 }
 
+/// STATEMENT: Local graceful shutdown reports a peer-gone status without an error.
+///
+/// HOW:
+/// - Shut down without peer activity and verify inactive state and `IoStatusUpdate::PeerGone(None)`.
 #[ntex::test]
 async fn local_shutdown_reports_peer_gone_without_error() {
     let (client, server) = IoTest::create();
@@ -1538,6 +1699,11 @@ async fn local_shutdown_reports_peer_gone_without_error() {
     ));
 }
 
+/// STATEMENT: Replacing configuration enables or disables eager writes according to the new threshold.
+///
+/// HOW:
+/// - Start with eager writes disabled, set a positive threshold, then restore zero.
+/// - Check both stored thresholds and direct-write flags after each change.
 #[ntex::test]
 async fn set_config_updates_eager_write_support() {
     let io = Io::new(
@@ -1562,6 +1728,11 @@ async fn set_config_updates_eager_write_support() {
     assert_eq!(io.cfg().write_buf_threshold(), 0);
 }
 
+/// STATEMENT: Successful eager writes use the drained buffer size when deciding pressure and scheduling.
+///
+/// HOW:
+/// - Encode above the pressure watermark using a transport that immediately consumes all output.
+/// - Verify zero queued bytes, paused writes, and no pressure or scheduled-write flag.
 #[ntex::test]
 async fn eager_write_uses_updated_buffer_size() {
     #[derive(Debug)]
@@ -1601,6 +1772,11 @@ async fn eager_write_uses_updated_buffer_size() {
     assert!(!io.st().flags.is_wr_send_scheduled());
 }
 
+/// STATEMENT: Eager encoding propagates transport write errors and starts termination.
+///
+/// HOW:
+/// - Encode through a direct-write transport that reports a connection reset.
+/// - Check the returned error kind/message and terminating state.
 #[ntex::test]
 async fn eager_write_reports_transport_error() {
     #[derive(Debug)]
@@ -1632,6 +1808,11 @@ async fn eager_write_reports_transport_error() {
     assert!(io.st().flags.is_terminating());
 }
 
+/// STATEMENT: Termination triggered during an eager write releases the temporarily borrowed transport handle.
+///
+/// HOW:
+/// - Encode through a drop-tracked transport that reports a reset from its write callback.
+/// - Verify terminating state, handle destruction, and no handle reinstalled in connection state.
 #[ntex::test]
 async fn terminate_during_eager_write_releases_transport() {
     #[derive(Debug)]
@@ -1673,8 +1854,11 @@ async fn terminate_during_eager_write_releases_transport() {
     assert!(io.st().handle.take().is_none());
 }
 
-/// A query that stops the connection must not reinstall the handle, it
-/// holds the io context and would keep the connection state alive.
+/// STATEMENT: A transport query that stops the connection does not reinstall or leak its handle.
+///
+/// HOW:
+/// - Query a transport that reports stopped from the query callback and retains its context.
+/// - Check closure and handle destruction, then drop `Io` and verify the weak state reference expires.
 #[ntex::test]
 async fn stop_during_query_releases_transport() {
     #[derive(Debug)]
@@ -1720,6 +1904,11 @@ async fn stop_during_query_releases_transport() {
     assert!(st.upgrade().is_none(), "connection state leaked");
 }
 
+/// STATEMENT: Draining queued writes releases backpressure without a new status notification.
+///
+/// HOW:
+/// - Block peer writes, queue a payload above the watermark, then allow the peer to drain it.
+/// - Verify payload delivery, pending status polling, cleared pressure, and successful partial flush.
 #[ntex::test]
 async fn write_backpressure() {
     let (client, server) = IoTest::create();
@@ -1753,6 +1942,11 @@ async fn write_backpressure() {
     assert!(!io.flags().is_wr_backpressure());
 }
 
+/// STATEMENT: Partial flush releases write backpressure only at the half-watermark.
+///
+/// HOW:
+/// - Queue eight bytes, report one written byte, and verify flush still waits under pressure.
+/// - Report three more written bytes and check flush succeeds with pressure cleared.
 #[ntex::test]
 async fn partial_flush_keeps_write_backpressure_until_half_watermark() {
     let io = Io::new(
@@ -1778,6 +1972,11 @@ async fn partial_flush_keeps_write_backpressure_until_half_watermark() {
     assert!(!io.flags().is_wr_backpressure());
 }
 
+/// STATEMENT: Write progress wakes all producers at the release threshold without dispatcher polling.
+///
+/// HOW:
+/// - Register two write-ready producers while eight bytes are outstanding.
+/// - Drain first above, then to the half-watermark and check both producers resume only at the threshold.
 #[ntex::test]
 async fn write_ready_waits_for_release_threshold() {
     let io = Io::new(
@@ -1819,6 +2018,11 @@ async fn write_ready_waits_for_release_threshold() {
     assert!(io.write_ready().await.is_ok());
 }
 
+/// STATEMENT: A pending full flush does not prevent producer readiness at the half-watermark.
+///
+/// HOW:
+/// - Queue eight bytes, poll a full flush, and start a write-ready producer.
+/// - Report four bytes written and verify the producer resumes before output is fully drained.
 #[ntex::test]
 async fn write_ready_released_during_full_flush() {
     let io = Io::new(
@@ -1846,6 +2050,11 @@ async fn write_ready_released_during_full_flush() {
     assert!(done.get());
 }
 
+/// STATEMENT: Termination fails both pending and subsequent write-ready requests.
+///
+/// HOW:
+/// - Stall output above the watermark and register a waiting producer.
+/// - Terminate the connection and verify the pending request and a new request return errors.
 #[ntex::test]
 async fn write_ready_fails_on_disconnect() {
     let (client, server) = IoTest::create();
@@ -1871,6 +2080,11 @@ async fn write_ready_fails_on_disconnect() {
     assert!(io.write_ready().await.is_err());
 }
 
+/// STATEMENT: Tagged waiters preserve registrations across ownership changes and wake on disconnection.
+///
+/// HOW:
+/// - Register multiple tags, wake selectively, drop a waiter, and convert another to static ownership.
+/// - Check cloning does not duplicate registration and shutdown wakes and removes remaining waiters.
 #[ntex::test]
 async fn waiter() {
     let (client, server) = IoTest::create();
@@ -1923,6 +2137,11 @@ async fn waiter() {
     assert_eq!(io.get_ref().0.extensions.wakers_len(), 0);
 }
 
+/// STATEMENT: Waiters report registered wakes once and re-register on the following poll.
+///
+/// HOW:
+/// - Wake before registration, poll repeatedly, then wake between polls and inspect registration counts.
+/// - Verify one ready poll, subsequent re-registration, and cleanup after awaiting another wake.
 #[ntex::test]
 async fn waiter_poll_ready() {
     let (_client, server) = IoTest::create();
@@ -1948,6 +2167,10 @@ async fn waiter_poll_ready() {
     assert_eq!(ext.wakers_len(), 0);
 }
 
+/// STATEMENT: Application tag wakes cannot trigger reserved disconnect or write notifications.
+///
+/// HOW:
+/// - Register a disconnect waiter, wake both reserved tags, and check it remains pending and registered.
 #[ntex::test]
 async fn wake_reserved_tag_is_ignored() {
     let (_client, server) = IoTest::create();
@@ -1960,6 +2183,10 @@ async fn wake_reserved_tag_is_ignored() {
     assert_eq!(io.get_ref().0.extensions.wakers_len(), 1);
 }
 
+/// STATEMENT: Debug checks reject constructing an application waiter with the disconnect tag.
+///
+/// HOW:
+/// - Pass `TAG_DISCONNECT` to `Waiter::new` and expect the reserved-tag panic.
 #[cfg(debug_assertions)]
 #[ntex::test]
 #[should_panic(expected = "reserved")]
@@ -1969,6 +2196,10 @@ async fn waiter_reserved_tag() {
     let _waiter = Waiter::new(&io, TAG_DISCONNECT);
 }
 
+/// STATEMENT: Debug checks reject constructing an application waiter with the write tag.
+///
+/// HOW:
+/// - Pass `TAG_WRITE` to the connection's waiter factory and expect the reserved-tag panic.
 #[cfg(debug_assertions)]
 #[ntex::test]
 #[should_panic(expected = "reserved")]
@@ -1978,6 +2209,11 @@ async fn waiter_reserved_tag_ioref() {
     let _waiter = io.waiter(TAG_WRITE);
 }
 
+/// STATEMENT: Dropping or waking disconnect and write-ready waiters removes their registrations.
+///
+/// HOW:
+/// - Repeatedly register and drop both waiter kinds and verify counts return to zero.
+/// - Register both together, terminate, and check write and disconnect registrations clear at their stages.
 #[ntex::test]
 async fn dropped_waiters_are_removed() {
     let (client, server) = IoTest::create();
@@ -2022,6 +2258,11 @@ async fn dropped_waiters_are_removed() {
     assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
 }
 
+/// STATEMENT: Reusing a woken waiter's slot does not let stale registration IDs remove a replacement.
+///
+/// HOW:
+/// - Alternate registration, waking, and removal of two waiter entries on the same tag.
+/// - Check live counts after slot reuse and verify stale removal leaves the replacement registered.
 #[test]
 fn woken_waiter_slot_is_reused() {
     let ext = Extensions::default();
@@ -2050,6 +2291,11 @@ fn woken_waiter_slot_is_reused() {
     assert_eq!(ext.wakers_len(), 0);
 }
 
+/// STATEMENT: Full flush waits for transport-owned output to be reported written.
+///
+/// HOW:
+/// - Take queued pages into an in-flight write and verify flush waits despite an empty buffer.
+/// - Report write completion and check outstanding bytes reach zero and flush completes.
 #[ntex::test]
 async fn full_flush_waits_for_inflight_write() {
     // A completion based transport takes ownership of the write pages, so
@@ -2080,6 +2326,11 @@ async fn full_flush_waits_for_inflight_write() {
     ));
 }
 
+/// STATEMENT: In-flight output keeps write backpressure active after buffered pages are taken.
+///
+/// HOW:
+/// - Queue a watermark-sized payload and transfer its page to the transport.
+/// - Verify partial flush remains pending until write completion, then succeeds and clears pressure.
 #[ntex::test]
 async fn write_backpressure_counts_inflight_output() {
     // Output owned by the transport is still outstanding, so it keeps
@@ -2108,6 +2359,11 @@ async fn write_backpressure_counts_inflight_output() {
     assert!(!io.flags().is_wr_backpressure());
 }
 
+/// STATEMENT: Transport shutdown waits for in-flight output before requesting closure.
+///
+/// HOW:
+/// - Take an output page, enter transport shutdown, and check write readiness is pending.
+/// - Report the page written and verify readiness changes to close.
 #[ntex::test]
 async fn transport_shutdown_waits_for_inflight_write() {
     // The transport shutdown phase reports `Close` once the output has
@@ -2137,6 +2393,11 @@ async fn transport_shutdown_waits_for_inflight_write() {
     );
 }
 
+/// STATEMENT: Graceful shutdown flushes pending output even when read backpressure pauses input.
+///
+/// HOW:
+/// - Stall peer writes, queue a response tail, and fill input to the read watermark.
+/// - Start shutdown, unblock writes, and verify the entire tail arrives before disconnection.
 #[ntex::test]
 async fn shutdown_flushes_write_buf_with_read_backpressure() {
     // Graceful shutdown must flush the pending write buffer even if
@@ -2192,6 +2453,11 @@ async fn shutdown_flushes_write_buf_with_read_backpressure() {
         .expect("io stream did not disconnect after flush");
 }
 
+/// STATEMENT: Peer read EOF leaves the connection writable so a final response can precede shutdown.
+///
+/// HOW:
+/// - Send a request and close peer input, then decode the request and observe EOF without full closure.
+/// - Queue a response, shut down, and verify the peer receives the response.
 #[ntex::test]
 async fn peer_eof_allows_response_before_shutdown() {
     let (client, server) = IoTest::create();
@@ -2233,6 +2499,11 @@ async fn peer_eof_allows_response_before_shutdown() {
     );
 }
 
+/// STATEMENT: Shutdown and disconnect waiters complete only after the transport reports stopped.
+///
+/// HOW:
+/// - Enter transport shutdown on a dormant transport and verify both waiters remain pending.
+/// - Report stopped through the context and check successful shutdown and disconnect readiness.
 #[ntex::test]
 async fn shutdown_waits_for_transport_stop() {
     #[derive(Debug)]
@@ -2262,10 +2533,11 @@ async fn shutdown_waits_for_transport_stop() {
     assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
 }
 
-/// The transport can report the connection gone straight from the active
-/// state, so being stopped reports every earlier state as reached. That
-/// must not be mistaken for having gone through a graceful shutdown and
-/// discard input that arrived before the connection went away.
+/// STATEMENT: A direct transport stop preserves buffered input despite terminal shutdown predicates.
+///
+/// HOW:
+/// - Receive input while active, report transport stop, and check closed and shutdown-phase predicates.
+/// - Verify the previously buffered input remains available.
 #[ntex::test]
 async fn a_stopped_connection_keeps_its_buffered_input() {
     let (client, server) = IoTest::create();
@@ -2287,6 +2559,11 @@ async fn a_stopped_connection_keeps_its_buffered_input() {
     );
 }
 
+/// STATEMENT: Draining final output during transport shutdown wakes the write task to request closure.
+///
+/// HOW:
+/// - Enter transport shutdown with queued bytes and register the write task through readiness polling.
+/// - Drain and report all bytes written, then verify the task was woken and its next poll requests close.
 #[ntex::test]
 async fn transport_shutdown_drain_wakes_write_task() {
     #[derive(Debug)]
@@ -2336,6 +2613,11 @@ async fn transport_shutdown_drain_wakes_write_task() {
     ));
 }
 
+/// STATEMENT: Error termination waits for transport stop before completing shutdown and disconnect waiters.
+///
+/// HOW:
+/// - Stop a dormant transport with a reset error and verify both waiters still wait.
+/// - Report transport closure and check shutdown returns the reset while disconnect becomes ready.
 #[ntex::test]
 async fn termination_waits_for_transport_stop() {
     #[derive(Debug)]
@@ -2370,6 +2652,11 @@ async fn termination_waits_for_transport_stop() {
     assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
 }
 
+/// STATEMENT: Sending buffered output does not consume the error retained for shutdown.
+///
+/// HOW:
+/// - Begin termination with a connection reset and check `send_buf` returns its kind and message.
+/// - Report stopped and verify shutdown returns the same error.
 #[ntex::test]
 async fn send_buf_retains_termination_error() {
     #[derive(Debug)]
@@ -2400,6 +2687,11 @@ async fn send_buf_retains_termination_error() {
     assert_eq!(err.to_string(), "connection reset");
 }
 
+/// STATEMENT: Read-more, notification, and exact-read APIs preserve a connection's termination error.
+///
+/// HOW:
+/// - Stop a dormant transport with a connection reset.
+/// - Poll both readiness APIs and perform an exact read, checking the same error kind and message.
 #[ntex::test]
 async fn read_readiness_reports_termination_error() {
     #[derive(Debug)]
@@ -2437,11 +2729,11 @@ async fn read_readiness_reports_termination_error() {
     assert_eq!(err.to_string(), "connection reset");
 }
 
-/// Reads pause under back-pressure, so a filter shutdown that waits for
-/// input cannot complete while it holds, even once the dispatcher has
-/// taken the buffered input. Readiness must not ask for reads that would
-/// pause: a readiness based transport would then never re-arm read
-/// interest.
+/// STATEMENT: Read backpressure prevents a pending filter shutdown from requesting transport reads.
+///
+/// HOW:
+/// - Install a filter with pending shutdown, set read pressure, and clear the input-ready flag.
+/// - Begin shutdown and verify read readiness remains pending while transport shutdown is reached.
 #[ntex::test]
 async fn filter_shutdown_is_blocked_by_read_backpressure() {
     #[derive(Debug)]
@@ -2476,6 +2768,11 @@ async fn filter_shutdown_is_blocked_by_read_backpressure() {
     assert!(io.st().flags.is_stopping());
 }
 
+/// STATEMENT: Output generated during reads traverses intermediate filters to reach the transport.
+///
+/// HOW:
+/// - Place a reply-emitting filter above a passthrough layer and send peer input.
+/// - Drive receiving and verify the peer sees the generated reply.
 #[ntex::test]
 async fn intermediate_filter_output_reaches_transport() {
     // A filter that emits output while processing reads, the way a TLS
@@ -2543,6 +2840,11 @@ async fn intermediate_filter_output_reaches_transport() {
     assert!(client.read_any().starts_with(b"pong"));
 }
 
+/// STATEMENT: Read-generated output pauses reads until written down to the release threshold.
+///
+/// HOW:
+/// - Generate replies up to the watermark and verify reads pause even after pages become in-flight.
+/// - Report staged write progress and check reads resume at half; application output alone does not pause them.
 #[ntex::test]
 async fn read_pauses_while_read_output_is_not_drained() {
     // A filter that answers every input chunk itself, like WebSocket pong
@@ -2634,6 +2936,11 @@ async fn read_pauses_while_read_output_is_not_drained() {
     assert!(!io.st().flags.is_read_wr_backpressure());
 }
 
+/// STATEMENT: Held application output does not prolong a pause caused by read-generated handshake output.
+///
+/// HOW:
+/// - Hold application bytes behind a handshake filter, generate a reply, and verify reads pause.
+/// - Drain only the reply, check reads resume, then finish the handshake and verify held bytes are released.
 #[ntex::test]
 async fn read_output_pause_ignores_held_back_output() {
     // Holds application output until a handshake completes, like TLS
@@ -2749,6 +3056,11 @@ impl IoStream for ManualTransport {
 
 impl Handle for ManualTransport {}
 
+/// STATEMENT: Filters holding output pause transport writes until peer input releases the data.
+///
+/// HOW:
+/// - Queue bytes behind `HoldOutput` and verify empty transport output makes write readiness pending.
+/// - Deliver the release message and check the write task wakes with all queued bytes available.
 #[ntex::test]
 async fn held_back_output_pauses_write_task() {
     let io = Io::new(ManualTransport, SharedCfg::new("SRV")).add_filter(HoldOutput::default());
@@ -2781,6 +3093,11 @@ async fn held_back_output_pauses_write_task() {
     assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Io);
 }
 
+/// STATEMENT: Output queued during an in-flight write is processed rather than mistaken for held output.
+///
+/// HOW:
+/// - Open `HoldOutput`, take one output page, and queue more application bytes while writing.
+/// - Complete the first page and check writing continues with the new bytes at the transport.
 #[ntex::test]
 async fn held_back_output_queued_during_write_is_processed() {
     let io = Io::new(ManualTransport, SharedCfg::new("SRV")).add_filter(HoldOutput::default());
@@ -2821,6 +3138,11 @@ impl FilterLayer for Expand {
     }
 }
 
+/// STATEMENT: Filter-expanded output enables write backpressure when transport-visible bytes cross the watermark.
+///
+/// HOW:
+/// - Expand two small writes into 600-byte chunks around a 1,024-byte watermark.
+/// - Update write status and verify pressure is enabled only after expansion crosses the limit.
 #[ntex::test]
 async fn filter_expansion_enables_wr_backpressure() {
     let cfg = SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(1024));
@@ -2841,6 +3163,11 @@ async fn filter_expansion_enables_wr_backpressure() {
     assert!(lazy(|cx| ready.as_mut().poll(cx)).await.is_pending());
 }
 
+/// STATEMENT: Expanding newly queued output after a zero-progress completion updates write backpressure.
+///
+/// HOW:
+/// - Take one expanded page in-flight, queue another small write, and report no write progress.
+/// - Verify the second expansion raises outstanding bytes to 1,200 and enables pressure.
 #[ntex::test]
 async fn filter_expansion_after_write_enables_wr_backpressure() {
     let cfg = SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(1024));
@@ -2860,6 +3187,11 @@ async fn filter_expansion_after_write_enables_wr_backpressure() {
     assert!(io.st().flags.is_wr_backpressure());
 }
 
+/// STATEMENT: Undrainable held output keeps shutdown pending until its deadline closes the connection.
+///
+/// HOW:
+/// - Enter transport shutdown with output blocked by a filter and verify the write task waits.
+/// - Wait past the configured deadline and check close readiness and aborted state.
 #[ntex::test]
 async fn held_back_output_waits_for_shutdown_deadline() {
     let io = Io::new(
@@ -2894,8 +3226,11 @@ async fn held_back_output_waits_for_shutdown_deadline() {
     assert!(io.st().flags.is_aborted());
 }
 
-/// Output can not be delivered once the transport is gone, it is freed
-/// right away instead of when `Io` is dropped. Input stays readable.
+/// STATEMENT: Transport stop immediately discards undeliverable output but retains readable input.
+///
+/// HOW:
+/// - Buffer input and a large output payload, then report a transport failure.
+/// - Verify closed state, zero outstanding output, and unchanged input length.
 #[ntex::test]
 async fn stopped_discards_undeliverable_output() {
     let io = Io::new(ManualTransport, SharedCfg::new("SRV"));
@@ -2912,8 +3247,11 @@ async fn stopped_discards_undeliverable_output() {
     assert_eq!(io.st().buffer.read_dst_size(), 2);
 }
 
-/// An aborted transport does not write buffered output, including output
-/// held by filters.
+/// STATEMENT: Explicit termination discards both filter-held and transport-facing output.
+///
+/// HOW:
+/// - Queue bytes on both sides of `HoldOutput`, verify their combined size, then terminate.
+/// - Check no output remains outstanding.
 #[ntex::test]
 async fn terminate_discards_output_of_all_layers() {
     let io = Io::new(ManualTransport, SharedCfg::new("SRV")).add_filter(HoldOutput::default());
@@ -2927,8 +3265,11 @@ async fn terminate_discards_output_of_all_layers() {
     assert_eq!(io.st().write_outstanding(), 0);
 }
 
-/// A filter that aborts the connection while it holds the write buffers
-/// does not leave output behind.
+/// STATEMENT: Termination inside filter write processing discards output added during the callback.
+///
+/// HOW:
+/// - Use a filter that terminates while borrowing write buffers and appends bytes to both sides.
+/// - Trigger processing and verify force-close state with no buffered or outstanding output.
 #[ntex::test]
 async fn terminate_from_filter_discards_output() {
     #[derive(Debug)]
@@ -2959,9 +3300,11 @@ async fn terminate_from_filter_discards_output() {
     assert_eq!(io.st().write_outstanding(), 0);
 }
 
-/// Output returned to a write buffer that is in use when the connection
-/// stops is freed once the buffer is released, pages the transport took
-/// are not counted as in flight.
+/// STATEMENT: Stopping during write-buffer access discards returned bytes and clears in-flight accounting.
+///
+/// HOW:
+/// - Take an output page, report stopped inside the buffer callback, and append replacement bytes.
+/// - Release the buffer and verify both outstanding and buffered write counters are zero.
 #[ntex::test]
 async fn stop_while_write_buffer_in_use_discards_output() {
     let io = Io::new(ManualTransport, SharedCfg::new("SRV"));
@@ -2977,6 +3320,11 @@ async fn stop_while_write_buffer_in_use_discards_output() {
     assert_eq!(io.st().wr_buffered.get(), 0);
 }
 
+/// STATEMENT: Explicit read-more and read-notification requests lift read-output backpressure pauses.
+///
+/// HOW:
+/// - Generate enough filter replies to pause reads before each readiness API call.
+/// - Verify each call clears the pause, wakes the read task, and restores transport read readiness.
 #[ntex::test]
 async fn read_more_lifts_read_output_pause() {
     #[derive(Debug)]
@@ -3048,6 +3396,11 @@ async fn read_more_lifts_read_output_pause() {
     );
 }
 
+/// STATEMENT: Filter shutdown can continue reading despite an earlier read-output backpressure pause.
+///
+/// HOW:
+/// - Generate queued replies that pause reads, then begin a filter shutdown that awaits input.
+/// - Check filter-shutdown state, restored read readiness, and continued read processing.
 #[ntex::test]
 async fn read_pause_on_read_output_does_not_block_filter_shutdown() {
     #[derive(Debug)]
@@ -3110,6 +3463,11 @@ async fn read_pause_on_read_output_does_not_block_filter_shutdown() {
     assert_eq!(read(b"ping"), IoTaskStatus::Io);
 }
 
+/// STATEMENT: Peer EOF ends a filter shutdown that can no longer receive input while still flushing output.
+///
+/// HOW:
+/// - Queue output through a perpetually pending shutdown filter and close peer input.
+/// - Verify shutdown finishes well before its deadline and the peer receives the buffered bytes.
 #[ntex::test]
 async fn peer_eof_completes_filter_shutdown() {
     #[derive(Debug)]
@@ -3186,6 +3544,11 @@ impl FilterLayer for StuckShutdown {
     }
 }
 
+/// STATEMENT: Transport shutdown leaves further input unread once filter shutdown has completed.
+///
+/// HOW:
+/// - Receive initial input, stall output, and enter transport shutdown.
+/// - Send additional input and verify it remains in the transport while the connection awaits drain.
 #[ntex::test]
 async fn transport_shutdown_pauses_read_task() {
     let (client, server) = IoTest::create();
@@ -3236,6 +3599,11 @@ impl WakeCounter {
     }
 }
 
+/// STATEMENT: Repeated shutdown polls wake transport tasks only when relevant state changes.
+///
+/// HOW:
+/// - Register counting read/write wakers during pending filter shutdown and poll repeatedly without changes.
+/// - Verify no wakes, then pause reads and check another shutdown poll resumes them with one wake.
 #[ntex::test]
 async fn repeated_shutdown_polls_do_not_wake_tasks() {
     use std::{sync::Arc, task::Waker};
@@ -3299,6 +3667,11 @@ fn wake_read_task_inline<F>(
     seen
 }
 
+/// STATEMENT: Read-task wake callbacks observe resumed reads or advanced shutdown state immediately.
+///
+/// HOW:
+/// - Install synchronous wake hooks before source/destination access and filter-shutdown resumption.
+/// - Check each hook sees reads unpaused, and a final hook sees transport shutdown already published.
 #[ntex::test]
 async fn read_task_is_woken_after_state_is_published() {
     let not_paused = |io: &IoRef| !io.0.flags.is_read_paused();
@@ -3329,6 +3702,11 @@ async fn read_task_is_woken_after_state_is_published() {
     assert_eq!(seen.get(), Some(true), "transport shutdown");
 }
 
+/// STATEMENT: Pending filter shutdown does not allow unbounded input buffering.
+///
+/// HOW:
+/// - Begin shutdown with a non-completing filter and repeatedly send input above the read watermark.
+/// - Verify local buffering stays within the asserted bound and unread bytes remain at the peer.
 #[ntex::test]
 async fn filter_shutdown_applies_read_backpressure() {
     let (client, server) = IoTest::create();
@@ -3371,6 +3749,11 @@ async fn filter_shutdown_applies_read_backpressure() {
     );
 }
 
+/// STATEMENT: Unconsumed input blocking a filter handshake ends shutdown before its long deadline.
+///
+/// HOW:
+/// - Fill the read watermark through a filter whose shutdown never completes.
+/// - Start shutdown and verify it returns an `Other` error within a shorter outer timeout.
 #[ntex::test]
 async fn filter_shutdown_blocked_by_unconsumed_input() {
     // The dispatcher stops consuming with a full read buffer, so the filter
@@ -3486,6 +3869,11 @@ async fn filter_shutdown_waits_for_peer<F: Filter>(client: IoTest, io: Io<F>) {
     assert!(done.get());
 }
 
+/// STATEMENT: Filter shutdown delivers its closing message and waits for the peer's acknowledgment.
+///
+/// HOW:
+/// - Shut down through `AckShutdown`, verify the peer receives `bye`, and check shutdown is still pending.
+/// - Send `ack` and verify shutdown completes.
 #[ntex::test]
 async fn filter_shutdown_completes_on_peer_input() {
     let (client, server) = IoTest::create();
@@ -3493,6 +3881,11 @@ async fn filter_shutdown_completes_on_peer_input() {
     filter_shutdown_waits_for_peer(client, io).await;
 }
 
+/// STATEMENT: Shutdown handshake output traverses inner filters while the outer shutdown waits for input.
+///
+/// HOW:
+/// - Place `AckShutdown` above a passthrough layer and verify `bye` reaches the peer before completion.
+/// - Return `ack` through the layers and check shutdown completes.
 #[ntex::test]
 async fn filter_shutdown_output_passes_inner_filters() {
     let (client, server) = IoTest::create();
@@ -3500,6 +3893,11 @@ async fn filter_shutdown_output_passes_inner_filters() {
     filter_shutdown_waits_for_peer(client, io).await;
 }
 
+/// STATEMENT: A failing filter's closing output traverses inner layers before connection closure.
+///
+/// HOW:
+/// - Send input through a filter that emits `err`, requests close, and returns an invalid-data error.
+/// - Verify receiving reports that error and the peer gets the closing output through a passthrough layer.
 #[ntex::test]
 async fn filter_failure_output_passes_inner_filters() {
     /// Answers any input with "err", closes and fails.
@@ -3538,6 +3936,11 @@ async fn filter_failure_output_passes_inner_filters() {
     assert!(io.is_closed());
 }
 
+/// STATEMENT: Filter failure delivers its error record without flushing previously held application data.
+///
+/// HOW:
+/// - Hold application output in a filter that releases it only after failing on input.
+/// - Trigger the failure and verify the peer receives only `err` before the connection closes.
 #[ntex::test]
 async fn filter_failure_discards_application_output() {
     /// Holds application output until it fails, then encodes it.
@@ -3578,6 +3981,11 @@ async fn filter_failure_discards_application_output() {
     assert!(io.is_closed());
 }
 
+/// STATEMENT: Undeliverable output from a failing filter cannot hold shutdown open indefinitely.
+///
+/// HOW:
+/// - Block peer writes and use a filter that forwards output before returning an error.
+/// - Queue bytes and verify shutdown returns an error and closes within the outer timeout.
 #[ntex::test]
 async fn filter_failure_output_delivery_is_bounded() {
     /// Moves output to the transport, then fails.
@@ -3613,6 +4021,11 @@ async fn filter_failure_output_delivery_is_bounded() {
     assert!(io.st().flags.is_closed());
 }
 
+/// STATEMENT: A filter shutdown deadline returns `TimedOut` while closing without forceful termination.
+///
+/// HOW:
+/// - Install a perpetually pending shutdown filter with a short deadline.
+/// - Await shutdown and check the timeout error, closed state, and absence of terminating state.
 #[ntex::test]
 async fn filter_shutdown_timeout_is_reported() {
     #[derive(Debug)]
@@ -3649,6 +4062,11 @@ async fn filter_shutdown_timeout_is_reported() {
     assert!(!io.st().flags.is_terminating());
 }
 
+/// STATEMENT: A read-blocked filter shutdown still drains its closing output through transport shutdown.
+///
+/// HOW:
+/// - Stall peer writes, enable read pressure, and close through a filter that emits `bye` then waits.
+/// - Verify transport shutdown starts, unblock writes, receive `bye`, and check the blocked-shutdown error.
 #[ntex::test]
 async fn blocked_filter_shutdown_flushes_buffered_output() {
     #[derive(Debug)]
@@ -3713,6 +4131,11 @@ async fn blocked_filter_shutdown_flushes_buffered_output() {
     assert_eq!(err.kind(), io::ErrorKind::Other);
 }
 
+/// STATEMENT: Filter shutdown and transport drain share one deadline rather than separate full timeouts.
+///
+/// HOW:
+/// - Block delivery of a closing record from a filter whose shutdown remains pending.
+/// - Measure shutdown and verify closure occurs within the bound for one timeout, not two.
 #[ntex::test]
 async fn one_deadline_bounds_both_shutdown_phases() {
     #[derive(Debug)]
@@ -3770,6 +4193,11 @@ async fn one_deadline_bounds_both_shutdown_phases() {
     );
 }
 
+/// STATEMENT: Read-blocked filter shutdown reports an error without waiting for its deadline or forcing termination.
+///
+/// HOW:
+/// - Enable read pressure with a pending shutdown filter and a long timeout, then close.
+/// - Verify prompt `Other` error delivery, closed state, and no terminating flag.
 #[ntex::test]
 async fn blocked_filter_shutdown_is_reported() {
     #[derive(Debug)]
@@ -3814,6 +4242,11 @@ async fn blocked_filter_shutdown_is_reported() {
     assert!(!io.st().flags.is_terminating());
 }
 
+/// STATEMENT: Shutdown rejects new application writes and filter shutdown clears unprocessed output.
+///
+/// HOW:
+/// - Start shutdown, check the write rejection, and run a layer shutdown over buffered data.
+/// - Verify its output is discarded, then stop the transport and check termination errors and final closure.
 #[ntex::test]
 async fn shutdown() {
     // layer drops all unprocessed data after filter shutdown
@@ -3889,6 +4322,11 @@ impl Decoder for FixedSize {
     }
 }
 
+/// STATEMENT: Receiving reports timeout notifications even while write backpressure remains active.
+///
+/// HOW:
+/// - Block writes, queue output above the watermark, and notify timeout while receiving.
+/// - Check the timed-out transport error and verify write pressure remains set.
 #[ntex::test]
 async fn recv_reports_timeout_during_write_backpressure() {
     let (client, server) = IoTest::create();
@@ -3915,6 +4353,11 @@ async fn recv_reports_timeout_during_write_backpressure() {
     assert!(io.flags().is_wr_backpressure());
 }
 
+/// STATEMENT: Write timeout fails send, flush, and producer readiness without closing the connection.
+///
+/// HOW:
+/// - Stall output and await all three operations concurrently under a short write timeout.
+/// - Check each returns `TimedOut`, then unblock the peer and verify a full flush succeeds.
 #[ntex::test]
 async fn write_timeout_bounds_output_waits() {
     let (client, server) = IoTest::create();
@@ -3957,6 +4400,11 @@ async fn write_timeout_bounds_output_waits() {
     io.flush(true).await.unwrap();
 }
 
+/// STATEMENT: Peer EOF during an incomplete frame reports truncation without discarding buffered bytes.
+///
+/// HOW:
+/// - Send three bytes for an eight-byte decoder and close peer input.
+/// - Verify `UnexpectedEof` and the three-byte buffer remains available.
 #[ntex::test]
 async fn recv_reports_truncated_stream() {
     let (client, server) = IoTest::create();
@@ -3978,6 +4426,11 @@ async fn recv_reports_truncated_stream() {
     assert_eq!(io.with_read_dst(|b| b.len()), 3);
 }
 
+/// STATEMENT: A complete final frame is delivered before clean EOF.
+///
+/// HOW:
+/// - Send one complete fixed-size frame and close peer input.
+/// - Verify the first receive returns the frame and the next returns no item.
 #[ntex::test]
 async fn recv_reports_clean_eof() {
     let (client, server) = IoTest::create();
@@ -4015,6 +4468,11 @@ impl Decoder for FixedSizeEof {
     }
 }
 
+/// STATEMENT: Receiving switches to EOF decoding only after peer EOF and can deliver a shorter final frame.
+///
+/// HOW:
+/// - Decode a full frame while open and check no EOF-decoder calls.
+/// - Send a partial frame and close, then check its delivery, EOF calls, and an empty final buffer.
 #[ntex::test]
 async fn recv_uses_decode_eof_after_eof() {
     let (client, server) = IoTest::create();
@@ -4039,6 +4497,11 @@ async fn recv_uses_decode_eof_after_eof() {
     assert_eq!(io.with_read_dst(|b| b.len()), 0);
 }
 
+/// STATEMENT: Local shutdown does not classify incomplete buffered input as peer truncation.
+///
+/// HOW:
+/// - Buffer less than a full frame and initiate shutdown without peer EOF.
+/// - Verify receiving returns no item successfully and preserves the partial input.
 #[ntex::test]
 async fn recv_local_shutdown_is_not_truncation() {
     let (client, server) = IoTest::create();
@@ -4056,6 +4519,11 @@ async fn recv_local_shutdown_is_not_truncation() {
     assert_eq!(io.with_read_dst(|b| b.len()), 3);
 }
 
+/// STATEMENT: Explicit read pause stops transport input but preserves status notifications and can be cancelled.
+///
+/// HOW:
+/// - Pause reads, send peer bytes, and verify they do not enter the application buffer.
+/// - Report a timeout, then await read notification and check the pause clears and the bytes arrive.
 #[ntex::test]
 async fn read_pause_stops_transport_reads() {
     let (client, server) = IoTest::create();
@@ -4084,7 +4552,11 @@ async fn read_pause_stops_transport_reads() {
     assert_eq!(io.with_read_dst(BytesMut::take), b"data");
 }
 
-/// Querying the read destination size leaves the read state in place.
+/// STATEMENT: Querying destination-buffer size preserves read-pause and input-ready flags.
+///
+/// HOW:
+/// - Check the empty size while paused, then receive input and check its size while marked ready.
+/// - Verify both flags survive size queries and only consuming the buffer clears input readiness.
 #[ntex::test]
 async fn read_dst_size_keeps_read_state() {
     let (client, server) = IoTest::create();
@@ -4117,6 +4589,10 @@ impl Decoder for Failing {
     }
 }
 
+/// STATEMENT: Receiving distinguishes decoder errors from transport errors.
+///
+/// HOW:
+/// - Send input to a decoder that returns a fixed error and verify the decoder-error variant and message.
 #[ntex::test]
 async fn recv_reports_decoder_error() {
     let (client, server) = IoTest::create();
@@ -4130,8 +4606,11 @@ async fn recv_reports_decoder_error() {
     assert_eq!(err, "invalid frame");
 }
 
-/// An expired timer is reported before decoding, the buffered input is
-/// left for the next attempt.
+/// STATEMENT: A timeout notification takes precedence over decoding without consuming input.
+///
+/// HOW:
+/// - Buffer a payload and notify timeout, then verify decode polling reports timeout with bytes retained.
+/// - Poll again and check the decoded payload and consumed/remaining byte counts.
 #[ntex::test]
 async fn poll_recv_decode_reports_timeout_before_decoding() {
     let (client, server) = IoTest::create();
@@ -4153,8 +4632,11 @@ async fn poll_recv_decode_reports_timeout_before_decoding() {
     assert_eq!((decoded.consumed, decoded.remains), (4, 0));
 }
 
-/// Write backpressure is reported before decoding, the buffered input is
-/// left for the next attempt.
+/// STATEMENT: Write backpressure is reported before decoding while preserving buffered input.
+///
+/// HOW:
+/// - Buffer input, set write pressure, and verify decode polling reports pressure without consuming bytes.
+/// - Clear pressure through partial flush and check the next poll returns the payload.
 #[ntex::test]
 async fn poll_recv_decode_reports_write_backpressure_before_decoding() {
     let (client, server) = IoTest::create();
@@ -4176,8 +4658,11 @@ async fn poll_recv_decode_reports_write_backpressure_before_decoding() {
     assert_eq!(decoded.item.unwrap(), "data");
 }
 
-/// A closing connection reports neither an expired timer nor write
-/// backpressure, the buffered input is decoded before the disconnect.
+/// STATEMENT: Closing connections decode buffered input before disconnect, ignoring timeout and pressure notifications.
+///
+/// HOW:
+/// - Buffer input, initiate close, and set both timeout and write-pressure notifications.
+/// - Verify decode polling first returns the payload and then reports peer gone without an error.
 #[ntex::test]
 async fn poll_recv_decode_closing_decodes_buffered_input() {
     let (client, server) = IoTest::create();
@@ -4200,6 +4685,11 @@ async fn poll_recv_decode_closing_decodes_buffered_input() {
     assert!(matches!(res, Err(RecvError::PeerGone(None))));
 }
 
+/// STATEMENT: Flush polling detects write pressure for output buffered without a state update.
+///
+/// HOW:
+/// - Append output directly while peer writes are blocked and verify pressure is initially absent.
+/// - Poll partial flush to enable pressure, then drain at the peer and verify flushing clears it.
 #[ntex::test]
 async fn poll_flush_enables_write_backpressure() {
     let (client, server) = IoTest::create();
@@ -4359,6 +4849,11 @@ fn gated_layers(server: IoTest) -> (GateCtl, Io<impl Filter>) {
     (gate, io.map_filter(move |f| Gate(f, g)))
 }
 
+/// STATEMENT: Filter readiness pauses new reads, accepts in-flight input, and notifies the dispatcher on transitions.
+///
+/// HOW:
+/// - Block a gated filter and verify pending readiness and a single dispatcher wake while the pause persists.
+/// - Complete an in-flight read, reopen the gate, and check resumed reads and a new transition notification.
 #[ntex::test]
 async fn filter_pause_pauses_reading() {
     let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
@@ -4410,6 +4905,11 @@ async fn filter_pause_pauses_reading() {
     );
 }
 
+/// STATEMENT: Filter readiness changes are tracked independently of a dispatcher-imposed read pause.
+///
+/// HOW:
+/// - Pause reads and toggle a gated filter from blocked to ready, checking the filter-pause flag each time.
+/// - Verify reads remain pending until the dispatcher pause is removed.
 #[ntex::test]
 async fn filter_pause_is_tracked_while_reads_are_paused() {
     let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
@@ -4433,6 +4933,11 @@ async fn filter_pause_is_tracked_while_reads_are_paused() {
     );
 }
 
+/// STATEMENT: Paused filter readiness does not block transport output or require write-side readiness polling.
+///
+/// HOW:
+/// - Block a gated filter, record its readiness-poll count, and queue transport-visible output.
+/// - Verify writes are ready without another filter poll and can drain while the filter stays paused.
 #[ntex::test]
 async fn filter_pause_does_not_pause_writing() {
     let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
@@ -4457,6 +4962,11 @@ async fn filter_pause_does_not_pause_writing() {
     assert!(io.is_filter_paused());
 }
 
+/// STATEMENT: Resuming filter readiness flushes held output without requiring new peer input.
+///
+/// HOW:
+/// - Block layered filters and queue small and large payloads, checking no bytes bypass the hold.
+/// - Reopen the gate, collect the expected output length, and verify its prefix and cleared filter pause.
 #[ntex::test]
 async fn held_output_is_written_on_resume() {
     let (client, server) = IoTest::create();
@@ -4488,6 +4998,11 @@ async fn held_output_is_written_on_resume() {
     assert!(!io.is_filter_paused());
 }
 
+/// STATEMENT: Resuming filter readiness processes already-held input without another transport read.
+///
+/// HOW:
+/// - Hold incoming bytes in intermediate filters, then pause the chain with no application input available.
+/// - Reopen the gate and verify receiving delivers the original payload within the timeout.
 #[ntex::test]
 async fn held_input_is_processed_on_resume() {
     let (client, server) = IoTest::create();
@@ -4510,6 +5025,11 @@ async fn held_input_is_processed_on_resume() {
     assert_eq!(item.unwrap().unwrap().unwrap(), Bytes::from_static(BIN));
 }
 
+/// STATEMENT: Filter readiness failure requests graceful closure and preserves its error for shutdown.
+///
+/// HOW:
+/// - Make a gated filter fail readiness and check inactive, non-terminating state and write-close readiness.
+/// - Report transport stop and verify shutdown returns the gate error.
 #[ntex::test]
 async fn filter_readiness_error_closes() {
     let (gate, io) = gated(Io::new(GateTransport, SharedCfg::default()));
@@ -4527,6 +5047,11 @@ async fn filter_readiness_error_closes() {
     assert_eq!(io.shutdown().await.unwrap_err().to_string(), "gate");
 }
 
+/// STATEMENT: A filter-readiness pause cannot indefinitely block connection shutdown.
+///
+/// HOW:
+/// - Block a layered filter chain, send input, and verify the filter pause is active.
+/// - Await shutdown under an outer timeout and verify it returns and closes the peer.
 #[ntex::test]
 async fn shutdown_does_not_wait_for_filter_readiness() {
     let (client, server) = IoTest::create();
@@ -4565,6 +5090,10 @@ mod buf_tracker {
             .into()
     }
 
+    /// STATEMENT: Disabled buffer tracking attaches no tracker before or after receiving input.
+    ///
+    /// HOW:
+    /// - Create an untracked connection, receive bytes, and inspect both connection and read-buffer trackers.
     #[ntex::test]
     async fn disabled() {
         let (client, io) = io_with(BufTracker::Disabled);
@@ -4576,6 +5105,11 @@ mod buf_tracker {
         assert!(io.st().get_read_buf().tracker().is_none());
     }
 
+    /// STATEMENT: Per-connection tracking reuses one tracker per connection while isolating other connections.
+    ///
+    /// HOW:
+    /// - Query a tracker repeatedly, receive input, and check its allocation count increases from zero to one.
+    /// - Create another connection and verify it has a distinct tracker.
     #[ntex::test]
     async fn per_connection_is_created_once() {
         let (client, io) = io_with(BufTracker::PerConnection);
@@ -4592,7 +5126,10 @@ mod buf_tracker {
         assert!(!t.ptr_eq(io2.buf_tracker().unwrap()));
     }
 
-    /// Allocating a read buffer creates the per-connection tracker.
+    /// STATEMENT: Allocating a read buffer lazily creates and attaches the connection's tracker.
+    ///
+    /// HOW:
+    /// - Obtain a read buffer before querying the connection tracker and compare their identities.
     #[ntex::test]
     async fn per_connection_created_by_read_buf() {
         let (_client, io) = io_with(BufTracker::PerConnection);
@@ -4600,6 +5137,11 @@ mod buf_tracker {
         assert!(buf.tracker().unwrap().ptr_eq(io.buf_tracker().unwrap()));
     }
 
+    /// STATEMENT: A shared tracker aggregates multiple connections and retains charges for received frames.
+    ///
+    /// HOW:
+    /// - Receive input on two connections sharing one tracker and check the combined allocation count.
+    /// - Retain a frame after dropping its connection, then release all owners and verify zero live charges.
     #[ntex::test]
     async fn shared() {
         let t = BytesTracker::new();
@@ -4624,6 +5166,10 @@ mod buf_tracker {
         assert_eq!(t.snapshot().live_bytes, 0);
     }
 
+    /// STATEMENT: Replacing configuration with per-connection tracking preserves the existing tracker.
+    ///
+    /// HOW:
+    /// - Capture the connection tracker, replace its configuration with the same tracking mode, and compare identity.
     #[ntex::test]
     async fn set_config_keeps_per_connection() {
         let (_client, io) = io_with(BufTracker::PerConnection);
@@ -4634,7 +5180,11 @@ mod buf_tracker {
         assert!(t.ptr_eq(io.buf_tracker().unwrap()));
     }
 
-    /// Read buffers held by the connection move to the new tracker.
+    /// STATEMENT: Configuration changes transfer owned read-buffer charges to the replacement tracker.
+    ///
+    /// HOW:
+    /// - Buffer input, switch from per-connection to shared tracking, and check the old charge moves.
+    /// - Switch back, verify a new per-connection tracker owns the charge, and decode the unchanged payload.
     #[ntex::test]
     async fn set_config_moves_read_buffers() {
         let (client, io) = io_with(BufTracker::PerConnection);
@@ -4664,7 +5214,11 @@ mod buf_tracker {
         assert_eq!(item, TEXT.as_bytes());
     }
 
-    /// Disabling keeps existing buffers charged to the old tracker.
+    /// STATEMENT: Disabling tracking leaves existing buffers charged but does not track new read buffers.
+    ///
+    /// HOW:
+    /// - Receive tracked input, disable tracking, and inspect the connection and a newly obtained buffer.
+    /// - Check the old charge persists until the buffered frame and connection are released.
     #[ntex::test]
     async fn set_config_disabled() {
         let t = BytesTracker::new();
@@ -4686,8 +5240,11 @@ mod buf_tracker {
 
     const DATA: [u8; 1000] = [b'a'; 1000];
 
-    /// A frame keeps its charge after the connection is gone, the tracker
-    /// does not keep the connection alive.
+    /// STATEMENT: A retained frame keeps its allocation charged without retaining connection state.
+    ///
+    /// HOW:
+    /// - Receive a frame, drop its connection, and close the peer while holding a weak state reference.
+    /// - Verify state destruction with a live charge, then drop the frame and check all charges clear.
     #[ntex::test]
     async fn frame_outlives_io() {
         let (client, io) = io_with(BufTracker::PerConnection);
@@ -4710,6 +5267,11 @@ mod buf_tracker {
         assert_eq!(t.snapshot().live_bytes, 0);
     }
 
+    /// STATEMENT: Releasing a received frame on another thread clears its shared tracker charges.
+    ///
+    /// HOW:
+    /// - Receive a frame and drop the connection and peer while retaining the frame's allocation.
+    /// - Drop the frame in a joined thread and verify zero live allocations and bytes.
     #[ntex::test]
     async fn release_on_other_thread() {
         let t = BytesTracker::new();
@@ -4725,8 +5287,11 @@ mod buf_tracker {
         assert_eq!(t.snapshot().live_bytes, 0);
     }
 
-    /// A buffer taken for a read in flight is charged. Released empty, it
-    /// goes back to the page cache and the charge is released.
+    /// STATEMENT: In-flight read buffers are charged until empty release or final decoded-frame destruction.
+    ///
+    /// HOW:
+    /// - Take a tracked buffer, release it pending and empty, and check the allocation charge clears.
+    /// - Complete another buffer with data, decode it, and verify its charge outlives the connection until frame drop.
     #[ntex::test]
     async fn pending_read() {
         let io = Io::new(ManualTransport, cfg_with(BufTracker::PerConnection));
@@ -4752,8 +5317,11 @@ mod buf_tracker {
         assert_eq!(t.snapshot().live_allocations, 0);
     }
 
-    /// A read completing after the `Io` is dropped, as a cancelled read
-    /// does, releases its charge.
+    /// STATEMENT: A read completion arriving after connection drop discards its buffer and releases its charge.
+    ///
+    /// HOW:
+    /// - Take a tracked read buffer, drop `Io`, and verify the in-flight allocation remains charged.
+    /// - Complete it with data and check live allocation and byte counts become zero.
     #[ntex::test]
     async fn cancelled_read() {
         let io = Io::new(ManualTransport, cfg_with(BufTracker::PerConnection));
@@ -4792,8 +5360,11 @@ mod buf_tracker {
         }
     }
 
-    /// The buffer a filter layer writes its output to is charged, like the
-    /// plaintext of a TLS layer.
+    /// STATEMENT: A filter's decoded destination allocation remains tracked while its output frame is retained.
+    ///
+    /// HOW:
+    /// - Complete a read through a copying filter and receive its output frame.
+    /// - Drop connection state, check the frame's allocation and byte charges, then drop it and verify release.
     #[ntex::test]
     async fn filter_layer_destination() {
         let t = BytesTracker::new();
