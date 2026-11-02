@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::marker::PhantomPinned;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::task::{Wake, Waker};
 
@@ -60,7 +60,10 @@ impl Drop for PinnedFuture {
             Ordering::SeqCst,
         );
         self.probe.drops.fetch_add(1, Ordering::SeqCst);
-        assert!(!self.panics, "future drop");
+        if self.panics {
+            // Exercise unwind cleanup without invoking panic hooks or backtraces.
+            resume_unwind(Box::new("future drop"));
+        }
     }
 }
 
