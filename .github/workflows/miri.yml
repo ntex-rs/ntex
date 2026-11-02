@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@nextest
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -34,35 +35,35 @@ jobs:
 
       - name: Run Miri (bytes)
         # Run all of your tests inside of Miri interpreter
-        run: cargo miri test -p ntex-bytes
+        run: cargo miri nextest run -p ntex-bytes
 
       - name: Run Miri (bytes, tracker)
-        run: cargo miri test -p ntex-bytes --features tracker
+        run: cargo miri nextest run -p ntex-bytes --features tracker
 
       - name: Run Miri (bytes, big-endian)
         continue-on-error: true
-        run: cargo miri test -p ntex-bytes --target s390x-unknown-linux-gnu
+        run: cargo miri nextest run -p ntex-bytes --target s390x-unknown-linux-gnu
 
       - name: Run Miri (ntex-service::cfg)
         # Run all of your tests inside of Miri interpreter
-        run: cargo miri test -p ntex-service -- --test "cfg::tests::"
+        run: cargo miri nextest run -p ntex-service -- "cfg::tests::"
 
       - name: Run Miri (ntex-service::pipeline)
         # Pipelines are self-referential, which Stacked Borrows rejects
         env:
           MIRIFLAGS: -Zmiri-disable-stacked-borrows
-        run: cargo miri test -p ntex-service -- --test "miri_"
+        run: cargo miri nextest run -p ntex-service -- "miri_"
 
       - name: Run Miri (ntex-io)
         # Run all of your tests inside of Miri interpreter
-        run: cargo miri test -p ntex-io -- --test "miri_"
+        run: cargo miri nextest run -p ntex-io -- "miri_"
 
       - name: Run Miri (ntex-rt core reclamation)
         # Keep leak detection for serviced-runtime reclamation and owner releases.
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-many-seeds=0..8
         run: >-
-          cargo miri test -p ntex-rt --lib -- "rt::task::core_tests"
+          cargo miri nextest run -p ntex-rt --lib -- "rt::task::core_tests"
           --skip completed_wakers_retain_storage_but_not_the_driver
           --skip unregistered_clones_and_native_awaiters_are_inert
 
@@ -71,18 +72,18 @@ jobs:
         # Normal reclamation is checked above and by explicit allocation assertions.
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-ignore-leaks -Zmiri-many-seeds=0..8
-        run: cargo miri test -p ntex-rt --lib -- "rt::"
+        run: cargo miri nextest run -p ntex-rt --lib -- "rt::"
 
       - name: Run Miri (ntex-rt join and local wake handles)
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-many-seeds=0..8
         run: |
-          cargo miri test -p ntex-rt --lib -- local_waker::tests
-          cargo miri test -p ntex-rt --lib -- local_handles_survive_runtime_shutdown
-          cargo miri test -p ntex-rt --lib -- remote_join_result_
-          cargo miri test -p ntex-rt --lib -- remote::tests
+          cargo miri nextest run -p ntex-rt --lib -- local_waker::tests
+          cargo miri nextest run -p ntex-rt --lib -- local_handles_survive_runtime_shutdown
+          cargo miri nextest run -p ntex-rt --lib -- remote_join_result_
+          cargo miri nextest run -p ntex-rt --lib -- remote::tests
 
       - name: Run loom (ntex-rt runtime task)
         env:
           RUSTFLAGS: --cfg ntex_loom
-        run: cargo test --release -p ntex-rt --lib -- task_loom
+        run: cargo nextest run --release -p ntex-rt --lib -- task_loom

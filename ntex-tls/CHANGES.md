@@ -1,6 +1,10 @@
 # Changes
 
-## [4.7.0] - Unreleased
+## [4.7.1] - 2026-11-02
+
+* Use base64 simd engine for PEM encoding/decoding
+
+## [4.7.0] - 2026-11-02
 
 * Add public `x509` module: certificate parsing, thumbprints,
   peer certificates, CA trust verification (`CaCerts`), identity loading and

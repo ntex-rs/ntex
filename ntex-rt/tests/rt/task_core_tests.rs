@@ -306,7 +306,10 @@ fn raw_queue_shutdown_preserves_release_ordering() {
             let refs = core(h).refs.get();
             drop(self.task.take());
             self.deferred.set(core(h).refs.get() == refs);
-            assert!(!self.panics, "shutdown cleanup panic");
+            if self.panics {
+                // Exercise unwind cleanup without invoking panic hooks or backtraces.
+                std::panic::resume_unwind(Box::new("shutdown cleanup panic"));
+            }
         }
     }
 
@@ -1129,7 +1132,8 @@ fn earlier_fifo_wake_acquires_later_published_writes() {
     let (waker, references) = thread::spawn(move || {
         let mut references = vec![waker.clone()];
         waker.wake_by_ref();
-        references.extend((0..64).map(|_| waker.clone()));
+        // SegQueue holds 31 entries per segment; crossing one boundary is enough.
+        references.extend((0..32).map(|_| waker.clone()));
         (waker, references)
     })
     .join()
@@ -1162,7 +1166,10 @@ fn earlier_fifo_wake_acquires_later_published_writes() {
         .unwrap()
         .run();
     assert!(task.is_finished());
-    drop(producer.join().unwrap());
+    let waker = producer.join().unwrap();
+    // Apply the acquisitions first so releasing clones does not grow the backlog.
+    drain(&rt);
+    drop(waker);
     drop(references);
     drop(task);
     drain(&rt);

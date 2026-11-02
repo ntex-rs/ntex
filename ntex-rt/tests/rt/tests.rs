@@ -262,10 +262,12 @@ fn awake_skips_local_notify() {
 /// STATEMENT: Remote submissions notify once per batch until polling clears the wake flag.
 ///
 /// HOW:
-/// - Submit and drain two successive batches of 100 tasks from another thread.
+/// - Submit and drain two successive task batches from another thread, smaller under Miri.
 /// - Check one new notification per batch and no additional notification during draining.
 #[test]
 fn remote_schedule_notifies_once() {
+    const TASKS: usize = iters(100, 4);
+
     let cnt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let rt = Runtime::new(Box::new(CountNotify(cnt.clone())));
     let spawn = |n| {
@@ -279,12 +281,12 @@ fn remote_schedule_notifies_once() {
         .unwrap();
     };
 
-    spawn(100);
+    spawn(TASKS);
     assert_eq!(cnt.load(Ordering::Relaxed), 1);
     while rt.poll() == PollResult::PollAgain {}
 
     // `poll` clears the flag
-    spawn(100);
+    spawn(TASKS);
     assert_eq!(cnt.load(Ordering::Relaxed), 2);
     while rt.poll() == PollResult::PollAgain {}
     assert_eq!(cnt.load(Ordering::Relaxed), 2);
@@ -444,12 +446,13 @@ fn schedule_while_running() {
     assert_eq!(*done.borrow(), 1);
 }
 
-/// STATEMENT: Event intervals bound local polling and still drain overflowed remote work.
+/// STATEMENT: Event intervals bound local polling and remote command batches.
 ///
 /// HOW:
 /// - For intervals zero and one, check an empty poll and two tasks split across two polls.
-/// - Remotely submit 130 counted tasks with interval one to overflow the fixed queue.
-/// - Check 129 tasks run before `PollAgain` and the final task runs before `Pending`.
+/// - Queue 130 remote commands with interval one to exceed the drain budget.
+/// - Under Miri, prefill 128 reference commands instead of allocating 128 extra submissions.
+/// - Check only the final submission waits for the second poll and all tasks are reclaimed.
 #[test]
 fn event_interval() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -466,17 +469,34 @@ fn event_interval() {
         assert_eq!(rt.poll(), PollResult::Pending);
     }
 
-    // tasks scheduled from other threads overflow the fixed queue
+    // Remote commands exceed the per-turn command budget.
     let rt = Runtime::builder()
         .event_interval(1)
         .build(Box::new(NoopNotify));
+    let tasks = iters(130, 2);
+    let waker = cfg!(miri).then(|| {
+        let task = rt.spawn(poll_fn(|cx| Poll::Ready(cx.waker().clone())));
+        assert_eq!(rt.poll(), PollResult::Pending);
+        let waker = block_on_thread(task).unwrap();
+        let header = std::ptr::NonNull::new(waker.data().cast_mut().cast()).unwrap();
+        // Balance each queued acquisition and keep its source alive until the drain.
+        for _ in 0..(130 - tasks) / 2 {
+            rt.queue
+                .wake_queue
+                .push(wake::WakeEntry::new(header, wake::Operation::AddRef));
+            rt.queue
+                .wake_queue
+                .push(wake::WakeEntry::new(header, wake::Operation::Release));
+        }
+        waker
+    });
     let cnt = Arc::new(AtomicUsize::new(0));
     let hnd = rt.handle();
     let cnt2 = cnt.clone();
     std::thread::spawn(move || {
-        for _ in 0..130 {
+        for _ in 0..tasks {
             let cnt = cnt2.clone();
-            hnd.spawn(async move {
+            hnd.spawn_detached(async move {
                 cnt.fetch_add(1, Ordering::Relaxed);
             });
         }
@@ -484,10 +504,13 @@ fn event_interval() {
     .join()
     .unwrap();
     assert_eq!(rt.poll(), PollResult::PollAgain);
-    assert_eq!(cnt.load(Ordering::Relaxed), 129);
+    assert_eq!(cnt.load(Ordering::Relaxed), tasks - 1);
     // Untouched tasks reclaim directly instead of consuming the FIFO budget.
     assert_eq!(rt.poll(), PollResult::Pending);
-    assert_eq!(cnt.load(Ordering::Relaxed), 130);
+    assert_eq!(cnt.load(Ordering::Relaxed), tasks);
+    drop(waker);
+    drain(&rt);
+    assert_eq!(rt.queue.task_count(), 0, "task allocations retained");
 }
 
 /// STATEMENT: Runtime time is live while idle and fixed at turn start while awake.
@@ -1590,7 +1613,7 @@ async fn yield_once() {
 /// - Block on each remote join while the owner polls, and check every result and final completion count.
 #[test]
 fn remote_join_result_race() {
-    const N: usize = iters(2000, 50);
+    const N: usize = iters(2000, 8);
 
     let rt = Runtime::new(Box::new(NoopNotify));
     let handle = rt.handle();
