@@ -1507,6 +1507,10 @@ mod tests {
         assert!(req.uri().authority().is_none());
     }
 
+    /// STATEMENT: Incremental parsing rejects a header name exceeding its representable length.
+    ///
+    /// HOW:
+    /// - Feed a request line and near-limit partial name, then finish an oversized name and check the header error.
     #[test]
     fn test_too_long_header_name() {
         let mut buf = BytesMut::from("GET / HTTP/1.1\r\n");
@@ -1521,6 +1525,11 @@ mod tests {
         assert!(matches!(reader.decode(&mut buf), Err(DecodeError::Header)));
     }
 
+    /// STATEMENT: Partial start-line parsing resumes independently per decoder and resets after errors.
+    ///
+    /// HOW:
+    /// - Reject an invalid byte immediately, reuse that decoder, and decode request/response heads bytewise.
+    /// - Interleave two partial requests and verify their methods and paths remain independent.
     #[test]
     fn test_partial_start_line_is_resumed() {
         let reader = MessageDecoder::<Request>::default();
@@ -1572,6 +1581,11 @@ mod tests {
         assert_eq!((req.method(), req.path()), (&Method::DELETE, "/two"));
     }
 
+    /// STATEMENT: Leading empty lines are discarded but still count toward the request-buffer limit.
+    ///
+    /// HOW:
+    /// - Feed repeated blank lines before a valid request and inspect buffer consumption and decoded path.
+    /// - Exceed a small buffer budget using blank lines alone and check the reported size.
     #[test]
     fn test_leading_empty_lines() {
         let reader = MessageDecoder::<Request>::default();
@@ -1602,6 +1616,11 @@ mod tests {
         assert_eq!(res.err(), Some(DecodeError::TooLarge(12)));
     }
 
+    /// STATEMENT: Start-line limits include line endings, reject oversized partial input, and do not limit header lengths.
+    ///
+    /// HOW:
+    /// - Decode at-limit and oversized complete/partial lines, inspect exact errors, and accept a longer header.
+    /// - Verify the default limit also rejects a large incomplete request target.
     #[test]
     fn test_max_start_line_size() {
         let cfg: SharedCfg = SharedCfg::new("test")
@@ -1650,6 +1669,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Request-head decoding preserves HTTP version, method, and path with or without body framing.
+    ///
+    /// HOW:
+    /// - Decode ordinary and content-length-bearing GET heads and compare their parsed metadata.
     #[test]
     fn test_parse() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
@@ -1673,6 +1696,11 @@ mod tests {
         assert_eq!(req.path(), "/test");
     }
 
+    /// STATEMENT: Connection options are matched as case-insensitive tokens rather than substrings.
+    ///
+    /// HOW:
+    /// - Parse whitespace/comma/case variants, misleading prefixes/suffixes, and combined options.
+    /// - Compare exact close, upgrade, keepalive, and combined flags.
     #[test]
     fn test_connection_flags() {
         for s in ["Close", "close,", "close ", " close", "\tclose"] {
@@ -1705,6 +1733,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Connection decoding combines token lists and repeated headers without overriding an earlier close.
+    ///
+    /// HOW:
+    /// - Decode embedded close tokens, a nonmatching token, repeated close/keepalive headers, and combined upgrade.
+    /// - Inspect connection type and upgrade state.
     #[test]
     fn test_conn_multiple_tokens() {
         let mut buf = BytesMut::from(
@@ -1739,6 +1772,10 @@ mod tests {
         assert!(req.upgrade());
     }
 
+    /// STATEMENT: A request split within its HTTP version resumes into the correct head.
+    ///
+    /// HOW:
+    /// - Decode an incomplete PUT line, append the remaining version and headers, and check method/path/version.
     #[test]
     fn test_parse_partial() {
         let mut buf = BytesMut::from("PUT /test HTTP/1");
@@ -1753,6 +1790,11 @@ mod tests {
         assert_eq!(req.path(), "/test");
     }
 
+    /// STATEMENT: Optional header vectors retain original casing and repeated values for requests and responses.
+    ///
+    /// HOW:
+    /// - Decode mixed-case headers with vectors disabled and enabled.
+    /// - Compare normalized names, original spellings, and repeated response values.
     #[test]
     fn parse_header_name_origins() {
         // request
@@ -1810,6 +1852,11 @@ mod tests {
         assert_eq!(res.headers_vec()[2].value, "456");
     }
 
+    /// STATEMENT: Header extraction trims whitespace, preserves long values and optional origins, and leaves body bytes untouched.
+    ///
+    /// HOW:
+    /// - Decode whole and bytewise requests with empty, whitespace-only, long, and short headers.
+    /// - Compare header maps, optional ordered vectors, and the remaining body buffer.
     #[test]
     fn parse_header_values_split_from_buffer() {
         const LONG_NAME: &str = "X-A-Very-Long-Header-Name-Over-Inline";
@@ -1880,6 +1927,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: HTTP/1.0 GET parsing supports paths, queries, and content lengths but rejects chunked transfer encoding.
+    ///
+    /// HOW:
+    /// - Decode bodyless and length-framed requests, inspect metadata/query, and reject a chunked HTTP/1.0 head.
     #[test]
     fn parse_h10_get() {
         let mut buf = BytesMut::from(
@@ -1927,6 +1978,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: HTTP/1.0 POST requests require explicit body length, including zero for an empty body.
+    ///
+    /// HOW:
+    /// - Decode positive/zero-length requests and inspect metadata, then reject a POST without length.
     #[test]
     fn parse_h10_post() {
         let mut buf = BytesMut::from(
@@ -1963,6 +2018,10 @@ mod tests {
         assert!(err.to_string().contains("Header"));
     }
 
+    /// STATEMENT: A content-length request separates head metadata from its fixed-length payload.
+    ///
+    /// HOW:
+    /// - Decode a complete GET with four body bytes and compare both request metadata and payload output.
     #[test]
     fn test_parse_body() {
         let mut buf = BytesMut::from(
@@ -1981,6 +2040,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Leading CRLF does not alter a request's metadata or fixed-length body.
+    ///
+    /// HOW:
+    /// - Decode a length-framed GET preceded by an empty line and compare the parsed head and body bytes.
     #[test]
     fn test_parse_body_crlf() {
         let mut buf = BytesMut::from(
@@ -1999,6 +2062,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Request-head parsing waits for the final blank line.
+    ///
+    /// HOW:
+    /// - Supply complete headers without their terminator, append CRLF, and inspect the resulting request metadata.
     #[test]
     fn test_parse_partial_eof() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n");
@@ -2012,6 +2079,11 @@ mod tests {
         assert_eq!(req.path(), "/test");
     }
 
+    /// STATEMENT: A header name split across multiple reads is assembled without losing its value.
+    ///
+    /// HOW:
+    /// - Feed pieces of a header name before its value and final terminator.
+    /// - Verify pending results until completion, then inspect request metadata and header bytes.
     #[test]
     fn test_headers_split_field() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n");
@@ -2039,6 +2111,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Repeated headers retain their separate values in input order.
+    ///
+    /// HOW:
+    /// - Decode two Set-Cookie lines and compare both values from the resulting header map.
     #[test]
     fn test_headers_multi_value() {
         let mut buf = BytesMut::from(
@@ -2058,6 +2134,10 @@ mod tests {
         assert_eq!(val[1], "c2=cookie2");
     }
 
+    /// STATEMENT: HTTP/1.0 requests default to closing the connection.
+    ///
+    /// HOW:
+    /// - Decode a request without connection options and inspect its connection type.
     #[test]
     fn test_conn_default_1_0() {
         let mut buf = BytesMut::from("GET /test HTTP/1.0\r\n\r\n");
@@ -2066,6 +2146,10 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Close);
     }
 
+    /// STATEMENT: HTTP/1.1 requests default to persistent connections.
+    ///
+    /// HOW:
+    /// - Decode a request without connection options and inspect its keepalive connection type.
     #[test]
     fn test_conn_default_1_1() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
@@ -2074,6 +2158,10 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
     }
 
+    /// STATEMENT: Explicit close options disable HTTP/1.1 persistence regardless of case.
+    ///
+    /// HOW:
+    /// - Decode lowercase and capitalized close options and compare their connection types.
     #[test]
     fn test_conn_close() {
         let mut buf = BytesMut::from(
@@ -2093,6 +2181,10 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Close);
     }
 
+    /// STATEMENT: An explicit close option retains HTTP/1.0 nonpersistent behavior.
+    ///
+    /// HOW:
+    /// - Decode an HTTP/1.0 request with the close option and inspect its connection type.
     #[test]
     fn test_conn_close_1_0() {
         let mut buf = BytesMut::from(
@@ -2105,6 +2197,10 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Close);
     }
 
+    /// STATEMENT: HTTP/1.0 keepalive options enable persistence case-insensitively.
+    ///
+    /// HOW:
+    /// - Decode lowercase and mixed-case keepalive options and inspect persistent connection types.
     #[test]
     fn test_conn_keep_alive_1_0() {
         let mut buf = BytesMut::from(
@@ -2124,6 +2220,10 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
     }
 
+    /// STATEMENT: An explicit HTTP/1.1 keepalive option preserves persistence.
+    ///
+    /// HOW:
+    /// - Decode a keepalive-bearing request and inspect its connection type.
     #[test]
     fn test_conn_keep_alive_1_1() {
         let mut buf = BytesMut::from(
@@ -2135,6 +2235,10 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
     }
 
+    /// STATEMENT: Unknown connection options do not enable HTTP/1.0 persistence.
+    ///
+    /// HOW:
+    /// - Decode an unknown option and verify the connection still closes.
     #[test]
     fn test_conn_other_1_0() {
         let mut buf = BytesMut::from(
@@ -2146,6 +2250,10 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Close);
     }
 
+    /// STATEMENT: Unknown connection options do not disable default HTTP/1.1 persistence.
+    ///
+    /// HOW:
+    /// - Decode an unknown option and verify the connection remains keepalive.
     #[test]
     fn test_conn_other_1_1() {
         let mut buf = BytesMut::from(
@@ -2157,6 +2265,10 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
     }
 
+    /// STATEMENT: Matching upgrade headers select upgrade connection state case-insensitively.
+    ///
+    /// HOW:
+    /// - Decode lowercase and mixed-case upgrade requests and inspect both upgrade predicates and connection types.
     #[test]
     fn test_conn_upgrade() {
         let mut buf = BytesMut::from(
@@ -2180,6 +2292,11 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Upgrade);
     }
 
+    /// STATEMENT: Both upgrade and connection-upgrade headers are required to leave ordinary HTTP framing.
+    ///
+    /// HOW:
+    /// - Decode incomplete upgrade combinations and verify the next pipelined request or fixed body remains ordinary HTTP.
+    /// - Supply both headers and verify streaming upgrade payload classification.
     #[test]
     fn test_upgrade_requires_connection_option() {
         let reader = MessageDecoder::<Request>::default();
@@ -2220,6 +2337,10 @@ mod tests {
         assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
+    /// STATEMENT: Expectation parsing recognizes a complete case-insensitive 100-continue token within lists.
+    ///
+    /// HOW:
+    /// - Decode valid case/whitespace/list forms and misleading partial tokens, comparing each expectation flag.
     #[test]
     fn test_expect_100_continue() {
         let reader = MessageDecoder::<Request>::default();
@@ -2244,6 +2365,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: HTTP/1.0 retains expectation/upgrade headers without activating HTTP/1.1 protocol behavior.
+    ///
+    /// HOW:
+    /// - Decode HTTP/1.0 with both headers and a following request, checking flags, preserved headers, and pipeline boundary.
+    /// - Verify equivalent HTTP/1.1 headers activate expectation and upgrade streaming.
     #[test]
     fn test_http10_ignores_expect_and_upgrade() {
         let mut buf = BytesMut::from(
@@ -2357,6 +2483,10 @@ mod tests {
         assert!(reader.decode(&mut buf).unwrap().is_some());
     }
 
+    /// STATEMENT: CONNECT requests are classified as connection upgrades.
+    ///
+    /// HOW:
+    /// - Decode an authority-target CONNECT request and inspect its upgrade predicate.
     #[test]
     fn test_conn_upgrade_connect_method() {
         let mut buf = BytesMut::from(
@@ -2368,6 +2498,10 @@ mod tests {
         assert!(req.upgrade());
     }
 
+    /// STATEMENT: Request framing recognizes chunked transfer encoding and rejects unsupported spellings.
+    ///
+    /// HOW:
+    /// - Decode a chunked request and inspect its chunked predicate, then reject a misspelled coding.
     #[test]
     fn test_request_chunked() {
         let mut buf = BytesMut::from(
@@ -2390,6 +2524,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Content length must be numeric.
+    ///
+    /// HOW:
+    /// - Decode a request with an alphabetic content-length value and require a parse error.
     #[test]
     fn test_headers_content_length_err_1() {
         let mut buf = BytesMut::from(
@@ -2400,6 +2538,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Negative content lengths are invalid.
+    ///
+    /// HOW:
+    /// - Decode a request declaring length minus one and require a parse error.
     #[test]
     fn test_headers_content_length_err_2() {
         let mut buf = BytesMut::from(
@@ -2410,6 +2552,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Header lines require a field-name/value separator.
+    ///
+    /// HOW:
+    /// - Decode a header line without a colon and require a parse error.
     #[test]
     fn test_invalid_header() {
         let mut buf = BytesMut::from(
@@ -2420,6 +2566,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Invalid token characters are rejected in header names.
+    ///
+    /// HOW:
+    /// - Decode a header name containing square brackets and require a parse error.
     #[test]
     fn test_invalid_name() {
         let mut buf = BytesMut::from(
@@ -2430,12 +2580,20 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Malformed request start lines are rejected.
+    ///
+    /// HOW:
+    /// - Supply a combined method/path token without a valid target or version and require a parse error.
     #[test]
     fn test_http_request_bad_status_line() {
         let mut buf = BytesMut::from("getpath \r\n\r\n");
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: A valid upgrade request exposes subsequent bytes as an upgraded stream rather than an HTTP body.
+    ///
+    /// HOW:
+    /// - Decode upgrade headers followed by raw data and inspect upgrade flags and stream payload classification.
     #[test]
     fn test_http_request_upgrade() {
         let mut buf = BytesMut::from(
@@ -2451,6 +2609,11 @@ mod tests {
         assert!(pl.is_unhandled());
     }
 
+    /// STATEMENT: Upgrade framing ignores zero length, respects nonzero body length, and rejects duplicate lengths.
+    ///
+    /// HOW:
+    /// - Decode both header orders for zero/nonzero upgrade lengths and inspect stream or fixed-body behavior.
+    /// - Verify duplicate content lengths still fail after an upgrade header.
     #[test]
     fn test_http_request_upgrade_content_length() {
         let reader = MessageDecoder::<Request>::default();
@@ -2501,6 +2664,10 @@ mod tests {
         assert!(reader.decode(&mut buf).is_err());
     }
 
+    /// STATEMENT: Request header values preserve non-ASCII UTF-8 bytes.
+    ///
+    /// HOW:
+    /// - Decode a Cyrillic header value and compare its original byte sequence.
     #[test]
     fn test_http_request_parser_utf8() {
         let mut buf = BytesMut::from(
@@ -2515,6 +2682,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A request target beginning with two slashes remains a path, not an authority.
+    ///
+    /// HOW:
+    /// - Decode a double-slash target and inspect its exact path and absent authority.
     #[test]
     fn test_http_request_parser_two_slashes() {
         let mut buf = BytesMut::from("GET //path HTTP/1.1\r\nhost: localhost\r\n\r\n");
@@ -2524,6 +2695,10 @@ mod tests {
         assert!(req.uri().authority().is_none());
     }
 
+    /// STATEMENT: Invalid method-token characters are rejected.
+    ///
+    /// HOW:
+    /// - Decode a method containing invalid punctuation and require a parse error.
     #[test]
     fn test_http_request_parser_bad_method() {
         let mut buf = BytesMut::from("!12%()+=~$ /get HTTP/1.1\r\nhost: localhost\r\n\r\n");
@@ -2531,6 +2706,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Malformed HTTP version syntax is rejected.
+    ///
+    /// HOW:
+    /// - Decode a request with an invalid protocol/version token and require a parse error.
     #[test]
     fn test_http_request_parser_bad_version() {
         let mut buf = BytesMut::from("GET //get HT/11\r\n\r\n");
@@ -2538,6 +2717,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Chunked request bodies decode adjacent small chunks into payload bytes followed by EOF.
+    ///
+    /// HOW:
+    /// - Decode a chunked head, append two chunks and a terminator, and compare merged data and EOF.
     #[test]
     fn test_http_request_chunked_payload() {
         let mut buf = BytesMut::from(
@@ -2557,6 +2740,10 @@ mod tests {
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
     }
 
+    /// STATEMENT: Chunked payload decoding preserves the next pipelined request.
+    ///
+    /// HOW:
+    /// - Append a two-chunk body and a following POST, consume body/EOF, and inspect the next request's method and framing.
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
         let mut buf = BytesMut::from(
@@ -2585,6 +2772,11 @@ mod tests {
         assert!(req.chunked().unwrap());
     }
 
+    /// STATEMENT: Chunked parsing resumes across split sizes, delimiters, and body data.
+    ///
+    /// HOW:
+    /// - Feed a body in fragments crossing every framing boundary and compare emitted data or pending results.
+    /// - Verify EOF appears only after the final blank line completes.
     #[test]
     fn test_http_request_chunked_payload_chunks() {
         let mut buf = BytesMut::from(
@@ -2626,6 +2818,11 @@ mod tests {
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
     }
 
+    /// STATEMENT: Trailer-size limits apply to single, repeated, and unfinished fields, including bytewise input.
+    ///
+    /// HOW:
+    /// - Decode trailer fields at and above the limit as whole buffers and one byte at a time.
+    /// - Check acceptance at the boundary and rejection of oversized or endless fields.
     #[test]
     fn test_chunked_trailers_limit() {
         let decode = |trailers: &[u8], split: bool| {
@@ -2677,6 +2874,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Chunked trailers preserve values and pipeline boundaries while rejecting malformed syntax.
+    ///
+    /// HOW:
+    /// - Decode complete and fragmented trailers, including whitespace and repeated fields, then inspect EOF and the next request.
+    /// - Feed invalid names, separators, line endings, and folded fields and require errors.
     #[test]
     fn test_parse_chunked_payload_trailers() {
         let mut buf = BytesMut::from(
@@ -2757,6 +2959,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Chunked output orders data, trailers, and EOF without consuming following bytes.
+    ///
+    /// HOW:
+    /// - Decode a buffered chunk/trailer sequence and compare each item plus the untouched trailing buffer.
     #[test]
     fn test_chunked_trailers_after_data() {
         let (pl, mut buf) = chunked_payload();
@@ -2773,6 +2979,10 @@ mod tests {
         assert_eq!(&buf[..], b"next");
     }
 
+    /// STATEMENT: Supported chunk extensions do not appear in decoded payload data.
+    ///
+    /// HOW:
+    /// - Decode an extension-bearing chunk followed by ordinary data and compare merged body bytes and EOF.
     #[test]
     fn test_parse_chunked_payload_chunk_extension() {
         let mut buf = BytesMut::from(
@@ -2804,6 +3014,11 @@ mod tests {
         items
     }
 
+    /// STATEMENT: Small chunk payloads merge up to a bounded output size and are released before final input arrives.
+    ///
+    /// HOW:
+    /// - Decode many one-byte chunks and compare output lengths and contents.
+    /// - Exercise a completed small body and a partial chunk, checking prompt output and final EOF.
     #[test]
     fn test_small_chunks_are_merged() {
         let (pl, mut buf) = chunked_payload();
@@ -2849,6 +3064,10 @@ mod tests {
         assert_eq!(pl.decode(&mut buf).unwrap(), Some(PayloadItem::Eof));
     }
 
+    /// STATEMENT: Large payload chunks remain separate and borrow the original input allocation.
+    ///
+    /// HOW:
+    /// - Decode alternating small/large chunks, compare item boundaries, and verify large-chunk pointers lie in the input buffer.
     #[test]
     fn test_large_chunks_are_not_merged() {
         let large = "x".repeat(SMALL_CHUNK);
@@ -2883,6 +3102,10 @@ mod tests {
         (pl.unwrap(), buf)
     }
 
+    /// STATEMENT: Chunk extensions reject forbidden control bytes while tolerating allowed tab, spacing, and high bytes.
+    ///
+    /// HOW:
+    /// - Feed malformed extension lines and require invalid-input errors, then decode an accepted quoted extension.
     #[test]
     fn test_chunk_extension_control_chars() {
         for line in [
@@ -2908,6 +3131,11 @@ mod tests {
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
     }
 
+    /// STATEMENT: Chunk-extension budgets bound unfinished lines and cumulative extensions across the payload.
+    ///
+    /// HOW:
+    /// - Grow an unterminated extension and repeated extension-bearing chunks until rejection.
+    /// - Check bounded buffering and acceptance of a single extension exactly at the budget.
     #[test]
     fn test_chunk_extensions_limit() {
         // a size line that never ends is not buffered without limit
@@ -2956,6 +3184,11 @@ mod tests {
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
     }
 
+    /// STATEMENT: Oversized partial extensions and invalid chunk delimiters produce specific framing errors.
+    ///
+    /// HOW:
+    /// - Feed an already-oversized extension and corrupt body/end CRLF bytes.
+    /// - Drain any preceding data and compare each invalid-input diagnostic.
     #[test]
     fn test_chunk_framing_errors() {
         // a partial size line larger than the limit, received at once
@@ -2985,6 +3218,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Content-length parsing rejects trailing nondigits and non-text bytes.
+    ///
+    /// HOW:
+    /// - Decode numeric-plus-letter and high-byte length values and expect header errors.
     #[test]
     fn test_illegal_content_length() {
         for value in [&b"12a"[..], b"\xff1"] {
@@ -2999,6 +3236,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Incremental chunk-size parsing validates each byte promptly and enforces extension budgets.
+    ///
+    /// HOW:
+    /// - Feed valid spacing/extensions bytewise and compare decoded data.
+    /// - Check exact rejection positions for invalid bytes and boundary behavior for long or endless extensions.
     #[test]
     fn test_chunk_size_line_byte_by_byte() {
         let feed = |line: &[u8]| {
@@ -3055,6 +3297,11 @@ mod tests {
         assert!(feed(&line).is_err());
     }
 
+    /// STATEMENT: Bodyless response statuses ignore framing headers and preserve following response bytes.
+    ///
+    /// HOW:
+    /// - Decode informational, no-content, and not-modified responses and inspect absent payloads and remaining buffers.
+    /// - Verify an ordinary successful response still yields its declared body.
     #[test]
     fn test_response_bodyless_status() {
         for (head, rest) in [
@@ -3090,6 +3337,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Unframed ordinary responses read until close, explicit zero lengths are empty, and switching protocols yields a stream.
+    ///
+    /// HOW:
+    /// - Decode HTTP/1.0 and HTTP/1.1 variants and inspect connection type, payload mode, and body bytes.
+    /// - Compare zero-length ordinary responses with a zero-length upgrade response.
     #[test]
     fn test_response_read_until_eof() {
         for version in ["1.0", "1.1"] {
@@ -3121,6 +3373,10 @@ mod tests {
         assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
+    /// STATEMENT: HTTP/1.0 responses without length expose buffered data as close-delimited payload.
+    ///
+    /// HOW:
+    /// - Decode a response without framing headers and compare its first payload chunk.
     #[test]
     fn test_response_http10_read_until_eof() {
         let mut buf = BytesMut::from("HTTP/1.0 200 Ok\r\n\r\ntest data");
@@ -3134,6 +3390,10 @@ mod tests {
         assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"test data")));
     }
 
+    /// STATEMENT: Multiple content-length headers are rejected even when one declares zero.
+    ///
+    /// HOW:
+    /// - Decode conflicting positive lengths and zero/positive lengths and require parse errors.
     #[test]
     fn test_multiple_content_length() {
         let mut buf = BytesMut::from(
@@ -3157,6 +3417,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: HTTP/1.0 requests reject transfer encoding.
+    ///
+    /// HOW:
+    /// - Decode an HTTP/1.0 POST with chunked framing and require a parse error.
     #[test]
     fn test_transfer_encoding_http10() {
         // in HTTP/1.0 transfer encoding is not supported
@@ -3175,6 +3439,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: A content length does not make HTTP/1.0 transfer encoding acceptable.
+    ///
+    /// HOW:
+    /// - Decode a request containing both framing headers and require a parse error.
     #[test]
     fn test_content_length_and_te_http10() {
         // in HTTP/1.0 transfer encoding is not supported
@@ -3191,6 +3459,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Content lengths cannot carry a leading plus sign.
+    ///
+    /// HOW:
+    /// - Decode a positive signed content-length value and require a parse error.
     #[test]
     fn test_content_length_plus() {
         let mut buf = BytesMut::from(
@@ -3203,6 +3475,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: A later chunked header does not hide an earlier unsupported transfer encoding.
+    ///
+    /// HOW:
+    /// - Decode unknown and chunked transfer headers together and require rejection.
     #[test]
     fn test_unknown_transfer_encoding() {
         let mut buf = BytesMut::from(
@@ -3219,6 +3495,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Ambiguous repeated transfer framing with content length is rejected before pipelined bytes are interpreted.
+    ///
+    /// HOW:
+    /// - Decode identity/chunked headers plus a length and request-like body suffix and require a parse error.
     #[test]
     fn test_multiple_transfer_encoding() {
         let mut buf = BytesMut::from(
@@ -3236,6 +3516,10 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Requests cannot combine content length with chunked transfer encoding in either header order.
+    ///
+    /// HOW:
+    /// - Decode both framing-header orders and require parse errors.
     #[test]
     fn test_transfer_encoding_content_length_combination() {
         let mut buf = BytesMut::from(
@@ -3259,6 +3543,11 @@ mod tests {
         expect_parse_err!(&mut buf);
     }
 
+    /// STATEMENT: Transfer-coding lists distinguish final chunking and unsupported codings while rejecting invalid syntax.
+    ///
+    /// HOW:
+    /// - Parse case, whitespace, empty-token, ordering, duplicate, and parameter variants.
+    /// - Compare final-chunked/other-coding flags or invalid-list results.
     #[test]
     fn test_transfer_codings() {
         for (val, res) in [
@@ -3280,6 +3569,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Requests require valid final chunking and distinguish unsupported codings from malformed framing.
+    ///
+    /// HOW:
+    /// - Decode several coding lists and compare unsupported/header errors or valid chunked payload classification.
     #[test]
     fn test_request_transfer_codings() {
         for (val, res) in [
@@ -3303,6 +3596,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Responses use final chunking for framing, otherwise close-delimit unsupported codings, and reject conflicting lengths.
+    ///
+    /// HOW:
+    /// - Decode final/nonfinal chunked lists and compare headers, connection modes, and undecoded body bytes.
+    /// - Reject transfer coding combined with content length in either order.
     #[test]
     fn test_response_transfer_codings() {
         // final chunked coding frames the payload, other codings are not decoded
@@ -3353,6 +3651,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Identity transfer encoding is rejected in requests but tolerated with response content length.
+    ///
+    /// HOW:
+    /// - Reject request variants with and without lengths and differing header order/case.
+    /// - Decode a length-framed identity response and compare its body.
     #[test]
     fn test_transfer_encoding_identity() {
         for req in [
@@ -3384,6 +3687,11 @@ mod tests {
         assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"0\r\n")));
     }
 
+    /// STATEMENT: Header decoding enforces buffer-size and field-count limits while supporting decoder reuse within limits.
+    ///
+    /// HOW:
+    /// - Decode the same head under small/larger byte budgets and a one-field limit.
+    /// - Compare exact errors and successful repeated decoder use.
     #[test]
     fn test_max_headers() {
         const TEXT: &str = "GET /test HTTP/1.1\r\n\
@@ -3429,6 +3737,11 @@ mod tests {
         assert_eq!(err, DecodeError::MaxHeaders);
     }
 
+    /// STATEMENT: Header-count limits count repeated names, persist across partial reads, and reset per message.
+    ///
+    /// HOW:
+    /// - Exceed the limit with repeated names in whole and split input.
+    /// - Decode two at-limit pipelined messages and verify both succeed.
     #[test]
     fn test_max_headers_repeated_names() {
         let cfg: SharedCfg = SharedCfg::new("test")
@@ -3461,6 +3774,11 @@ mod tests {
         assert!(reader.decode(&mut buf).unwrap().is_some());
     }
 
+    /// STATEMENT: Request decoders reset after syntax, framing, count, and size failures.
+    ///
+    /// HOW:
+    /// - Feed each invalid head, then reuse the same decoder for a valid request.
+    /// - Check its path and header count show no stale state.
     #[test]
     fn test_decoder_reusable_after_error() {
         const VALID: &str = "GET /ok HTTP/1.1\r\nHost: example.com\r\n\r\n";
@@ -3495,6 +3813,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Request-head byte limits are inclusive and apply to both whole-buffer and split completion.
+    ///
+    /// HOW:
+    /// - Decode an oversized head whole and split, comparing reported size.
+    /// - Accept the same head with larger and exactly matching limits.
     #[test]
     fn test_max_buf_size_complete_message() {
         const TEXT: &str = "GET /test HTTP/1.1\r\n\

@@ -434,6 +434,11 @@ mod tests {
     use super::*;
     use crate::web::test::TestRequest;
 
+    /// STATEMENT: Header guards require an existing header with the expected value.
+    ///
+    /// HOW:
+    /// - Check matching, mismatched, and absent headers against a chunked request.
+    /// - Assert only the matching value passes and debug output identifies the header guard.
     #[test]
     fn test_header() {
         let req = TestRequest::with_header(header::TRANSFER_ENCODING, "chunked").to_http_request();
@@ -450,6 +455,11 @@ mod tests {
         assert!(format!("{pred:?}").contains("Header"));
     }
 
+    /// STATEMENT: Host guards match a bare host without requiring a request scheme.
+    ///
+    /// HOW:
+    /// - Supply `www.rust-lang.org` in `Host` and check guards with and without a scheme.
+    /// - Assert the matching host passes and unrelated hosts fail.
     #[test]
     fn test_host() {
         let req = TestRequest::default()
@@ -478,6 +488,11 @@ mod tests {
         assert!(!pred.check(req.head()));
     }
 
+    /// STATEMENT: Host guards enforce a supplied request scheme as well as the hostname.
+    ///
+    /// HOW:
+    /// - Supply an HTTPS host value and check matching, omitted, and mismatched guard schemes.
+    /// - Assert unrelated hosts fail and debug output identifies the host guard.
     #[test]
     fn test_host_scheme() {
         let req = TestRequest::default()
@@ -514,7 +529,7 @@ mod tests {
     /// STATEMENT: Host guards use CONNECT authorities, not double-slash origin paths.
     ///
     /// HOW:
-    /// - Match an authority-form CONNECT request without a Host header.
+    /// - Match an authority-form CONNECT request without a `Host` header.
     /// - Check matching/nonmatching hosts and confirm an origin path does not supply a host.
     #[test]
     fn test_host_without_header() {
@@ -545,6 +560,11 @@ mod tests {
         assert!(!Host("www.rust-lang.org").check(req.head()));
     }
 
+    /// STATEMENT: Absolute request targets override `Host`, while malformed host values do not match.
+    ///
+    /// HOW:
+    /// - Supply conflicting absolute-target and header authorities and assert target host/scheme wins.
+    /// - Check a host with a port matches and a host containing a path does not.
     #[test]
     fn test_host_absolute_form() {
         // the target authority takes precedence over `Host`
@@ -566,6 +586,12 @@ mod tests {
         assert!(!Host("www.rust-lang.org").check(req.head()));
     }
 
+    /// STATEMENT: Method guards accept their own HTTP method and reject other methods.
+    ///
+    /// HOW:
+    /// - Build requests for GET, POST, PUT, DELETE, HEAD, OPTIONS, CONNECT, PATCH, TRACE, and QUERY.
+    /// - Check each corresponding guard against matching and mismatched requests.
+    /// - Assert the trace guard debug output includes its method.
     #[test]
     fn test_methods() {
         let req = TestRequest::default().to_http_request();
@@ -626,6 +652,11 @@ mod tests {
         assert!(!Query().check(req.head()));
     }
 
+    /// STATEMENT: `Not`, `All`, and `Any` compose method guards with their expected Boolean semantics.
+    ///
+    /// HOW:
+    /// - Check negated, conjunctive, and disjunctive guards against a TRACE request.
+    /// - Assert positive and negative outcomes and each composite guard's debug identity.
     #[test]
     fn test_preds() {
         let r = TestRequest::default()
@@ -645,6 +676,11 @@ mod tests {
         assert!(format!("{:?}", Any(Get())).contains("AnyGuard"));
     }
 
+    /// STATEMENT: Function guards and closures can inspect request headers.
+    ///
+    /// HOW:
+    /// - Check a content-type predicate through `fn_guard` and a direct closure.
+    /// - Assert both pass and `FnGuard` debug output identifies the wrapper.
     #[test]
     fn test_fn_guard() {
         let req = TestRequest::with_header(header::CONTENT_TYPE, "text/plain").to_http_request();
@@ -658,6 +694,11 @@ mod tests {
         assert!(g.check(req.head()));
     }
 
+    /// STATEMENT: Composite guard debug output includes built-in and custom guard identities.
+    ///
+    /// HOW:
+    /// - Compose a header guard, host guard, and custom `Guard` implementation with `Any`.
+    /// - Format it and assert all three guard identities are present.
     #[test]
     fn test_guard_debug() {
         struct Custom;
@@ -677,6 +718,11 @@ mod tests {
         assert!(s.contains("Guard"), "{s}");
     }
 
+    /// STATEMENT: Invalid or path-only `Host` values cannot satisfy a hostname guard.
+    ///
+    /// HOW:
+    /// - Build requests with a space-containing host and a path-only host.
+    /// - Assert neither matches `Host("localhost")`.
     #[test]
     fn test_host_without_host_name() {
         let req = TestRequest::default()

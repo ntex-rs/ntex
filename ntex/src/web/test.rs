@@ -1185,6 +1185,11 @@ mod tests {
     use crate::http::{HttpMessage, header};
     use crate::web::{self, App};
 
+    /// STATEMENT: `TestRequest` carries configured HTTP metadata, application state, and an empty default payload.
+    ///
+    /// HOW:
+    /// - Set headers, HTTP version, route parameters, application state, and peer address and assert each.
+    /// - Check TCP stream debug text and assert a request without payload loads as empty bytes.
     #[crate::rt_test]
     async fn test_basics() {
         let req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
@@ -1210,6 +1215,11 @@ mod tests {
         assert_eq!(res, &b""[..]);
     }
 
+    /// STATEMENT: Request-builder method helpers dispatch to their corresponding application routes.
+    ///
+    /// HOW:
+    /// - Register distinct PUT, PATCH, and DELETE response bodies.
+    /// - Build each request with its method helper and assert `read_response` returns the matching bytes.
     #[crate::rt_test]
     async fn test_request_methods() {
         let app = init_service(
@@ -1243,6 +1253,11 @@ mod tests {
         assert_eq!(result, Bytes::from_static(b"delete!"));
     }
 
+    /// STATEMENT: `read_response` collects the body returned by an initialized application service.
+    ///
+    /// HOW:
+    /// - Register a POST handler returning `welcome!` and build a POST request to its path.
+    /// - Read the response and assert the exact body bytes.
     #[crate::rt_test]
     async fn test_response() {
         let app = init_service(
@@ -1268,6 +1283,11 @@ mod tests {
         name: String,
     }
 
+    /// STATEMENT: `read_response_json` deserializes a service's JSON response into a typed value.
+    ///
+    /// HOW:
+    /// - POST raw JSON to a handler that extracts and echoes a `Person` as JSON.
+    /// - Deserialize the response with `read_response_json` and assert the person's ID.
     #[crate::rt_test]
     async fn test_response_json() {
         let app = init_service(
@@ -1291,6 +1311,11 @@ mod tests {
         assert_eq!(&result.id, "12345");
     }
 
+    /// STATEMENT: Form request construction sets the media type and round-trips serialized fields.
+    ///
+    /// HOW:
+    /// - Build a POST using `TestRequest::form` and assert its URL-encoded content type.
+    /// - Send it to a form-extracting JSON responder and assert both decoded response fields.
     #[crate::rt_test]
     async fn test_request_response_form() {
         let app = init_service(
@@ -1319,6 +1344,11 @@ mod tests {
         assert_eq!(&result.name, "User name");
     }
 
+    /// STATEMENT: JSON request construction sets the media type and round-trips serialized fields.
+    ///
+    /// HOW:
+    /// - Build a POST using `TestRequest::json` and assert `application/json`.
+    /// - Echo the extracted person as JSON and assert both fields after response deserialization.
     #[crate::rt_test]
     async fn test_request_response_json() {
         let app = init_service(
@@ -1347,6 +1377,11 @@ mod tests {
         assert_eq!(&result.name, "User name");
     }
 
+    /// STATEMENT: An asynchronous handler can await successful work from `web::block`.
+    ///
+    /// HOW:
+    /// - Register a handler that offloads obtaining a value and builds a response from its result.
+    /// - POST to the handler and assert the response has a success status.
     #[crate::rt_test]
     async fn test_async_with_block() {
         async fn async_with_block() -> Result<HttpResponse, Infallible> {
@@ -1370,6 +1405,11 @@ mod tests {
         assert!(res.status().is_success());
     }
 
+    /// STATEMENT: Test-server method helpers send their corresponding HTTP methods and load empty bodies.
+    ///
+    /// HOW:
+    /// - Start a server with PUT, PATCH, DELETE, and OPTIONS routes and call each helper.
+    /// - Assert all statuses are OK, then load another PUT response and assert its body is empty.
     #[crate::rt_test]
     async fn test_test_methods() {
         let srv = server(async |()| {
@@ -1409,6 +1449,11 @@ mod tests {
         assert_eq!(srv.load_body(res).await.unwrap(), Bytes::new());
     }
 
+    /// STATEMENT: `TestRequest::state` preserves state in decomposed and service-request forms.
+    ///
+    /// HOW:
+    /// - Set numeric state and assert `to_http_parts` returns it.
+    /// - Set `AppState<usize>` and assert the service request exposes the wrapped value.
     #[crate::rt_test]
     async fn test_request_state() {
         let (_, _, st) = TestRequest::default().state(10usize).to_http_parts();
@@ -1420,6 +1465,11 @@ mod tests {
         assert_eq!(**req.st(), 5);
     }
 
+    /// STATEMENT: Test-server configuration applies HTTP/1 mode and accepts custom client configuration.
+    ///
+    /// HOW:
+    /// - Configure HTTP/1, an ephemeral port, and a named client configuration; inspect TCP debug output.
+    /// - Start the server, assert OK and HTTP/1.1 from a request, and stop it explicitly.
     #[crate::rt_test]
     async fn test_server_config() {
         let cfg = config()
@@ -1438,6 +1488,11 @@ mod tests {
         srv.stop().await;
     }
 
+    /// STATEMENT: A supplied test-server listener takes precedence over the configured port.
+    ///
+    /// HOW:
+    /// - Bind an ephemeral listener and configure both that listener and its already-bound port.
+    /// - Start the server, assert it uses the listener address, and verify an OK request succeeds.
     #[crate::rt_test]
     async fn test_server_listener_ignores_port() {
         // regression: the configured port was bound even if a listener is set
@@ -1473,6 +1528,11 @@ mod tests {
         builder.build()
     }
 
+    /// STATEMENT: OpenSSL test servers expose HTTPS URLs and negotiate the configured HTTP protocol.
+    ///
+    /// HOW:
+    /// - Start HTTP/1-only, HTTP/2-only, and automatic servers with matching ALPN selections.
+    /// - Assert OpenSSL debug identity, HTTPS URL scheme, OK status, and the expected response version.
     #[cfg(feature = "openssl")]
     #[crate::rt_test]
     async fn test_server_openssl() {
@@ -1495,6 +1555,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: The test-server WebSocket helper connects to an OpenSSL-backed upgrade handler.
+    ///
+    /// HOW:
+    /// - Start a TLS HTTP/1 server whose root handler calls `web::ws::start`.
+    /// - Await `srv.ws()` and assert the connection succeeds.
     #[cfg(all(feature = "openssl", feature = "ws"))]
     #[crate::rt_test]
     async fn test_server_openssl_ws() {
@@ -1511,6 +1576,11 @@ mod tests {
         assert!(srv.ws().await.is_ok());
     }
 
+    /// STATEMENT: Rustls test-server configuration identifies its TLS stream type in debug output.
+    ///
+    /// HOW:
+    /// - Load the test certificate and private key and build a Rustls server configuration.
+    /// - Apply it to the test-server configuration and assert `StreamType::Rustls` appears in debug text.
     #[cfg(feature = "rustls")]
     #[test]
     fn test_server_config_rustls_debug() {
@@ -1529,6 +1599,11 @@ mod tests {
         assert!(format!("{:?}", config().rustls(cfg)).contains("StreamType::Rustls"));
     }
 
+    /// STATEMENT: `TestRequest::cookie` produces a request with a parseable named cookie.
+    ///
+    /// HOW:
+    /// - Add a cookie with domain, path, HTTP-only, and lifetime settings to a request.
+    /// - Parse its cookies and assert exactly one cookie named `name` is present.
     #[cfg(feature = "cookie")]
     #[test]
     fn test_response_cookies() {

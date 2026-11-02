@@ -7,6 +7,11 @@ use ntex::server::{TestServer, build, build_with_config};
 use ntex::service::{cfg::SharedCfg, fn_service};
 use ntex::{codec::BytesCodec, io::Io, util::Bytes};
 
+/// STATEMENT: A server built with `bind` accepts TCP connections.
+///
+/// HOW:
+/// - Start a one-worker server on an unused address in a separate system thread.
+/// - Assert a TCP connection succeeds, then stop the system and join the thread.
 #[test]
 fn test_bind() {
     let addr = TestServer::unused_addr();
@@ -35,6 +40,11 @@ fn test_bind() {
     let _ = h.join();
 }
 
+/// STATEMENT: A server accepts connections from a supplied TCP listener and supports graceful stop.
+///
+/// HOW:
+/// - Pass a bound `TcpListener` to `listen` and start a one-worker server.
+/// - Assert a TCP connection succeeds, await `stop(true)`, and stop and join the system.
 #[ntex::test]
 async fn test_listen() {
     let addr = TestServer::unused_addr();
@@ -66,6 +76,11 @@ async fn test_listen() {
     let _ = h.join();
 }
 
+/// STATEMENT: Server pause, resume, and stop control connection processing.
+///
+/// HOW:
+/// - Start a server sending `test` and assert the bytes are received.
+/// - Pause and confirm a read times out, resume and confirm connections and response bytes succeed, then stop and assert new connections fail.
 #[ntex::test]
 #[cfg(unix)]
 #[allow(clippy::unused_io_amount)]
@@ -131,6 +146,11 @@ async fn test_run() {
     let _ = h.join();
 }
 
+/// STATEMENT: Worker-start initialization runs once for multiple configured listeners.
+///
+/// HOW:
+/// - Configure two bound addresses and one existing listener, registering services and incrementing a counter in `on_worker_start`.
+/// - Start one worker, connect to all three addresses, and assert the initialization counter is `1`.
 #[test]
 fn test_on_worker_start() {
     use std::io;
@@ -193,6 +213,11 @@ fn test_on_worker_start() {
     let _ = h.join();
 }
 
+/// STATEMENT: Asynchronous server configuration initializes services once per worker.
+///
+/// HOW:
+/// - Configure two bound sockets and a supplied listener, checking the `ServiceRuntime` debug label during worker initialization.
+/// - Connect to each address and assert the initialization counter is `1` before stopping.
 #[test]
 fn test_configure() {
     use std::io;
@@ -259,6 +284,11 @@ fn test_configure() {
     let _ = h.join();
 }
 
+/// STATEMENT: A server replaces panicked Tokio workers and continues handling connections.
+///
+/// HOW:
+/// - Start one worker whose service increments a counter and panics for each accepted connection.
+/// - Connect repeatedly across worker restarts and assert the counter advances from `1` to `3`.
 #[test]
 #[cfg(feature = "tokio")]
 #[allow(unreachable_code)]
@@ -312,6 +342,11 @@ fn test_panic_in_worker() {
     let _ = h.join();
 }
 
+/// STATEMENT: Configured server state is supplied to each connection service.
+///
+/// HOW:
+/// - Build state containing a shared counter and increment it from a state-aware connection handler.
+/// - Open three connections and assert the state counter reaches `3`.
 #[test]
 fn test_server_state() {
     let addr = TestServer::unused_addr();
@@ -353,6 +388,11 @@ fn test_server_state() {
     let _ = h.join();
 }
 
+/// STATEMENT: `stop_on_panic` completes the server future after a worker panics.
+///
+/// HOW:
+/// - Start a one-worker server with `stop_on_panic` and a panicking connection service.
+/// - Connect to trigger the panic and assert the server future returns and sends its completion marker.
 #[cfg(not(any(feature = "tokio", feature = "compio")))]
 #[test]
 fn test_stop_on_panic() {

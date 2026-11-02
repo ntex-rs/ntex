@@ -646,6 +646,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Gzip and deflate expansion produces bounded chunks even from highly compressible input.
+    ///
+    /// HOW:
+    /// - Decode a multi-megabyte zero payload using whole and split compressed inputs.
+    /// - Verify every output byte, total decoded length, and maximum emitted chunk size.
     #[crate::rt_test]
     async fn decoded_chunks_are_bounded() {
         for encoding in [ContentEncoding::Gzip, ContentEncoding::Deflate] {
@@ -673,6 +678,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A failed content decoder ends instead of passing through later input.
+    ///
+    /// HOW:
+    /// - Feed invalid gzip followed by raw bytes and check one error followed by EOF.
     #[crate::rt_test]
     async fn decoder_is_fused_after_error() {
         let chunks = vec![
@@ -684,6 +693,10 @@ mod tests {
         assert!(decoder.next().await.is_none());
     }
 
+    /// STATEMENT: An unparseable content-encoding header leaves input undecoded.
+    ///
+    /// HOW:
+    /// - Construct a decoder from a non-text encoding header and verify raw bytes, disabled decoding, and EOF.
     #[crate::rt_test]
     async fn decoder_from_headers() {
         use crate::http::header::HeaderValue;
@@ -700,6 +713,10 @@ mod tests {
         assert!(decoder.next().await.is_none());
     }
 
+    /// STATEMENT: Large invalid input fails through the blocking decoder and then ends the stream.
+    ///
+    /// HOW:
+    /// - Decode a large invalid deflate chunk and check the error, fused EOF, and exactly one offloaded task.
     #[crate::rt_test]
     async fn decoder_error_on_blocking_pool() {
         let before = super::super::offloaded();
@@ -708,6 +725,29 @@ mod tests {
         assert!(matches!(decoder.next().await, Some(Err(_))));
         assert!(decoder.next().await.is_none());
         assert_eq!(super::super::offloaded(), before + 1);
+    }
+
+    /// STATEMENT: A canceled blocking decoder reports an error and cannot expose pending or subsequent raw input.
+    ///
+    /// HOW:
+    /// - Inject a panicking decode task with pending bytes and another unread source chunk.
+    /// - Verify one I/O error, cleared pending work, and repeated EOF.
+    #[crate::rt_test]
+    async fn decoder_blocking_task_canceled() {
+        let chunks = vec![Ok::<_, PayloadError>(Bytes::from_static(b"raw source"))];
+        let mut decoder = Decoder::new(stream::iter(chunks), ContentEncoding::Gzip);
+        decoder.inner = None;
+        decoder.pending = Some(Bytes::from_static(b"pending input"));
+        decoder.fut = Some(crate::rt::spawn_blocking(|| panic!("decoder panic")));
+
+        assert!(matches!(
+            decoder.next().await,
+            Some(Err(PayloadError::Io(_)))
+        ));
+        assert!(decoder.pending.is_none());
+        assert!(decoder.fut.is_none());
+        assert!(decoder.next().await.is_none());
+        assert!(decoder.next().await.is_none());
     }
 
     fn compress(encoding: ContentEncoding, data: &[u8]) -> Vec<u8> {
@@ -756,6 +796,11 @@ mod tests {
             .collect()
     }
 
+    /// STATEMENT: Decoder offloading begins at each encoding's input threshold while smaller chunks stay inline.
+    ///
+    /// HOW:
+    /// - Decode incompressible data in below-threshold and threshold-sized chunks for each encoding.
+    /// - Compare round-trip bytes and exact changes in offloaded-task counts.
     #[crate::rt_test]
     async fn decoder_offloads_large_input() {
         for (encoding, limit) in [
@@ -787,6 +832,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Zstd decoding supports varied input fragmentation and concatenated frames.
+    ///
+    /// HOW:
+    /// - Decode a large payload with bytewise through whole-frame chunks, then decode two concatenated frames.
+    /// - Compare reconstructed bytes with the original payloads.
     #[crate::rt_test]
     async fn zstd_decoder() {
         let data = random(300 * 1024);
@@ -806,6 +856,11 @@ mod tests {
         assert_eq!(out.unwrap(), b"hello world");
     }
 
+    /// STATEMENT: Zstd releases already-decoded block output without waiting for more compressed input.
+    ///
+    /// HOW:
+    /// - Find a complete-block boundary, provide only that prefix, and leave the input stream pending.
+    /// - Read bounded output under a timeout and compare all bytes available from the completed block.
     #[crate::rt_test]
     async fn zstd_decoder_drains_output_without_input() {
         use zstd::stream::raw::Operation;
@@ -852,6 +907,11 @@ mod tests {
         assert_eq!(decoded, data[..pos]);
     }
 
+    /// STATEMENT: Highly compressed Zstd input cannot produce unbounded output chunks.
+    ///
+    /// HOW:
+    /// - Decode a multi-megabyte zero payload from bytewise and whole-frame input.
+    /// - Check chunk bounds, contents, and total output length.
     #[crate::rt_test]
     async fn zstd_decoded_chunks_are_bounded() {
         let compressed = zstd::encode_all(&vec![0u8; BOMB_SIZE][..], 19).unwrap();
@@ -874,6 +934,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Zstd rejects incomplete, corrupt, and over-window-limit frames while accepting the maximum permitted window.
+    ///
+    /// HOW:
+    /// - Decode truncated, empty, corrupt, 16 MiB-window, and 8 MiB-window inputs.
+    /// - Verify errors for the invalid cases and correct data at the accepted limit.
     #[crate::rt_test]
     async fn zstd_decoder_errors() {
         let compressed = zstd::encode_all(&random(1024)[..], 0).unwrap();
@@ -928,6 +993,11 @@ mod tests {
         Ok(out)
     }
 
+    /// STATEMENT: Shared Zstd memory accounting limits large windows and makes released capacity reusable.
+    ///
+    /// HOW:
+    /// - Allocate two large decoders, reject a third, and verify small windows are uncharged.
+    /// - Drop a large decoder, retry allocation, and check all charges clear after final drops.
     #[test]
     fn zstd_decoder_memory_is_limited() {
         static MEMORY: ZstdMemory = ZstdMemory::new(20 * 1024 * 1024);
@@ -967,6 +1037,10 @@ mod tests {
         assert_eq!(MEMORY.used.load(Ordering::Acquire), 0);
     }
 
+    /// STATEMENT: Zstd releases the accounting charge when repeated small frames shrink an oversized window.
+    ///
+    /// HOW:
+    /// - Decode one large-window frame followed by many small-window frames and check both decoder and shared charges clear.
     #[test]
     fn zstd_decoder_memory_shrinks() {
         static MEMORY: ZstdMemory = ZstdMemory::new(20 * 1024 * 1024);
@@ -983,6 +1057,11 @@ mod tests {
         assert_eq!(MEMORY.used.load(Ordering::Acquire), 0);
     }
 
+    /// STATEMENT: A Zstd memory-budget failure ends decoding and releases its accounting charge.
+    ///
+    /// HOW:
+    /// - Decode a large-window frame with an insufficient shared budget.
+    /// - Verify one stream error, subsequent EOF, and zero remaining memory usage.
     #[crate::rt_test]
     async fn zstd_decoder_memory_error() {
         static MEMORY: ZstdMemory = ZstdMemory::new(1024 * 1024);
@@ -1004,6 +1083,11 @@ mod tests {
         assert_eq!(MEMORY.used.load(Ordering::Acquire), 0);
     }
 
+    /// STATEMENT: Blocking decode work is split according to its output budget.
+    ///
+    /// HOW:
+    /// - Decode large incompressible gzip and Zstd inputs and compare reconstructed bytes.
+    /// - Check offloaded-task counts fall within the expected output-budget range.
     #[crate::rt_test]
     async fn decoder_task_output() {
         for (encoding, limit) in [
@@ -1026,6 +1110,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A gzip stream missing its trailer reports an error rather than clean completion.
+    ///
+    /// HOW:
+    /// - Remove the last four compressed bytes, consume the decoder, and verify an error was emitted.
     #[crate::rt_test]
     async fn decoder_truncated_stream() {
         let mut e = GzEncoder::new(Vec::new(), Compression::fast());
@@ -1060,6 +1148,11 @@ mod tests {
         header
     }
 
+    /// STATEMENT: Gzip optional headers support fragmented input while validating CRC, magic, method, and reserved flags.
+    ///
+    /// HOW:
+    /// - Decode a member with all optional fields as a whole and bytewise.
+    /// - Corrupt each checked header component and verify decoding fails.
     #[crate::rt_test]
     async fn gzip_decoder_header() {
         let data = random(4096);
@@ -1080,6 +1173,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Gzip and deflate reject trailing data, checksum corruption, and truncated streams.
+    ///
+    /// HOW:
+    /// - Verify bytewise round trips, then mutate checksums, append bytes, and truncate at several boundaries.
+    /// - Check each malformed input reports an error.
     #[crate::rt_test]
     async fn flate_decoder_errors() {
         let data = random(4096);
@@ -1109,6 +1207,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Gzip and deflate decode correctly when completion coincides with a full output page.
+    ///
+    /// HOW:
+    /// - Decode payload sizes around the page boundary and compare full reconstructed data.
+    /// - Verify the sweep actually reaches a completed decoder with no remaining output capacity.
     #[test]
     fn flate_decoder_output_fills_pages() {
         // some sizes end the stream exactly at the end of a page, which holds

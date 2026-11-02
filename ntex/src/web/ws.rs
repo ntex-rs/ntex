@@ -272,6 +272,12 @@ mod tests {
     use crate::service::fn_service;
     use crate::ws::error::ProtocolError;
 
+    /// STATEMENT: WebSocket dispatch maps frames, controls, and stop reasons to responses and errors.
+    ///
+    /// HOW:
+    /// - Dispatch ping/text frames and backpressure control, checking service results and no-op handling.
+    /// - Assert stop reasons yield the expected close message, timeout, protocol, or disconnect outcome.
+    /// - Trigger decoder errors twice and assert the sink closes; dispatch close and await I/O closure.
     #[crate::rt_test]
     async fn dispatch_service() {
         let (client, server) = IoTest::create();

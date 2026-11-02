@@ -19,6 +19,11 @@ async fn ws_service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     Ok(Some(msg))
 }
 
+/// STATEMENT: A web WebSocket handler exchanges data frames and supplies its chosen close reason.
+///
+/// HOW:
+/// - Start `ws_service` through `ws::start` and verify text and binary echoes plus ping/pong.
+/// - Send a Normal close and assert the handler replies with Away.
 #[ntex::test]
 async fn web_ws() {
     let _ = env_logger::try_init();
@@ -62,6 +67,11 @@ async fn web_ws() {
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
 }
 
+/// STATEMENT: WebSocket clients report ordinary and error HTTP responses as invalid upgrade statuses.
+///
+/// HOW:
+/// - Connect to a normal OK web route and a route returning an I/O error.
+/// - Assert invalid-response-status variants for 200 and 500 and their exact display messages.
 #[ntex::test]
 async fn web_no_ws() {
     let srv = test::server(async |_| {
@@ -90,6 +100,11 @@ async fn web_no_ws() {
     );
 }
 
+/// STATEMENT: A WebSocket handshake does not inherit a recycled POST method from the request-head pool.
+///
+/// HOW:
+/// - Complete a POST so its `RequestHead` returns to the thread-local pool, then create a WebSocket client on the same thread.
+/// - Assert the POST is OK, negotiation succeeds, and a text message echoes correctly.
 #[ntex::test]
 async fn web_ws_after_pooled_post_request() {
     let srv = test::server(async |_| {
@@ -116,6 +131,11 @@ async fn web_ws_after_pooled_post_request() {
     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 }
 
+/// STATEMENT: An unhandled upgrade request still delivers a normal web response body.
+///
+/// HOW:
+/// - Send GET with upgrade connection tokens to a route returning `Hello world`.
+/// - Assert a successful response and the complete ordinary body.
 #[ntex::test]
 async fn web_no_ws_2() {
     let srv = test::server(async |_| {
@@ -138,6 +158,11 @@ async fn web_no_ws_2() {
     assert_eq!(body, b"Hello world");
 }
 
+/// STATEMENT: WebSocket sink and receiver APIs exchange messages and observe closing-handshake completion.
+///
+/// HOW:
+/// - Assert switching protocols, then verify text/binary echoes and ping/pong through the sink and receiver.
+/// - Send Normal close, assert an Away reply, await disconnect, and assert receiver EOF.
 #[ntex::test]
 async fn web_ws_client() {
     let srv = test::server(async |_| {
@@ -181,6 +206,11 @@ async fn web_ws_client() {
     assert!(rx.recv().await.is_none());
 }
 
+/// STATEMENT: A client service stops within its close timeout when the server does not answer a close.
+///
+/// HOW:
+/// - Use a server service that echoes text but ignores close messages and configure a 50 ms client close timeout.
+/// - Send text, run a client service that responds with close, and assert its start future completes within 500 ms.
 #[ntex::test]
 async fn web_ws_service_close_timeout() {
     use ntex::io::DispatchItem;
@@ -236,6 +266,11 @@ async fn web_ws_service_close_timeout() {
     assert!(result.is_ok());
 }
 
+/// STATEMENT: A requested supported WebSocket subprotocol is returned by the handshake.
+///
+/// HOW:
+/// - Have the web handler select the first supported offered protocol and request `my-subprotocol`.
+/// - Assert switching protocols and `SEC_WEBSOCKET_PROTOCOL` equal to the selected protocol.
 #[ntex::test]
 async fn web_ws_subprotocol() {
     use ntex::{time::Seconds, ws::WsClient};
@@ -275,6 +310,11 @@ async fn web_ws_subprotocol() {
     );
 }
 
+/// STATEMENT: A web handler cannot select a WebSocket subprotocol the client did not request.
+///
+/// HOW:
+/// - Offer `chat` while the handler calls `ws::start` with `other`.
+/// - Assert the client sees HTTP 400 and the handler reports `HandshakeError::BadWebsocketProtocol`.
 #[ntex::test]
 async fn web_ws_rejects_unrequested_subprotocol() {
     use std::sync::mpsc;
@@ -314,6 +354,11 @@ async fn web_ws_rejects_unrequested_subprotocol() {
     assert!(rx.recv().unwrap());
 }
 
+/// STATEMENT: An unsupported WebSocket version receives a bad-request response advertising version 13.
+///
+/// HOW:
+/// - Send an upgrade request with WebSocket version `8` to a route using `ws::start`.
+/// - Assert HTTP 400 and a `sec-websocket-version` response header of `13`.
 #[ntex::test]
 async fn web_ws_handshake_error_response() {
     let srv = test::server(async |_| {
@@ -338,6 +383,11 @@ async fn web_ws_handshake_error_response() {
     );
 }
 
+/// STATEMENT: A WebSocket URL's authority, including its nondefault port, becomes the `Host` header.
+///
+/// HOW:
+/// - Connect using an `example.test` URL while directing the socket to the local test server.
+/// - Assert switching protocols and the handler's captured `HOST` equals the full URL authority.
 #[ntex::test]
 async fn web_ws_host_includes_port() {
     use std::sync::mpsc;
@@ -376,6 +426,11 @@ async fn web_ws_host_includes_port() {
     assert_eq!(rx.recv().unwrap(), authority);
 }
 
+/// STATEMENT: A WebSocket handshake succeeds without a subprotocol when no offered protocol is supported.
+///
+/// HOW:
+/// - Offer `my-subprotocol` while the handler searches only for an unsupported value.
+/// - Assert switching protocols and no `SEC_WEBSOCKET_PROTOCOL` response header.
 #[ntex::test]
 async fn web_ws_subprotocol_none() {
     use ntex::{time::Seconds, ws::WsClient};
@@ -414,6 +469,11 @@ async fn web_ws_subprotocol_none() {
     );
 }
 
+/// STATEMENT: WebSocket subprotocol parsing lets the handler select by its own priority.
+///
+/// HOW:
+/// - Offer `proto1` and `proto2`; collect `ws::subprotocols` and prefer `proto2` in the handler.
+/// - Assert switching protocols and a `proto2` response protocol header.
 #[ntex::test]
 async fn web_ws_protocols_parsing() {
     use ntex::service::cfg::SharedCfg;
@@ -464,6 +524,11 @@ async fn web_ws_protocols_parsing() {
     );
 }
 
+/// STATEMENT: Closing a web WebSocket connection invokes the underlying service shutdown hook.
+///
+/// HOW:
+/// - Attach a shutdown notification to `ws_service` and verify a text echo.
+/// - Send Normal close, assert the Away reply, and require the shutdown notification within one second.
 #[ntex::test]
 async fn web_ws_shutdown_propagation() {
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
@@ -508,6 +573,11 @@ async fn web_ws_shutdown_propagation() {
         .expect("Service shutdown was not called");
 }
 
+/// STATEMENT: The service-provided WebSocket sink rejects sends after the service has sent a close.
+///
+/// HOW:
+/// - Have the service return `Close(None)` for `close` and verify the peer receives it.
+/// - Send another text frame to trigger a sink send and assert that send fails.
 #[ntex::test]
 async fn web_ws_sink_shares_close_state() {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -555,6 +625,11 @@ async fn web_ws_sink_shares_close_state() {
     );
 }
 
+/// STATEMENT: A web WebSocket protocol error emits a Protocol close and propagates an error from `ws::start`.
+///
+/// HOW:
+/// - Send a raw masked frame with a reserved opcode after negotiation.
+/// - Assert the peer receives a Protocol close and the handler reports `WsError::Protocol`.
 #[ntex::test]
 async fn web_ws_protocol_error_sends_close() {
     let (tx, rx) = std::sync::mpsc::channel();

@@ -657,6 +657,11 @@ mod tests {
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, App, HttpRequest, HttpResponse, WebRequest, guard};
 
+    /// STATEMENT: Scopes match complete resource paths and can enable case-insensitive child routing.
+    ///
+    /// HOW:
+    /// - Register normal and case-insensitive scopes serving `/path1`.
+    /// - Assert exact paths succeed, `/path10` misses, and `/Path1` succeeds in the latter scope.
     #[crate::rt_test]
     async fn test_scope() {
         let srv = init_service(
@@ -690,6 +695,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Empty and slash resources distinguish the two forms of a scope root.
+    ///
+    /// HOW:
+    /// - Register separate handlers for `""` and `/` under `/app`.
+    /// - Assert `/app` returns OK and `/app/` returns `CREATED`.
     #[crate::rt_test]
     async fn test_scope_root() {
         let srv = init_service(
@@ -710,6 +720,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
+    /// STATEMENT: Every prefix in a multi-pattern scope preserves empty-versus-slash root matching.
+    ///
+    /// HOW:
+    /// - Register empty and slash resources under both `/app` and `/app2`.
+    /// - Assert roots without slashes return OK and roots with slashes return `CREATED`.
     #[crate::rt_test]
     async fn test_scope_root_multi() {
         let srv = init_service(
@@ -734,6 +749,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: An empty resource under a slash-terminated scope requires the trailing slash.
+    ///
+    /// HOW:
+    /// - Mount an empty resource under `/app/`.
+    /// - Assert `/app` returns 404 and `/app/` returns OK.
     #[crate::rt_test]
     async fn test_scope_root2() {
         let srv = init_service(App::new().service(
@@ -750,6 +770,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Slash-terminated multi-pattern scopes require slashes for their empty resource.
+    ///
+    /// HOW:
+    /// - Mount an empty resource under `/app/` and `/app2/`.
+    /// - Assert both unsuffixed roots return 404 and both slash-suffixed roots return OK.
     #[crate::rt_test]
     async fn test_scope_root2_multi() {
         let srv = init_service(
@@ -773,6 +798,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A slash resource under a slash-terminated scope matches its single-slash root.
+    ///
+    /// HOW:
+    /// - Register `/` within `/app/`.
+    /// - Assert `/app` returns 404 while `/app/` returns OK.
     #[crate::rt_test]
     async fn test_scope_root3() {
         let srv = init_service(App::new().service(
@@ -789,6 +819,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Direct scope routes dispatch matching methods and leave unmatched methods unhandled.
+    ///
+    /// HOW:
+    /// - Register GET and DELETE at `/path1` under the slashless prefix `app`.
+    /// - Assert GET and DELETE return OK while POST returns 404 at `/app/path1`.
     #[crate::rt_test]
     async fn test_scope_route() {
         let srv = init_service(
@@ -813,6 +848,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Direct routes work identically across every prefix of a multi-pattern scope.
+    ///
+    /// HOW:
+    /// - Register GET and DELETE routes under `app` and `app2`.
+    /// - Request both prefixes with GET, DELETE, and POST and assert OK, OK, and 404.
     #[crate::rt_test]
     async fn test_scope_route_multi() {
         let srv = init_service(
@@ -843,6 +883,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Scope and resource patterns without leading slashes compose into a normal path.
+    ///
+    /// HOW:
+    /// - Register resource `path1` under scope `app` with GET and DELETE handlers.
+    /// - Assert `/app/path1` returns OK for those methods and 405 for POST.
     #[crate::rt_test]
     async fn test_scope_route_without_leading_slash() {
         let srv = init_service(
@@ -873,6 +918,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
+    /// STATEMENT: Scope guards select matching scopes and allow other resources to handle misses.
+    ///
+    /// HOW:
+    /// - Register GET- and POST-guarded scopes sharing `/app`, followed by an unguarded resource.
+    /// - Assert POST returns 304, GET returns OK, and DELETE reaches the fallback resource's 204.
     #[crate::rt_test]
     async fn test_scope_guard() {
         let srv = init_service(
@@ -910,6 +960,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
+    /// STATEMENT: A variable embedded in a scope segment is available to its child handler.
+    ///
+    /// HOW:
+    /// - Serve `/path1` under `/ab-{project}` and request a matching project path.
+    /// - Assert OK and the project text when the body is bytes; assert a different prefix returns 404.
     #[crate::rt_test]
     async fn test_scope_variable_segment() {
         let srv = init_service(App::new().service(web::scope("/ab-{project}").service(
@@ -933,6 +988,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// STATEMENT: Variable scope roots support empty and slash resource patterns.
+    ///
+    /// HOW:
+    /// - Register both root patterns under `/ab-{project}` and request both root spellings.
+    /// - Assert OK and captured project text for byte bodies, then assert a mismatched prefix returns 404.
     #[crate::rt_test]
     async fn test_scope_variable_segment2() {
         let srv = init_service(App::new().service(web::scope("/ab-{project}").service(
@@ -965,6 +1025,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// STATEMENT: Nested scopes compose their prefixes with child resource paths.
+    ///
+    /// HOW:
+    /// - Nest `/t1` under `/app` and register a `/path1` handler returning `Created`.
+    /// - Request `/app/t1/path1` and assert status 201.
     #[crate::rt_test]
     async fn test_nested_scope() {
         let srv = init_service(App::new().service(web::scope("/app").service(
@@ -977,6 +1042,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
+    /// STATEMENT: A nested scope without a leading slash still composes with its parent prefix.
+    ///
+    /// HOW:
+    /// - Nest `t1` under `/app` and register `/path1`.
+    /// - Request `/app/t1/path1` and assert the handler's `CREATED` response.
     #[crate::rt_test]
     async fn test_nested_scope_no_slash() {
         let srv = init_service(App::new().service(web::scope("/app").service(
@@ -989,6 +1059,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
+    /// STATEMENT: Nested scopes preserve the distinction between empty and slash root resources.
+    ///
+    /// HOW:
+    /// - Register distinct empty and slash handlers under `/app/t1`.
+    /// - Assert `/app/t1` returns OK and `/app/t1/` returns `CREATED`.
     #[crate::rt_test]
     async fn test_nested_scope_root() {
         let srv = init_service(
@@ -1011,6 +1086,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
+    /// STATEMENT: Method guards on nested scopes reject nonmatching requests before child routing.
+    ///
+    /// HOW:
+    /// - Guard `/app/t1` with `Get` and register `/path1`.
+    /// - Assert POST returns 404 and GET reaches the child handler with OK.
     #[crate::rt_test]
     async fn test_nested_scope_filter() {
         let srv = init_service(
@@ -1037,6 +1117,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: A nested variable scope exposes its captured segment to the child handler.
+    ///
+    /// HOW:
+    /// - Register `/app/{project_id}/path1` and return the captured project ID.
+    /// - Assert status 201 and, for a byte body, the expected `project_1` text.
     #[crate::rt_test]
     async fn test_nested_scope_with_variable_segment() {
         let srv = init_service(App::new().service(web::scope("/app").service(
@@ -1059,6 +1144,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Multiple nested variable scopes retain all captures and still enforce child paths.
+    ///
+    /// HOW:
+    /// - Serve `/path1` under `/app/{project}/{id}` and return both captures.
+    /// - Assert 201 and expected byte-body text for `/app/test/1/path1`, and 404 for `/path2`.
     #[crate::rt_test]
     async fn test_nested2_scope_with_variable_segment() {
         let srv = init_service(App::new().service(web::scope("/app").service(
@@ -1088,6 +1178,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// STATEMENT: A scope default service handles only requests inside its prefix.
+    ///
+    /// HOW:
+    /// - Register a default service returning `BadRequest` inside `/app`.
+    /// - Assert an unknown scoped path returns 400 and the same unscoped path returns 404.
     #[crate::rt_test]
     async fn test_default_resource() {
         let srv = init_service(
@@ -1110,6 +1205,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// STATEMENT: Scope filters run before their matching child route.
+    ///
+    /// HOW:
+    /// - Install a flag-setting filter under `app` and register `/test`.
+    /// - Request `/app/test` and assert OK and that the filter flag was set.
     #[crate::rt_test]
     async fn test_filter() {
         let filter = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -1131,6 +1231,11 @@ mod tests {
         assert!(filter.get());
     }
 
+    /// STATEMENT: Scope middleware applies default headers to child-resource responses.
+    ///
+    /// HOW:
+    /// - Add `DefaultHeaders` with content type `0001` to a scope serving `/test`.
+    /// - Request `/app/test` and assert OK and the configured header value.
     #[crate::rt_test]
     async fn test_middleware() {
         let srv = init_service(
@@ -1156,6 +1261,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Nested `configure` calls register routes under their enclosing scope prefixes.
+    ///
+    /// HOW:
+    /// - Configure `/app`, then configure `/v1` within it and register `/`.
+    /// - Request `/app/v1/` and assert OK.
     #[crate::rt_test]
     async fn test_scope_config_2() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
@@ -1170,6 +1280,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: External resources configured inside nested scopes retain their external origin.
+    ///
+    /// HOW:
+    /// - Register a YouTube template in `/app/v1` and return its generated URL from the root handler.
+    /// - Assert OK and the exact external URL without either scope prefix.
     #[crate::rt_test]
     async fn test_url_for_external() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
@@ -1197,6 +1312,11 @@ mod tests {
         assert_eq!(body, &b"https://youtube.com/watch/xxxxxx"[..]);
     }
 
+    /// STATEMENT: Named nested resources generate URLs including every enclosing scope prefix.
+    ///
+    /// HOW:
+    /// - Name `/a/b/c/{stuff}` as `c` and generate its URL with a replacement value.
+    /// - Request the handler and assert OK and the full `/a/b/c/12345` absolute URL body.
     #[crate::rt_test]
     async fn test_url_for_nested() {
         let srv = init_service(App::new().service(web::scope("/a").service(
@@ -1218,6 +1338,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Nested handlers resolve parent, external, and sibling resource names correctly.
+    ///
+    /// HOW:
+    /// - Register root and sibling resources plus an external URL and expose them from two nesting levels.
+    /// - Request `/a/` and `/a/b/` and assert OK and identical correctly prefixed URL bodies.
     #[crate::rt_test]
     async fn test_url_for_parent() {
         async fn urls(req: HttpRequest) -> HttpResponse {
@@ -1265,6 +1390,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A scope containing only a default service still limits handling to its own prefix.
+    ///
+    /// HOW:
+    /// - Mount a `Created` default service under `/app` without registering child resources.
+    /// - Assert `/app/path` returns 201 and `/other` returns 404.
     #[crate::rt_test]
     async fn test_scope_default_service_only() {
         let srv = init_service(App::new().service(web::scope("/app").default_service(

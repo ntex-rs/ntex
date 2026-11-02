@@ -370,6 +370,11 @@ pub(crate) mod tests {
         responder
     }
 
+    /// STATEMENT: `Either` responders render the selected branch's response type.
+    ///
+    /// HOW:
+    /// - Return a bad-request builder for an empty query and a string for a nonempty query.
+    /// - Request both variants and assert 400 and OK, respectively.
     #[crate::rt_test]
     async fn test_either_responder() {
         let srv = init_service(web::App::new().service(web::resource("/index.html").to(
@@ -392,6 +397,11 @@ pub(crate) mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Optional responders map `None` to not found and render the value in `Some`.
+    ///
+    /// HOW:
+    /// - Register handlers returning `None` and `Some("some")`.
+    /// - Assert 404 for the former and OK with the exact byte body for the latter.
     #[crate::rt_test]
     async fn test_option_responder() {
         let srv = init_service(
@@ -416,6 +426,12 @@ pub(crate) mod tests {
         }
     }
 
+    /// STATEMENT: Text and binary responders preserve bytes and select their corresponding content type.
+    ///
+    /// HOW:
+    /// - Render string, borrowed string, byte slice, `Bytes`, and `BytesMut` values.
+    /// - Assert OK, unchanged bytes, and textual or octet-stream content types as appropriate.
+    /// - Render an `InternalError` and assert its explicit bad-request status.
     #[crate::rt_test]
     async fn test_responder() {
         let req = TestRequest::default().to_http_request();
@@ -479,6 +495,11 @@ pub(crate) mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: Result responders render successful values and delegate failures to error rendering.
+    ///
+    /// HOW:
+    /// - Render an OK string result and assert OK, its bytes, and the text content type.
+    /// - Render an `InternalError` result and assert `BAD_REQUEST`.
     #[crate::rt_test]
     async fn test_result_responder() {
         let req = TestRequest::default().to_http_request();
@@ -506,6 +527,11 @@ pub(crate) mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: Responder customization overrides status or headers without changing body bytes.
+    ///
+    /// HOW:
+    /// - Apply `with_status` to a string responder and assert 400 with the original body.
+    /// - Apply `with_header` and assert OK, the original body, and the replacement content type.
     #[crate::rt_test]
     async fn test_custom_responder() {
         let req = TestRequest::default().to_http_request();
@@ -529,6 +555,12 @@ pub(crate) mod tests {
         );
     }
 
+    /// STATEMENT: Custom headers append together, replace original values, and reject invalid syntax.
+    ///
+    /// HOW:
+    /// - Add two `x-test` values and assert their order, then replace multiple original content types.
+    /// - Supply an invalid name and a newline-containing value and assert 500 responses.
+    /// - Assert the invalid value is absent even when a successful status override was requested.
     #[crate::rt_test]
     async fn test_custom_responder_headers() {
         let req = TestRequest::default().to_http_request();
@@ -572,6 +604,11 @@ pub(crate) mod tests {
         assert!(res.headers().get("x-test").is_none());
     }
 
+    /// STATEMENT: Tuple responders apply their status and support additional header customization.
+    ///
+    /// HOW:
+    /// - Render a string/status tuple and assert the chosen status and original bytes.
+    /// - Wrap an OK tuple in `CustomResponder`, override content type, and assert status, body, and header.
     #[crate::rt_test]
     async fn test_tuple_responder_with_status_code() {
         let req = TestRequest::default().to_http_request();

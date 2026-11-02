@@ -312,6 +312,10 @@ mod tests {
     use super::*;
     use ntex_http::Error as HttpError;
 
+    /// STATEMENT: Invalid HTTP metadata errors produce internal-server-error responses.
+    ///
+    /// HOW:
+    /// - Convert an invalid status-code error to an error response and inspect its status.
     #[test]
     fn test_into_response() {
         let err: HttpError = StatusCode::from_u16(10000).err().unwrap().into();
@@ -319,6 +323,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    /// STATEMENT: Converting an ordinary I/O error produces an internal-server-error response.
+    ///
+    /// HOW:
+    /// - Convert an `Other` I/O error into a response and compare its status.
     #[test]
     fn test_error_http_response() {
         let orig = io::Error::other("other");
@@ -326,6 +334,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    /// STATEMENT: Payload error formatting retains underlying failures and identifies cancellation and incomplete EOF.
+    ///
+    /// HOW:
+    /// - Convert direct and blocking I/O failures and cancellation, then inspect their messages and incomplete-EOF text.
     #[test]
     fn test_payload_error() {
         let err: PayloadError = io::Error::other("DecodeError").into();
@@ -355,6 +367,10 @@ mod tests {
         };
     }
 
+    /// STATEMENT: Both HTTP parser implementations map equivalent failures to the same decode-error categories.
+    ///
+    /// HOW:
+    /// - Convert header, status, token, size, and version failures from both parsers and inspect variants and display text.
     #[test]
     fn test_from() {
         from!(httparse::Error::HeaderName => DecodeError::Header);
@@ -375,6 +391,10 @@ mod tests {
         from!(ntex_httparse::Error::Version => DecodeError::Version);
     }
 
+    /// STATEMENT: URL and UTF-8 conversion failures retain distinct decode-error classifications.
+    ///
+    /// HOW:
+    /// - Produce each source error and verify conversion yields the URI and UTF-8 variants respectively.
     #[test]
     fn test_decode_error_from() {
         let err = "".parse::<urly::Url>().unwrap_err();
@@ -383,6 +403,10 @@ mod tests {
         assert!(matches!(DecodeError::from(err), DecodeError::Utf8));
     }
 
+    /// STATEMENT: Cloned payload errors retain their display information across all exercised variants.
+    ///
+    /// HOW:
+    /// - Clone incomplete, encoding, size, HTTP/2, decode, and I/O failures and compare formatted messages.
     #[test]
     fn test_payload_error_clone() {
         let errs = [
@@ -400,6 +424,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Payload conversion preserves either-side errors and classifies runtime cancellation as interrupted I/O.
+    ///
+    /// HOW:
+    /// - Convert payload/I/O alternatives and runtime join/blocking failures, then inspect variants, message, and error kinds.
     #[test]
     fn test_payload_error_conversions() {
         let err = PayloadError::from(Either::<PayloadError, io::Error>::Left(
@@ -421,6 +449,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Excessive empty HTTP/2 data frames have a stable diagnostic category and descriptive error.
+    ///
+    /// HOW:
+    /// - Construct the empty-frame error and compare its diagnostic signature and display text.
     #[test]
     fn test_h2_error() {
         use crate::error::ErrorDiagnostic;

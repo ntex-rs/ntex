@@ -631,6 +631,10 @@ mod tests {
     use crate::service::cfg::SharedCfg;
     use crate::testing::IoTest;
 
+    /// STATEMENT: Request transport access can be taken once while previously obtained references remain valid.
+    ///
+    /// HOW:
+    /// - Obtain a reference, take and drop the transport, then check the reference tag and rejected subsequent accesses.
     #[crate::rt_test]
     async fn request_io_access_is_one_shot() {
         let (_, server) = IoTest::create();
@@ -660,6 +664,10 @@ mod tests {
         Io::new(server, cfg)
     }
 
+    /// STATEMENT: Control debug output distinguishes requests, expectations, and disconnect reasons.
+    ///
+    /// HOW:
+    /// - Format request, expectation, keepalive, and error controls and inspect their variant labels.
     #[test]
     fn debug_fmt() {
         let s = format!("{:?}", Ctl::request(Request::new()));
@@ -672,6 +680,10 @@ mod tests {
         assert!(s.contains("Control::Disconnect(Error("), "{s}");
     }
 
+    /// STATEMENT: Transport-bearing control messages have distinct connect and upgrade debug representations.
+    ///
+    /// HOW:
+    /// - Construct both message kinds with test transports and inspect their formatted output.
     #[crate::rt_test]
     async fn debug_fmt_io() {
         let s = format!("{:?}", Ctl::connect(1, io()));
@@ -683,6 +695,10 @@ mod tests {
         assert!(s.starts_with("Control::Upgrade(Upgrade"), "{s}");
     }
 
+    /// STATEMENT: Connection controls expose their ID and transport before acknowledging connection acceptance.
+    ///
+    /// HOW:
+    /// - Inspect mutable and shared transport access, then verify acknowledgment produces a connect result.
     #[crate::rt_test]
     async fn connection() {
         let Control::Connect(mut msg) = Ctl::connect(7, io()) else {
@@ -694,6 +710,11 @@ mod tests {
         assert!(matches!(msg.ack().result, ControlResult::Connect(_)));
     }
 
+    /// STATEMENT: New-request controls allow mutation and either publication or an error response.
+    ///
+    /// HOW:
+    /// - Change a request method and acknowledge publication, then fail another with a slow-request timeout.
+    /// - Verify the failure response has request-timeout status.
     #[test]
     fn new_request() {
         let Control::Request(mut msg) = Ctl::request(Request::new()) else {
@@ -718,6 +739,10 @@ mod tests {
         assert_eq!(res.status(), crate::http::StatusCode::REQUEST_TIMEOUT);
     }
 
+    /// STATEMENT: Expectation controls retain request mutations and acknowledge continuation.
+    ///
+    /// HOW:
+    /// - Change the request method, inspect it through shared access, and check the continuation result.
     #[test]
     fn expect() {
         let Control::Expect(mut msg) = Ctl::expect(Request::new()) else {
@@ -731,6 +756,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Disconnect controls preserve reason-specific details and produce the appropriate stop or error acknowledgment.
+    ///
+    /// HOW:
+    /// - Exercise service, keepalive, mutable error, protocol-error, and peer-gone controls.
+    /// - Inspect their details and acknowledgment variants, including an internal-server-error response.
     #[test]
     fn disconnect_reasons() {
         let Control::Disconnect(Reason::Service(msg)) =

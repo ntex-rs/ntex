@@ -369,6 +369,11 @@ mod tests {
     use crate::web::test::{TestRequest, init_service};
     use crate::web::{self, App, DefaultError, HttpResponse, guard};
 
+    /// STATEMENT: Raw web services handle matching paths and allow guards to reject requests.
+    ///
+    /// HOW:
+    /// - Register a named raw service and assert `/test` returns OK.
+    /// - Add a GET guard and assert a PUT request returns 404.
     #[crate::rt_test]
     async fn test_service() {
         let srv = init_service(App::new().service(web::service("/test").name("test").build(
@@ -396,6 +401,12 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// STATEMENT: Service method restrictions return 405 with deduplicated `Allow` values only on path hits.
+    ///
+    /// HOW:
+    /// - Exercise restricted and unrestricted services at root and scoped prefixes with several methods.
+    /// - Assert unsupported restricted methods return 405 and `Allow: GET, POST`; others return OK without it.
+    /// - Assert missing paths remain 404.
     #[crate::rt_test]
     async fn test_service_methods() {
         for (prefix, restricted) in [("", false), ("", true), ("/app", false), ("/app", true)] {
@@ -461,6 +472,12 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Service guards select the service before its method restrictions are applied.
+    ///
+    /// HOW:
+    /// - Register a header-guarded GET service before an unrestricted service at the same path.
+    /// - Send PUT without and with the header and assert 201 versus 405 with `Allow: GET`.
+    /// - Assert a missing path reaches the application's 202 default service.
     #[crate::rt_test]
     async fn test_service_methods_and_guards() {
         let srv = init_service(
@@ -509,6 +526,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
     }
 
+    /// STATEMENT: Arrays, tuples, and vectors register every contained web service.
+    ///
+    /// HOW:
+    /// - Initialize separate applications with two resources registered through each collection type.
+    /// - Request both paths in each application and assert OK.
     #[crate::rt_test]
     async fn test_multi() {
         let srv = init_service(App::new().service([
@@ -548,6 +570,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Web request and response debug output includes identifying metadata and headers.
+    ///
+    /// HOW:
+    /// - Format a request carrying a query and `x-test` header and assert all appear with its type name.
+    /// - Format a response carrying `x-test` and assert its type name and header appear.
     #[test]
     fn test_fmt_debug() {
         let req = TestRequest::get()
@@ -569,6 +596,11 @@ mod tests {
         assert!(s.contains("x-test"));
     }
 
+    /// STATEMENT: An empty raw-service path matches only the exact root of its enclosing scope.
+    ///
+    /// HOW:
+    /// - Mount an empty service under `/app`.
+    /// - Assert `/app` returns OK and `/app/` returns 404.
     #[crate::rt_test]
     async fn test_service_empty_path_in_scope() {
         let srv = init_service(App::new().service(web::scope("/app").service(

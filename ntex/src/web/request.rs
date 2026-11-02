@@ -333,6 +333,12 @@ mod tests {
     use crate::http::{self, HttpMessage, header};
     use crate::web::{HttpResponse, test::TestRequest};
 
+    /// STATEMENT: `WebRequest` exposes mutable message data and redacts authorization in debug output.
+    ///
+    /// HOW:
+    /// - Check the default version and absent peer, then render an overflow error as status 413.
+    /// - Mutate headers and extensions through both accessor families and assert shared changes.
+    /// - Format the request and assert its authorization header is redacted.
     #[test]
     fn test_request() {
         let mut req = TestRequest::default().to_srv_request();
@@ -365,6 +371,12 @@ mod tests {
         assert!(t.contains("\"authorization\": <REDACTED>"));
     }
 
+    /// STATEMENT: Request reconstruction preserves paths and state and transfers payload ownership.
+    ///
+    /// HOW:
+    /// - Reconstruct `/path` and assert its path, absent I/O, missing resource, and empty payload.
+    /// - Take a nonempty payload, verify its source is drained, and install it on another request.
+    /// - Build from parts with numeric state and assert that state is retained.
     #[test]
     fn test_request_parts() {
         use crate::web::{WebRequest, types::Payload};
@@ -392,6 +404,11 @@ mod tests {
         assert_eq!(*wreq.st(), 10);
     }
 
+    /// STATEMENT: Debug output includes route parameters for both web and HTTP requests.
+    ///
+    /// HOW:
+    /// - Build each request kind with an `id` parameter and format it with `Debug`.
+    /// - Assert both include a parameters section and the web request includes the parameter name.
     #[test]
     fn test_request_debug_params() {
         let req = TestRequest::with_uri("/test")

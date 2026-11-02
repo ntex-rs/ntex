@@ -91,6 +91,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Secure schemes require the TLS pool while plain schemes use the TCP pool.
+    ///
+    /// HOW:
+    /// - Reject HTTPS/WSS without a secure connector and verify TCP is not called.
+    /// - Install both pools, route WS/WSS requests, and check connector invocation counts and shutdown.
     #[crate::rt_test]
     async fn scheme_routing() {
         let cfg = SharedCfg::new("C").add(ClientConfig::new()).build();

@@ -1439,6 +1439,11 @@ mod tests {
         assert_eq!(service.calls.get(), 0);
     }
 
+    /// STATEMENT: Resuming payload timing preserves an exhausted cumulative budget and its final shortened period.
+    ///
+    /// HOW:
+    /// - Consume a 15-second budget in 10- and 5-second periods, pause, and resume through decoded data.
+    /// - Verify remaining budget stays zero and the resumed timer retains the final five-second period.
     #[crate::rt_test]
     async fn test_payload_timer_resume_preserves_maximum() {
         let (_client, server) = IoTest::create();
@@ -1477,7 +1482,11 @@ mod tests {
         assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
     }
 
-    /// A sent disconnect absorbs pending and later disconnect reasons.
+    /// STATEMENT: Acknowledged disconnect state absorbs later disconnect reasons.
+    ///
+    /// HOW:
+    /// - Set a pending reason, acknowledge peer loss without a control service, and attempt to replace the reason.
+    /// - Verify sent state persists and subsequent checks stop dispatch.
     #[crate::rt_test]
     async fn test_disconnect_state() {
         let (_client, server) = IoTest::create();
@@ -1538,8 +1547,11 @@ mod tests {
         (h1, rx)
     }
 
-    /// A detached payload reader is woken with an error when the dispatcher
-    /// is dropped before the payload is complete.
+    /// STATEMENT: Dropping a dispatcher wakes detached readers with an incomplete-payload error.
+    ///
+    /// HOW:
+    /// - Return a response while a detached task reads an unfinished request body.
+    /// - Drop the dispatcher and verify the reader completes with the expected incomplete error.
     #[crate::rt_test]
     async fn test_dropped_dispatcher_fails_detached_payload() {
         let (client, server) = IoTest::create();
@@ -1586,7 +1598,11 @@ mod tests {
         );
     }
 
-    /// Resuming without budget left decodes the buffered payload first.
+    /// STATEMENT: Exhausted payload timing still decodes buffered bytes before deciding completion or timeout.
+    ///
+    /// HOW:
+    /// - Resume with a fully buffered body and verify data plus clean EOF.
+    /// - Repeat with only part buffered and verify those bytes precede a slow-payload error.
     #[crate::rt_test]
     async fn test_exhausted_payload_budget_decodes_buffered_data() {
         let (client, server) = IoTest::create();
@@ -1622,7 +1638,10 @@ mod tests {
         assert!(stream_recv(&mut rx).await.unwrap().is_err());
     }
 
-    /// Resuming continues the interrupted period instead of starting a new one.
+    /// STATEMENT: Resuming a paused payload continues its interrupted period without spending a fresh budget.
+    ///
+    /// HOW:
+    /// - Resume a partial body with saved period/budget values and inspect payload state and timer duration.
     #[crate::rt_test]
     async fn test_payload_resume_continues_period() {
         let (client, server) = IoTest::create();
@@ -1640,7 +1659,11 @@ mod tests {
         assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(2));
     }
 
-    /// A period that expired before pausing is checked on resume.
+    /// STATEMENT: Payload resume evaluates an already-expired period against observed read progress.
+    ///
+    /// HOW:
+    /// - Resume identical partial data under insufficient and sufficient byte-rate thresholds.
+    /// - Check timeout with delivered data or a new period with decremented remaining budget.
     #[crate::rt_test]
     async fn test_payload_resume_checks_expired_period() {
         let (client, server) = IoTest::create();
@@ -1676,6 +1699,11 @@ mod tests {
         assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(3));
     }
 
+    /// STATEMENT: A stale header timeout cannot abort a request whose head has completed.
+    ///
+    /// HOW:
+    /// - Queue a timeout alongside a completed head, then supply the body.
+    /// - Drive dispatch to completion and verify a successful response.
     #[crate::rt_test]
     async fn test_header_timeout_does_not_leak_into_payload() {
         let (client, server) = IoTest::create();
@@ -1713,6 +1741,11 @@ mod tests {
         assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
     }
 
+    /// STATEMENT: A stale payload timeout does not close a connection entering keepalive.
+    ///
+    /// HOW:
+    /// - Complete a body alongside a timeout notification and verify active keepalive state and a successful response.
+    /// - Close the peer and check the final reason is peer loss rather than timeout.
     #[crate::rt_test]
     async fn test_payload_timeout_does_not_leak_into_keepalive() {
         let (client, server) = IoTest::create();
@@ -1760,8 +1793,10 @@ mod tests {
         assert_eq!(h1.inner.io.close_reason(), Some(nio::CloseReason::PeerGone));
     }
 
-    /// An expired keep-alive timer closes the connection with the keep-alive
-    /// close reason.
+    /// STATEMENT: Keepalive expiry terminates an idle connection with the keepalive close reason.
+    ///
+    /// HOW:
+    /// - Complete a request, verify keepalive state, inject timer expiry, and inspect dispatch completion and close reason.
     #[crate::rt_test]
     async fn test_keepalive_close_reason() {
         let (client, server) = IoTest::create();
@@ -1794,6 +1829,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Newly buffered request bytes take precedence over a simultaneous keepalive timeout.
+    ///
+    /// HOW:
+    /// - Enter keepalive, buffer a partial next head, and inject expiry.
+    /// - Verify header timing/progress, finish the request, and observe a successful response.
     #[crate::rt_test]
     async fn test_partial_next_request_wins_keepalive_timeout() {
         let (client, server) = IoTest::create();
@@ -1845,8 +1885,11 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
-    /// Bytes of a partial request head consumed by a decode attempt that ends
-    /// with write backpressure count towards the headers read rate.
+    /// STATEMENT: Head bytes decoded during write backpressure remain counted in header-rate progress.
+    ///
+    /// HOW:
+    /// - Pipeline a partial next head behind a response that saturates the write buffer.
+    /// - Drain writes, verify exact consumed-header progress, and complete the next request successfully.
     #[crate::rt_test]
     async fn test_headers_rate_counts_bytes_decoded_during_write_backpressure() {
         let (client, server) = IoTest::create();
@@ -1922,8 +1965,11 @@ mod tests {
         )
     }
 
-    /// Expiry of the keep-alive timer left armed while a request is processed
-    /// does not close the connection.
+    /// STATEMENT: A cached keepalive deadline expiring during application work does not close the busy connection.
+    ///
+    /// HOW:
+    /// - Follow a completed request with a handler slower than the keepalive period.
+    /// - Verify its response, active connection, renewed keepalive state, and another successful request.
     #[crate::rt_test]
     async fn test_idle_keepalive_expiry_is_ignored() {
         let (client, server) = IoTest::create();
@@ -1987,8 +2033,11 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
-    /// Without request-head timing, waiting for the first request is not
-    /// bounded by keep-alive, for an idle or a partially received request.
+    /// STATEMENT: Disabled first-request timing leaves idle and partial first requests unbounded by keepalive.
+    ///
+    /// HOW:
+    /// - Wait before and during a partial first head, checking no timer is armed and the connection remains active.
+    /// - Finish the head and verify a successful response.
     #[crate::rt_test]
     async fn test_first_request_unbounded_without_header_timeout() {
         let (client, server) = IoTest::create();
@@ -2024,8 +2073,11 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
-    /// Without request-head timing, a partial next request does not stop the
-    /// keep-alive timer.
+    /// STATEMENT: Without header timing, a partial next request remains subject to keepalive expiry.
+    ///
+    /// HOW:
+    /// - Pipeline a partial second request, add more incomplete header bytes, and inspect persistent keepalive timing.
+    /// - Wait for dispatcher completion and verify no second response was emitted.
     #[crate::rt_test]
     async fn test_partial_next_request_keepalive_without_header_timeout() {
         let (client, server) = IoTest::create();
@@ -2070,7 +2122,10 @@ mod tests {
         )
     }
 
-    /// A new connection that sends nothing is bounded by the client timeout.
+    /// STATEMENT: A silent new connection expires with a request-timeout response and read-timeout close reason.
+    ///
+    /// HOW:
+    /// - Start a timed connection without sending input, wait within an outer deadline, and inspect response and close reason.
     #[crate::rt_test]
     async fn test_client_timeout_without_request() {
         let (client, server) = IoTest::create();
@@ -2094,8 +2149,11 @@ mod tests {
         );
     }
 
-    /// The headers read rate starts with the first byte of the first request,
-    /// with the complete cumulative budget.
+    /// STATEMENT: First-request bytes switch client timing to header-rate timing with its full cumulative budget.
+    ///
+    /// HOW:
+    /// - Send a partial head after an idle poll and inspect consumed bytes and remaining budget.
+    /// - Finish the head and verify a successful response.
     #[crate::rt_test]
     async fn test_headers_rate_starts_with_first_byte() {
         let (client, server) = IoTest::create();
@@ -2120,7 +2178,10 @@ mod tests {
         assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
     }
 
-    /// The first byte arriving together with the client timeout wins.
+    /// STATEMENT: First request bytes take precedence over a simultaneous initial client timeout.
+    ///
+    /// HOW:
+    /// - Buffer a partial head before injecting expiry and verify active header timing without an error response.
     #[crate::rt_test]
     async fn test_first_byte_wins_client_timeout() {
         let (client, server) = IoTest::create();
@@ -2138,6 +2199,10 @@ mod tests {
         assert!(client.read_any().is_empty());
     }
 
+    /// STATEMENT: A connection without an initial timeout remains active until its first request arrives.
+    ///
+    /// HOW:
+    /// - Poll an idle timeout-disabled connection, then send a request and verify successful completion and response.
     #[crate::rt_test]
     async fn test_new_connection_without_header_timeout() {
         let (client, server) = IoTest::create();
@@ -2227,6 +2292,10 @@ mod tests {
         decoder.decode(buf).unwrap().unwrap()
     }
 
+    /// STATEMENT: The control service observes new requests before their successful responses are sent.
+    ///
+    /// HOW:
+    /// - Record request-control delivery, send a request, inspect the response, and verify the observation after shutdown.
     #[crate::rt_test]
     async fn test_on_request() {
         let (client, server) = IoTest::create();
@@ -2269,6 +2338,10 @@ mod tests {
         assert!(data.get());
     }
 
+    /// STATEMENT: Malformed request heads produce bad-request responses and close with a decoder reason.
+    ///
+    /// HOW:
+    /// - Send an invalid HTTP version, drive shutdown, and compare response bytes, inactive state, and close reason.
     #[crate::rt_test]
     async fn test_req_parse_err() {
         let (client, server) = IoTest::create();
@@ -2293,6 +2366,10 @@ mod tests {
         assert_eq!(h1.inner.io.close_reason(), Some(nio::CloseReason::Decoder));
     }
 
+    /// STATEMENT: Persistent HTTP dispatch handles sequential and pipelined requests until the peer closes.
+    ///
+    /// HOW:
+    /// - Send one request and then two together, decode all successful responses, and check connection lifetime.
     #[crate::rt_test]
     async fn test_pipeline() {
         let (client, server) = IoTest::create();
@@ -2319,6 +2396,11 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
+    /// STATEMENT: Requests pipelined after a nonpersistent request are not dispatched.
+    ///
+    /// HOW:
+    /// - Follow close-bearing, HTTP/1.0, and body-bearing nonpersistent requests with another request.
+    /// - Verify one response, one service call, and a closed connection.
     #[crate::rt_test]
     async fn test_pipeline_after_close() {
         for (req, res) in [
@@ -2368,6 +2450,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Bodyless ordinary responses use explicit zero length so the next pipelined response remains distinguishable.
+    ///
+    /// HOW:
+    /// - Pipeline a no-body response and a four-byte response, then compare their framing, payload boundaries, and persistence.
     #[crate::rt_test]
     async fn test_response_without_body_is_framed() {
         let (client, server) = IoTest::create();
@@ -2397,6 +2483,11 @@ mod tests {
         assert!(!client.is_server_dropped());
     }
 
+    /// STATEMENT: An application informational response is replaced by a final server error without corrupting the pipeline.
+    ///
+    /// HOW:
+    /// - Return several informational statuses before a second successful request.
+    /// - Verify a zero-length server error, absent interim body, and the following successful response.
     #[crate::rt_test]
     async fn test_informational_response_is_replaced() {
         for status in [
@@ -2438,6 +2529,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Incomplete upgrade header combinations remain ordinary pipelined HTTP requests.
+    ///
+    /// HOW:
+    /// - Pipeline requests carrying only one required upgrade header and then an ordinary request.
+    /// - Compare all service paths/upgrade flags and three successful responses.
     #[crate::rt_test]
     async fn test_upgrade_without_connection_option() {
         let (client, server) = IoTest::create();
@@ -2474,6 +2570,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: HTTP/1.0 dispatch ignores expectation/upgrade semantics while preserving ordinary payload and pipeline handling.
+    ///
+    /// HOW:
+    /// - Pipeline a body-bearing expectation request, an upgrade-bearing request, and a final close request.
+    /// - Verify no interim continue response and ordinary service delivery for every path.
     #[crate::rt_test]
     async fn test_http10_expect_and_upgrade_ignored() {
         let (client, server) = IoTest::create();
@@ -2558,6 +2659,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Reading a request payload completes before the next request is dispatched on the persistent connection.
+    ///
+    /// HOW:
+    /// - Send a head and delayed body to a consuming handler, then send another request.
+    /// - Decode both successful responses and inspect persistence until peer closure.
     #[crate::rt_test]
     async fn test_pipeline_with_payload() {
         let (client, server) = IoTest::create();
@@ -2589,9 +2695,12 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
+    /// STATEMENT: Payload bytes retained after response completion cannot be reinterpreted as a new request.
+    ///
+    /// HOW:
+    /// - Retain a body reader, return a response, and send request-shaped bytes within the declared body.
+    /// - Check one service call, consume the complete body, then verify a real next request is dispatched.
     #[crate::rt_test]
-    /// The rest of a payload that is still held by the application after the
-    /// response is sent must not be decoded as the next request.
     async fn test_payload_after_response_is_not_a_request() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
@@ -2628,6 +2737,10 @@ mod tests {
         assert_eq!(calls.get(), 2);
     }
 
+    /// STATEMENT: Delayed application responses preserve pipelined request ordering and connection reuse.
+    ///
+    /// HOW:
+    /// - Send requests before and during delayed handlers, decode each successful response, and inspect persistence through peer close.
     #[crate::rt_test]
     async fn test_pipeline_with_delay() {
         let (client, server) = IoTest::create();
@@ -2666,9 +2779,12 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
+    /// STATEMENT: Peer write-half closure still allows buffered requests and their responses to complete.
+    ///
+    /// HOW:
+    /// - Queue three requests before closing peer writes.
+    /// - Decode three successful responses and verify exactly three service calls before transport drop.
     #[crate::rt_test]
-    /// A peer write-half close still allows all buffered requests to complete
-    /// and their responses to be written.
     async fn test_write_disconnected() {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
@@ -2695,7 +2811,11 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 3);
     }
 
-    /// max http message size is 32k (no payload)
+    /// STATEMENT: Request heads exceeding the configured 32 KiB limit receive a header-too-large response.
+    ///
+    /// HOW:
+    /// - Send a 70,000-byte unfinished header through bounded read buffers.
+    /// - Drive dispatch to completion and verify inactive I/O and status `431`.
     #[crate::rt_test]
     async fn test_read_large_message() {
         let (client, server) = IoTest::create();
@@ -2743,6 +2863,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A stalled payload consumer bounds how much request data is drained from the transport.
+    ///
+    /// HOW:
+    /// - Read one body chunk and stall the handler while supplying a one-megabyte payload.
+    /// - Verify the head was consumed, the handler ran, and almost all remaining data stays upstream.
     #[crate::rt_test]
     async fn test_read_backpressure() {
         let mark = Arc::new(AtomicBool::new(false));
@@ -2801,8 +2926,11 @@ mod tests {
         )
     }
 
-    /// A client that stops reading the response is disconnected by the write
-    /// timeout.
+    /// STATEMENT: Write timeout disconnects a client that stops reading its response.
+    ///
+    /// HOW:
+    /// - Block peer reads while sending a large response and verify write-backpressure timing.
+    /// - Await completion and inspect closed transport and write-timeout close reason.
     #[crate::rt_test]
     async fn test_write_timeout_during_response() {
         let (client, server) = IoTest::create();
@@ -2828,8 +2956,11 @@ mod tests {
         );
     }
 
-    /// The write timeout stops the dispatcher while sending a response with
-    /// an unfinished request payload.
+    /// STATEMENT: Response write timeout also fails an unfinished request payload.
+    ///
+    /// HOW:
+    /// - Retain a partial request body while sending a large response to a blocked peer.
+    /// - Await shutdown, drain the retained payload, and require a timed-out I/O error.
     #[crate::rt_test]
     async fn test_write_timeout_with_unfinished_payload() {
         let payload = Rc::new(RefCell::new(None));
@@ -2856,8 +2987,11 @@ mod tests {
         assert!(timed_out);
     }
 
-    /// A delayed protocol error does not interrupt a response whose head has
-    /// been sent.
+    /// STATEMENT: Finishing response-payload handling consumes a delayed protocol error and records disconnect.
+    ///
+    /// HOW:
+    /// - Seed a pending slow-payload error and send a response body through payload handling.
+    /// - Verify stop state, sent disconnect, and cleared pending error.
     #[crate::rt_test]
     async fn test_delayed_protocol_error_finishes_response() {
         let (client, server) = IoTest::create();
@@ -2873,7 +3007,11 @@ mod tests {
         assert!(h1.inner.pending_payload_error.is_none());
     }
 
-    /// Without a write timeout, write backpressure is not bounded.
+    /// STATEMENT: Without a configured write timeout, backpressure leaves the connection pending with no timer armed.
+    ///
+    /// HOW:
+    /// - Block peer reads during a large response and wait under an external deadline.
+    /// - Verify pending dispatch, stopped timing, and an open connection.
     #[crate::rt_test]
     async fn test_no_write_timeout_during_response() {
         let (client, server) = IoTest::create();
@@ -2893,8 +3031,11 @@ mod tests {
         assert!(!client.is_closed());
     }
 
-    /// The write timer keeps paused payload timing and restores it once
-    /// backpressure is disabled.
+    /// STATEMENT: Write timing retains paused payload progress and restores payload timing when output drains.
+    ///
+    /// HOW:
+    /// - Stall a large response while retaining an incomplete body and inspect saved payload period/budget.
+    /// - Unblock output and verify the timer returns to payload mode.
     #[crate::rt_test]
     async fn test_write_timer_restores_payload_timer() {
         let payload = Rc::new(RefCell::new(None));
@@ -2926,6 +3067,11 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
+    /// STATEMENT: Response write backpressure suspends payload timing even without a write timeout.
+    ///
+    /// HOW:
+    /// - Stall output while retaining a partial request body and verify paused payload state with no armed timer.
+    /// - Drain output, check restored payload timing, and complete the body before closing.
     #[crate::rt_test]
     async fn test_payload_timer_pauses_for_write_backpressure() {
         let payload = Rc::new(RefCell::new(None));
@@ -2977,7 +3123,11 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
-    /// The request payload is read while write backpressure is active.
+    /// STATEMENT: Request-payload delivery continues while response writes are backpressured.
+    ///
+    /// HOW:
+    /// - Spawn a detached body reader, block response output, and send the remaining request bytes.
+    /// - Verify the full body reaches the reader while write backpressure remains active.
     #[crate::rt_test]
     async fn test_payload_read_during_write_backpressure() {
         let body = Rc::new(RefCell::new(BytesMut::new()));
@@ -3022,6 +3172,11 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
+    /// STATEMENT: Write backpressure bounds response-body polling until buffered output drains.
+    ///
+    /// HOW:
+    /// - Count bytes generated by an endless response stream while peer writes are blocked.
+    /// - Inspect queued wire bytes, drain one chunk, and verify only then is another chunk generated.
     #[crate::rt_test]
     #[allow(clippy::items_after_statements)]
     async fn test_write_backpressure() {
@@ -3079,6 +3234,11 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);
     }
 
+    /// STATEMENT: A partially emitted sized response can remain pending immediately after peer write closure.
+    ///
+    /// HOW:
+    /// - Emit half the declared body and then return pending, checking the successful response head.
+    /// - Close peer writes and verify the next dispatcher poll remains pending.
     #[crate::rt_test]
     async fn test_disconnect_during_response_body_pending() {
         struct Stream(bool);
@@ -3128,6 +3288,11 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
     }
 
+    /// STATEMENT: Clean peer closure during a partial request head emits one disconnect without dispatching a request.
+    ///
+    /// HOW:
+    /// - Close the peer after an incomplete header and record request/control calls.
+    /// - Verify one error-free peer-loss notification, no application calls, and no response bytes.
     #[crate::rt_test]
     async fn test_partial_request_headers_clean_disconnect() {
         let requests = Arc::new(AtomicUsize::new(0));
@@ -3174,6 +3339,11 @@ mod tests {
         assert!(client.read_any().is_empty());
     }
 
+    /// STATEMENT: Transport failure during a partial request head reports its cause once without dispatching the request.
+    ///
+    /// HOW:
+    /// - Inject connection reset after incomplete headers and inspect the disconnect error.
+    /// - Verify one notification, no application calls, and no response bytes.
     #[crate::rt_test]
     async fn test_partial_request_headers_read_error() {
         let requests = Arc::new(AtomicUsize::new(0));
@@ -3226,6 +3396,10 @@ mod tests {
         assert!(client.read_any().is_empty());
     }
 
+    /// STATEMENT: Buffered request-head bytes are considered before a simultaneous timeout notification.
+    ///
+    /// HOW:
+    /// - Supply a partial request line alongside expiry and verify header timing continues without an error response.
     #[crate::rt_test]
     async fn test_header_progress_available_when_timer_fires() {
         let (client, server) = IoTest::create();
@@ -3260,6 +3434,11 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
+    /// STATEMENT: Chunk-framing bytes count as payload read progress even without producing body data.
+    ///
+    /// HOW:
+    /// - Send only a chunk-size line alongside payload timer expiry.
+    /// - Verify dispatch remains pending and emits no timeout response before peer closure.
     #[crate::rt_test]
     async fn test_payload_progress_available_when_timer_fires() {
         let (client, server) = IoTest::create();
@@ -3302,6 +3481,11 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
+    /// STATEMENT: Payload timing does not expire while expectation handling is still pending.
+    ///
+    /// HOW:
+    /// - Delay expectation acknowledgement beyond the payload timeout and require `100 Continue`.
+    /// - Send the body afterward and verify exact payload bytes and a successful final response.
     #[crate::rt_test]
     async fn test_payload_timer_waits_for_expect_continue() {
         let (client, server) = IoTest::create();
@@ -3356,8 +3540,11 @@ mod tests {
         assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
     }
 
-    /// An expectation answered with a final response starts payload timing
-    /// once the dispatcher reads the rest of the payload.
+    /// STATEMENT: A final response to an expectation-bearing request starts timing its retained unfinished payload.
+    ///
+    /// HOW:
+    /// - Reject the request with `403` while retaining its body reader.
+    /// - Verify payload-reading state/timing and eventual dispatcher completion without dropping the retained reader.
     #[crate::rt_test]
     async fn test_payload_timer_starts_after_expect_response() {
         let stash = Rc::new(RefCell::new(None));
@@ -3407,6 +3594,11 @@ mod tests {
         assert!(stash.borrow().is_some());
     }
 
+    /// STATEMENT: Peer loss during pending request control prevents application dispatch and reports one disconnect.
+    ///
+    /// HOW:
+    /// - Delay request acknowledgement, send an incomplete body, and close the peer.
+    /// - Drive completion and compare zero application calls with one peer-loss notification.
     #[crate::rt_test]
     async fn test_payload_peer_gone_while_control_pending() {
         let requests = Arc::new(AtomicUsize::new(0));
@@ -3451,6 +3643,11 @@ mod tests {
         assert_eq!(disconnects.load(Ordering::Relaxed), 1);
     }
 
+    /// STATEMENT: Payload decode failure during pending request control prevents application dispatch.
+    ///
+    /// HOW:
+    /// - Delay request acknowledgement while supplying malformed chunk framing.
+    /// - Verify completion with one decode-error notification and no application calls.
     #[crate::rt_test]
     async fn test_payload_decode_error_while_control_pending() {
         let requests = Arc::new(AtomicUsize::new(0));
@@ -3497,6 +3694,11 @@ mod tests {
         assert_eq!(errors.load(Ordering::Relaxed), 1);
     }
 
+    /// STATEMENT: Peer loss cannot duplicate a disconnect notification already being handled.
+    ///
+    /// HOW:
+    /// - Fail the service with a retained partial body and delay its error-control acknowledgement.
+    /// - Close the peer and verify exactly one disconnect, with no additional peer-loss event.
     #[crate::rt_test]
     async fn test_disconnect_notification_is_not_repeated() {
         let payload = Rc::new(RefCell::new(None));
@@ -3552,6 +3754,10 @@ mod tests {
         assert_eq!(peer_gone.load(Ordering::Relaxed), 0);
     }
 
+    /// STATEMENT: Premature clean peer closure delivers exactly one incomplete-payload error to the consumer.
+    ///
+    /// HOW:
+    /// - Close the peer before its declared body length arrives and count matching consumer errors under a deadline.
     #[crate::rt_test]
     async fn test_payload_peer_gone_reports_incomplete() {
         let mark = Arc::new(AtomicUsize::new(0));
@@ -3587,6 +3793,10 @@ mod tests {
         assert_eq!(mark.load(Ordering::Relaxed), 1);
     }
 
+    /// STATEMENT: Incomplete-payload errors preserve the transport failure that interrupted the body.
+    ///
+    /// HOW:
+    /// - Inject connection reset during a partial fixed-length body and require one consumer error carrying that cause.
     #[crate::rt_test]
     async fn test_payload_read_error_reports_incomplete() {
         let mark = Arc::new(AtomicUsize::new(0));
@@ -3621,6 +3831,10 @@ mod tests {
         assert_eq!(mark.load(Ordering::Relaxed), 1);
     }
 
+    /// STATEMENT: Malformed chunk framing reaches the payload consumer as a decode error.
+    ///
+    /// HOW:
+    /// - Send an invalid chunk-size line, drive shutdown, and verify exactly one decode error reaches the handler.
     #[crate::rt_test]
     async fn test_payload_decode_error_is_preserved() {
         let mark = Arc::new(AtomicUsize::new(0));
@@ -3648,6 +3862,10 @@ mod tests {
         assert_eq!(mark.load(Ordering::Relaxed), 1);
     }
 
+    /// STATEMENT: Service failure returns an internal-server-error response and closes the connection.
+    ///
+    /// HOW:
+    /// - Fail a handler for a body-bearing request and inspect inactive I/O, status bytes, and the original error text.
     #[crate::rt_test]
     async fn test_service_error() {
         let (client, server) = IoTest::create();
@@ -3666,6 +3884,11 @@ mod tests {
         assert_eq!(&buf[buf.len() - 5..], b"error");
     }
 
+    /// STATEMENT: Sufficient payload progress earns an extension but cannot exceed the cumulative read-time limit.
+    ///
+    /// HOW:
+    /// - Feed a large declared body above the minimum rate under a two-period budget.
+    /// - Verify received bytes demonstrate an extension followed by exactly one slow-payload timeout notification.
     #[crate::rt_test]
     async fn test_payload_timeout() {
         let mark = Arc::new(AtomicUsize::new(0));
@@ -3745,9 +3968,12 @@ mod tests {
         assert_eq!(err_mark.load(Ordering::Relaxed), 1);
     }
 
+    /// STATEMENT: Dropping an unfinished payload during service execution marks the response for connection closure.
+    ///
+    /// HOW:
+    /// - Drop the request reader, delay the response, and send more body bytes.
+    /// - Check the successful response advertises close and the transport is subsequently dropped.
     #[crate::rt_test]
-    /// A payload dropped while the service is running closes the connection,
-    /// the response announces it.
     async fn test_payload_dropped_before_response_closes() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
@@ -3771,9 +3997,12 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
+    /// STATEMENT: Transport reset drops a pending response body for immediate and delayed handlers.
+    ///
+    /// HOW:
+    /// - Track destruction of a stream that emits one chunk then stalls.
+    /// - Reset the connection after response output and verify body destruction in both handler variants.
     #[crate::rt_test]
-    /// A peer disconnect stops the dispatcher while the response body is
-    /// pending, the body is dropped.
     async fn test_pending_body_dropped_on_peer_gone() {
         struct Stream(Rc<Cell<bool>>, bool);
         impl Drop for Stream {
@@ -3821,8 +4050,11 @@ mod tests {
         }
     }
 
-    /// A client half-close drops an idle response body, unless half-close is
-    /// enabled or pipelined requests are still buffered.
+    /// STATEMENT: Peer half-close drops a pending response unless half-close support or buffered pipelined requests require persistence.
+    ///
+    /// HOW:
+    /// - Track body destruction across half-close configuration, pipeline, and handler-delay variants.
+    /// - Close peer writes and inspect the expected body/transport lifetime for each case.
     #[crate::rt_test]
     async fn test_pending_body_dropped_on_half_close() {
         struct Stream(Rc<Cell<bool>>, bool);
@@ -3899,8 +4131,11 @@ mod tests {
         }
     }
 
-    /// A response body is not polled after its declared length is sent, or
-    /// for a response without a body.
+    /// STATEMENT: Declared response lengths bound body polling, and HEAD responses never poll their bodies.
+    ///
+    /// HOW:
+    /// - Count polls of an overproducing body for sized GET and sized/streaming HEAD responses.
+    /// - Compare exact output and poll counts across two requests on the same connection.
     #[crate::rt_test]
     async fn test_body_not_polled_after_length() {
         struct Stream(Rc<Cell<usize>>, body::BodySize);
@@ -3959,8 +4194,11 @@ mod tests {
         }
     }
 
-    /// A response with a declared length is complete once its last byte is
-    /// sent, the body is not polled for its end.
+    /// STATEMENT: A sized response completes at its declared byte count without waiting for stream EOF.
+    ///
+    /// HOW:
+    /// - Return a body that emits its declared length and then stays pending.
+    /// - Pipeline two requests and verify both bodies arrive on the still-open connection.
     #[crate::rt_test]
     async fn test_sized_body_complete_without_end() {
         struct Stream(bool);
@@ -4000,7 +4238,10 @@ mod tests {
         assert!(!client.is_server_dropped());
     }
 
-    /// The end of a chunked response body is encoded.
+    /// STATEMENT: End-of-stream emits the terminating chunk for a streaming response.
+    ///
+    /// HOW:
+    /// - Return a one-item stream and compare the wire suffix including the data chunk and zero-length terminator.
     #[crate::rt_test]
     async fn test_chunked_body_terminated() {
         use futures_util::stream;
@@ -4019,8 +4260,11 @@ mod tests {
         assert!(buf.ends_with(b"\r\n\r\n4\r\ndata\r\n0\r\n\r\n"), "{buf:?}");
     }
 
-    /// The last chunk of a response with a declared length is flushed before
-    /// the connection is closed, it is not left to the shutdown timeout.
+    /// STATEMENT: A closing sized response flushes its last body bytes before transport shutdown timing begins.
+    ///
+    /// HOW:
+    /// - Block output longer than the configured shutdown timeout and verify the transport remains alive.
+    /// - Unblock it and drain through EOF, checking the large response and final body bytes arrive.
     #[crate::rt_test]
     async fn test_sized_body_flushed_before_close() {
         let (client, server) = IoTest::create();
@@ -4058,6 +4302,11 @@ mod tests {
         assert!(buf.len() > 128 * 1024);
     }
 
+    /// STATEMENT: An unconsumed request payload forces connection closure after the response.
+    ///
+    /// HOW:
+    /// - Ignore a declared request body and return a small response.
+    /// - Verify inactive I/O and explicit close framing on the successful response.
     #[crate::rt_test]
     async fn test_unconsumed_payload() {
         let (client, server) = IoTest::create();
@@ -4142,7 +4391,10 @@ mod tests {
         events.borrow().clone()
     }
 
-    /// A control service error stops the dispatcher with that error.
+    /// STATEMENT: A request-control error stops dispatch without invoking the application.
+    ///
+    /// HOW:
+    /// - Fail request acknowledgement and inspect the returned control error, event history, and zero application calls.
     #[crate::rt_test]
     async fn test_control_error_stops_dispatcher() {
         use crate::error::IntoFailure;
@@ -4172,7 +4424,11 @@ mod tests {
         assert_eq!(events(&ev), ["request"]);
     }
 
-    /// A rejected upgrade sends the response and closes the connection.
+    /// STATEMENT: Rejected upgrades send the chosen failure response without dispatching the application or pipelined request.
+    ///
+    /// HOW:
+    /// - Reject upgrade control with a response or error and inspect request/I/O accessors.
+    /// - Verify the corresponding status, single response, zero application calls, and ordered failure events.
     #[crate::rt_test]
     async fn test_upgrade_failed() {
         for with_err in [false, true] {
@@ -4228,7 +4484,10 @@ mod tests {
         }
     }
 
-    /// The control service can replace the response for a service error.
+    /// STATEMENT: Error control can replace an application failure with a response or another error.
+    ///
+    /// HOW:
+    /// - Inspect the service error, replace it using both failure paths, and compare resulting status and event history.
     #[crate::rt_test]
     async fn test_service_error_response_replaced() {
         for with_err in [false, true] {
@@ -4270,7 +4529,10 @@ mod tests {
         }
     }
 
-    /// The control service can replace the response for a protocol error.
+    /// STATEMENT: Protocol-error control can replace a decode failure with a response or another error.
+    ///
+    /// HOW:
+    /// - Send an invalid content length, override its failure through both control paths, and compare response status and decode events.
     #[crate::rt_test]
     async fn test_protocol_error_response_replaced() {
         for with_err in [false, true] {
@@ -4308,8 +4570,11 @@ mod tests {
         }
     }
 
-    /// A rejected expectation sends the response, skips the service and
-    /// closes the connection.
+    /// STATEMENT: Rejected expectations send a final failure without interim continue or application dispatch.
+    ///
+    /// HOW:
+    /// - Reject expectation control with a response or error and inspect the request path.
+    /// - Verify final status, absent continue bytes, zero application calls, and ordered failure events.
     #[crate::rt_test]
     async fn test_expect_failed() {
         for with_err in [false, true] {
@@ -4358,8 +4623,11 @@ mod tests {
         }
     }
 
-    /// A response body error is reported as a protocol error and the
-    /// connection is closed without completing the response.
+    /// STATEMENT: Response-body failure reports a protocol error without terminating chunk framing or serving the next request.
+    ///
+    /// HOW:
+    /// - Return one body chunk followed by an error while another request is pipelined.
+    /// - Verify partial output, absent final chunk, a single response, and the response-payload error event.
     #[crate::rt_test]
     async fn test_response_body_error() {
         use futures_util::stream;
@@ -4396,7 +4664,10 @@ mod tests {
         assert_eq!(events(&ev), ["request", "response-payload"]);
     }
 
-    /// A transport read error is reported with the error.
+    /// STATEMENT: Peer-loss control preserves a transport read error and permits taking ownership of it.
+    ///
+    /// HOW:
+    /// - Inject connection reset, inspect and take its error in control handling, and verify event history and successful shutdown.
     #[crate::rt_test]
     async fn test_peer_gone_with_error() {
         let (client, server) = IoTest::create();
@@ -4573,8 +4844,11 @@ mod tests {
         }
     }
 
-    /// The keep-alive timer does not run while the filter chain pauses
-    /// reading.
+    /// STATEMENT: Filter readiness pauses suspend keepalive timing until reading resumes.
+    ///
+    /// HOW:
+    /// - Complete a request, block the filter, and queue another request.
+    /// - Verify no armed timer while paused, then resume and observe its response followed by eventual keepalive closure.
     #[crate::rt_test]
     async fn test_filter_pause_suspends_keepalive() {
         let (client, server) = IoTest::create();
@@ -4621,8 +4895,11 @@ mod tests {
         assert!(client.is_closed());
     }
 
-    /// The request-head read timer does not run while the filter chain
-    /// pauses reading.
+    /// STATEMENT: Header-read timing is suspended while a filter prevents reading and resumes afterward.
+    ///
+    /// HOW:
+    /// - Pause the filter during an incomplete head and inspect its disarmed timer and active connection.
+    /// - Resume with the head still incomplete and verify eventual timeout closure with status `408`.
     #[crate::rt_test]
     async fn test_filter_pause_suspends_headers_timer() {
         let (client, server) = IoTest::create();
@@ -4664,8 +4941,11 @@ mod tests {
         assert!(client.read_any().starts_with(b"HTTP/1.1 408"));
     }
 
-    /// The payload read timer does not run while the filter chain pauses
-    /// reading.
+    /// STATEMENT: Filter readiness pauses suspend payload timing without discarding buffered body completion.
+    ///
+    /// HOW:
+    /// - Pause during a partial body, send its remaining bytes, and verify no timer runs while paused.
+    /// - Resume and require a successful response.
     #[crate::rt_test]
     async fn test_filter_pause_suspends_payload_timer() {
         let (client, server) = IoTest::create();
@@ -4705,7 +4985,11 @@ mod tests {
         );
     }
 
-    /// The write timer does not run while the filter chain is paused.
+    /// STATEMENT: Filter readiness pauses suspend write timeout even while output remains backpressured.
+    ///
+    /// HOW:
+    /// - Hold a large response in the filter, pause readiness, and inspect backpressure with no armed timer.
+    /// - Resume and verify the complete successful response is readable.
     #[crate::rt_test]
     async fn test_filter_pause_suspends_write_timeout() {
         let (client, server) = IoTest::create();
@@ -4742,7 +5026,11 @@ mod tests {
         assert!(!io.is_filter_paused());
     }
 
-    /// The write timer starts over once the filter chain resumes.
+    /// STATEMENT: Write timeout restarts with a full period when a paused filter resumes under persistent backpressure.
+    ///
+    /// HOW:
+    /// - Block peer reads, pause the filter, and verify its write timer is disarmed.
+    /// - Resume, inspect a fresh one-second deadline, and wait for connection closure.
     #[crate::rt_test]
     async fn test_write_timeout_restarts_after_filter_pause() {
         let (client, server) = IoTest::create();
@@ -4780,8 +5068,11 @@ mod tests {
         assert!(client.is_closed());
     }
 
-    /// A write timer expiry before the dispatcher notices a filter pause
-    /// suspends the timer.
+    /// STATEMENT: Write expiry observed during a filter pause suspends timing instead of closing the connection.
+    ///
+    /// HOW:
+    /// - Enter write backpressure, pause the filter before checking expiry, and inspect suspended timer state.
+    /// - Resume and drain output, verifying dispatch stays pending and the successful response remains intact.
     #[crate::rt_test]
     async fn test_write_timer_expiry_during_filter_pause() {
         let (client, server) = IoTest::create();

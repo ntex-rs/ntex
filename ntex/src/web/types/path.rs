@@ -198,6 +198,11 @@ mod tests {
         value: u32,
     }
 
+    /// STATEMENT: A single path capture can deserialize to a scalar but not a multi-field struct.
+    ///
+    /// HOW:
+    /// - Recognize `/32/` against a one-capture route.
+    /// - Assert `Path<i8>` is 32 and `Path<MyStruct>` extraction fails.
     #[crate::rt_test]
     async fn test_extract_path_single() {
         let mut router = Router::<usize>::builder();
@@ -221,6 +226,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Tuple extractors can repeatedly read the same route captures without consuming them.
+    ///
+    /// HOW:
+    /// - Recognize two path segments and extract one, then two `Path` values in tuples.
+    /// - Assert every extracted pair matches the same segments and unit extraction succeeds.
     #[crate::rt_test]
     async fn test_tuple_extract() {
         let mut router = Router::<usize>::builder();
@@ -249,6 +259,11 @@ mod tests {
         from_request::<_, ()>(&(), &req, &mut pl).await.unwrap();
     }
 
+    /// STATEMENT: Path extraction supports named structs, typed tuples, vectors, and mutable access.
+    ///
+    /// HOW:
+    /// - Recognize string captures and assert struct/tuple values, formatting, mutation, and unwrapping.
+    /// - Recognize a numeric segment and assert typed struct/tuple values and ordered vector strings.
     #[crate::rt_test]
     async fn test_request_extract() {
         let mut router = Router::<usize>::builder();
@@ -302,6 +317,11 @@ mod tests {
         assert_eq!(res[1], "32".to_owned());
     }
 
+    /// STATEMENT: `Path::from` retains its value for dereferencing and ownership recovery.
+    ///
+    /// HOW:
+    /// - Wrap `10u32` with `Path::from`.
+    /// - Assert dereferencing and `into_inner` both return 10.
     #[test]
     fn test_path_from() {
         let path = Path::from(10u32);

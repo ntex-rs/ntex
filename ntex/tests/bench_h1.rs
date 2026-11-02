@@ -648,6 +648,11 @@ fn addr_env(name: &str) -> Option<net::SocketAddr> {
     })
 }
 
+/// STATEMENT: The ignored HTTP/1 benchmark measures sequential and pipelined transfers without premature EOF or response-size drift.
+///
+/// HOW:
+/// - By default start ntex and blocking reference servers, select small or 16 KiB responses at depths 1, 16, and 64, warm up, and report wall time, CPU, and allocation deltas.
+/// - The read helpers assert complete content-length framing and bounded nonempty reads; environment options select remote client/listener modes, TLS, case filters, and optional counters.
 #[ntex::test]
 #[ignore]
 async fn bench_h1() {

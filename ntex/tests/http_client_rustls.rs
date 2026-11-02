@@ -9,6 +9,11 @@ use ntex::{SharedCfg, service};
 
 mod rustls_utils;
 
+/// STATEMENT: The rustls HTTP client reuses one negotiated HTTP/2 connection.
+///
+/// HOW:
+/// - Count server connections and configure the rustls client to offer HTTP/2 and HTTP/1.1.
+/// - Send GET then POST, assert successful statuses and HTTP/2 on the latter, and assert one accepted connection.
 #[ntex::test]
 async fn test_connection_reuse_h2() {
     let num = Arc::new(AtomicUsize::new(0));

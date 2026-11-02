@@ -71,6 +71,11 @@ async fn recv<T>(rx: &std::sync::mpsc::Receiver<T>) -> T {
     }
 }
 
+/// STATEMENT: A Schannel HTTP client reuses one negotiated HTTP/2 connection to an OpenSSL server.
+///
+/// HOW:
+/// - Count accepted connections and use a Schannel secure connector for GET then POST.
+/// - Assert both responses succeed, the latter uses HTTP/2, and only one connection was accepted.
 #[ntex::test]
 async fn test_connection_reuse_h2() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -111,7 +116,11 @@ fn schannel_connector() -> TlsConnector<ntex::connect::Connector<&'static str>> 
     TlsConnector::with_config(ClientConfig::new().danger_accept_invalid_certs(true))
 }
 
-/// A failed handshake must send the TLS alert to the peer.
+/// STATEMENT: A Schannel certificate-verification failure sends a TLS alert to the peer.
+///
+/// HOW:
+/// - Connect with default verification to an OpenSSL server using the self-signed fixture certificate.
+/// - Assert connection failure and that the server reports `alert unknown ca`.
 #[ntex::test]
 async fn test_handshake_failure_sends_alert() {
     use ntex::{connect::Connect, service::Pipeline};
@@ -138,7 +147,11 @@ async fn test_handshake_failure_sends_alert() {
     assert!(err.contains("alert unknown ca"), "no alert received: {err}");
 }
 
-/// ALPN protocols offered by the client follow the configuration.
+/// STATEMENT: Schannel's offered ALPN list and queried HTTP protocol follow client configuration.
+///
+/// HOW:
+/// - Capture the OpenSSL server's received ALPN bytes for default, HTTP/1.1-only, and empty configured lists.
+/// - Assert exact offers and selected `HttpProtocol` values of HTTP/2, HTTP/1, and HTTP/1 respectively.
 #[ntex::test]
 async fn test_alpn_protocols() {
     use ntex::{connect::Connect, io::types::HttpProtocol, service::Pipeline};
@@ -199,8 +212,11 @@ async fn test_alpn_protocols() {
     );
 }
 
-/// A write page larger than one TLS record must be fully encrypted in a single
-/// filter pass, not one record per transport write completion.
+/// STATEMENT: Schannel encrypts a write page larger than one TLS record in a single filter pass.
+///
+/// HOW:
+/// - Queue 16 MiB while the OpenSSL peer delays reads, allowing the socket send buffer to fill.
+/// - Assert no plaintext remains in the source write buffer, flush, and require the peer's `done` acknowledgment after all bytes arrive.
 #[ntex::test]
 async fn test_large_write_encrypted_in_one_pass() {
     use ntex::{codec::BytesCodec, connect::Connect, io::Io, server, service::Pipeline};
@@ -245,7 +261,11 @@ async fn test_large_write_encrypted_in_one_pass() {
     assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "done");
 }
 
-/// Records must be encrypted in place into the transport's write pages.
+/// STATEMENT: Schannel encrypts records in place without exceeding transport write-page capacity.
+///
+/// HOW:
+/// - Record raw TLS input while sending 256 KiB as small 997-byte writes followed by one large write.
+/// - Assert the plaintext and acknowledgment, parse recorded application records, and require each record to fit a 16 KiB write page.
 #[ntex::test]
 async fn test_records_fit_write_pages() {
     use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
@@ -337,7 +357,11 @@ async fn test_records_fit_write_pages() {
     );
 }
 
-/// Graceful shutdown must send close_notify to the peer.
+/// STATEMENT: Schannel graceful shutdown flushes queued plaintext and sends `close_notify`.
+///
+/// HOW:
+/// - Receive `test`, queue `bye`, and call `Io::shutdown` against a blocking OpenSSL server.
+/// - Assert the server receives `bye`, reads clean EOF, and records `ShutdownState::RECEIVED`.
 #[ntex::test]
 async fn test_shutdown_sends_close_notify() {
     use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
@@ -382,6 +406,11 @@ async fn test_shutdown_sends_close_notify() {
     assert!(close_notify, "peer did not receive close_notify");
 }
 
+/// STATEMENT: Schannel shutdown waits for the peer's TLS reply even while TCP stays open.
+///
+/// HOW:
+/// - Have an OpenSSL server receive the client's alert, delay 300 ms, and reply while retaining its socket.
+/// - Assert clean EOF and successful shutdown on both sides, with client elapsed time at least 250 ms and under three seconds.
 #[ntex::test]
 async fn test_shutdown_waits_for_peer_close_notify() {
     use ntex::{connect::Connect, service::Pipeline, time};
@@ -481,21 +510,33 @@ async fn exchange(version: tls_openssl::ssl::SslVersion) -> String {
     join(server).await
 }
 
-/// TLS 1.3 post-handshake messages (session tickets) must be processed.
+/// STATEMENT: Schannel processes TLS 1.3 session tickets and continues exchanging application data.
+///
+/// HOW:
+/// - Use `exchange` against a TLS-1.3-only OpenSSL server, verifying `hello`, `ping`/`pong`, and a clean closing handshake.
+/// - Assert the server reports `TLSv1.3`.
 #[ntex::test]
 async fn test_tls13_post_handshake_messages() {
     let version = exchange(tls_openssl::ssl::SslVersion::TLS1_3).await;
     assert_eq!(version, "TLSv1.3");
 }
 
+/// STATEMENT: Schannel exchanges data and completes clean shutdown with TLS 1.2.
+///
+/// HOW:
+/// - Use `exchange` against a TLS-1.2-only OpenSSL server, verifying `hello`, `ping`/`pong`, and `close_notify`.
+/// - Assert the server reports `TLSv1.2`.
 #[ntex::test]
 async fn test_tls12() {
     let version = exchange(tls_openssl::ssl::SslVersion::TLS1_2).await;
     assert_eq!(version, "TLSv1.2");
 }
 
-/// An optional client certificate request completes the handshake without
-/// a certificate, Schannel must not pick one from the user's store.
+/// STATEMENT: An optional certificate request does not make Schannel select a certificate from the user's store.
+///
+/// HOW:
+/// - For TLS 1.2 and TLS 1.3, request optional client authentication without configuring a client certificate.
+/// - Assert handshake success and the `hello` payload, shut down, and assert the server received no client certificate.
 #[ntex::test]
 async fn test_client_cert_request() {
     use ntex::{connect::Connect, service::Pipeline};
@@ -596,7 +637,11 @@ impl TestClientCert {
     }
 }
 
-/// The configured client certificate is sent to a server that requires one.
+/// STATEMENT: Schannel selects and sends the configured valid client certificate from the user store.
+///
+/// HOW:
+/// - Install same-subject certificates with different validity ranges, look up by thumbprint and uppercase subject, and assert the desired DER bytes are selected.
+/// - Use those selections for TLS 1.2 and TLS 1.3 servers requiring authentication; verify `hello`, clean shutdown, and the exact peer certificate bytes.
 #[ntex::test]
 async fn test_client_cert() {
     use ntex::{connect::Connect, service::Pipeline};
@@ -705,6 +750,11 @@ impl Drop for InstalledCert {
     }
 }
 
+/// STATEMENT: Cloned Schannel connectors share resumable TLS sessions across pipelines.
+///
+/// HOW:
+/// - Make three connections through new pipelines sharing connector configuration, read `hello`, and finish a clean shutdown each time.
+/// - Assert the server's `session_reused` results are `[false, true, true]`.
 #[ntex::test]
 async fn test_session_resumption() {
     use ntex::{connect::Connect, service::Pipeline};
@@ -751,6 +801,11 @@ async fn test_session_resumption() {
     assert_eq!(reused, [false, true, true], "sessions are not resumed");
 }
 
+/// STATEMENT: Schannel accepts a completed handshake followed immediately by peer TCP EOF.
+///
+/// HOW:
+/// - Repeat 20 connections to an OpenSSL server that half-closes its write side after negotiation.
+/// - Assert every connection succeeds and its first application receive is `Ok(None)`, then stop and join the server.
 #[ntex::test]
 async fn test_handshake_then_eof() {
     use ntex::{connect::Connect, service::Pipeline};
@@ -788,6 +843,11 @@ async fn test_handshake_then_eof() {
     join(server).await;
 }
 
+/// STATEMENT: Schannel drains preceding plaintext and answers a peer's `close_notify` without requiring TCP closure.
+///
+/// HOW:
+/// - Have the server send `test` and its shutdown alert while retaining TCP; assert the payload then client EOF within five seconds.
+/// - Complete client shutdown and assert the server sees clean EOF and a received close notification.
 #[ntex::test]
 async fn test_peer_close_notify_closes_io() {
     use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline, time};
@@ -886,7 +946,11 @@ impl std::io::Write for Trickle {
     }
 }
 
-/// Records split at any byte, including handshake messages and record headers.
+/// STATEMENT: Schannel handles fragmented handshake and application records across arbitrary byte boundaries.
+///
+/// HOW:
+/// - For TLS 1.2 and TLS 1.3, wrap the OpenSSL socket in `Trickle` to send 1-, 3-, 7-, 100-, and 1000-byte pieces with pauses.
+/// - Assert the full 40,000-byte payload, `ping`/`pong`, and clean shutdown despite split headers and adjoining record fragments.
 #[ntex::test]
 async fn test_fragmented_records() {
     use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
@@ -971,8 +1035,11 @@ impl std::io::Write for Coalesce {
     }
 }
 
-/// Application data in the same segment as the server's last handshake flight
-/// (TLS 1.2 `Finished`, TLS 1.3 session tickets).
+/// STATEMENT: Schannel delivers application data coalesced with the server's final handshake flight.
+///
+/// HOW:
+/// - For TLS 1.2 and TLS 1.3, use `Coalesce` to send `hello` with `Finished` or session-ticket bytes.
+/// - Require `hello` within five seconds, then complete shutdown and assert the server observes `close_notify`.
 #[ntex::test]
 async fn test_data_with_last_handshake_flight() {
     use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
@@ -1013,8 +1080,11 @@ async fn test_data_with_last_handshake_flight() {
     }
 }
 
-/// A corrupted record fails the read (or the connect, if it arrives with the
-/// handshake), instead of hanging or reporting a clean eof.
+/// STATEMENT: A corrupted Schannel TLS record fails connection or read instead of hanging or yielding clean EOF.
+///
+/// HOW:
+/// - For TLS 1.2 and TLS 1.3, inject a forged application record either immediately after negotiation or after a verified `hello`/`ping` exchange.
+/// - Keep TCP open and require connection completion within five seconds; if connected, require a read error within five seconds.
 #[ntex::test]
 async fn test_corrupted_record_fails_read() {
     use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
@@ -1076,7 +1146,11 @@ async fn test_corrupted_record_fails_read() {
     }
 }
 
-/// Server initiated TLS 1.2 renegotiation, data is exchanged with the new keys.
+/// STATEMENT: Schannel completes server-initiated TLS 1.2 renegotiation and receives data encrypted with the new keys.
+///
+/// HOW:
+/// - Enable OpenSSL renegotiation, send `hello`, initiate `SSL_renegotiate`, and drive the handshake until it is no longer pending.
+/// - Assert `hello` and subsequent `pong` arrive within the deadline, then verify clean shutdown.
 #[ntex::test]
 async fn test_tls12_renegotiation() {
     use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};

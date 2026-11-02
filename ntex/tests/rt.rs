@@ -4,6 +4,11 @@ use std::{sync::mpsc, thread};
 use ntex::rt::{self, Arbiter, Handle, System};
 use ntex::time::{Millis, sleep};
 
+/// STATEMENT: Local and remote runtime join handles return task results across threads.
+///
+/// HOW:
+/// - Spawn local and same-thread remote tasks and assert their values.
+/// - Submit a task through `Handle` from another thread, join it there, and assert its result and the `Arbiter` debug label.
 #[ntex::test]
 async fn test_join_handle() {
     let hnd = rt::Handle::current();
@@ -28,6 +33,11 @@ async fn test_join_handle() {
     assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
 }
 
+/// STATEMENT: System and arbiter handles execute tasks in their owning system.
+///
+/// HOW:
+/// - Run a system on another thread and submit detached, boxed, and joined tasks through its handles.
+/// - Compare each task's `System::current().id()` with the target system ID.
 #[test]
 fn test_async() {
     let (tx, rx) = mpsc::channel();
@@ -77,6 +87,11 @@ fn test_async() {
     assert_eq!(id, id2);
 }
 
+/// STATEMENT: A custom Tokio runner preserves system context and records arbiter pings.
+///
+/// HOW:
+/// - Implement `Runner` with a current-thread Tokio runtime and run a system with a short ping interval.
+/// - Assert submitted tasks observe the owning system ID and ping records are nonempty before stopping.
 #[cfg(feature = "tokio")]
 #[test]
 fn test_block_on() {
@@ -132,6 +147,11 @@ fn test_block_on() {
     sys.stop();
 }
 
+/// STATEMENT: Arbiter-local and runtime typed storage return initialized values.
+///
+/// HOW:
+/// - Create a `System`, initialize an arbiter-local `u64`, and assert it is `64`.
+/// - Store `100u32` with `set_item` and retrieve the same value with `get_item`.
 #[test]
 fn test_arbiter_local_storage() {
     let _s = System::new("test", ntex::rt::DefaultRuntime);
@@ -141,6 +161,11 @@ fn test_arbiter_local_storage() {
     assert_eq!(ntex::rt::get_item::<u32>().unwrap(), 100);
 }
 
+/// STATEMENT: Spawned tasks expose completion and return their values through handles.
+///
+/// HOW:
+/// - Spawn a sleeping task and check `is_finished` before and after awaiting it.
+/// - Spawn through the current `Handle` and assert the joined result is `1`.
 #[test]
 fn test_spawn_api() {
     System::new("test", ntex::rt::DefaultRuntime).block_on(async {
@@ -161,6 +186,11 @@ fn test_spawn_api() {
     });
 }
 
+/// STATEMENT: Task lifecycle callbacks install once and run for spawned work.
+///
+/// HOW:
+/// - Install counting callbacks with `task_opt_callbacks` and assert a second installation is rejected.
+/// - Join a sleeping task, assert completion, and verify the callback counter increased.
 #[test]
 fn test_spawn_cb() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -207,8 +237,11 @@ fn test_spawn_cb() {
     assert!(val > 0);
 }
 
-/// `Arbiter::on_shutdown()` callbacks run on stop request, while the arbiter
-/// is still running, including callbacks registered by callbacks.
+/// STATEMENT: `Arbiter::on_shutdown` callbacks, including nested registrations, run while the arbiter is still running.
+///
+/// HOW:
+/// - Register a shutdown callback that registers another callback on a new arbiter.
+/// - Stop the arbiter, assert the nested callback observes `is_running()`, and join the arbiter.
 #[test]
 fn test_on_shutdown_arbiter() {
     System::new("test", ntex::rt::DefaultRuntime).block_on(async {
@@ -232,8 +265,11 @@ fn test_on_shutdown_arbiter() {
     });
 }
 
-/// The system arbiter runs them on `System::stop()`, and on exit of an event
-/// loop that ends without a stop request.
+/// STATEMENT: System shutdown callbacks run on explicit stop and on event-loop exit without a stop request.
+///
+/// HOW:
+/// - Register a counting callback in a system that calls `System::stop` and assert one invocation.
+/// - Register another in `block_on`, assert it has not run inside the loop, and assert one additional invocation on exit.
 #[test]
 fn test_on_shutdown_system() {
     thread::spawn(|| {
@@ -263,6 +299,11 @@ fn test_on_shutdown_system() {
     .unwrap();
 }
 
+/// STATEMENT: System-scoped typed storage is shared across arbiters.
+///
+/// HOW:
+/// - Initialize a `usize` to `10` in the current system.
+/// - Read it from a new arbiter using an initializer returning `11` and assert the existing value `10` is retained.
 #[ntex::test]
 async fn system_storage() {
     let val = System::current().get_value::<usize>(|| 10);
@@ -276,6 +317,11 @@ async fn system_storage() {
     assert_eq!(val2, 10);
 }
 
+/// STATEMENT: The io-uring backend drains input and observes EOF after an idle peer closes.
+///
+/// HOW:
+/// - Use small read buffers and backpressure while a server sends two delayed copies of `DATA` and closes.
+/// - Receive with `BytesCodec` under a five-second timeout and assert EOF arrives after exactly twice the payload length.
 #[cfg(all(target_os = "linux", feature = "neon-uring"))]
 #[ntex::test]
 async fn idle_disconnect_uring() {
@@ -352,6 +398,11 @@ async fn idle_disconnect_uring() {
     assert_eq!(total, DATA.len() * 2);
 }
 
+/// STATEMENT: Arbiter latency callbacks report stalls and supply the spawn location when available.
+///
+/// HOW:
+/// - Run a deliberately blocking arbiter once without a callback, then repeat with `System::set_latency_callback` installed.
+/// - Assert the callback ran and, when a location is reported, that its file is this test file.
 #[cfg(any(target_os = "linux", windows))]
 #[test]
 fn test_log_backtrace() {

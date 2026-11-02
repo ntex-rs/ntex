@@ -106,6 +106,11 @@ mod tests {
     use super::*;
     use crate::http::{error::ResponseError, test::TestRequest};
 
+    /// STATEMENT: WebSocket handshakes validate method, tokenized upgrade headers, version, and challenge before switching protocols.
+    ///
+    /// HOW:
+    /// - Build progressively valid requests and compare each missing or malformed component's handshake error.
+    /// - Accept a complete request and verify the switching-protocols response has no transfer encoding.
     #[test]
     fn test_handshake() {
         let req = TestRequest::default().method(Method::POST).build();
@@ -265,6 +270,10 @@ mod tests {
         assert!(!response.headers().contains_key(header::TRANSFER_ENCODING));
     }
 
+    /// STATEMENT: WebSocket handshakes accept only a single version-13 declaration.
+    ///
+    /// HOW:
+    /// - Verify version 13 succeeds while older versions and repeated mixed version headers fail.
     #[test]
     fn test_only_version_13_is_supported() {
         let req = |versions: &[&'static str]| {
@@ -286,6 +295,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Handshake failures map to appropriate HTTP statuses and advertise the supported version when needed.
+    ///
+    /// HOW:
+    /// - Convert each handshake error into a response and inspect method-not-allowed or bad-request status.
+    /// - Check the unsupported-version response includes version 13.
     #[test]
     fn test_wserror_http_response() {
         let resp: Response = HandshakeError::GetMethodRequired.error_response();

@@ -432,6 +432,10 @@ mod tests {
     use super::*;
     use crate::ws::CloseCode;
 
+    /// STATEMENT: Text-frame decoding leaves UTF-8 validation to consumers.
+    ///
+    /// HOW:
+    /// - Decode a text frame containing an invalid UTF-8 byte and verify it is returned unchanged.
     #[test]
     fn text_payload_is_not_validated() {
         let codec = Codec::new().set_client_mode();
@@ -442,6 +446,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Receiving close discards both buffered and subsequently received frames.
+    ///
+    /// HOW:
+    /// - Decode close followed by text, then add another text frame and verify both later decodes clear input without output.
     #[test]
     fn input_after_close_is_discarded() {
         let codec = Codec::new().set_client_mode();
@@ -459,6 +467,10 @@ mod tests {
         assert!(src.is_empty());
     }
 
+    /// STATEMENT: Receivers accept extension close code 1010 even though server-side encoders reject sending it.
+    ///
+    /// HOW:
+    /// - Decode a peer close with code 1010 and attempt to encode the same reason in server mode.
     #[test]
     fn accepts_extension_close_code() {
         // servers should not send 1010, but receivers accept it
@@ -481,6 +493,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: An active fragmented message prevents unrelated text or page messages until its last fragment.
+    ///
+    /// HOW:
+    /// - Start a binary continuation, reject text/page sends, end it, and verify a page can then be encoded.
     #[test]
     fn validates_outgoing_continuations() {
         let codec = Codec::new();
@@ -508,6 +524,10 @@ mod tests {
             .unwrap();
     }
 
+    /// STATEMENT: Sending close prevents later text and page messages.
+    ///
+    /// HOW:
+    /// - Encode close, then check both outgoing data APIs return the closed-protocol error.
     #[test]
     fn rejects_messages_after_close() {
         let codec = Codec::new();
@@ -524,6 +544,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Encoding rejects oversized controls and invalid continuation transitions.
+    ///
+    /// HOW:
+    /// - Reject oversized ping/pong, new data during a text continuation, and continuation after its last fragment.
     #[test]
     fn encode_errors() {
         let codec = Codec::new();
@@ -565,6 +589,11 @@ mod tests {
         codec.decode(&mut BytesMut::from(frame))
     }
 
+    /// STATEMENT: Decoding enforces fragmented-message ordering without preventing valid later continuation frames.
+    ///
+    /// HOW:
+    /// - Reject orphan continuations and new data while a binary message is open.
+    /// - Continue that message and verify an empty final fragment completes it.
     #[test]
     fn decode_continuation_errors() {
         let codec = Codec::new().set_client_mode();
@@ -638,6 +667,11 @@ mod tests {
             Frame::Text(Bytes::from_static(data.as_bytes()))
         }
 
+        /// STATEMENT: Deflate frame decoding matches RFC 7692 examples across fragmentation, context reuse, and block forms.
+        ///
+        /// HOW:
+        /// - Decode published single/fragmented, context-dependent, stored, final-block, multi-block, and empty messages.
+        /// - Compare their text and continuation outputs.
         #[test]
         fn rfc7692_examples() {
             // 7.2.3.1, a message in one frame and in two fragments
@@ -703,6 +737,11 @@ mod tests {
             );
         }
 
+        /// STATEMENT: No-context-takeover servers skip small whole messages but still compress fragments.
+        ///
+        /// HOW:
+        /// - Inspect frame flags and round trips around the small-message threshold, then encode a fragment.
+        /// - Verify the client still compresses small messages when its context remains enabled.
         #[test]
         fn small_messages_without_context_takeover() {
             let cfg = DeflateConfig::new().set_server_no_context_takeover(true);
@@ -729,6 +768,10 @@ mod tests {
             assert_eq!(frame[0], 0xc1);
         }
 
+        /// STATEMENT: Deflate text encoding reproduces the RFC 7692 Hello example.
+        ///
+        /// HOW:
+        /// - Encode the example message and compare every compressed frame byte.
         #[test]
         fn encode_rfc7692_example() {
             let codec = Codec::new().set_deflate(DeflateConfig::new());
@@ -738,6 +781,11 @@ mod tests {
             );
         }
 
+        /// STATEMENT: Deflate codecs round-trip mixed messages and interleaved controls in both client/server directions.
+        ///
+        /// HOW:
+        /// - Repeatedly encode text, large/empty binary data, controls, and text/binary continuations.
+        /// - Decode each combined buffer and compare the complete frame sequence.
         #[test]
         fn roundtrip() {
             let (client, server) = (client(), server());
@@ -785,6 +833,11 @@ mod tests {
             }
         }
 
+        /// STATEMENT: Compressed payloads remain decodable when reframed into small fragments with an empty final fragment.
+        ///
+        /// HOW:
+        /// - Split compressed binary messages into 16-byte frames, append an empty last frame, and repeat with reused contexts.
+        /// - Reassemble decoded continuation data and compare the original payload.
         #[test]
         fn fragmented_compressed_payload() {
             // a compressed message split into frames of 16 bytes, like the
@@ -822,6 +875,11 @@ mod tests {
             }
         }
 
+        /// STATEMENT: Deflate sets RSV1 only on initial data frames and leaves controls uncompressed.
+        ///
+        /// HOW:
+        /// - Inspect whole-message, continuation, ping, and close wire flags and bytes.
+        /// - Encode a binary page and verify its compressed flag and decoded payload.
         #[test]
         fn rsv1_only_on_first_data_frame() {
             let codec = server();
@@ -856,6 +914,11 @@ mod tests {
             );
         }
 
+        /// STATEMENT: Negotiating deflate still permits uncompressed whole and fragmented messages.
+        ///
+        /// HOW:
+        /// - Decode a buffer mixing uncompressed text/fragments/binary and an empty compressed message.
+        /// - Compare the complete expected frame sequence.
         #[test]
         fn uncompressed_messages() {
             // the peer may send uncompressed messages
@@ -876,6 +939,11 @@ mod tests {
             );
         }
 
+        /// STATEMENT: Deflate does not permit RSV1 on controls/continuations or any use of RSV2/RSV3.
+        ///
+        /// HOW:
+        /// - Decode illegal flag combinations and inspect reserved-bit errors.
+        /// - Verify RSV1 is also rejected when compression was not negotiated.
         #[test]
         fn reserved_bits() {
             for frame in [
@@ -917,6 +985,10 @@ mod tests {
             ));
         }
 
+        /// STATEMENT: Invalid compressed data is rejected in both complete and initial-fragment frames.
+        ///
+        /// HOW:
+        /// - Decode malformed deflate bytes with final and nonfinal text headers and compare protocol errors.
         #[test]
         fn invalid_data() {
             assert!(matches!(
@@ -929,6 +1001,11 @@ mod tests {
             ));
         }
 
+        /// STATEMENT: Frame-size limits apply to decompressed bytes, independently for each fragment.
+        ///
+        /// HOW:
+        /// - Decode a highly compressed payload at and below its expanded-size limit.
+        /// - Accept a boundary-sized first fragment and reject an oversized last fragment.
         #[test]
         fn decompressed_size_limit() {
             let data = Bytes::from(vec![0; 1024 * 1024]);
@@ -977,6 +1054,11 @@ mod tests {
             ));
         }
 
+        /// STATEMENT: Negotiated server context resets reject cross-message references without resetting the client's compressor.
+        ///
+        /// HOW:
+        /// - Compare repeated server frames and decode them with fresh contexts, then reject a back-reference-only message.
+        /// - Verify repeated client messages shrink through retained compression history.
         #[test]
         fn context_takeover() {
             // the server resets its context, the client reads each message
@@ -1001,6 +1083,10 @@ mod tests {
             assert!(encode(&client, Message::Text("Hello".into())).len() < first.len());
         }
 
+        /// STATEMENT: Cloned WebSocket codecs share negotiated compression configuration and history.
+        ///
+        /// HOW:
+        /// - Inspect clone/default configuration, encode consecutive messages through separate clones, and decode both together.
         #[test]
         fn clones_share_state() {
             let (client, server) = (client(), server());

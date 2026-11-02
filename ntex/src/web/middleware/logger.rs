@@ -421,6 +421,12 @@ mod tests {
     use crate::web::{test, test::TestRequest};
     use crate::{fn_service, service::Pipeline, util::lazy};
 
+    /// STATEMENT: Logging middleware preserves response bodies for logged and excluded paths.
+    ///
+    /// HOW:
+    /// - Configure header/environment/timing placeholders and exclude `/test`.
+    /// - Check readiness/shutdown, then read ordinary and excluded responses and assert `TEST` bytes.
+    /// - Assert the ordinary response body's reported size is four bytes.
     #[crate::rt_test]
     async fn test_logger() {
         let srv = fn_service(async move |req: WebRequest<()>| {
@@ -455,6 +461,11 @@ mod tests {
         assert_eq!(body, Bytes::from_static(b"TEST"));
     }
 
+    /// STATEMENT: The request-line log placeholder includes method, query-bearing target, and version.
+    ///
+    /// HOW:
+    /// - Render `%r` for a GET request with a path and query after adding response values.
+    /// - Assert the exact `GET /test/route/yeah?q=test HTTP/1.1` text.
     #[crate::rt_test]
     async fn test_request_line() {
         let format = Format::new("%r");
@@ -474,6 +485,11 @@ mod tests {
         assert_eq!(s, "GET /test/route/yeah?q=test HTTP/1.1");
     }
 
+    /// STATEMENT: URL-path log formatting includes the requested path alongside timing output.
+    ///
+    /// HOW:
+    /// - Render `%T %U` for a request with a path and query.
+    /// - Assert the formatted output contains `/test/route/yeah`.
     #[crate::rt_test]
     async fn test_url_path() {
         let format = Format::new("%T %U");
@@ -493,6 +509,11 @@ mod tests {
         assert!(s.contains("/test/route/yeah"));
     }
 
+    /// STATEMENT: Escaped percent signs render literally in log format strings.
+    ///
+    /// HOW:
+    /// - Render `100%% %U` for a request to `/test`.
+    /// - Assert the exact output is `100% /test`.
     #[crate::rt_test]
     async fn test_percent_format() {
         let format = Format::new("100%% %U");
@@ -506,6 +527,11 @@ mod tests {
         assert_eq!(s, "100% /test");
     }
 
+    /// STATEMENT: Default log formatting includes request, response status/size, and user agent.
+    ///
+    /// HOW:
+    /// - Render the default format for a root request with user agent `NTEX` and an OK response.
+    /// - Assert the output includes the request line, `200 1024`, and the user agent.
     #[crate::rt_test]
     async fn test_default_format() {
         let format = Format::default();
@@ -528,6 +554,11 @@ mod tests {
         assert!(s.contains("NTEX"));
     }
 
+    /// STATEMENT: Request-time log formatting uses the supplied request timestamp.
+    ///
+    /// HOW:
+    /// - Render `%t` using the same captured `SystemTime` for request and final formatting.
+    /// - Assert the output contains that timestamp formatted as an HTTP date.
     #[crate::rt_test]
     async fn test_request_time_format() {
         let format = Format::new("%t");
@@ -544,6 +575,11 @@ mod tests {
         assert!(s.contains(&httpdate::HttpDate::from(now).to_string()));
     }
 
+    /// STATEMENT: Missing environment and header log values render as dashes without losing body size.
+    ///
+    /// HOW:
+    /// - Render absent environment, response-header, and request-header placeholders with `%b`.
+    /// - Supply size 12 and assert the exact output is `- - - 12`.
     #[crate::rt_test]
     async fn test_missing_values() {
         let format = Format::new("%{NTEX_LOGGER_MISSING_VAR}e %{X-Missing}o %{X-Missing}i %b");
@@ -558,6 +594,11 @@ mod tests {
         assert_eq!(format!("{}", FormatDisplay(&render)), "- - - 12");
     }
 
+    /// STATEMENT: Logged response bodies retain their size metadata and readable bytes.
+    ///
+    /// HOW:
+    /// - Wrap a service returning `TEST` with a status/body-size logger.
+    /// - Assert `BodySize::Sized(4)` and read back the unchanged body.
     #[crate::rt_test]
     async fn test_body_size() {
         let srv = fn_service(async move |req: WebRequest<()>| {

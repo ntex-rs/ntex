@@ -347,6 +347,10 @@ mod tests {
         };
     }
 
+    /// STATEMENT: Wire opcode parsing recognizes supported frame types and rejects an unknown opcode.
+    ///
+    /// HOW:
+    /// - Convert data/control opcode numbers and compare their variants, then check an invalid number fails.
     #[test]
     fn test_to_opcode() {
         opcode_into!(0 => OpCode::Continue);
@@ -358,6 +362,10 @@ mod tests {
         assert!(OpCode::try_from(99).is_err());
     }
 
+    /// STATEMENT: Supported WebSocket opcode variants encode to their assigned wire values.
+    ///
+    /// HOW:
+    /// - Convert continuation, text, binary, close, ping, and pong variants and compare numeric values.
     #[test]
     fn test_from_opcode() {
         opcode_from!(OpCode::Continue => 0);
@@ -368,6 +376,10 @@ mod tests {
         opcode_from!(OpCode::Pong => 10);
     }
 
+    /// STATEMENT: WebSocket opcodes display their distinct uppercase protocol names.
+    ///
+    /// HOW:
+    /// - Format every supported opcode and compare its complete name.
     #[test]
     fn test_from_opcode_display() {
         assert_eq!(format!("{}", OpCode::Continue), "CONTINUE");
@@ -378,12 +390,21 @@ mod tests {
         assert_eq!(format!("{}", OpCode::Pong), "PONG");
     }
 
+    /// STATEMENT: WebSocket challenge hashing produces the expected accept value for a known key.
+    ///
+    /// HOW:
+    /// - Hash a fixed challenge and compare its complete base64-encoded result.
     #[test]
     fn test_hash_key() {
         let hash = hash_key(b"hello actix-web").unwrap();
         assert_eq!(&hash, "cR1dlyUUJKp0s/Bel25u5TgvC3E=");
     }
 
+    /// STATEMENT: Numeric close codes map to named or custom variants and reject reserved wire values.
+    ///
+    /// HOW:
+    /// - Convert standard and application codes, comparing variants.
+    /// - Check reserved and out-of-range values fail validity checks.
     #[test]
     fn closecode_from_u16() {
         assert_eq!(CloseCode::from(1000u16), CloseCode::Normal);
@@ -407,6 +428,10 @@ mod tests {
         assert!(!CloseCode::from(2000u16).is_valid());
     }
 
+    /// STATEMENT: Close-code variants retain their protocol numbers and custom codes remain subject to validity rules.
+    ///
+    /// HOW:
+    /// - Convert all named variants and an application code, then check an invalid custom code is rejected.
     #[test]
     fn closecode_into_u16() {
         assert_eq!(1000u16, Into::<u16>::into(CloseCode::Normal));
@@ -427,6 +452,10 @@ mod tests {
         assert!(!CloseCode::Other(2000).is_valid());
     }
 
+    /// STATEMENT: Challenge hashing enforces its key-length boundary.
+    ///
+    /// HOW:
+    /// - Hash keys at and immediately above the maximum length and compare success with the bad-key error.
     #[test]
     fn test_hash_key_too_long() {
         assert_eq!(hash_key(&[b'a'; 33]), Err(HandshakeError::BadWebsocketKey));

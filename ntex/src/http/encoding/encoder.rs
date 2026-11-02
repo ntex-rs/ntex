@@ -473,8 +473,13 @@ mod tests {
     use std::future::poll_fn;
 
     use super::*;
+    use crate::http::body::BodyStream;
     use crate::rt::spawn_blocking;
 
+    /// STATEMENT: A blocking encoding error ends the output stream without changing its streaming size classification.
+    ///
+    /// HOW:
+    /// - Inject a failed encoding task and check the error, size before/after, and subsequent EOF.
     #[crate::rt_test]
     async fn encoder_is_fused_after_error() {
         let mut enc = Encoder::<Body> {
@@ -509,6 +514,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: An encoder does not repoll its source after observing EOF.
+    ///
+    /// HOW:
+    /// - Wrap a source that panics on a second poll and verify two encoder polls both return EOF safely.
     #[crate::rt_test]
     async fn encoder_is_fused_after_end_of_stream() {
         let mut enc = Encoder::<EndOnce> {
@@ -520,6 +529,44 @@ mod tests {
         };
         assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
         assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
+    }
+
+    /// STATEMENT: Compression propagates source-body errors and discards later data for typed and boxed streams.
+    ///
+    /// HOW:
+    /// - Wrap an error followed by bytes in each supported encoder and both stream representations.
+    /// - Consume any initial codec output, check the original error text, and verify subsequent EOF.
+    #[crate::rt_test]
+    async fn encoder_source_error() {
+        for encoding in [
+            ContentEncoding::Gzip,
+            ContentEncoding::Deflate,
+            ContentEncoding::Zstd,
+        ] {
+            for boxed in [false, true] {
+                let source = BodyStream::new(futures_util::stream::iter([
+                    Err(io::Error::other("body failed")),
+                    Ok(Bytes::from_static(b"must not be emitted")),
+                ]));
+                let body = if boxed {
+                    ResponseBody::Other(source.into())
+                } else {
+                    ResponseBody::Body(source)
+                };
+                let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+                let mut body = Encoder::response(encoding, &mut head, body);
+                loop {
+                    let chunk = poll_fn(|cx| body.poll_next_chunk(cx))
+                        .await
+                        .expect("source error was lost");
+                    if let Err(err) = chunk {
+                        assert_eq!(err.to_string(), "body failed");
+                        break;
+                    }
+                }
+                assert!(poll_fn(|cx| body.poll_next_chunk(cx)).await.is_none());
+            }
+        }
     }
 
     async fn collect(body: &mut ResponseBody<Body>) -> Vec<u8> {
@@ -540,6 +587,11 @@ mod tests {
         buf
     }
 
+    /// STATEMENT: Compression skips ineligible response bodies and supports both boxed and typed streams.
+    ///
+    /// HOW:
+    /// - Check empty, identity/auto, bodyless-status, and already-encoded responses retain their original bodies.
+    /// - Encode boxed and typed streams and verify gzip headers and decompressed bytes.
     #[crate::rt_test]
     async fn encoder_response_bodies() {
         let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
@@ -625,6 +677,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Compression skips known bodies below its threshold but encodes threshold-sized and unknown-size bodies.
+    ///
+    /// HOW:
+    /// - Exercise byte and sized-stream bodies around 1 KiB for gzip, deflate, and Zstd.
+    /// - Check body/header choices and round-trip data, including an unknown-size one-byte stream.
     #[crate::rt_test]
     async fn encoder_skips_small_bodies() {
         for encoding in [
@@ -673,6 +730,11 @@ mod tests {
         zstd::zstd_safe::get_frame_content_size(data).unwrap()
     }
 
+    /// STATEMENT: Zstd frames record known body sizes and reject bodies exceeding their declared size.
+    ///
+    /// HOW:
+    /// - Encode bytes, sized multi-chunk streams, and unknown-size streams and inspect frame sizes and decoded bytes.
+    /// - Supply more bytes than declared and verify an encoding error.
     #[crate::rt_test]
     async fn encoder_zstd_known_size() {
         let data = Bytes::from(vec![b'x'; 4096]);
@@ -714,6 +776,28 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Zstd finalization rejects a body shorter than its declared size and fuses after that error.
+    ///
+    /// HOW:
+    /// - Encode a stream declaring twice the bytes it actually yields.
+    /// - Consume output until finalization fails and verify later polls return EOF.
+    #[crate::rt_test]
+    async fn encoder_zstd_short_body() {
+        let source = Chunks(vec![Bytes::from(vec![b'x'; 4096])], BodySize::Sized(8192));
+        let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+        let body = Body::from_message(source);
+        let mut body = Encoder::<Body>::response(ContentEncoding::Zstd, &mut head, body.into());
+        loop {
+            let chunk = poll_fn(|cx| body.poll_next_chunk(cx))
+                .await
+                .expect("short body was accepted");
+            if chunk.is_err() {
+                break;
+            }
+        }
+        assert!(poll_fn(|cx| body.poll_next_chunk(cx)).await.is_none());
+    }
+
     fn decompress(encoding: ContentEncoding, data: &[u8]) -> Vec<u8> {
         use std::io::Read;
 
@@ -731,6 +815,10 @@ mod tests {
         buf
     }
 
+    /// STATEMENT: Encoding offloads chunks at the codec-specific size threshold, not below it.
+    ///
+    /// HOW:
+    /// - Encode payloads immediately below and at each threshold and compare headers, round trips, and task counts.
     #[crate::rt_test]
     async fn encoder_offloads_large_chunks() {
         for (encoding, limit) in [
@@ -771,6 +859,11 @@ mod tests {
             .collect()
     }
 
+    /// STATEMENT: Large input is split into bounded blocking jobs and bounded encoded output chunks.
+    ///
+    /// HOW:
+    /// - Encode input spanning two task budgets plus an inline remainder for each codec.
+    /// - Verify output chunk bounds, full round trips, and exactly two offloaded jobs.
     #[crate::rt_test]
     async fn encoder_splits_large_chunks() {
         for (encoding, task, limit) in [
@@ -802,6 +895,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Failed encoding discards unprocessed input instead of emitting it later.
+    ///
+    /// HOW:
+    /// - Inject a failed blocking task alongside pending bytes and verify error, cleared input, and fused EOF.
     #[crate::rt_test]
     async fn encoder_drops_pending_on_error() {
         let mut enc = Encoder::<Body> {
@@ -819,6 +916,10 @@ mod tests {
         assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
     }
 
+    /// STATEMENT: A panicking blocking encoder is surfaced as cancellation and ends the output stream.
+    ///
+    /// HOW:
+    /// - Inject a panicking blocking task and check the cancellation message followed by EOF.
     #[crate::rt_test]
     async fn encoder_blocking_task_canceled() {
         let mut enc = Encoder::<Body> {
@@ -833,6 +934,10 @@ mod tests {
         assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
     }
 
+    /// STATEMENT: An encoder without an active codec does not emit its stored raw body.
+    ///
+    /// HOW:
+    /// - Construct that terminal encoder state with bytes present and verify polling returns EOF.
     #[crate::rt_test]
     async fn encoder_without_content_encoder() {
         let mut enc = Encoder::<Body> {
@@ -845,6 +950,11 @@ mod tests {
         assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
     }
 
+    /// STATEMENT: Encoder debug output identifies active codecs and body storage without exposing stream internals.
+    ///
+    /// HOW:
+    /// - Format all supported codec states and byte, typed-stream, and boxed-stream bodies.
+    /// - Check their labels and verify identity encoding creates no codec.
     #[test]
     fn encoder_debug() {
         assert!(ContentEncoder::new(ContentEncoding::Identity, None).is_none());
@@ -880,6 +990,11 @@ mod tests {
         std::iter::from_fn(|| enc.take()).collect()
     }
 
+    /// STATEMENT: Compression queues large output in nonempty bounded pages and uses the standard gzip header.
+    ///
+    /// HOW:
+    /// - Encode large incompressible input with every codec, inspect page sizes, and verify decompressed bytes.
+    /// - Compare the gzip header with flate2 output.
     #[test]
     fn encoder_writes_pages() {
         // the output of a large write is queued page by page
@@ -902,6 +1017,11 @@ mod tests {
         assert_eq!(chunks[0][..10], e.finish().unwrap()[..10]);
     }
 
+    /// STATEMENT: Finishing a compressed stream preserves trailers split across output-page boundaries.
+    ///
+    /// HOW:
+    /// - Sweep sizes around each codec's first two-page output boundary and verify round trips.
+    /// - Check page bounds and confirm cases with a short trailing page were exercised.
     #[test]
     fn encoder_finish_across_pages() {
         // some sizes end the compressed data a few bytes before the end of a
@@ -929,6 +1049,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Zstd compression limits its window allocation and reduces it for known-small bodies.
+    ///
+    /// HOW:
+    /// - Encode identical data with known and unknown sizes, inspect context memory use, and verify round trips.
     #[test]
     fn encoder_zstd_window() {
         let data = random(4096);
@@ -952,6 +1076,11 @@ mod tests {
         assert!(window[1] < 256 * 1024, "{}", window[1]);
     }
 
+    /// STATEMENT: Finishing releases codec state while leaving queued output readable and rejecting further encoding.
+    ///
+    /// HOW:
+    /// - Finish each codec, inspect terminal state and debug output, and reject subsequent write/finish calls.
+    /// - Drain queued pages and verify the original payload decompresses correctly.
     #[test]
     fn encoder_releases_state_on_finish() {
         for encoding in [
@@ -974,6 +1103,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Encoder output insertion preserves byte order when a write crosses a page boundary.
+    ///
+    /// HOW:
+    /// - Fill all but three bytes of a page, append eight distinct bytes, and compare the split page tails.
     #[test]
     fn encoder_put_across_pages() {
         let mut enc = ContentEncoder::new(ContentEncoding::Deflate, None).unwrap();
@@ -988,6 +1121,11 @@ mod tests {
         assert!(enc.take().is_none());
     }
 
+    /// STATEMENT: Writing after a full compression page continues without emitting empty output chunks.
+    ///
+    /// HOW:
+    /// - Feed repeated chunks to every codec, drain after each write and finish, and inspect nonempty output.
+    /// - Verify full-page states were reached and all data round-trips.
     #[test]
     fn encoder_write_after_full_page() {
         // a write can leave a full page, `zstd` does with these sizes, the
@@ -1067,6 +1205,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Pending source bodies flush decodable compressed prefixes without redundant empty output.
+    ///
+    /// HOW:
+    /// - Alternate small data, pending markers, empty input, and multi-page input for every codec.
+    /// - Compare decoded prefixes at each pause, check repeated polls emit nothing, and verify final round trips.
     #[test]
     fn encoder_flushes_when_body_is_pending() {
         let mut cx = Context::from_waker(std::task::Waker::noop());

@@ -254,6 +254,11 @@ mod tests {
     use super::*;
     use crate::http::header::{self, HeaderValue};
 
+    /// STATEMENT: Requests copied from a head retain its method and repeated headers without replacing client defaults.
+    ///
+    /// HOW:
+    /// - Copy a PATCH head with repeated accept values and a conflicting default header.
+    /// - Check method, repeated values, default precedence, and copying when no client default exists.
     #[crate::rt_test]
     async fn request_from_head() {
         let client = Client::builder().build(

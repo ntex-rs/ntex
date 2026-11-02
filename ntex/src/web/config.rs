@@ -283,6 +283,11 @@ mod tests {
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, App, HttpRequest, HttpResponse};
 
+    /// STATEMENT: `WebAppConfig` retains explicit settings and exposes its default identity.
+    ///
+    /// HOW:
+    /// - Set the host, local address, and pool size and assert their stored values.
+    /// - Check the default name and insecure mode, then enable and assert secure mode.
     #[crate::rt_test]
     async fn test_webappconfig() {
         let cfg = WebAppConfig::default()
@@ -297,6 +302,11 @@ mod tests {
         assert!(cfg.set_secure().secure());
     }
 
+    /// STATEMENT: An external resource registered through `configure` supports URL generation.
+    ///
+    /// HOW:
+    /// - Configure a named YouTube resource and return its generated URL from `/test`.
+    /// - Call the service and assert an OK response containing the substituted video URL.
     #[crate::rt_test]
     async fn test_configure_external_resource() {
         let srv = init_service(
@@ -320,6 +330,11 @@ mod tests {
         assert_eq!(body, Bytes::from_static(b"https://youtube.com/watch/12345"));
     }
 
+    /// STATEMENT: `ServiceConfig` registers both resources and direct routes in an application.
+    ///
+    /// HOW:
+    /// - Configure a resource returning `Created` and a direct route returning `Ok`.
+    /// - Send GET requests to both paths and assert their distinct response statuses.
     #[crate::rt_test]
     async fn test_configure_service() {
         let srv = init_service(App::new().configure(|cfg| {
@@ -343,6 +358,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: A fresh `ServiceConfig` contains no services or external resources.
+    ///
+    /// HOW:
+    /// - Construct `ServiceConfig::new` with an empty vector.
+    /// - Assert both registration collections are empty.
     #[test]
     fn test_new_service_config() {
         let cfg: ServiceConfig<(), ()> = ServiceConfig::new(Vec::new());

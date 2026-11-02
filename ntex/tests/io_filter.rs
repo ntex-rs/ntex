@@ -50,13 +50,11 @@ impl FilterLayer for BurstWriteFilter {
     }
 }
 
-/// A filter that produces a write burst (>= `write_buf_threshold`)
-/// during read-buffer processing must not break the io stream.
+/// STATEMENT: A filter write burst during read processing must not break the I/O driver or reenter its slab access.
 ///
-/// Regression test for the polling (neon) backend: the driver used to
-/// panic on reentrant slab access ("called `Option::unwrap()` on a
-/// `None` value") when a filter generated enough write data during
-/// read processing to trigger a direct write.
+/// HOW:
+/// - Install `BurstWriteFilter`, wait for its greeting, then send `ping` to trigger a 16 KiB burst exceeding `IoConfig::write_buf_threshold`.
+/// - Read and verify the entire burst followed by the echoed `ping`; this guards the neon backend's former reentrant `Option::unwrap()` panic.
 #[ntex::test]
 async fn test_filter_large_write_during_read_processing() {
     let srv = test_server(async || {

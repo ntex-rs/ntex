@@ -27,6 +27,11 @@ fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
     builder.build()
 }
 
+/// STATEMENT: The OpenSSL connector exposes peer metadata and receives application data for a string address.
+///
+/// HOW:
+/// - Connect to a local TLS server and assert `PeerAddr`, `HttpProtocol`, certificate bytes, certificate-chain length, and the received `test` payload.
+/// - On Unix, connect with a missing port and assert the resolved diagnostic backtrace identifies the connection service.
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_openssl_string() {
@@ -103,6 +108,11 @@ async fn test_openssl_string() {
     }
 }
 
+/// STATEMENT: OpenSSL delivers buffered application bytes before reporting the peer's closure.
+///
+/// HOW:
+/// - Have a TLS server send `test` and return after a delay; read and assert that payload through an `Rc<BytesCodec>`.
+/// - Send another payload and assert the next receive yields EOF.
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_openssl_read_before_error() {
@@ -138,6 +148,11 @@ async fn test_openssl_read_before_error() {
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
+/// STATEMENT: OpenSSL I/O shutdown delivers TLS `close_notify` to its peer.
+///
+/// HOW:
+/// - Echo `hello` through a server that calls `Io::shutdown` and verify the echo with a blocking OpenSSL client.
+/// - Read to clean EOF and assert `ShutdownState::RECEIVED`, distinguishing TLS shutdown from a bare TCP close.
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_openssl_shutdown_sends_close_notify() {
@@ -188,6 +203,11 @@ async fn test_openssl_shutdown_sends_close_notify() {
     );
 }
 
+/// STATEMENT: OpenSSL shutdown completes promptly when the peer answers `close_notify`.
+///
+/// HOW:
+/// - Request a one-megabyte response with a TLS 1.2 client, drain it to EOF, and answer the server's shutdown alert.
+/// - Assert the server's `Io::shutdown` succeeds in under 500 ms rather than waiting for its timeout.
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_openssl_shutdown_completes_on_peer_close_notify() {
@@ -243,6 +263,11 @@ async fn test_openssl_shutdown_completes_on_peer_close_notify() {
     );
 }
 
+/// STATEMENT: A zero OpenSSL handshake timeout disables the deadline.
+///
+/// HOW:
+/// - Set `TlsConfig` handshake timeout to `Seconds(0)` and delay the client handshake by 200 ms after connecting.
+/// - Complete TLS negotiation and assert `hello` is echoed.
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_openssl_accept_zero_handshake_timeout() {
@@ -279,6 +304,11 @@ async fn test_openssl_accept_zero_handshake_timeout() {
     assert_eq!(&echo, b"hello");
 }
 
+/// STATEMENT: The OpenSSL acceptor succeeds when the final handshake flight is followed immediately by EOF.
+///
+/// HOW:
+/// - Repeat 20 TLS connections and half-close the client TCP write side immediately after negotiation.
+/// - Assert each server accept succeeds and its first application receive returns EOF, even if EOF and handshake bytes arrive together.
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_openssl_accept_handshake_then_eof() {
@@ -333,6 +363,11 @@ async fn test_openssl_accept_handshake_then_eof() {
     }
 }
 
+/// STATEMENT: A zero rustls handshake timeout disables the deadline.
+///
+/// HOW:
+/// - Set the rustls acceptor's `TlsConfig` timeout to `Seconds(0)` and delay an OpenSSL client handshake by 200 ms.
+/// - Complete negotiation and assert `hello` is echoed.
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_rustls_accept_zero_handshake_timeout() {
@@ -371,6 +406,11 @@ async fn test_rustls_accept_zero_handshake_timeout() {
     assert_eq!(&echo, b"hello");
 }
 
+/// STATEMENT: The rustls acceptor succeeds when the final handshake flight is followed immediately by EOF.
+///
+/// HOW:
+/// - Repeat 20 OpenSSL client connections and immediately half-close each TCP write side after negotiation.
+/// - Assert the server reports successful acceptance followed by application EOF, including coalesced handshake and EOF delivery.
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_rustls_accept_handshake_then_eof() {
@@ -414,6 +454,11 @@ async fn test_rustls_accept_handshake_then_eof() {
     }
 }
 
+/// STATEMENT: The Schannel connector exposes peer metadata and exchanges data with an OpenSSL server.
+///
+/// HOW:
+/// - Connect using a `localhost` string address and assert `PeerAddr`, `HttpProtocol::Http1`, and the certificate DER bytes.
+/// - Send `test` and assert the echoed payload matches.
 #[cfg(all(windows, feature = "openssl"))]
 #[ntex::test]
 async fn test_schannel_string() {
@@ -455,6 +500,11 @@ async fn test_schannel_string() {
     assert_eq!(item, Bytes::from_static(b"test"));
 }
 
+/// STATEMENT: The rustls connector exposes peer metadata and drains data before EOF.
+///
+/// HOW:
+/// - Assert client-side address, protocol, certificate, and certificate-chain metadata; assert the unauthenticated server sees no client certificates.
+/// - Receive `test`, queue and flush a reply, and assert the next receive is EOF.
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_string() {
@@ -515,6 +565,11 @@ async fn test_rustls_string() {
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
+/// STATEMENT: Receiving rustls `close_notify` closes I/O even when the peer keeps TCP open.
+///
+/// HOW:
+/// - Verify an echo round trip, then queue plaintext and `close_notify` together on a blocking rustls client without half-closing TCP.
+/// - Read raw TLS bytes until EOF or reset and fail if the server does not close within the read timeout.
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_peer_close_notify_closes_io() {
@@ -591,6 +646,11 @@ async fn test_rustls_peer_close_notify_closes_io() {
     }
 }
 
+/// STATEMENT: Rustls I/O shutdown sends `close_notify` instead of ending with an unclean TCP EOF.
+///
+/// HOW:
+/// - Echo `hello` through a server that calls `Io::shutdown` and assert the blocking rustls client receives the echo.
+/// - Continue reading and require clean EOF rather than `UnexpectedEof` or another error.
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_shutdown_sends_close_notify() {
@@ -643,6 +703,11 @@ async fn test_rustls_shutdown_sends_close_notify() {
     }
 }
 
+/// STATEMENT: Rustls shutdown waits for the peer's TLS shutdown response rather than completing on its own alert.
+///
+/// HOW:
+/// - Read the server's `close_notify`, delay 300 ms, and answer it while keeping the TCP socket open.
+/// - Assert `Io::shutdown` succeeds after at least 300 ms but before 900 ms, ahead of the default timeout.
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_shutdown_waits_for_peer_close_notify() {
@@ -698,6 +763,11 @@ async fn test_rustls_shutdown_waits_for_peer_close_notify() {
     );
 }
 
+/// STATEMENT: Rustls flushes a TLS 1.3 key-update response generated during read processing on an otherwise idle connection.
+///
+/// HOW:
+/// - Complete a TLS 1.3 handshake, exchange and verify `ping`, then request a traffic-key update.
+/// - Without sending more application data, require nonempty TLS input from the server and process it successfully.
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_keyupdate_response_flushed() {
@@ -781,6 +851,11 @@ async fn test_rustls_keyupdate_response_flushed() {
     }
 }
 
+/// STATEMENT: An explicit socket address overrides an unresolved host string, while a host without a port fails.
+///
+/// HOW:
+/// - Connect with `Connect::with("10", server_addr)` and assert the reported `PeerAddr`.
+/// - Connect using `127.0.0.1` without a port and assert an error.
 #[ntex::test]
 async fn test_static_str() {
     let srv = test_server(async || {
@@ -805,6 +880,11 @@ async fn test_static_str() {
     assert!(io.is_err());
 }
 
+/// STATEMENT: A connector pipeline connects using an explicitly supplied socket address.
+///
+/// HOW:
+/// - Start a byte-sending TCP server and call a new `Connector` pipeline with `Connect::with`.
+/// - Assert the connected I/O reports the server's address through `PeerAddr`.
 #[ntex::test]
 async fn test_create() {
     let srv = test_server(async || {
@@ -822,6 +902,11 @@ async fn test_create() {
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
+/// STATEMENT: A plain connector resolves the host and port from a URL.
+///
+/// HOW:
+/// - Start a local TCP server and construct an HTTPS `Url` containing its port.
+/// - Connect through `Connector` and assert `PeerAddr` matches the server address.
 #[ntex::test]
 async fn test_uri() {
     let srv = test_server(async || {
@@ -841,6 +926,11 @@ async fn test_uri() {
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
+/// STATEMENT: A connector establishes the TCP connection specified by a URL pointing at a rustls listener.
+///
+/// HOW:
+/// - Start a rustls acceptor and construct an HTTPS `Url` using its local port.
+/// - Call the default `Connector` and assert the returned I/O has the expected `PeerAddr`.
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_uri() {
@@ -868,6 +958,11 @@ async fn test_rustls_uri() {
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
+/// STATEMENT: Connector validation rejects invalid destinations and falls back across supplied addresses.
+///
+/// HOW:
+/// - Assert empty and out-of-range-port destinations fail, the debug label contains `Connector`, and a valid server address connects.
+/// - Supply an unavailable address followed by the server address and require success; also verify `connect_with` using explicit configuration.
 #[ntex::test]
 async fn basic_connect_service() {
     let server = ntex::server::test_server(async || service(async |_| Ok::<_, ()>(())));

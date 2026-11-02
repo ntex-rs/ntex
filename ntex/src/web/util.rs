@@ -466,6 +466,11 @@ impl<B> BodyEncoding for HttpResponse<B> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Body encoding metadata survives response construction and remains mutable.
+    ///
+    /// HOW:
+    /// - Assert a new builder has no encoding, then set and read `Gzip`.
+    /// - Build the response, verify `Gzip` persists, and replace it with `Identity`.
     #[test]
     fn body_encoding() {
         let mut builder = HttpResponse::Ok();
@@ -479,6 +484,11 @@ mod tests {
         assert_eq!(res.get_encoding(), Some(ContentEncoding::Identity));
     }
 
+    /// STATEMENT: Blocking task panics become cancellation errors while ordinary errors are preserved.
+    ///
+    /// HOW:
+    /// - Run a panicking closure with `block` and assert `BlockingError::Canceled`.
+    /// - Run an error-returning closure and assert `BlockingError::Error` retains its value.
     #[crate::rt_test]
     async fn block_canceled() {
         let res = block(|| -> Result<(), ()> { panic!("blocking panic") }).await;

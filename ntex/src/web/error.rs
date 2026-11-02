@@ -759,6 +759,11 @@ mod tests {
     use crate::client::error::{ClientError, ConnectError};
     use crate::{http, web::WebError};
 
+    /// STATEMENT: `WebError` preserves error formatting while response traits select their own status.
+    ///
+    /// HOW:
+    /// - Wrap `UrlencodedError::UnknownLength` and assert its display and debug text.
+    /// - Assert the HTTP error trait returns 500 while the web error renderer returns 411.
     #[test]
     fn test_into_error() {
         let e = WebError::<(), _>::from_err(UrlencodedError::UnknownLength);
@@ -777,6 +782,11 @@ mod tests {
         assert_eq!(res.status(), StatusCode::LENGTH_REQUIRED);
     }
 
+    /// STATEMENT: Timeout, client, and decoding errors map to their appropriate web response statuses.
+    ///
+    /// HOW:
+    /// - Render timeout and client connection, timeout, and send errors and assert 504, 400, or 500.
+    /// - Render content-type, query, payload, UTF-8, and enabled cookie parse failures as 400.
     #[test]
     fn test_other_errors() {
         use crate::util::timeout::TimeoutError;
@@ -836,6 +846,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: `Either` delegates response rendering to the error in its active branch.
+    ///
+    /// HOW:
+    /// - Render a left client timeout and a right payload-decoding error.
+    /// - Assert `GATEWAY_TIMEOUT` and `BAD_REQUEST`, respectively.
     #[test]
     fn test_either_error() {
         let err: Either<ClientError, PayloadError> = Either::Left(ClientError::Timeout);
@@ -847,6 +862,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: I/O error kinds distinguish missing, forbidden, and internal-server responses.
+    ///
+    /// HOW:
+    /// - Render `NotFound`, `PermissionDenied`, and an unspecified I/O error.
+    /// - Assert statuses 404, 403, and 500, respectively.
     #[test]
     fn test_io_error() {
         assert_eq!(
@@ -868,6 +888,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: URL-encoded payload errors distinguish size, length, and content-type failures.
+    ///
+    /// HOW:
+    /// - Render `Overflow`, `UnknownLength`, and `ContentType` errors.
+    /// - Assert statuses 413, 411, and 400, respectively.
     #[test]
     fn test_urlencoded_error() {
         let resp: HttpResponse =
@@ -881,6 +906,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: JSON payload overflow and content-type errors use different response statuses.
+    ///
+    /// HOW:
+    /// - Render `JsonPayloadError::Overflow` and `JsonPayloadError::ContentType`.
+    /// - Assert `PAYLOAD_TOO_LARGE` and `BAD_REQUEST`, respectively.
     #[test]
     fn test_json_payload_error() {
         let resp: HttpResponse = WebResponseError::error_response(&JsonPayloadError::Overflow, &());
@@ -890,6 +920,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: Query deserialization failures produce a bad-request response.
+    ///
+    /// HOW:
+    /// - Wrap a failed integer query parse in `QueryPayloadError::Deserialize`.
+    /// - Render it and assert `BAD_REQUEST`.
     #[test]
     fn test_query_payload_error() {
         let err = QueryPayloadError::Deserialize(
@@ -899,6 +934,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: Path deserialization failures produce a not-found response.
+    ///
+    /// HOW:
+    /// - Wrap a failed integer parse in `PathError::Deserialize`.
+    /// - Render it and assert `NOT_FOUND`.
     #[test]
     fn test_path_error() {
         let err =
@@ -907,6 +947,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// STATEMENT: WebSocket handshake errors report method or upgrade failures and supported versions.
+    ///
+    /// HOW:
+    /// - Render each handshake error and assert 405 for a non-GET method and 400 otherwise.
+    /// - Assert an unsupported version response advertises WebSocket version 13.
     #[cfg(feature = "ws")]
     #[test]
     fn test_handshake_error() {
@@ -953,6 +998,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: Error helper constructors render their corresponding HTTP status codes.
+    ///
+    /// HOW:
+    /// - Check `InternalError` debug identity and a custom bad-request response.
+    /// - Render the client- and server-error helper constructors and assert every named status.
     #[test]
     fn test_error_helpers() {
         let err = ErrorBadRequest::<_>("err");
@@ -1176,6 +1226,12 @@ mod tests {
         assert_eq!(r.status(), StatusCode::NETWORK_AUTHENTICATION_REQUIRED);
     }
 
+    /// STATEMENT: Default renderers classify serialization, cancellation, and payload failures.
+    ///
+    /// HOW:
+    /// - Render JSON, URL-encoding, header, URL-generation, and cancellation errors as 500.
+    /// - Assert generic deserialization and client-payload failures return 400, overflow returns 413,
+    ///   and an enabled OpenSSL error returns 400.
     #[test]
     fn test_default_error_renderers() {
         use serde::de::Error as _;
@@ -1230,6 +1286,12 @@ mod tests {
 
     impl WebResponseError<(), DefaultError> for CustomError {}
 
+    /// STATEMENT: `WebError` preserves sources and display text across wrapping and renders defaults.
+    ///
+    /// HOW:
+    /// - Render a custom error directly and wrapped, checking 500 and its inner source text.
+    /// - Wrap the `WebError` again and assert the original display text and status remain intact.
+    /// - Render a generic cancellation error and assert 500.
     #[test]
     fn test_web_error() {
         let err = CustomError(io::Error::other("inner"));
@@ -1252,6 +1314,11 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    /// STATEMENT: An `InternalError` consumes its supplied response only once.
+    ///
+    /// HOW:
+    /// - Construct the error with an OK response and render it twice.
+    /// - Assert the first status is OK and the second falls back to `INTERNAL_SERVER_ERROR`.
     #[test]
     fn test_internal_error_response_taken() {
         let err = InternalError::from_response("err", HttpResponse::Ok().build());

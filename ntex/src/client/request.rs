@@ -549,6 +549,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Request debug output identifies the request and its ordinary headers.
+    ///
+    /// HOW:
+    /// - Format a request carrying a custom header and check both the type name and header name appear.
     #[crate::rt_test]
     async fn test_debug() {
         let request = Client::new().get("/").header("x-test", "111");
@@ -557,6 +561,11 @@ mod tests {
         assert!(repr.contains("x-test"));
     }
 
+    /// STATEMENT: Request builders apply method, version, headers, and conditional transformations.
+    ///
+    /// HOW:
+    /// - Build an HTTP/2 PUT with true/false and present/absent conditions and inspect which headers were added.
+    /// - Check method/version accessors and exercise mutable headers and body sending.
     #[crate::rt_test]
     async fn test_basics() {
         let mut req = Client::new()
@@ -586,6 +595,10 @@ mod tests {
         let _ = req.send_body("").await;
     }
 
+    /// STATEMENT: Request cookies combine with one another and extend a preexisting cookie header.
+    ///
+    /// HOW:
+    /// - Prepare requests with two builder cookies and with a raw header plus one cookie, then compare header entries.
     #[cfg(feature = "cookie")]
     #[crate::rt_test]
     async fn cookies_extend_cookie_header() {
@@ -613,6 +626,10 @@ mod tests {
         assert_eq!(cookie_header(&mut req), "c0=v0; c1=v1");
     }
 
+    /// STATEMENT: Client-wide default headers are copied into new requests.
+    ///
+    /// HOW:
+    /// - Configure a default content type, construct a request, and compare its stored header.
     #[crate::rt_test]
     async fn test_client_header() {
         let req = Client::builder()
@@ -637,6 +654,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Request-specific header replacement overrides a client default.
+    ///
+    /// HOW:
+    /// - Configure a default content type, replace it on a request, and check the new value.
     #[crate::rt_test]
     async fn test_client_header_override() {
         let req = Client::builder()
@@ -662,6 +683,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Request Basic authentication supports both supplied and omitted passwords.
+    ///
+    /// HOW:
+    /// - Build both credential forms and compare their complete encoded authorization values.
     #[crate::rt_test]
     async fn client_basic_auth() {
         let req = Client::new()
@@ -691,6 +716,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Request bearer authentication constructs the expected authorization value.
+    ///
+    /// HOW:
+    /// - Set a bearer token on a request and compare the resulting header.
     #[crate::rt_test]
     async fn client_bearer_auth() {
         let req = Client::new().get("/").bearer_auth("someS3cr3tAutht0k3n");
@@ -706,6 +735,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Authentication and content-length setters replace prior values rather than append duplicates.
+    ///
+    /// HOW:
+    /// - Override client authentication, repeat length setters, and switch authentication schemes.
+    /// - Check resulting values and single-header counts for both requests and client configuration.
     #[crate::rt_test]
     async fn client_auth_replaces_header() {
         let client = Client::builder().build(
@@ -749,6 +783,11 @@ mod tests {
         assert_eq!(cfg.headers().get_all(header::AUTHORIZATION).count(), 1);
     }
 
+    /// STATEMENT: Request construction errors are retained and returned when sending.
+    ///
+    /// HOW:
+    /// - Build a malformed URL, inspect its stored parse error, and verify sending returns that category.
+    /// - Build an invalid header and check it is stored as an HTTP error.
     #[crate::rt_test]
     async fn client_invalid_url() {
         let req = Client::new().get("http://local host/");
@@ -766,6 +805,11 @@ mod tests {
         assert!(matches!(req.err, Some(ClientError::Http(_))));
     }
 
+    /// STATEMENT: Query serialization replaces an existing query while preserving the URL path and surfacing errors.
+    ///
+    /// HOW:
+    /// - Serialize pairs into relative, pathless, and already-queried URLs and compare the results.
+    /// - Use a failing serializer and check the request stores its error.
     #[crate::rt_test]
     async fn client_query() {
         let req = Client::new()
@@ -788,6 +832,11 @@ mod tests {
         assert_eq!(req.get_uri(), "http://localhost/p?k=v");
     }
 
+    /// STATEMENT: Header builders reject invalid input except when an existing conditional header makes replacement unnecessary.
+    ///
+    /// HOW:
+    /// - Try malformed names and values across header setters and verify stored and send-time HTTP errors.
+    /// - Attempt conditional replacement of an existing header with an invalid value and check the original survives.
     #[crate::rt_test]
     async fn client_invalid_headers() {
         let bad_value = "a\nb";
@@ -815,6 +864,10 @@ mod tests {
         assert_eq!(req.headers().get("x-test").unwrap(), "1");
     }
 
+    /// STATEMENT: Sending rejects URLs with missing host, missing scheme, or unsupported scheme distinctly.
+    ///
+    /// HOW:
+    /// - Send relative, scheme-relative, authority-like, and FTP URLs and compare their URL error classifications.
     #[crate::rt_test]
     async fn client_url_validation() {
         for (url, expected) in [
@@ -834,6 +887,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Request debug output redacts authorization while retaining an explicit connection address.
+    ///
+    /// HOW:
+    /// - Build an authenticated request with an address override and check the address and redacted debug representation.
     #[crate::rt_test]
     async fn test_debug_redacts_authorization() {
         let req = Client::new()

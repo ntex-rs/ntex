@@ -132,6 +132,11 @@ mod tests {
     use crate::service::{Identity, Pipeline, fn_service};
     use crate::web::{HttpResponse, test::TestRequest};
 
+    /// STATEMENT: `WebStack` preserves successful responses and converts service errors into web errors.
+    ///
+    /// HOW:
+    /// - Wrap a service returning OK or a not-found I/O error with identity middleware.
+    /// - Assert the successful status and the error's text, then render the error and assert 404.
     #[crate::rt_test]
     async fn test_web_middleware() {
         let svc = fn_service(async |req: WebRequest<()>| {

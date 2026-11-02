@@ -114,6 +114,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Optimized WebSocket masking matches bytewise XOR for aligned and unaligned buffers.
+    ///
+    /// HOW:
+    /// - Apply a native-endian mask to a complete buffer and an offset slice.
+    /// - Compare each result with the safe bytewise reference implementation.
     #[test]
     fn test_apply_mask() {
         let mask = [0x6d, 0xb6, 0xb2, 0x80];

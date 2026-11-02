@@ -271,6 +271,11 @@ mod tests {
     use super::*;
     use crate::service::cfg::SharedCfg;
 
+    /// STATEMENT: Response decoding skips informational heads except protocol switching.
+    ///
+    /// HOW:
+    /// - Decode multiple interim responses followed by complete or fragmented final heads.
+    /// - Check final headers and payload boundaries, and verify `101` is returned directly.
     #[test]
     fn test_skip_interim_responses() {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
@@ -302,6 +307,10 @@ mod tests {
         assert_eq!(head.status, StatusCode::SWITCHING_PROTOCOLS);
     }
 
+    /// STATEMENT: Response persistence follows the protocol version and explicit connection directives.
+    ///
+    /// HOW:
+    /// - Decode HTTP/1.0 and HTTP/1.1 responses with default, keep-alive, and close settings and compare reuse decisions.
     #[test]
     fn test_http10_response_keepalive() {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
@@ -326,6 +335,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Successful CONNECT responses become non-reusable tunnels regardless of framing headers.
+    ///
+    /// HOW:
+    /// - Encode CONNECT requests and decode successful responses with varied framing, checking streamed tunnel bytes.
+    /// - Decode a proxy-authentication failure and verify ordinary payload framing and persistence remain.
     #[crate::rt_test]
     async fn test_connect_response_is_tunnel() {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
@@ -374,6 +388,11 @@ mod tests {
         assert!(codec.keepalive());
     }
 
+    /// STATEMENT: Empty requests declare content length according to their method and explicit body size.
+    ///
+    /// HOW:
+    /// - Encode requests across body-bearing and other methods with absent, empty, and sized bodies.
+    /// - Check the expected content-length header or its absence in the wire output.
     #[crate::rt_test]
     async fn test_empty_request_content_length() {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();

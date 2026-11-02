@@ -258,6 +258,11 @@ fn client_cfg(deflate: DeflateConfig) -> WsClientConfig {
         .set_deflate(deflate)
 }
 
+/// STATEMENT: Negotiated `permessage-deflate` compresses data frames while leaving control and continuation frames correctly marked.
+///
+/// HOW:
+/// - Assert the default extension offer, response header, and negotiated codec configuration.
+/// - Run `roundtrip` over repeated/empty text, large compressible and random binary data, fragmented messages, ping/pong, and close; compare frames and `ROUNDTRIP_RSV1`.
 #[ntex::test]
 async fn deflate_accepted() {
     let srv = deflate_server(Some("permessage-deflate"), Some(DeflateConfig::new()));
@@ -283,6 +288,11 @@ async fn deflate_accepted() {
     assert_eq!(srv.rsv1(), ROUNDTRIP_RSV1);
 }
 
+/// STATEMENT: Deflate negotiation applies agreed window/context limits while retaining the client's compression level.
+///
+/// HOW:
+/// - Offer custom parameters and assert the wire offer and negotiated `DeflateConfig` use the agreed limits and level `1`.
+/// - Run `roundtrip` and assert `ROUNDTRIP_RSV1_NO_CONTEXT`, including uncompressed small unfragmented messages.
 #[ntex::test]
 async fn deflate_accepted_with_params() {
     let agreed = DeflateConfig::new()
@@ -318,6 +328,11 @@ async fn deflate_accepted_with_params() {
     assert_eq!(srv.rsv1(), ROUNDTRIP_RSV1_NO_CONTEXT);
 }
 
+/// STATEMENT: An agreed eight-bit client compression window supports complete message round trips.
+///
+/// HOW:
+/// - Have the server select `client_max_window_bits=8` and assert the negotiated codec configuration.
+/// - Run `roundtrip` to verify text, binary, fragmentation, control frames, and close with that window.
 #[ntex::test]
 async fn deflate_8_bit_client_window() {
     let agreed = DeflateConfig::new().set_client_max_window_bits(8);
@@ -334,6 +349,11 @@ async fn deflate_8_bit_client_window() {
     roundtrip(conn).await;
 }
 
+/// STATEMENT: A declined deflate offer leaves messages uncompressed and fully functional.
+///
+/// HOW:
+/// - Offer deflate to a server returning no extension and assert the offer exists but the codec has no deflate configuration.
+/// - Run `roundtrip` and assert every recorded RSV1 bit is clear.
 #[ntex::test]
 async fn deflate_declined() {
     let srv = deflate_server(None, None);
@@ -349,6 +369,11 @@ async fn deflate_declined() {
     assert!(srv.rsv1().iter().all(|rsv1| !rsv1));
 }
 
+/// STATEMENT: The client neither offers deflate by default nor accepts unsolicited extension negotiation.
+///
+/// HOW:
+/// - Connect without deflate configuration and assert no offer and no codec deflate state.
+/// - Have another server return unsolicited `permessage-deflate` and assert `UnexpectedWebSocketExtensions` contains that value.
 #[ntex::test]
 async fn deflate_not_offered() {
     let srv = deflate_server(None, None);
@@ -369,6 +394,11 @@ async fn deflate_not_offered() {
     ));
 }
 
+/// STATEMENT: Invalid, duplicate, incompatible, or unexpected WebSocket extension responses are rejected.
+///
+/// HOW:
+/// - Try missing/out-of-range parameters, unknown parameters, duplicate offers, and an unmet no-context-takeover requirement; assert `InvalidWebSocketExtensions`.
+/// - Return an unrelated extension and assert `UnexpectedWebSocketExtensions`.
 #[ntex::test]
 async fn deflate_invalid_response() {
     for response in [
@@ -418,6 +448,11 @@ async fn deflate_invalid_response() {
     ));
 }
 
+/// STATEMENT: The split WebSocket sink and receiver share negotiated deflate across repeated messages.
+///
+/// HOW:
+/// - Negotiate deflate and exchange 20 alternating large binary and text messages through the sink and receiver, asserting each frame.
+/// - Assert an empty close reply and RSV1 set on all 20 data frames.
 #[ntex::test]
 async fn deflate_sink_and_receiver() {
     let srv = deflate_server(Some("permessage-deflate"), Some(DeflateConfig::new()));
@@ -461,6 +496,11 @@ async fn deflate_sink_and_receiver() {
     assert!(srv.rsv1().iter().take(20).all(|rsv1| *rsv1));
 }
 
+/// STATEMENT: A WebSocket byte transport retains negotiated compression.
+///
+/// HOW:
+/// - Negotiate deflate, convert with `into_transport`, and send 100,000 compressible bytes using `BytesCodec`.
+/// - Collect the echoed chunks, assert exact bytes, and assert RSV1 on every recorded data frame.
 #[ntex::test]
 async fn deflate_transport() {
     let srv = deflate_server(Some("permessage-deflate"), Some(DeflateConfig::new()));
@@ -486,6 +526,11 @@ async fn deflate_transport() {
     assert!(srv.rsv1().iter().all(|rsv1| *rsv1));
 }
 
+/// STATEMENT: The WebSocket frame-size limit applies to decompressed data and triggers an uncompressed close.
+///
+/// HOW:
+/// - Set a 64 KiB receive limit, negotiate deflate, and send a highly compressible message one byte larger than the limit.
+/// - Assert `ProtocolError::Overflow`, receiver EOF, and recorded RSV1 bits for compressed data followed by an uncompressed close opcode.
 #[ntex::test]
 async fn decompressed_size_limit() {
     // the server sends a message that is larger than the client's limit once
@@ -533,6 +578,11 @@ async fn decompressed_size_limit() {
     assert_eq!(received[1], 0x88);
 }
 
+/// STATEMENT: Compressed WebSocket control frames are rejected even after deflate negotiation.
+///
+/// HOW:
+/// - Negotiate deflate and have a raw server send a control frame with RSV1 set.
+/// - Assert the receiver reports `ProtocolError::ReservedBits(0b100)` within the timeout.
 #[ntex::test]
 async fn compressed_close_reason_is_rejected() {
     // control frames cannot be compressed, the client fails the connection

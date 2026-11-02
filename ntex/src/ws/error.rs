@@ -308,6 +308,10 @@ impl ResponseError for ProtocolError {}
 mod tests {
     use super::*;
 
+    /// STATEMENT: WebSocket client conversion distinguishes codec failures from transport disconnects.
+    ///
+    /// HOW:
+    /// - Convert both sides of decoding and encoding error unions and inspect the resulting error variants.
     #[test]
     fn test_client_error_from_either() {
         let err = WsClientError::from(Either::<DecodeError, io::Error>::Left(DecodeError::Method));
@@ -329,6 +333,11 @@ mod tests {
         assert!(matches!(err, WsClientError::Disconnected(Some(_))));
     }
 
+    /// STATEMENT: Cloning WebSocket client errors preserves their diagnostics and error signature.
+    ///
+    /// HOW:
+    /// - Clone configuration, handshake, protocol, timeout, connection, and disconnect errors.
+    /// - Compare display/debug output and check the common client-error signature.
     #[test]
     fn test_client_error_clone() {
         let hdr = HeaderValue::from_static("v");

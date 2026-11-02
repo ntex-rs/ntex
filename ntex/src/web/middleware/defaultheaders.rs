@@ -147,6 +147,11 @@ mod tests {
     use crate::web::{HttpResponse, test::TestRequest, test::ok_service};
     use crate::{Pipeline, fn_service, util::lazy};
 
+    /// STATEMENT: Default headers fill missing response headers without replacing existing values.
+    ///
+    /// HOW:
+    /// - Check middleware readiness/shutdown and assert an absent content type receives `0001`.
+    /// - Wrap a service already returning `0002` and assert that value is preserved.
     #[crate::rt_test]
     async fn test_default_headers() {
         let mw = Pipeline::new(
@@ -183,18 +188,33 @@ mod tests {
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
     }
 
+    /// STATEMENT: Configuring an invalid default header name panics with a descriptive error.
+    ///
+    /// HOW:
+    /// - Pass a space-containing header name to `DefaultHeaders::header`.
+    /// - Require a panic containing `Cannot create header name`.
     #[crate::rt_test]
     #[should_panic(expected = "Cannot create header name")]
     async fn test_invalid_header_name() {
         DefaultHeaders::new().header("no existing header name", "0001");
     }
 
+    /// STATEMENT: Configuring an invalid default header value panics with a descriptive error.
+    ///
+    /// HOW:
+    /// - Pass a newline as the content-type header value.
+    /// - Require a panic containing `Cannot create header value`.
     #[crate::rt_test]
     #[should_panic(expected = "Cannot create header value")]
     async fn test_invalid_header_value() {
         DefaultHeaders::new().header(CONTENT_TYPE, "\n");
     }
 
+    /// STATEMENT: Enabling the default content type supplies octet-stream when the service omits it.
+    ///
+    /// HOW:
+    /// - Wrap an OK service with `DefaultHeaders::content_type`.
+    /// - Call it and assert `Content-Type` is `application/octet-stream`.
     #[crate::rt_test]
     async fn test_content_type() {
         let srv = fn_service(async move |req: WebRequest<()>| {

@@ -118,6 +118,11 @@ mod tests {
         format!("filtered:{n}")
     }
 
+    /// STATEMENT: `AppState` exposes its inner state through accessors, dereferencing, and cloning.
+    ///
+    /// HOW:
+    /// - Wrap a named `Counter` and assert its name through `st`, dereference, and a clone.
+    /// - Construct default state and assert its default name is empty.
     #[test]
     fn app_state() {
         let st = AppState::new(Counter {
@@ -130,6 +135,12 @@ mod tests {
         assert_eq!(AppState::<Counter>::default().name, "");
     }
 
+    /// STATEMENT: State-aware handlers compose with extractors, method routes, fallbacks, and filters.
+    ///
+    /// HOW:
+    /// - Build handlers sharing named counter state, a numeric path extractor, and a state-mapping filter.
+    /// - Assert exact statuses and bodies for valid/invalid paths, method-specific handlers, and fallbacks.
+    /// - Assert the filter supplies numeric input and exactly three calls increment shared state.
     #[crate::rt_test]
     async fn state_handlers() {
         let st = AppState::new(Counter {
@@ -196,6 +207,11 @@ mod tests {
         assert_eq!(st.hits.get(), 3);
     }
 
+    /// STATEMENT: `build_with` supplies fixed handler state independently of the pipeline's state type.
+    ///
+    /// HOW:
+    /// - Build a counter-state application with a `usize` pipeline state.
+    /// - Assert the registered route is OK, a missing path is 404, and the fixed counter increments once.
     #[crate::rt_test]
     async fn build_with() {
         let st = AppState::new(Counter {

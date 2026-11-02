@@ -16,6 +16,11 @@ use ntex::{SharedCfg, io::IoConfig, server::Affinity, server::TestServer, time::
 use ntex::{rt, time::sleep};
 use ntex_tls::TlsConfig;
 
+/// STATEMENT: A configured `HttpServer` accepts HTTP requests and can be stopped.
+///
+/// HOW:
+/// - Start a one-worker bound server with connection, TLS-handshake, keepalive, and timeout settings in another system thread.
+/// - Send GET, assert success, then stop the server and system.
 #[ntex::test]
 async fn test_run() {
     let addr = TestServer::unused_addr();
@@ -106,6 +111,11 @@ async fn client() -> ntex::client::Client {
         )
 }
 
+/// STATEMENT: An OpenSSL-bound `HttpServer` exposes secure app configuration to handlers.
+///
+/// HOW:
+/// - Start `bind_openssl` with `WebAppConfig::set_secure` and assert `req.app_config().secure()` in the route.
+/// - Send HTTPS GET with the OpenSSL client, assert success, and stop the server.
 #[ntex::test]
 #[cfg(feature = "openssl")]
 async fn test_openssl() {
@@ -157,6 +167,11 @@ async fn test_openssl() {
     sys.stop();
 }
 
+/// STATEMENT: A rustls-bound `HttpServer` exposes secure app configuration to handlers.
+///
+/// HOW:
+/// - Start `bind_rustls` with secure app configuration and assert `req.app_config().secure()` in the route.
+/// - Send HTTPS GET with the OpenSSL client, assert success, and stop the server.
 #[ntex::test]
 #[cfg(all(unix, feature = "rustls", feature = "openssl"))]
 async fn test_rustls() {
@@ -205,6 +220,11 @@ async fn test_rustls() {
     sys.stop();
 }
 
+/// STATEMENT: `HttpServer::bind_uds` serves HTTP over a Unix-domain socket.
+///
+/// HOW:
+/// - Bind a Unix-domain endpoint and configure a client connector using `rt::unix_connect`.
+/// - Send GET through that connector, assert success, then stop the server and system.
 #[ntex::test]
 #[cfg(unix)]
 async fn test_bind_uds() {
@@ -251,6 +271,11 @@ async fn test_bind_uds() {
     sys.stop();
 }
 
+/// STATEMENT: `HttpServer::listen_uds` serves HTTP from a supplied Unix listener.
+///
+/// HOW:
+/// - Create a `UnixListener`, pass it to the server, and configure a client using `rt::unix_connect`.
+/// - Send GET through the Unix socket, assert success, then stop the server and system.
 #[ntex::test]
 #[cfg(unix)]
 async fn test_listen_uds() {
@@ -317,6 +342,11 @@ impl ntex::server::ServerAppConfig for CounterConfig {
     }
 }
 
+/// STATEMENT: `server_with_config` provides initialized application state to factories and handlers.
+///
+/// HOW:
+/// - Use `CounterConfig` to construct `Counter(42)` and assert the factory receives `42`.
+/// - Send GET to a state-aware route, assert success and body `42`, then stop the server.
 #[ntex::test]
 async fn test_with_config() {
     let addr = TestServer::unused_addr();
@@ -357,6 +387,11 @@ async fn test_with_config() {
     sys.stop();
 }
 
+/// STATEMENT: `HttpServer::bind` reports occupied and empty address inputs distinctly.
+///
+/// HOW:
+/// - Keep a TCP listener open and attempt to bind a server to its address.
+/// - Assert `AddrInUse`, then bind an empty address slice and assert `InvalidInput`.
 #[ntex::test]
 async fn test_bind_error() {
     let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -397,6 +432,11 @@ async fn client_alpn(protos: &[u8]) -> ntex::client::Client {
         .build(SharedCfg::default())
 }
 
+/// STATEMENT: An OpenSSL listener negotiates supported ALPN and falls back to HTTP/1.1 for unknown protocols.
+///
+/// HOW:
+/// - Serve the request version from a supplied OpenSSL TCP listener.
+/// - Offer HTTP/2 plus HTTP/1.1, HTTP/1.1 only, and an unknown protocol; assert successful responses with versions HTTP/2, HTTP/1.1, and HTTP/1.1 respectively.
 #[ntex::test]
 #[cfg(feature = "openssl")]
 async fn test_listen_openssl() {
@@ -446,6 +486,11 @@ async fn test_listen_openssl() {
     sys.stop();
 }
 
+/// STATEMENT: `HttpServer::listen_rustls` serves HTTPS from a supplied TCP listener.
+///
+/// HOW:
+/// - Start a rustls server using an existing listener and its TLS configuration.
+/// - Send HTTPS GET with an OpenSSL client, assert success, and stop the server and system.
 #[ntex::test]
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 async fn test_listen_rustls() {

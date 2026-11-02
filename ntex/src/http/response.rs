@@ -881,6 +881,11 @@ mod tests {
     use super::*;
     use crate::http::header::{CONTENT_TYPE, COOKIE};
 
+    /// STATEMENT: Taking a response transfers its body into an independent head without copying extensions.
+    ///
+    /// HOW:
+    /// - Take a response with custom status, reason, headers, body, and extension, then mutate both results.
+    /// - Check copied metadata, transferred body, independent headers/status, and original-only extensions.
     #[test]
     fn test_take_copies_head() {
         let mut resp = Response::NotFound()
@@ -907,6 +912,10 @@ mod tests {
         assert_eq!(resp.extensions().get::<u8>(), Some(&1));
     }
 
+    /// STATEMENT: Response, head, and builder debug output identify their respective types.
+    ///
+    /// HOW:
+    /// - Format responses and a builder with repeated cookie headers and check the type labels.
     #[test]
     fn test_debug() {
         let resp = Response::Ok()
@@ -925,6 +934,10 @@ mod tests {
         assert!(dbg.contains("ResponseBuilder"));
     }
 
+    /// STATEMENT: Response cookie builders preserve attributes and encode deletion as an expired empty cookie.
+    ///
+    /// HOW:
+    /// - Parse request cookies, delete one, add a fully attributed response cookie, and compare emitted headers.
     #[cfg(feature = "cookie")]
     #[test]
     fn test_response_cookies() {
@@ -961,6 +974,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Deleting a response cookie removes every matching name while retaining unrelated cookies.
+    ///
+    /// HOW:
+    /// - Append repeated cookie names, verify their count, delete the repeated name, and inspect remaining cookies.
     #[cfg(feature = "cookie")]
     #[test]
     fn test_update_response_cookies() {
@@ -985,12 +1002,20 @@ mod tests {
         assert_eq!((v.name(), v.value()), ("cookie3", "val300"));
     }
 
+    /// STATEMENT: Adding a custom response header preserves the selected OK status.
+    ///
+    /// HOW:
+    /// - Build an OK response with a custom header and inspect its status.
     #[test]
     fn test_basic_builder() {
         let resp = Response::Ok().header("X-TEST", "value").build();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Response upgrade configuration records both upgrade state and protocol header.
+    ///
+    /// HOW:
+    /// - Build a WebSocket upgrade response and verify its upgrade predicate and header value.
     #[test]
     fn test_upgrade() {
         let resp = Response::builder(StatusCode::OK)
@@ -1003,12 +1028,20 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A force-close response does not advertise keepalive.
+    ///
+    /// HOW:
+    /// - Apply force-close to a response builder and verify its persistence predicate is false.
     #[test]
     fn test_force_close() {
         let resp = Response::builder(StatusCode::OK).force_close().build();
         assert!(!resp.keep_alive());
     }
 
+    /// STATEMENT: Response content-type configuration survives body construction.
+    ///
+    /// HOW:
+    /// - Set a plain-text media type, build an empty body, and inspect the resulting header.
     #[test]
     fn test_content_type() {
         let resp = Response::builder(StatusCode::OK)
@@ -1017,6 +1050,10 @@ mod tests {
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/plain");
     }
 
+    /// STATEMENT: JSON responses serialize their body and supply the default JSON media type.
+    ///
+    /// HOW:
+    /// - Build a response from a string vector and compare its content type and serialized bytes.
     #[test]
     fn test_json() {
         let resp = Response::builder(StatusCode::OK).json(&vec!["v1", "v2", "v3"]);
@@ -1025,6 +1062,10 @@ mod tests {
         assert_eq!(resp.get_body_ref(), b"[\"v1\",\"v2\",\"v3\"]");
     }
 
+    /// STATEMENT: JSON response construction preserves an explicitly supplied content type.
+    ///
+    /// HOW:
+    /// - Set a nondefault JSON media type, serialize a vector, and compare header and body.
     #[test]
     fn test_json_ct() {
         let resp = Response::builder(StatusCode::OK)
@@ -1035,6 +1076,11 @@ mod tests {
         assert_eq!(resp.get_body_ref(), b"[\"v1\",\"v2\",\"v3\"]");
     }
 
+    /// STATEMENT: String and byte conversions select appropriate response media types and preserve body data.
+    ///
+    /// HOW:
+    /// - Convert borrowed/owned strings and byte buffers, checking OK status, media type, and bytes.
+    /// - Convert a taken keepalive builder into a response and verify its status.
     #[test]
     fn test_into_response() {
         let resp: Response = "test".into();
@@ -1112,6 +1158,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Converting response heads or whole responses into builders preserves cookies while allowing status changes.
+    ///
+    /// HOW:
+    /// - Convert a response through both builder forms, replace its status, and inspect status and optional cookie values.
     #[test]
     fn test_into_builder() {
         #[allow(unused_mut)]
@@ -1144,12 +1194,21 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Response display includes version, status, canonical text, and a custom reason.
+    ///
+    /// HOW:
+    /// - Format a not-found response with a custom reason and compare the complete display string.
     #[test]
     fn test_display() {
         let resp = Response::NotFound().reason(" Nope").build();
         assert_eq!(resp.to_string(), "Response<HTTP/1.1 404 Not Found Nope>\n");
     }
 
+    /// STATEMENT: Invalid response header names or values produce server errors, including when JSON is added afterward.
+    ///
+    /// HOW:
+    /// - Exercise append, replace, and content-type setters with malformed input and inspect final statuses.
+    /// - Add JSON after an invalid header and verify it does not hide the builder error.
     #[test]
     fn test_builder_invalid_headers() {
         let resp = Response::Ok().header("bad name", "value").build();
@@ -1168,6 +1227,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    /// STATEMENT: JSON serialization failure becomes an internal-server-error response.
+    ///
+    /// HOW:
+    /// - Serialize a map with unsupported vector keys and inspect the response status.
     #[test]
     fn test_json_error() {
         let mut map = std::collections::HashMap::new();
@@ -1176,6 +1239,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    /// STATEMENT: Cookie response handling supports deletion and builder conversion while rejecting invalid values.
+    ///
+    /// HOW:
+    /// - Inspect deletion cookies, build a cookie with a newline, and check its server-error response.
+    /// - Convert a two-cookie response through head and response builders and verify both cookies remain.
     #[cfg(feature = "cookie")]
     #[test]
     fn test_cookies() {

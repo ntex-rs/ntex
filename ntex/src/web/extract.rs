@@ -250,6 +250,11 @@ mod tests {
         hello: String,
     }
 
+    /// STATEMENT: Optional extractors turn extraction failures into `None` and retain valid values.
+    ///
+    /// HOW:
+    /// - Extract `Option<Form<Info>>` from empty, valid, and missing-field URL-encoded bodies.
+    /// - Assert `None`, the expected `hello` value, and `None`, respectively.
     #[crate::rt_test]
     async fn test_option() {
         let (req, mut pl, ()) =
@@ -290,6 +295,11 @@ mod tests {
         assert_eq!(r, None);
     }
 
+    /// STATEMENT: Result extractors expose inner extraction errors without failing outer extraction.
+    ///
+    /// HOW:
+    /// - Extract `Result<Form<Info>, UrlencodedError>` from valid and missing-field bodies.
+    /// - Assert outer success in both cases, with the expected form value or an inner error.
     #[crate::rt_test]
     async fn test_result() {
         let (req, mut pl, ()) =

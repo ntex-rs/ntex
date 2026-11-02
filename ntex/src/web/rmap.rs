@@ -196,6 +196,12 @@ mod tests {
     use super::*;
     use crate::web::test::TestRequest;
 
+    /// STATEMENT: Nested resource maps resolve parent and sibling names without adding spurious prefixes.
+    ///
+    /// HOW:
+    /// - Build root, nested, sibling, and external named resources and link the maps.
+    /// - Resolve each name from root and nested maps and assert the correct absolute URL.
+    /// - Check reserved characters are escaped and missing elements or names return errors.
     #[test]
     fn url_for_parent() {
         // regression: names of the parent map were prefixed with the nested root

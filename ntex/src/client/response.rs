@@ -507,6 +507,11 @@ mod tests {
     use crate::client::{error::ClientPayloadError, test::TestResponse};
     use crate::http::header;
 
+    /// STATEMENT: Body collection validates length and size limits and returns a compact payload.
+    ///
+    /// HOW:
+    /// - Collect malformed-length, oversized, limited, and valid bodies and inspect errors or bytes.
+    /// - Trim a collected large body and verify its data pointer stays unchanged.
     #[crate::rt_test]
     async fn test_body() {
         let req = TestResponse::with_header(header::CONTENT_LENGTH, "xxxx").build();
@@ -569,6 +574,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: JSON collection validates content type and payload length before deserialization.
+    ///
+    /// HOW:
+    /// - Exercise absent/wrong media types, oversized and invalid lengths, and a valid object.
+    /// - Compare error categories and the successfully deserialized value.
     #[crate::rt_test]
     async fn test_json_body() {
         let req = TestResponse::builder().build();
@@ -653,6 +663,11 @@ mod tests {
         matches!(err, PayloadError::Incomplete(Some(e)) if e.kind() == std::io::ErrorKind::TimedOut)
     }
 
+    /// STATEMENT: Body futures propagate timeout and stream errors and take exclusive ownership of the payload.
+    ///
+    /// HOW:
+    /// - Collect pending and failing streams, then create two body futures for one response.
+    /// - Check the errors and verify only the first future receives the original bytes.
     #[crate::rt_test]
     async fn test_body_timeout_and_error() {
         let res = TestResponse::builder().build();
@@ -674,6 +689,11 @@ mod tests {
         assert_eq!(body.await.unwrap(), Bytes::from_static(b"data"));
     }
 
+    /// STATEMENT: JSON collection distinguishes stream and deserialize failures and accepts JSON syntax suffixes.
+    ///
+    /// HOW:
+    /// - Use pending, failing, and type-invalid payloads and verify their error variants.
+    /// - Decode an `application/problem+json` response and check its object field.
     #[crate::rt_test]
     async fn test_json_timeout_and_errors() {
         let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json").build();
@@ -705,6 +725,11 @@ mod tests {
         assert_eq!(res.json::<MyObject>().await.unwrap().name, "test");
     }
 
+    /// STATEMENT: Response streaming yields payload chunks and errors and ends after its payload is taken.
+    ///
+    /// HOW:
+    /// - Poll successful and failing response streams and inspect their items.
+    /// - Take a payload twice and verify the second take and subsequent stream are empty.
     #[crate::rt_test]
     async fn test_response_stream() {
         use futures_util::StreamExt;
@@ -733,6 +758,10 @@ mod tests {
         assert!(res.next().await.is_none());
     }
 
+    /// STATEMENT: Response metadata mutations are visible through accessors and debug output.
+    ///
+    /// HOW:
+    /// - Set version, headers, and an extension, then inspect getters and the formatted response.
     #[test]
     fn test_response_accessors() {
         let mut res = TestResponse::with_header(header::CONTENT_TYPE, "text/plain")

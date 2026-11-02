@@ -80,6 +80,11 @@ async fn service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>, io
     Ok(Some(msg))
 }
 
+/// STATEMENT: HTTP/1 upgrade dispatch preserves WebSocket frames, fragmentation rules, and service readiness.
+///
+/// HOW:
+/// - Upgrade through `WsService`, assert switching protocols, and verify text, binary, ping/pong, and fragmented text/binary echoes.
+/// - Assert overlapping fragment starts and continuation frames outside a message fail, verify the close echo, and confirm the service was polled for readiness.
 #[ntex::test]
 async fn test_simple() {
     let ws_service = WsService::new();
@@ -267,6 +272,11 @@ async fn test_simple() {
     assert!(ws_service.was_polled());
 }
 
+/// STATEMENT: A server-side `WsTransport` echoes binary data and the peer's close code.
+///
+/// HOW:
+/// - Upgrade an HTTP request into a byte-echo `WsTransport`.
+/// - Send a binary frame and an Away close through the client codec and assert matching replies.
 #[ntex::test]
 async fn test_transport() {
     let srv = test_server(async |_| {

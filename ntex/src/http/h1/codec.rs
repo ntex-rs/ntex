@@ -242,7 +242,10 @@ mod tests {
         util::Bytes,
     };
 
-    /// A status code without a canonical reason has an empty reason phrase.
+    /// STATEMENT: Unknown status codes use an empty reason unless the response supplies a custom phrase.
+    ///
+    /// HOW:
+    /// - Encode status 599 with default and custom reasons and compare the wire status lines.
     #[crate::rt_test]
     async fn test_unknown_status_reason() {
         use crate::http::StatusCode;
@@ -272,7 +275,11 @@ mod tests {
         assert!(data.starts_with(b"HTTP/1.1 599 Custom\r\n"), "{data:?}");
     }
 
-    /// Bodyless statuses do not write body bytes or length headers.
+    /// STATEMENT: Bodyless response statuses suppress payload bytes and framing headers.
+    ///
+    /// HOW:
+    /// - Encode informational, no-content, and not-modified responses with sized and streaming payloads.
+    /// - Check output ends after headers and contains neither length nor transfer encoding.
     #[crate::rt_test]
     async fn test_bodyless_status_has_no_body() {
         use crate::http::StatusCode;
@@ -315,7 +322,10 @@ mod tests {
         }
     }
 
-    /// A response without body size information is framed with a zero length.
+    /// STATEMENT: Switching protocols ends HTTP/1 persistence even without an explicit response upgrade setting.
+    ///
+    /// HOW:
+    /// - Decode an ordinary persistent request, encode a `101` response, and check upgrade output and disabled keepalive.
     #[crate::rt_test]
     async fn test_switching_protocols_ends_http1() {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
@@ -344,7 +354,11 @@ mod tests {
         assert!(!codec.keepalive());
     }
 
-    /// A `101` response body belongs to the new protocol, it is sent as is.
+    /// STATEMENT: Protocol-switching response bodies are sent unframed as new-protocol data.
+    ///
+    /// HOW:
+    /// - Encode sized and streaming `101` responses with multiple chunks.
+    /// - Compare concatenated wire data and verify no HTTP body-framing headers are emitted.
     #[crate::rt_test]
     async fn test_switching_protocols_body_is_not_framed() {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
@@ -378,6 +392,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Responses without a body use zero-length framing unless the method or status forbids it.
+    ///
+    /// HOW:
+    /// - Encode ordinary HTTP/1.0 and HTTP/1.1 responses, including an overridden service length.
+    /// - Compare length/persistence headers and verify HEAD, bodyless, and upgrade responses omit framing.
     #[crate::rt_test]
     async fn test_response_without_body_has_length() {
         use crate::http::{StatusCode, header};
@@ -460,8 +479,11 @@ mod tests {
         (String::from_utf8(data).unwrap(), codec.keepalive())
     }
 
-    /// HTTP/1.0 streaming responses are not chunked, a streaming response
-    /// delimited by connection close closes the connection.
+    /// STATEMENT: Streaming responses use chunked framing only when supported and enabled, otherwise closing the connection.
+    ///
+    /// HOW:
+    /// - Encode HTTP/1.0, ordinary HTTP/1.1, and no-chunking HTTP/1.1 streams.
+    /// - Compare raw/chunked payloads, connection headers, and codec persistence.
     #[crate::rt_test]
     async fn test_http10_stream_response_is_not_chunked() {
         use crate::http::StatusCode;
@@ -493,6 +515,11 @@ mod tests {
         assert!(!keepalive);
     }
 
+    /// STATEMENT: Chunked request decoding preserves pipeline boundaries and upgrade requests disable reuse.
+    ///
+    /// HOW:
+    /// - Decode merged small chunks, EOF, and a following request from one buffer.
+    /// - Exercise upgrade token combinations and disabled keepalive configuration, inspecting request and codec state.
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();

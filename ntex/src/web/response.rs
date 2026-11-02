@@ -150,6 +150,11 @@ mod tests {
     use crate::http::{self, StatusCode};
     use crate::web::{HttpResponse, test::TestRequest};
 
+    /// STATEMENT: Replacing a `WebResponse` or rendering an error updates its status.
+    ///
+    /// HOW:
+    /// - Replace an OK response with `BadRequest` and assert the resulting status.
+    /// - Render `PayloadError::Overflow` and assert `PAYLOAD_TOO_LARGE`.
     #[test]
     fn test_response() {
         let res = TestRequest::default().to_srv_response(HttpResponse::Ok().build());
@@ -161,6 +166,11 @@ mod tests {
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    /// STATEMENT: Response accessors preserve the request while exposing mutable status and body.
+    ///
+    /// HOW:
+    /// - Build a response for `/path`, change its status, and take its byte body.
+    /// - Split it into parts and assert the changed status and original request path.
     #[test]
     fn test_response_accessors() {
         use crate::http::body::{Body, ResponseBody};
@@ -182,6 +192,11 @@ mod tests {
         assert_eq!(req.path(), "/path");
     }
 
+    /// STATEMENT: An unclassified I/O error produces an internal-server-error response.
+    ///
+    /// HOW:
+    /// - Pass `std::io::Error::other` and a request to `WebResponse::from_err`.
+    /// - Assert the response status is `INTERNAL_SERVER_ERROR`.
     #[test]
     fn test_from_err() {
         let req = TestRequest::default().to_http_request();
