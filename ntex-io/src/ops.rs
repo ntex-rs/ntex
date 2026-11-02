@@ -461,6 +461,11 @@ mod tests {
         start.elapsed()
     }
 
+    /// STATEMENT: Timer-set recycling rejects oversized sets and caps the number of cached sets.
+    ///
+    /// HOW:
+    /// - Recycle a small set and a cleared 10,000-entry set and check only the small one is cached.
+    /// - Recycle additional empty sets and verify the cache stops growing at `CAP`.
     #[test]
     fn large_timer_sets_are_not_cached() {
         let mut timers = TimerStorage {
@@ -494,8 +499,11 @@ mod tests {
         assert_eq!(timers.cache.len(), CAP);
     }
 
-    /// A timer started while no timers are pending expires after its
-    /// timeout, the ticker does not add a second.
+    /// STATEMENT: Starting an idle timer does not add an extra ticker interval to its timeout.
+    ///
+    /// HOW:
+    /// - Wait half a second, start a one-second timer, and await its timeout status.
+    /// - Verify expiry takes at least one second but less than 1.3 seconds.
     #[ntex::test]
     async fn timer_expires_after_timeout() {
         use ntex_service::cfg::SharedCfg;
@@ -516,8 +524,11 @@ mod tests {
         );
     }
 
-    /// A timer started while other timers are pending expires within a
-    /// second after its timeout.
+    /// STATEMENT: A timer started alongside pending timers expires near its configured deadline.
+    ///
+    /// HOW:
+    /// - Start a ten-second timer, wait half a second, then start a one-second timer.
+    /// - Verify the second timer reports timeout between one and 1.8 seconds later.
     #[ntex::test]
     async fn timer_expires_within_second_after_timeout() {
         use ntex_service::cfg::SharedCfg;
@@ -549,6 +560,11 @@ mod tests {
         IoManager::with(|mgr| (mgr.iops.running, mgr.iops.task, mgr.iops.waker.is_some()))
     }
 
+    /// STATEMENT: Write-task waker replacement and cleanup preserve the current task's registration.
+    ///
+    /// HOW:
+    /// - Poll with counting wakers, schedule writes, replace wakers, and check notifications and drops.
+    /// - Replace an old write task with a new one and verify dropping the old task leaves the new one intact.
     #[ntex::test]
     async fn local_write_task_replacement_and_cleanup() {
         use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
@@ -635,8 +651,11 @@ mod tests {
         assert_eq!(iops_state(), (false, 3, false));
     }
 
-    /// Write batches of later turns are run by the same task, a runtime that
-    /// replaces the manager starts a new one.
+    /// STATEMENT: Write batches reuse a task within one runtime but not across successive runtimes.
+    ///
+    /// HOW:
+    /// - Schedule several batches and verify the completed batches retain one task ID and waker.
+    /// - Start another runtime on the same thread and verify its write task has a different ID.
     #[test]
     fn write_task_is_reused() {
         std::thread::spawn(|| {
@@ -668,9 +687,11 @@ mod tests {
         .unwrap();
     }
 
-    /// The manager must not carry over to the next runtime on the thread, a
-    /// write scheduled by a runtime that has stopped would block the writes of
-    /// the next one.
+    /// STATEMENT: Runtime shutdown clears the thread-local I/O manager.
+    ///
+    /// HOW:
+    /// - Schedule writes in runtimes driven by `block_on` and `run` on the same thread.
+    /// - Check the manager exists while running and is absent after each shutdown.
     #[test]
     fn manager_reset_on_shutdown() {
         std::thread::spawn(|| {

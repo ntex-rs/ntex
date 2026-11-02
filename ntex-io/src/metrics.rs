@@ -706,6 +706,11 @@ mod tests {
 
     use super::*;
 
+    /// STATEMENT: Concurrent backpressure updates yield coherent duration and active-count snapshots.
+    ///
+    /// HOW:
+    /// - Toggle one connection's read backpressure on a worker while repeatedly taking snapshots.
+    /// - Check time never exceeds uptime, active count never exceeds one, and final activity is zero.
     #[test]
     fn backpressure_time_is_coherent() {
         let m = IoMetrics::new();
@@ -738,6 +743,11 @@ mod tests {
         assert!(s.read_backpressure > 0);
     }
 
+    /// STATEMENT: Only registered configurations receive cached dedicated metrics.
+    ///
+    /// HOW:
+    /// - Register one server configuration and create 1,000 unregistered client configurations.
+    /// - Verify clients use the shared fallback, the server has dedicated metrics, and one cache entry remains.
     #[test]
     fn unregistered_configs_are_not_cached() {
         let group = IoMetricsGroup::new();

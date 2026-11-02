@@ -213,6 +213,11 @@ mod tests {
 
     impl Handle for TestHandle {}
 
+    /// STATEMENT: Taking and boxing a live filter chain transfers ownership without double-dropping filters.
+    ///
+    /// HOW:
+    /// - Exchange data through a drop-counting filter, take and box the connection, then take it again.
+    /// - Drop every wrapper and verify the filter destructor ran exactly once.
     #[ntex::test]
     async fn drop_filter() {
         let p = Rc::new(Cell::new(0));
@@ -244,6 +249,10 @@ mod tests {
         assert_eq!(p.get(), 1);
     }
 
+    /// STATEMENT: A sealed connection supports adding and dropping a typed outer filter.
+    ///
+    /// HOW:
+    /// - Seal a manual transport, add `DropFilter`, and let the typed layered connection leave scope.
     #[test]
     fn miri_sealed_filter() {
         let p = Rc::new(Cell::new(0));
@@ -253,6 +262,11 @@ mod tests {
         let _io: Io<Layer<DropFilter, Sealed>> = io.add_filter(f);
     }
 
+    /// STATEMENT: Typed filter access survives mapping and layering over a sealed connection.
+    ///
+    /// HOW:
+    /// - Add and map drop-counting layers, checking their shared counter identity after each conversion.
+    /// - Verify no premature drops and exactly two filter drops when the connection is released.
     #[test]
     fn miri_sealed_layer_typed_access() {
         let p = Rc::new(Cell::new(0));
@@ -271,6 +285,11 @@ mod tests {
         assert_eq!(p.get(), 2);
     }
 
+    /// STATEMENT: Mapping a sealed chain can retain its type or introduce an accessible typed layer.
+    ///
+    /// HOW:
+    /// - Map the sealed filter unchanged, then wrap it in a drop-counting layer.
+    /// - Check typed counter access and exactly one destructor call after dropping the connection.
     #[test]
     fn miri_sealed_map_filter() {
         let p = Rc::new(Cell::new(0));
@@ -284,6 +303,11 @@ mod tests {
         assert_eq!(p.get(), 1);
     }
 
+    /// STATEMENT: Panicking during filter mapping makes the connection inactive.
+    ///
+    /// HOW:
+    /// - Queue output, map the filter with a panicking closure, and catch the panic.
+    /// - Check a retained connection reference no longer reports active state.
     #[ntex::test]
     async fn map_filter_panic_closes_connection() {
         let (client, server) = IoTest::create();
@@ -448,8 +472,11 @@ mod tests {
         panicked
     }
 
-    /// The filter chain cannot be changed, nor its `Io` dropped, from code run
-    /// by the connection while it holds references into the chain.
+    /// STATEMENT: Borrowed filter chains reject reentrant mutation and dropping their owning `Io`.
+    ///
+    /// HOW:
+    /// - Attempt adding, mapping, sealing, and dropping from buffer-access and query callbacks.
+    /// - Check each operation panics with its expected message and dropping makes the connection inactive.
     #[test]
     fn change_while_lent_panics() {
         type Enter = fn(&crate::IoRef, &Hook);
@@ -488,8 +515,11 @@ mod tests {
         }
     }
 
-    /// The filter chain cannot be changed, nor its `Io` dropped, from the
-    /// filters while they process input or output, or report readiness.
+    /// STATEMENT: Filter callbacks reject reentrant chain changes and dropping their owning `Io`.
+    ///
+    /// HOW:
+    /// - Trigger adding, mapping, sealing, and dropping from read, write, read-reply, and readiness hooks.
+    /// - Verify every hook observes the expected panic and drop attempts deactivate the connection.
     #[ntex::test]
     async fn change_from_filter_panics() {
         for change in Change::ALL {
@@ -537,8 +567,11 @@ mod tests {
         }
     }
 
-    /// An `Io` dropped while its filter is in use leaks the filter, the
-    /// connection is closed and the filter chain no longer runs.
+    /// STATEMENT: Dropping a borrowed chain deliberately leaks its filters and prevents further callbacks.
+    ///
+    /// HOW:
+    /// - Drop the owning connection inside a query hook and check the panic and inactive state.
+    /// - Query again and release the final reference, verifying neither hooks nor filter destructors run.
     #[test]
     fn drop_while_lent_leaks_filter() {
         let p = Rc::new(Cell::new(0));
@@ -566,8 +599,11 @@ mod tests {
         assert_eq!(p.get(), 0);
     }
 
-    /// An `Io` dropped while unwinding from its filter does not panic again,
-    /// that would abort.
+    /// STATEMENT: Dropping a borrowed connection during unwinding preserves the original panic.
+    ///
+    /// HOW:
+    /// - Panic in a query hook that owns the connection, then catch the unwind.
+    /// - Verify the original panic payload and inactive connection rather than a second-panic abort.
     #[test]
     fn drop_while_lent_unwinding() {
         let slot = Hook::default();
@@ -589,6 +625,10 @@ mod tests {
         assert!(!ioref.is_active());
     }
 
+    /// STATEMENT: Typed access through a null filter pointer is rejected.
+    ///
+    /// HOW:
+    /// - Request a `Base` filter from `FilterPtr::null` and expect the unset-filter panic.
     #[test]
     #[should_panic(expected = "Filter is not set")]
     fn miri_filter_access() {

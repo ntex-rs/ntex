@@ -730,6 +730,11 @@ mod tests {
     use super::*;
     use crate::{Io, testing::IoTest};
 
+    /// STATEMENT: Adding outer filter layers preserves existing buffers and nested borrow accounting.
+    ///
+    /// HOW:
+    /// - Fill and borrow the application buffer before adding each of four layers.
+    /// - Check nested borrows remain active and saved bytes appear in reverse layer-addition order.
     #[test]
     fn miri_add_layer_keeps_buffers() {
         let stack = Stack::new(BytePageSize::Size8);
@@ -763,6 +768,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Filter layers cannot be added while stack buffers are borrowed.
+    ///
+    /// HOW:
+    /// - Hold a stack borrow, add a layer, and expect the in-use panic.
     #[test]
     #[should_panic(expected = "filter buffers are in use")]
     fn miri_add_layer_while_borrowed() {
@@ -771,6 +780,11 @@ mod tests {
         stack.add_layer(BytePageSize::Size8);
     }
 
+    /// STATEMENT: An unlayered stack shares application and transport buffers without inner storage.
+    ///
+    /// HOW:
+    /// - Check buffer identities, merge input, write output, and inspect the base filter context.
+    /// - Take buffered data, verify empty-buffer handling, and update the write page size.
     #[ntex::test]
     async fn stack_without_layers() {
         let (_, server) = IoTest::create();
@@ -831,6 +845,11 @@ mod tests {
             .with_write(|buf| assert_eq!(buf.page_size(), BytePageSize::Size32));
     }
 
+    /// STATEMENT: Adding a filter separates application buffers from existing transport data.
+    ///
+    /// HOW:
+    /// - Buffer input and output before adding a layer, then append application output.
+    /// - Move data through the filter context and verify buffer identities, sizes, and byte order.
     #[ntex::test]
     async fn stack_with_one_layer() {
         let (_, server) = IoTest::create();
@@ -892,6 +911,11 @@ mod tests {
         assert_eq!(stack.write_buf_size(), 0);
     }
 
+    /// STATEMENT: Multiple stack layers retain ordered buffer pairs and support whole-stack updates.
+    ///
+    /// HOW:
+    /// - Add three layers around distinct read/write data and inspect each context's adjacent buffers.
+    /// - Check boundary buffer sizes, apply a page size to every layer, and verify release empties them.
     #[ntex::test]
     async fn stack_with_more_layers() {
         type Seen = (Option<Vec<u8>>, Vec<u8>, usize, usize);
@@ -964,6 +988,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A filter context cannot access buffers beyond the end of its chain.
+    ///
+    /// HOW:
+    /// - Advance twice through a one-layer stack and expect an out-of-chain panic on buffer access.
     #[ntex::test]
     #[should_panic(expected = "outside of the filter chain")]
     async fn filter_ctx_outside_of_chain() {
@@ -978,6 +1006,11 @@ mod tests {
         });
     }
 
+    /// STATEMENT: Merging read completions preserves bytes in a cacheable page despite a retained frame.
+    ///
+    /// HOW:
+    /// - Retain most of a split page, then merge its remainder with a second read buffer.
+    /// - Check byte order, combined length, original page capacity, and the retained frame length.
     #[ntex::test]
     async fn set_read_buf_merges_into_cacheable_buffer() {
         let high = BytePageSize::Size16.capacity();
@@ -1003,6 +1036,11 @@ mod tests {
         assert_eq!(frame.len(), high - 1100);
     }
 
+    /// STATEMENT: Filter read contexts expose connection metadata and distinct source/destination data.
+    ///
+    /// HOW:
+    /// - Move an input prefix through one layer and check metadata, destination bytes, and source remainder.
+    /// - Replace the read source and verify the transport-facing buffer receives the replacement.
     #[ntex::test]
     async fn filter_read_buffers() {
         let (_, server) = IoTest::create();
@@ -1041,6 +1079,10 @@ mod tests {
         assert_eq!(stack.get_read_buf().as_deref(), Some(b"next".as_ref()));
     }
 
+    /// STATEMENT: Debug checks reject output written to a nonexistent innermost destination.
+    ///
+    /// HOW:
+    /// - Move queued output into the base filter's destination and expect the unsent-output panic.
     #[cfg(debug_assertions)]
     #[ntex::test]
     #[should_panic(expected = "is never sent")]
@@ -1056,6 +1098,10 @@ mod tests {
         });
     }
 
+    /// STATEMENT: Debug checks reject input placed in a nonexistent innermost source.
+    ///
+    /// HOW:
+    /// - Assign input to the base filter's read source and expect the unread-input panic.
     #[cfg(debug_assertions)]
     #[ntex::test]
     #[should_panic(expected = "is never read")]
@@ -1072,6 +1118,11 @@ mod tests {
         });
     }
 
+    /// STATEMENT: Moving output through a filter requests writing and preserves queued-byte accounting.
+    ///
+    /// HOW:
+    /// - Move six bytes from application to transport buffers and check the write-request update.
+    /// - Drain the destination and verify its contents and zero remaining queued bytes.
     #[ntex::test]
     async fn filter_write_buffers_and_updates() {
         let (_, server) = IoTest::create();
@@ -1102,6 +1153,10 @@ mod tests {
         assert_eq!(stack.write_buf_size(), 0);
     }
 
+    /// STATEMENT: Formatting a buffer preserves its data and omits write storage currently in use.
+    ///
+    /// HOW:
+    /// - Fill read/write buffers, format normally and while borrowing writes, and check lengths and output.
     #[ntex::test]
     async fn buffer_debug_preserves_contents() {
         let (_, server) = IoTest::create();

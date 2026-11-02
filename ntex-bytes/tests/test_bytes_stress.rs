@@ -1,5 +1,10 @@
 use ntex_bytes::Bytes;
 
+/// STATEMENT: Concurrent cloning and dropping shared `Bytes` preserves the original allocation's contents.
+///
+/// HOW:
+/// - Repeatedly synchronize eight threads with a barrier before each clones and drops the same 256-byte buffer.
+/// - Join all threads and compare the surviving buffer with that iteration's original payload.
 #[test]
 fn stress() {
     // Tests promoting a buffer from a vec -> shared in a concurrent situation

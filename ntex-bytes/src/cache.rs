@@ -331,6 +331,10 @@ mod tests {
     use super::*;
     use crate::*;
 
+    /// STATEMENT: Dropped page storage is reused by the next allocation in the same size class.
+    ///
+    /// HOW:
+    /// - Reset the cache, write to a `Size8` page, drop it, and check the next `Size8` allocation has its address.
     #[test]
     fn cached() {
         reset();
@@ -346,6 +350,11 @@ mod tests {
         assert_eq!(addr, st.0);
     }
 
+    /// STATEMENT: Cache metrics distinguish hits, misses, cached pages, and full-cache frees by size class.
+    ///
+    /// HOW:
+    /// - Allocate, cache, reuse, and free a `Size8` page and check counters and byte totals.
+    /// - Cache `Size4` and non-page buffers, verify totals exclude non-pages, then reset and check old resident counts.
     #[test]
     fn cache_metrics() {
         reset();
@@ -402,6 +411,11 @@ mod tests {
         assert!(!Arc::ptr_eq(&metrics, &PageCacheMetrics::current()));
     }
 
+    /// STATEMENT: Replacing current metrics transfers resident accounting without sharing metrics across threads.
+    ///
+    /// HOW:
+    /// - Cache a `Size16` page, install metrics, and verify resident pages transfer and only new reuse counters change.
+    /// - Compare metrics identity with another thread and confirm its metrics are distinct.
     #[test]
     fn cache_metrics_set_current() {
         reset();
@@ -429,6 +443,10 @@ mod tests {
         reset();
     }
 
+    /// STATEMENT: Each page size retains no more than its default cache limit.
+    ///
+    /// HOW:
+    /// - Check default limits, allocate four excess pages per size class, drop them all, and verify each cached count equals its limit.
     #[test]
     fn default_cache_limit_per_page_size() {
         assert_eq!(DEFAULT_PAGES_CACHE, [128, 64, 64, 32, 16, 8, 16, 2, 1]);
@@ -443,6 +461,11 @@ mod tests {
         reset();
     }
 
+    /// STATEMENT: Global cache limits control retained pages and ignore reentrant updates.
+    ///
+    /// HOW:
+    /// - Set limits of one and zero, drop pages, and check cached counts.
+    /// - Take `CACHE`, drop a page and attempt a limit update, then verify no page was cached and limits stayed unchanged.
     #[test]
     #[allow(deprecated)]
     fn pages_cache_size() {
@@ -483,6 +506,11 @@ mod tests {
         })
     }
 
+    /// STATEMENT: Per-size limits leave other classes unchanged and ignore invalid or reentrant updates.
+    ///
+    /// HOW:
+    /// - Limit `Size64` to one, configure `Unset`, and check limits and retained `Size64` and `Size48` pages.
+    /// - Verify an update while `CACHE` is taken is ignored, then check a global limit applies to all classes.
     #[test]
     #[allow(deprecated)]
     fn page_cache_size() {
@@ -514,6 +542,11 @@ mod tests {
         reset();
     }
 
+    /// STATEMENT: Lowering cache limits releases excess pages without counting them as full-cache frees.
+    ///
+    /// HOW:
+    /// - Cache four `Size4` and four `Size64` pages, lower per-class and global limits, and check resident counts and counters.
+    /// - Raise the remaining class's limit and verify the retained page stays cached.
     #[test]
     #[allow(deprecated)]
     fn lowered_limit_releases_pages() {
@@ -544,6 +577,11 @@ mod tests {
         reset();
     }
 
+    /// STATEMENT: Page-sized `BytesMut` storage is cached only after its last shared view drops.
+    ///
+    /// HOW:
+    /// - Split a `Size8` buffer, drop both handles in turn, and check cache counts and pointer reuse.
+    /// - Verify `Unset` selects `Size64` while ordinary-capacity and copied buffers remain uncached.
     #[test]
     fn bytes_mut_with_page_size() {
         reset();

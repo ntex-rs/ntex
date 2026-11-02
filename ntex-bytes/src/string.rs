@@ -404,6 +404,11 @@ mod test {
 
     use super::*;
 
+    /// STATEMENT: `ByteString` exposes string-compatible views, formatting, and ownership conversions.
+    ///
+    /// HOW:
+    /// - Compare static `test` through string, byte, borrowed, display, and debug views and round-trip through `Bytes`.
+    /// - Slice to `te`, convert borrowed and owned `Cow` strings, and clear the result to an empty string.
     #[test]
     fn test_basics() {
         let mut s = ByteString::from_static("test");
@@ -437,6 +442,10 @@ mod test {
         assert_eq!(s, "");
     }
 
+    /// STATEMENT: `ByteString` splitting returns the requested half and retains the complementary half.
+    ///
+    /// HOW:
+    /// - Split static `helloworld` at five with `split_off` and `split_to` and check `hello` and `world` in both roles.
     #[test]
     fn test_split() {
         let mut s = ByteString::from_static("helloworld");
@@ -450,11 +459,19 @@ mod test {
         assert_eq!(s1, "hello");
     }
 
+    /// STATEMENT: `ByteString::new` constructs a value of the string wrapper type.
+    ///
+    /// HOW:
+    /// - Assign `ByteString::new()` to an explicitly typed `ByteString` binding without further assertions.
     #[test]
     fn test_new() {
         let _: ByteString = ByteString::new();
     }
 
+    /// STATEMENT: `ByteString` hashes identically to its corresponding string slice.
+    ///
+    /// HOW:
+    /// - Hash `str` as a slice and static `ByteString` with separate `DefaultHasher` instances and compare their results.
     #[test]
     fn test_hash() {
         let mut hasher1 = DefaultHasher::default();
@@ -466,6 +483,11 @@ mod test {
         assert_eq!(hasher1.finish(), hasher2.finish());
     }
 
+    /// STATEMENT: Owned, borrowed, and static string inputs support `ByteString` construction.
+    ///
+    /// HOW:
+    /// - Convert an owned `String`, a string slice, and a borrowed `ByteString`, checking the `hello` contents and `AsRef<str>` view.
+    /// - Construct a static `ByteString` initializer and another static-string value.
     #[test]
     #[allow(clippy::items_after_statements)]
     fn test_from() {
@@ -487,6 +509,11 @@ mod test {
         assert_eq!(s1, "hello");
     }
 
+    /// STATEMENT: Fallible `ByteString` conversions accept UTF-8 bytes and reject invalid encodings.
+    ///
+    /// HOW:
+    /// - Convert valid `nice bytes` and invalid byte sequences from slices, vectors, owned and borrowed `Bytes`, and `BytesMut`.
+    /// - Unwrap valid conversions and verify each invalid conversion returns an error.
     #[test]
     fn test_try_from() {
         let _ = ByteString::try_from(&b"nice bytes"[..]).unwrap();
@@ -505,18 +532,31 @@ mod test {
         assert!(ByteString::try_from(BytesMut::copy_from_slice(b"\xc3\x28")).is_err());
     }
 
+    /// STATEMENT: A JSON string deserializes to the same `ByteString` text.
+    ///
+    /// HOW:
+    /// - Parse the JSON string `"nice bytes"` with `serde_json::from_str` and compare the result with `nice bytes`.
     #[test]
     fn test_serialize() {
         let s: ByteString = serde_json::from_str(r#""nice bytes""#).unwrap();
         assert_eq!(s, "nice bytes");
     }
 
+    /// STATEMENT: `ByteString` serializes as a JSON string rather than a byte array.
+    ///
+    /// HOW:
+    /// - Serialize static `nice bytes` with `serde_json::to_string` and compare with the quoted JSON string.
     #[test]
     fn test_deserialize() {
         let s = serde_json::to_string(&ByteString::from_static("nice bytes")).unwrap();
         assert_eq!(s, r#""nice bytes""#);
     }
 
+    /// STATEMENT: Borrowed `ByteString` equality compares text and long `Arc<str>` conversion shares ownership.
+    ///
+    /// HOW:
+    /// - Compare borrowed `hello` with equal and different strings.
+    /// - Convert a cloned long `Arc<str>`, check text and a strong count of two, then drop the wrapper and check one remains.
     #[test]
     fn test_ref_eq_and_arc() {
         let s = ByteString::from_static("hello");

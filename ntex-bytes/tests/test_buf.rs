@@ -3,6 +3,10 @@
 
 use ntex_bytes::{Buf, BufMut, Bytes, BytesMut};
 
+/// STATEMENT: Slice-buffer advancement updates remaining bytes and reaches an empty chunk at exhaustion.
+///
+/// HOW:
+/// - Advance a `hello` slice by two and then three, checking lengths five, three, and zero and matching chunks.
 #[test]
 fn test_fresh_cursor_vec() {
     let mut buf = &b"hello"[..];
@@ -21,6 +25,10 @@ fn test_fresh_cursor_vec() {
     assert_eq!(buf.chunk(), b"");
 }
 
+/// STATEMENT: The external `bytes::Buf` implementation consumes `Bytes` in the requested increments.
+///
+/// HOW:
+/// - Advance `hello` by two and then three with `bytes::buf::Buf`, checking `hello`, `llo`, and empty chunks and lengths.
 #[test]
 fn test_bytes() {
     let mut buf = Bytes::from(b"hello");
@@ -39,6 +47,10 @@ fn test_bytes() {
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"");
 }
 
+/// STATEMENT: Native buffer traits report initialized and spare capacity separately while consuming `BytesMut`.
+///
+/// HOW:
+/// - Put `hello` in capacity 30, check 25 writable bytes, advance two and three, and verify remaining lengths and chunks.
 #[test]
 fn test_bytes_mut() {
     let mut buf = BytesMut::with_capacity(30);
@@ -58,6 +70,11 @@ fn test_bytes_mut() {
     assert_eq!(Buf::chunk(&buf), b"");
 }
 
+/// STATEMENT: External buffer traits consume and refill `BytesMut` while exposing growable writable capacity.
+///
+/// HOW:
+/// - Check `usize::MAX - 5` writable capacity, consume `hello`, and verify remaining chunks after each advancement.
+/// - Write `12345` through slice, signed and unsigned byte, and raw chunk methods and check the final chunk.
 #[test]
 fn test_bytes_mut_buf() {
     let mut buf = BytesMut::with_capacity(30);
@@ -89,6 +106,10 @@ fn test_bytes_mut_buf() {
     assert_eq!(&bytes::buf::Buf::chunk(&buf), b"12345");
 }
 
+/// STATEMENT: A copied mutable buffer reports no initial spare capacity and consumes bytes through the native `Buf` trait.
+///
+/// HOW:
+/// - Copy `hello`, check zero writable bytes, advance by two and three, and compare chunks and lengths through exhaustion.
 #[test]
 fn test_bytes_vec() {
     let mut buf = BytesMut::from(b"hello");
@@ -107,6 +128,11 @@ fn test_bytes_vec() {
     assert_eq!(Buf::chunk(&buf), b"");
 }
 
+/// STATEMENT: External buffer traits support consuming and refilling an exactly sized copied `BytesMut`.
+///
+/// HOW:
+/// - Copy `hello`, check growable remaining capacity, and consume it in two advancements with expected chunks and lengths.
+/// - Refill via slice, integer, and raw chunk writes and verify `12345`.
 #[test]
 fn test_bytes_vec_buf() {
     let mut buf = BytesMut::from(b"hello");
@@ -137,8 +163,11 @@ fn test_bytes_vec_buf() {
     assert_eq!(&bytes::buf::Buf::chunk(&buf), b"12345");
 }
 
-/// Encoders written for the `bytes` crate, such as prost, check
-/// `remaining_mut()` up front and expect a growable buffer.
+/// STATEMENT: External `bytes::BufMut` writers can grow a full buffer after checking its advertised writable capacity.
+///
+/// HOW:
+/// - Encode 100 bytes after `x` using a capacity-checking encoder and append through a `BufMut` stream writer.
+/// - Write a slice, chained chunks, and repeated bytes into another full buffer and check every resulting range and total length.
 #[test]
 fn test_bytes_mut_buf_grows() {
     fn encode(buf: &mut impl bytes::buf::BufMut, data: &[u8]) -> Result<(), ()> {
@@ -171,6 +200,10 @@ fn test_bytes_mut_buf_grows() {
     assert_eq!(&buf[105..], &[3; 50][..]);
 }
 
+/// STATEMENT: External mutable advancement still rejects counts beyond actual allocated capacity.
+///
+/// HOW:
+/// - Allocate capacity eight, call `bytes::buf::BufMut::advance_mut` with capacity plus one, and expect the bounds panic.
 #[test]
 #[should_panic(expected = "cannot advance past `remaining_mut`")]
 fn test_bytes_mut_buf_advance_past_capacity() {
@@ -179,12 +212,20 @@ fn test_bytes_mut_buf_advance_past_capacity() {
     unsafe { bytes::buf::BufMut::advance_mut(&mut buf, cap + 1) };
 }
 
+/// STATEMENT: `get_u8` reads the leading byte value.
+///
+/// HOW:
+/// - Read from a slice beginning with `0x21` followed by `zomg` and check the returned value is `0x21`.
 #[test]
 fn test_get_u8() {
     let mut buf = &b"\x21zomg"[..];
     assert_eq!(0x21, buf.get_u8());
 }
 
+/// STATEMENT: Sixteen-bit reads honor big- and little-endian byte order.
+///
+/// HOW:
+/// - Read the leading bytes `0x21, 0x54` from separate slices and check `get_u16` yields `0x2154` and `get_u16_le` yields `0x5421`.
 #[test]
 fn test_get_u16() {
     let mut buf = &b"\x21\x54zomg"[..];
@@ -193,6 +234,11 @@ fn test_get_u16() {
     assert_eq!(0x5421, buf.get_u16_le());
 }
 
+/// STATEMENT: Variable-width signed reads sign-extend their encoded width in both byte orders.
+///
+/// HOW:
+/// - Decode explicit negative and positive byte sequences and verify a zero-byte read returns zero.
+/// - Round-trip boundary and representative signed values at widths one through eight and compare with arithmetic sign extension.
 #[test]
 fn test_get_int_sign_extends() {
     let mut buf = &b"\xff\xfe\x80\x7f"[..];
@@ -220,6 +266,10 @@ fn test_get_int_sign_extends() {
     }
 }
 
+/// STATEMENT: Reading a sixteen-bit value from only one remaining byte panics.
+///
+/// HOW:
+/// - On non-macOS targets, call `get_u16` on a one-byte slice and require the underflow panic.
 #[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]

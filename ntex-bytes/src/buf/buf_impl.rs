@@ -898,6 +898,11 @@ fn _assert_trait_object(_b: &dyn Buf) {}
 mod tests {
     use super::*;
 
+    /// STATEMENT: `Buf` reads consume the expected bytes and decode numeric values in the requested byte order.
+    ///
+    /// HOW:
+    /// - Copy and advance slices, boxed slices, and cursors, checking remaining chunks and exhausted states.
+    /// - Decode signed and unsigned integers, variable-width integers, and floats in both byte orders and convert a slice to `Bytes`.
     #[test]
     fn buf_tests() {
         let mut buf = &b"a"[..];
@@ -1018,6 +1023,10 @@ mod tests {
         assert_eq!(&bytes[..], &b"hello world"[..]);
     }
 
+    /// STATEMENT: A cursor positioned beyond its input is empty and permits zero advancement without moving.
+    ///
+    /// HOW:
+    /// - Set a cursor over `abc` to position ten, check empty remaining data, advance zero, and verify position ten remains.
     #[test]
     fn cursor_advance_past_end() {
         let mut buf = std::io::Cursor::new(b"abc");
@@ -1028,6 +1037,10 @@ mod tests {
         assert_eq!(buf.position(), 10);
     }
 
+    /// STATEMENT: Advancing an out-of-range high cursor position panics instead of wrapping to a valid offset.
+    ///
+    /// HOW:
+    /// - Position a cursor over `abc` at `(1u64 << 32) + 1`, advance one, and expect an assertion failure.
     #[test]
     #[should_panic(expected = "assertion failed")]
     fn cursor_advance_high_position() {
@@ -1060,6 +1073,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Default `Buf` byte reads work across separate chunks and report exhaustion.
+    ///
+    /// HOW:
+    /// - Read `a`, `b`, and `c` from `Chunks` containing `a` and `bc`, then verify `has_remaining` is false.
     #[test]
     fn default_methods() {
         let mut buf = Chunks(vec![b"a", b"bc"]);

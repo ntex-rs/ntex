@@ -655,6 +655,10 @@ mod tests {
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \0";
 
+    /// STATEMENT: Reverse comparisons with `Bytes` order strings and byte containers by content.
+    ///
+    /// HOW:
+    /// - Compare slices, arrays, strings, and owned containers containing `a`, `b`, or `c` with `Bytes` containing `b` and check ordering.
     #[test]
     #[allow(clippy::op_ref, clippy::cmp_owned)]
     fn partial_ord_reverse() {
@@ -671,6 +675,10 @@ mod tests {
         assert_eq!(b"b"[..].partial_cmp(&b), Some(cmp::Ordering::Equal));
     }
 
+    /// STATEMENT: `slice_checked` rejects range bounds whose normalization would overflow.
+    ///
+    /// HOW:
+    /// - Slice vector-backed `LONG` with an inclusive end and excluded start at `usize::MAX` and verify both return `None`.
     #[test]
     fn slice_checked_max_bounds() {
         use std::ops::Bound;
@@ -683,6 +691,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `Bytes` views and buffer traits preserve content across storage representations.
+    ///
+    /// HOW:
+    /// - Advance, split, clear, and truncate vector, static, and inline bytes and check visible ranges.
+    /// - Exercise conversions, comparisons, hashing, `Buf` reads, `BufMut` writes, and iterator accessors against expected bytes.
     #[test]
     #[allow(
         clippy::op_ref,
@@ -794,6 +807,10 @@ mod tests {
         assert_eq!(b.len(), 1);
     }
 
+    /// STATEMENT: Reading `Bytes` consumes available bytes without overwriting unused output space.
+    ///
+    /// HOW:
+    /// - Read `123` into a ten-byte zeroed array and check a three-byte read, an empty source, and seven untouched zeros.
     #[test]
     fn bytes_read() {
         use std::io::Read;
@@ -806,6 +823,10 @@ mod tests {
         assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
 
+    /// STATEMENT: Owned and borrowed `ByteString` conversions preserve the string bytes.
+    ///
+    /// HOW:
+    /// - Convert a static `ByteString` by reference and by value and compare both `Bytes` results with `string`.
     #[test]
     fn from_byte_string() {
         let s = crate::ByteString::from_static("string");

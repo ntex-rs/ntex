@@ -114,6 +114,11 @@ mod tests {
     use super::*;
     use crate::{Io, testing::IoTest};
 
+    /// STATEMENT: `Framed` receives, sends, flushes, and shuts down its wrapped connection.
+    ///
+    /// HOW:
+    /// - Exchange byte frames with a test peer and verify decoded input and flushed output.
+    /// - Shut down, check peer closure, and extract the closed connection and codec.
     #[ntex::test]
     async fn framed() {
         let (client, server) = IoTest::create();

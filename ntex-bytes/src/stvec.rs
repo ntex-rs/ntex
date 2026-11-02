@@ -771,6 +771,10 @@ mod tests {
     use super::*;
     use crate::*;
 
+    /// STATEMENT: Page storage allocation layouts match their size categories including metadata.
+    ///
+    /// HOW:
+    /// - Allocate `Size4`, `Size16`, `Size64`, `Size128`, and `Size256` storage and check usable capacities and full layout sizes.
     #[test]
     fn page_allocation_is_category_size() {
         for (size, alloc) in [
@@ -789,6 +793,11 @@ mod tests {
 
     // Run under miri: without `Acquire`, the write below races with the read
     // made by the other thread before it released its handle.
+    /// STATEMENT: Observing unique storage synchronizes mutation with a different thread releasing its view.
+    ///
+    /// HOW:
+    /// - Shallow-freeze non-inline data, read and drop that view on another thread, and wait until `is_unique` succeeds.
+    /// - Mutate the reclaimed storage and verify the joined thread read the original byte.
     #[test]
     fn is_unique_synchronizes_with_release() {
         let mut st = StorageVec::with_capacity(64);
@@ -814,6 +823,11 @@ mod tests {
         (0..len).map(|i| i as u8).collect()
     }
 
+    /// STATEMENT: Reserving unique storage preserves the visible bytes and provides the requested writable space.
+    ///
+    /// HOW:
+    /// - Reserve 1,000 additional bytes for a patterned buffer, an offset view, and an empty view, checking contents and capacity accounting.
+    /// - Fill the offset view's reserved space and verify its original prefix and final length.
     #[test]
     fn reserve_grows_unique_buffer() {
         let data = pattern(100);
@@ -844,6 +858,10 @@ mod tests {
         assert_eq!(st.remaining(), st.capacity());
     }
 
+    /// STATEMENT: Growing shared storage preserves independent immutable views of its original bytes.
+    ///
+    /// HOW:
+    /// - Shallow-freeze a 100-byte pattern, reserve 1,000 bytes, mutate the grown buffer, and verify the old view and untouched suffix.
     #[test]
     fn reserve_keeps_shared_views() {
         let data = pattern(100);
@@ -856,6 +874,11 @@ mod tests {
         assert_eq!(&st.as_ref()[1..], &data[1..]);
     }
 
+    /// STATEMENT: Growing a full pooled page selects the next size class and returns the old page to its cache.
+    ///
+    /// HOW:
+    /// - Fill `Size8`, reserve one byte, and check `Size16` capacity, changed storage identity, and preserved contents.
+    /// - Reallocate `Size8` and check reuse of the old address, then drop the grown page and check its class cache.
     #[test]
     fn reserve_pooled_page_grows_to_next_page_size() {
         cache::reset();
@@ -880,6 +903,11 @@ mod tests {
         assert_eq!(cache::cached_pages(BytePageSize::Size16), 1);
     }
 
+    /// STATEMENT: Pooled reservation skips to a fitting size class but never shrinks the current class.
+    ///
+    /// HOW:
+    /// - Reserve 40 KiB after 100 bytes in `Size4` and check selection of `Size48` with unchanged data.
+    /// - Retain a shared 100-byte tail of full `Size32`, reserve ten bytes, and verify the class and both views' contents.
     #[test]
     fn reserve_pooled_page_skips_page_sizes() {
         cache::reset();
@@ -904,6 +932,11 @@ mod tests {
         assert_eq!(view.as_ref(), &full[full.len() - 100..]);
     }
 
+    /// STATEMENT: Growing a shared pooled page copies data and delays caching the old page until its last view drops.
+    ///
+    /// HOW:
+    /// - Fill and shallow-freeze `Size4`, reserve one byte, mutate the resulting `Size8`, and check the old view remains intact.
+    /// - Check the `Size4` cache before and after dropping that view.
     #[test]
     fn reserve_shared_pooled_page() {
         cache::reset();
@@ -924,6 +957,11 @@ mod tests {
         assert_eq!(cache::cached_pages(BytePageSize::Size4), 1);
     }
 
+    /// STATEMENT: A reservation exceeding all page classes falls back to uncached ordinary storage.
+    ///
+    /// HOW:
+    /// - Reserve a `Size256` capacity after 1,000 initialized bytes and check `Unset`, exact capacity, and preserved data.
+    /// - Verify the old page is cached and dropping the oversized buffer adds no cached pages.
     #[test]
     fn reserve_pooled_page_above_largest_page_size() {
         cache::reset();
@@ -947,6 +985,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Exact reservations use the requested capacity and classify storage as a page only at an exact page capacity.
+    ///
+    /// HOW:
+    /// - Reserve 5,000 bytes after 100 bytes in unique and shared `Size4` pages and check capacity 5,100, `Unset`, data, and cache behavior.
+    /// - Reserve exactly enough for `Size8` and verify that class is recognized with unchanged data.
     #[test]
     fn reserve_exact_pooled_page() {
         cache::reset();
@@ -981,6 +1024,11 @@ mod tests {
         assert_eq!(st.as_ref(), &data[..]);
     }
 
+    /// STATEMENT: Ordinary allocations remain unsized when grown unless their allocation exactly matches a page class.
+    ///
+    /// HOW:
+    /// - Grow unique and shared ordinary storage and check `Unset` without page rounding.
+    /// - Allocate exact `Size4` and `Size8` capacities, verify caching, and check a reused page starts empty and accepts new bytes.
     #[test]
     fn reserve_unsized_buffer_keeps_page_size() {
         cache::reset();
@@ -1017,6 +1065,11 @@ mod tests {
         assert_eq!(st.as_ref(), b"world");
     }
 
+    /// STATEMENT: Remaining capacity follows initialized data and view offsets and is restored when unique storage is reclaimed.
+    ///
+    /// HOW:
+    /// - Write, advance, truncate, clear, and fill storage, checking length, capacity, remaining space, and fullness at each step.
+    /// - Advance and freeze a mutable buffer, convert it back without moving, fill its spare space, and verify zero remains.
     #[test]
     fn remaining_is_derived() {
         let mut st = StorageVec::with_capacity(100);
@@ -1060,6 +1113,11 @@ mod tests {
         assert_eq!(BufMut::remaining_mut(&b), 0);
     }
 
+    /// STATEMENT: Truncating to zero reclaims consumed front capacity only for uniquely owned storage.
+    ///
+    /// HOW:
+    /// - Advance a capacity-128 buffer and truncate to zero, checking full capacity returns.
+    /// - Repeat while holding a split view and verify capacity retains the consumed offset.
     #[test]
     fn truncate_reclaims_unique_buffer() {
         let mut b = BytesMut::with_capacity(128);
@@ -1080,6 +1138,10 @@ mod tests {
         drop(other);
     }
 
+    /// STATEMENT: Resizing can shorten data and then extend it with the requested fill byte.
+    ///
+    /// HOW:
+    /// - Resize `hello world` to five bytes and then seven using `!`, checking `hello` and `hello!!`.
     #[test]
     fn resize_shrinks() {
         let mut b = BytesMut::copy_from_slice(b"hello world");
@@ -1089,6 +1151,10 @@ mod tests {
         assert_eq!(&b[..], b"hello!!");
     }
 
+    /// STATEMENT: Reserving unique storage can reclaim consumed front space instead of increasing allocation capacity.
+    ///
+    /// HOW:
+    /// - Consume 40 bytes before a ten-byte tail, reserve one more than current spare space, and check the tail, original capacity, and uniqueness.
     #[test]
     fn reserve_reclaims_front_space() {
         let mut b = BytesMut::with_capacity(128);
@@ -1105,6 +1171,11 @@ mod tests {
         assert!(b.is_unique());
     }
 
+    /// STATEMENT: Exact reservations preserve data for unique and shared buffers without amortized over-allocation.
+    ///
+    /// HOW:
+    /// - Fill 64 bytes, reserve zero then 1,000, and check unchanged contents and tightly bounded capacity.
+    /// - Keep a split view, reserve 2,000 for the tail, and verify tight capacity, unique new storage, and unchanged head data.
     #[test]
     fn reserve_exact() {
         let mut b = BytesMut::with_capacity(64);
@@ -1152,6 +1223,11 @@ mod tracker_tests {
         unsafe { !Header::tracker(b.storage.0.as_ptr()).is_null() }
     }
 
+    /// STATEMENT: Tracked page allocations remain charged while live but lose attribution when returned to the cache.
+    ///
+    /// HOW:
+    /// - Allocate and drop tracked `Size4`, check its charge clears, then reuse its pointer untracked and verify no tracker is attached.
+    /// - Allocate tracked `Unset` and cached `Size4` pages, check `Size64` normalization and combined charges, then drop both to zero.
     #[test]
     fn page_charged_until_released() {
         cache::reset();
@@ -1183,6 +1259,11 @@ mod tracker_tests {
         cache::reset();
     }
 
+    /// STATEMENT: Split handles share one allocation charge and unique conversion retains that charge until final release.
+    ///
+    /// HOW:
+    /// - Split a tracked `Size4` page into three handles, drop two, and check one full-page charge remains.
+    /// - Convert the last handle to `BytesMut`, verify tracking persists, and drop it to clear the charge.
     #[test]
     fn handles_share_the_charge() {
         cache::reset();
@@ -1208,6 +1289,11 @@ mod tracker_tests {
         cache::reset();
     }
 
+    /// STATEMENT: Copying shared tracked `Bytes` into mutable storage creates an untracked allocation.
+    ///
+    /// HOW:
+    /// - Freeze and clone a tracked page, convert one view to `BytesMut`, and verify it is untracked while the original page stays charged.
+    /// - Drop the remaining immutable view and check tracker totals return to zero before dropping the copy.
     #[test]
     fn shared_copy_from_bytes_is_untracked() {
         cache::reset();
@@ -1226,6 +1312,11 @@ mod tracker_tests {
         cache::reset();
     }
 
+    /// STATEMENT: Reallocating tracked storage adjusts charged bytes without adding another live allocation.
+    ///
+    /// HOW:
+    /// - Grow a tracked page with two exact reservations, compare snapshots with actual allocation sizes, and verify original data remains.
+    /// - Drop the grown buffer and check zero bytes and allocations remain charged.
     #[test]
     fn realloc_resizes_charge() {
         cache::reset();
@@ -1246,6 +1337,11 @@ mod tracker_tests {
         assert_eq!(snap(&tracker), (0, 0));
     }
 
+    /// STATEMENT: Page growth carries tracker attribution and shared old pages remain charged until their views drop.
+    ///
+    /// HOW:
+    /// - Grow tracked `Size4` to `Size8`, checking its single new charge and cached old page.
+    /// - Split a view and force replacement `Size8` storage, check two charges and a new pointer, then release handles and check charges fall to zero.
     #[test]
     fn move_to_page_carries_tracker() {
         cache::reset();
@@ -1274,6 +1370,11 @@ mod tracker_tests {
         cache::reset();
     }
 
+    /// STATEMENT: New ordinary allocations copied from shared tracked pages inherit their tracker.
+    ///
+    /// HOW:
+    /// - Split tracked `Size4` buffers, then reserve exactly 10,000 bytes or reserve beyond all page classes.
+    /// - Check `Unset` storage and combined old/new allocation charges, then release each old view and new buffer and verify totals decrease to zero.
     #[test]
     fn new_allocation_carries_tracker() {
         cache::reset();
@@ -1305,6 +1406,11 @@ mod tracker_tests {
         cache::reset();
     }
 
+    /// STATEMENT: Trimming creates untracked copies or inline data and releases charges when original storage is no longer referenced.
+    ///
+    /// HOW:
+    /// - Trim shared head and tail views from a tracked page and check the charge persists until both detach.
+    /// - Trim a short frozen tracked page inline and verify its charge clears as well.
     #[test]
     fn trimdown_drops_tracker() {
         cache::reset();
@@ -1331,6 +1437,10 @@ mod tracker_tests {
         cache::reset();
     }
 
+    /// STATEMENT: Cloning or explicitly copying tracked mutable data does not inherit allocation attribution.
+    ///
+    /// HOW:
+    /// - Clone and copy a tracked 200-byte buffer, check both copies are untracked, and drop the source to verify zero tracker totals.
     #[test]
     fn untracked_copies() {
         let tracker = BytesTracker::new();
@@ -1344,6 +1454,10 @@ mod tracker_tests {
         assert_eq!(snap(&tracker), (0, 0));
     }
 
+    /// STATEMENT: A tracked allocation keeps tracker state alive through growth after public tracker handles are dropped.
+    ///
+    /// HOW:
+    /// - Drop a page's tracker handle, grow the page to 5,000 bytes, split ten bytes, and release both allocation views safely.
     #[test]
     fn tracker_outlives_handles() {
         let tracker = BytesTracker::new();
@@ -1357,6 +1471,10 @@ mod tracker_tests {
         drop(head);
     }
 
+    /// STATEMENT: Releasing shared page handles on other threads clears the allocation's tracker charge.
+    ///
+    /// HOW:
+    /// - Split a tracked 200-byte page, drop head and tail in separate threads, join them, and verify zero live totals.
     #[test]
     fn release_on_other_thread() {
         let tracker = BytesTracker::new();
@@ -1371,6 +1489,11 @@ mod tracker_tests {
         assert_eq!(snap(&tracker), (0, 0));
     }
 
+    /// STATEMENT: Attaching a tracker adopts an existing allocation and keeps its charge through growth and freezing.
+    ///
+    /// HOW:
+    /// - Attach a tracker to an untracked buffer and check tracker identity and allocation-sized charge.
+    /// - Grow and freeze it, verify one correctly sized live allocation, then drop it and check zero totals.
     #[test]
     fn set_tracker_adopts_allocation() {
         let tracker = BytesTracker::new();
@@ -1391,6 +1514,11 @@ mod tracker_tests {
         assert_eq!(snap(&tracker), (0, 0));
     }
 
+    /// STATEMENT: Reassigning trackers moves a shared or unique allocation's charge exactly once.
+    ///
+    /// HOW:
+    /// - Adopt a shared allocation, assign the same tracker and its clone, and verify its charge remains unchanged.
+    /// - Move attribution to another tracker, drop the split view, move it back, and check old/new totals and final release.
     #[test]
     fn set_tracker_reattributes() {
         let tracker = BytesTracker::new();
@@ -1423,6 +1551,11 @@ mod tracker_tests {
         assert_eq!(snap(&tracker), (0, 0));
     }
 
+    /// STATEMENT: Reattribution safely releases tracker state held only by an allocation and retains the replacement tracker.
+    ///
+    /// HOW:
+    /// - Attach a temporary tracker, replace it, drop the replacement's public handle, and recover a clone through the buffer.
+    /// - Check the live allocation charge and verify dropping the buffer clears it.
     #[test]
     fn set_tracker_releases_last_tracker_handle() {
         let mut b = BytesMut::with_capacity(200);
@@ -1438,6 +1571,11 @@ mod tracker_tests {
         assert_eq!(snap(&tracker), (0, 0));
     }
 
+    /// STATEMENT: Tracker reassignment remains correct while another thread detaches a shared view.
+    ///
+    /// HOW:
+    /// - Split a tracked buffer, trim the head on another thread, and reassign the tail to a different tracker concurrently.
+    /// - Join, check head length and old/new charges, then drop the tail and verify the new charge clears.
     #[test]
     fn set_tracker_while_shared_across_threads() {
         let tracker = BytesTracker::new();
@@ -1462,6 +1600,11 @@ mod tracker_tests {
         assert_eq!(snap(&other), (0, 0));
     }
 
+    /// STATEMENT: Adopting a cached-size page charges it only while live and does not leave tracker state in the cache.
+    ///
+    /// HOW:
+    /// - Attach a tracker to untracked `Size4`, check its page charge, drop it, and verify zero totals and one cached page.
+    /// - Reuse the page without a tracker and check `tracker()` returns `None`.
     #[test]
     fn set_tracker_on_page() {
         cache::reset();
@@ -1478,6 +1621,11 @@ mod tracker_tests {
         assert!(b.tracker().is_none());
     }
 
+    /// STATEMENT: Concurrent final releases of many shared pages remove every allocation charge exactly once.
+    ///
+    /// HOW:
+    /// - Allocate tracked pages in four groups, split heads and tails, and check the full aggregate charge.
+    /// - Synchronize eight releasing threads with a barrier, join them, and verify zero live bytes and allocations.
     #[test]
     fn concurrent_releases() {
         const THREADS: usize = 4;
@@ -1520,6 +1668,11 @@ mod tracker_tests {
         assert_eq!(snap(&tracker), (0, 0));
     }
 
+    /// STATEMENT: Evicting already-unattributed cached pages does not alter live tracker charges or access retired tracker state.
+    ///
+    /// HOW:
+    /// - Cache pages from two trackers, keep a tracked `Size8` live, and drop the tracker with no remaining allocations.
+    /// - Lower the cache limit and reset the cache, check only `Size8` remains charged, then drop it to clear totals.
     #[test]
     fn cache_eviction_does_not_uncharge() {
         cache::reset();
@@ -1546,6 +1699,11 @@ mod tracker_tests {
         assert_eq!(snap(&tracker), (0, 0));
     }
 
+    /// STATEMENT: A cached page can be reassigned to a new tracker without retaining the previous one.
+    ///
+    /// HOW:
+    /// - Drop a tracked `Size4` page and its original tracker after checking the charge clears.
+    /// - Reuse its pointer with another tracker, check identity and charge, and drop it to return totals to zero.
     #[test]
     fn cache_reuse_by_other_tracker() {
         cache::reset();
@@ -1567,6 +1725,11 @@ mod tracker_tests {
         assert_eq!(snap(&second), (0, 0));
     }
 
+    /// STATEMENT: An allocation-owned tracker can be cloned through the buffer after its original public handle disappears.
+    ///
+    /// HOW:
+    /// - Attach a temporary tracker to a buffer, clone its borrowed tracker, and check the allocation-sized charge.
+    /// - Drop the buffer and verify the recovered tracker reports zero totals.
     #[test]
     fn borrowed_tracker_without_handles() {
         let mut b = BytesMut::with_capacity(100);

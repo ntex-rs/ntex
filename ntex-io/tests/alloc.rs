@@ -60,6 +60,11 @@ impl FilterLayer for Pass {
     }
 }
 
+/// STATEMENT: Filter-chain conversions allocate only when a new filter wrapper is needed.
+///
+/// HOW:
+/// - Warm thread-local state and count allocations around adding, mapping, sealing, and boxing filters.
+/// - Check one allocation per new wrapper and none when sealing or boxing an already sealed connection.
 #[ntex::test]
 async fn filter_chain_conversions_allocate_only_the_new_filter() {
     let cfg: SharedCfg = SharedCfg::new("SRV").into();
@@ -91,6 +96,11 @@ async fn filter_chain_conversions_allocate_only_the_new_filter() {
     drop(io);
 }
 
+/// STATEMENT: Warmed-up local waiter registration, replacement, and delivery allocate no memory.
+///
+/// HOW:
+/// - Cycle a waiter between native and wrapped wakers, including repeated registration and tag wakes.
+/// - Repeat the warmed-up cycle under allocation counting and assert zero allocations.
 #[ntex::test]
 async fn local_waiter_reuse_and_delivery_do_not_allocate() {
     use std::sync::Arc;

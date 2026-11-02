@@ -54,6 +54,11 @@ mod tests {
     use super::*;
     use crate::{ByteString, Bytes, buf::Buf};
 
+    /// STATEMENT: External `Arc<str>` storage tracks clones and detaches when views change their bounds.
+    ///
+    /// HOW:
+    /// - Wrap and clone `test` as `Bytes` and `ByteString`, checking contents, capacity, and strong counts through drops.
+    /// - Read, truncate, and adjust storage bounds on new wrappers, verifying substrings and release of the external reference.
     #[test]
     fn test_arc_str() {
         let test: Arc<str> = Arc::from("test".to_string());

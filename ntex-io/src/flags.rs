@@ -515,6 +515,10 @@ impl fmt::Debug for Flags {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Flag formatting identifies connection states and flag kinds compare distinctly.
+    ///
+    /// HOW:
+    /// - Format stopped, active, and read-EOF states and compare equal and distinct flag kinds.
     #[test]
     fn flags() {
         assert!(format!("{:?}", Flags::new_stopped()).contains("Stopped"));
@@ -524,6 +528,10 @@ mod tests {
         assert_ne!(FlagsKind::RD_EOF, FlagsKind::RD_PAUSED);
     }
 
+    /// STATEMENT: Every `FlagsKind` occupies a distinct bit.
+    ///
+    /// HOW:
+    /// - Compare the number of set bits in all flags with the number of iterated flag kinds.
     #[test]
     fn flag_bits_are_distinct() {
         let all = FlagsKind::all().bits();
@@ -534,6 +542,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Shutdown phases never move backward and stopped connections remain closed.
+    ///
+    /// HOW:
+    /// - Advance through filter and transport shutdown, retry earlier transitions, then stop.
+    /// - Check phase predicates and verify subsequent transitions cannot reopen the connection.
     #[test]
     fn shutdown_phase_only_moves_forward() {
         let f = Flags::new(false);
@@ -562,13 +575,11 @@ mod tests {
         assert!(f.is_closed());
     }
 
-    /// Being stopped is the last state, not a flag beside the others.
+    /// STATEMENT: Stopping reaches the terminal phase even when earlier shutdown stages are skipped.
     ///
-    /// The transport can report the connection gone at any point, so a
-    /// stopped connection has not necessarily *passed through* the earlier
-    /// states. It still reports them as reached, because every predicate here
-    /// asks "has it got at least this far" and once the socket is gone every
-    /// earlier state is over.
+    /// HOW:
+    /// - Stop one connection after graceful shutdown stages and another directly from active.
+    /// - Check both report all earlier stages reached, without ongoing filter shutdown.
     #[test]
     fn stopped_is_the_last_state_whichever_route_reached_it() {
         // walked the whole shutdown
@@ -591,6 +602,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A stopped transport is gone without implying a termination or force-close request.
+    ///
+    /// HOW:
+    /// - Stop an active connection and check closed, peer-gone, and aborted predicates.
+    /// - Verify it is neither active, terminating, nor force-closing.
     #[test]
     fn a_stopped_connection_is_gone_without_having_been_aborted() {
         let f = Flags::new(false);
@@ -604,6 +620,11 @@ mod tests {
         assert!(!f.is_force_closing());
     }
 
+    /// STATEMENT: Termination starts teardown once but later requests can escalate to force-close.
+    ///
+    /// HOW:
+    /// - Begin termination repeatedly and check only the first call requests teardown.
+    /// - Escalate to force-close and verify termination, filter-stage, and readiness flags.
     #[test]
     fn terminate_runs_teardown_once_and_force_still_escalates() {
         let f = Flags::new(false);
@@ -623,6 +644,10 @@ mod tests {
         assert!(f.is_terminating());
     }
 
+    /// STATEMENT: Graceful termination cannot downgrade an existing force-close request.
+    ///
+    /// HOW:
+    /// - Begin forceful termination, then request graceful termination and check force-close remains.
     #[test]
     fn force_close_is_never_downgraded() {
         let f = Flags::new(false);
@@ -635,12 +660,11 @@ mod tests {
         );
     }
 
-    /// Every state the type can represent is reachable, and nothing else is.
+    /// STATEMENT: The shutdown state machine reaches exactly its ten representable states.
     ///
-    /// With the manner carried by the shutdown states, an illegal combination
-    /// such as an active connection that is being aborted cannot be written
-    /// down at all. This checks the other direction: that no representable
-    /// state is dead, which would mean the type is still too loose.
+    /// HOW:
+    /// - Enumerate operation sequences up to five transitions, respecting transport prerequisites.
+    /// - Compare visited phases with active and every shutdown phase/manner combination.
     #[test]
     fn every_representable_state_is_reachable() {
         const OPS: usize = 5;
@@ -684,9 +708,10 @@ mod tests {
         assert_eq!(seen, expected);
     }
 
-    /// Finishing the filters moves to the next state, which carries its own
-    /// manner, so the transition has to hand the manner over. Losing it here
-    /// would silently turn a force close into a clean one.
+    /// STATEMENT: Transitioning from filter to transport shutdown preserves the termination manner.
+    ///
+    /// HOW:
+    /// - Begin graceful and forceful termination, advance to transport shutdown, and compare manners.
     #[test]
     fn finishing_the_filters_keeps_how_the_connection_ends() {
         for (force, manner) in [(false, Manner::Terminating), (true, Manner::ForceClosed)] {
@@ -699,8 +724,11 @@ mod tests {
         }
     }
 
-    /// Teardown completing is the last transition, so it has to hand the
-    /// manner over as well, from whichever state the connection was in.
+    /// STATEMENT: Stopping preserves graceful, terminating, and force-closed shutdown manners.
+    ///
+    /// HOW:
+    /// - Stop terminating connections during filter and transport shutdown and check their manners.
+    /// - Complete a clean shutdown and verify it remains graceful rather than terminating.
     #[test]
     fn a_stopped_connection_remembers_how_it_ended() {
         for (force, manner) in [(false, Manner::Terminating), (true, Manner::ForceClosed)] {
@@ -729,6 +757,10 @@ mod tests {
         assert!(!f.is_terminating());
     }
 
+    /// STATEMENT: A force-close request does not change an already stopped connection.
+    ///
+    /// HOW:
+    /// - Stop an active connection, request forceful termination, and check no teardown or escalation.
     #[test]
     fn a_terminated_connection_is_left_alone() {
         let f = Flags::new(false);

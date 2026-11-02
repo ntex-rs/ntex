@@ -1081,6 +1081,11 @@ impl From<&Bytes> for BytesMut {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Repeated small writes grow `BytesMut` amortized rather than reallocating for every write.
+    ///
+    /// HOW:
+    /// - Append eight bytes 10,000 times and check length and at most 16 capacity changes.
+    /// - Format 1,000 eight-digit numbers into another buffer and verify length and bounded capacity.
     #[test]
     fn growth_is_amortized() {
         let mut buf = BytesMut::with_capacity(0);
@@ -1105,6 +1110,11 @@ mod tests {
         assert!(buf.capacity() < 16_000);
     }
 
+    /// STATEMENT: Large reservations for small live data allocate only the requested additional capacity.
+    ///
+    /// HOW:
+    /// - Reserve 64 KiB after `hello` and check capacity equals live length plus the request.
+    /// - Split 1,000 bytes from a shared 1,024-byte buffer, reserve 4,096 for the tail, and check capacity and head data.
     #[test]
     fn growth_of_little_data_is_exact() {
         let mut buf = BytesMut::copy_from_slice(b"hello");
@@ -1120,6 +1130,11 @@ mod tests {
         assert_eq!(&head[..], &[1; 1000][..]);
     }
 
+    /// STATEMENT: Converting uniquely owned vector-backed `Bytes` to `BytesMut` reuses spare capacity.
+    ///
+    /// HOW:
+    /// - Freeze 64 bytes in a 256-byte buffer, convert back, and check pointer, contents, and capacity.
+    /// - Fill the spare capacity and verify the pointer and appended bytes.
     #[test]
     fn from_unique_bytes_reuses_buffer() {
         let mut buf = BytesMut::with_capacity(256);
@@ -1138,6 +1153,11 @@ mod tests {
         assert_eq!(&m[64..], &[2; 192][..]);
     }
 
+    /// STATEMENT: A unique `Bytes` subview regains writable capacity after its visible end when made mutable.
+    ///
+    /// HOW:
+    /// - Drop a split 32-byte head, truncate the tail, convert to `BytesMut`, and check pointer and tail capacity.
+    /// - Append 160 bytes and verify old and new content without relocation.
     #[test]
     fn from_unique_bytes_subview() {
         let mut buf = BytesMut::with_capacity(256);
@@ -1160,6 +1180,11 @@ mod tests {
         assert_eq!(&m[64..], &[3; 160][..]);
     }
 
+    /// STATEMENT: Converting shared `Bytes` to `BytesMut` copies rather than exposing shared mutable storage.
+    ///
+    /// HOW:
+    /// - Keep a clone, convert its sibling, mutate it, and check distinct pointers and unchanged clone data.
+    /// - Convert bytes taken from a live `BytesMut` and verify later writes to the original do not alter the copy.
     #[test]
     fn from_shared_bytes_copies() {
         let b = BytesMut::copy_from_slice([1; 64]).freeze();
@@ -1182,6 +1207,11 @@ mod tests {
 
     // Run under miri: without `Acquire`, the header update races with the
     // read made by the other thread before it released its handle.
+    /// STATEMENT: Reclaiming unique `Bytes` storage synchronizes with a different thread releasing its view.
+    ///
+    /// HOW:
+    /// - Read a cloned view on another thread while retrying `try_into_vec` until unique ownership is available.
+    /// - Check pointer reuse, mutate the reclaimed buffer, and verify the joined thread read the original byte.
     #[test]
     fn from_bytes_synchronizes_with_release() {
         let b = BytesMut::copy_from_slice([1; 64]).freeze();
@@ -1208,6 +1238,10 @@ mod tests {
         assert_eq!(handle.join().unwrap(), 1);
     }
 
+    /// STATEMENT: Inline and static `Bytes` convert to mutable buffers with unchanged contents.
+    ///
+    /// HOW:
+    /// - Convert inline `inline` bytes and a static 64-byte array with `BytesMut::from` and compare their contents.
     #[test]
     fn from_inline_and_static_bytes() {
         let m = BytesMut::from(Bytes::copy_from_slice(b"inline"));
@@ -1217,6 +1251,10 @@ mod tests {
         assert_eq!(&m[..], &[1; 64][..]);
     }
 
+    /// STATEMENT: Reading `BytesMut` consumes its contents without touching unused destination bytes.
+    ///
+    /// HOW:
+    /// - Read `123` into a ten-byte zeroed array and verify a three-byte read, an empty buffer, and seven untouched zeros.
     #[test]
     fn bvec_read() {
         use std::io::Read;
@@ -1229,6 +1267,10 @@ mod tests {
         assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
 
+    /// STATEMENT: Converting borrowed `Bytes` yields independently extensible mutable contents.
+    ///
+    /// HOW:
+    /// - Convert borrowed static `hello`, append `!`, and verify `hello!` while the source remains `hello`.
     #[test]
     fn from_bytes_ref() {
         let b = Bytes::from_static(b"hello");

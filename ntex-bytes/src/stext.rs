@@ -133,6 +133,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Cloning external storage with no clone callback result falls back to copying into vector storage.
+    ///
+    /// HOW:
+    /// - Wrap a boxed 100-byte payload with `Boxed`, clone it, and check `StExt` becomes an equal `Vec` copy.
+    /// - Format its `StorageVTable` and check the debug output identifies the type.
     #[test]
     fn clone_copies_data() {
         let data = vec![7u8; 100].into_boxed_slice();

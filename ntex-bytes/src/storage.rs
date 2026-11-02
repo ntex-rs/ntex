@@ -699,6 +699,10 @@ mod tests {
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb";
 
+    /// STATEMENT: Large vector-backed views retain valid offsets and shared storage on 32-bit targets.
+    ///
+    /// HOW:
+    /// - Split a `Bytes` allocation after one GiB, check lengths, storage identity and tail capacity, then clone and drop the tail.
     #[test]
     #[cfg(target_pointer_width = "32")]
     fn vec_view_offset_over_1gib() {
@@ -721,6 +725,11 @@ mod tests {
         drop(b2);
     }
 
+    /// STATEMENT: `trimdown` shrinks storage or makes short data inline without changing bytes.
+    ///
+    /// HOW:
+    /// - Shorten `LONG`, trim to 68 bytes and `INLINE_CAP`, and check contents and storage size.
+    /// - Trim a 40-byte tail view and verify its exact capacity and independent allocation.
     #[test]
     fn trimdown() {
         let mut b = Bytes::from(LONG.to_vec());
@@ -748,6 +757,11 @@ mod tests {
         assert!(!src.as_ref().as_ptr_range().contains(&b.as_ptr()));
     }
 
+    /// STATEMENT: Mutable storage preserves data through growth, advancement, and allocation reuse.
+    ///
+    /// HOW:
+    /// - Copy empty and nonempty slices, reserve exact and amortized capacity, and check lengths and appended bytes.
+    /// - Convert to `Bytes`, then consume and reserve a 48-byte buffer and verify its pointer is reused.
     #[test]
     #[allow(clippy::unnecessary_fallible_conversions)]
     fn bytes_mut() {
@@ -817,6 +831,11 @@ mod tests {
         assert_eq!(p1, p2);
     }
 
+    /// STATEMENT: External storage is shared for full views but copied for partial views and truncation.
+    ///
+    /// HOW:
+    /// - Wrap `LONG` in `Arc<str>` and verify no-op trimming, truncation, and advancement retain `StExt`.
+    /// - Slice full, tail, and middle ranges and truncate to 100 bytes, checking contents, kinds, and capacities.
     #[test]
     fn ext_storage() {
         let long: std::sync::Arc<str> = std::str::from_utf8(LONG).unwrap().into();
@@ -856,6 +875,10 @@ mod tests {
         assert_eq!(b.info().kind, info::Kind::Vec);
     }
 
+    /// STATEMENT: Truncating static bytes keeps their static storage kind.
+    ///
+    /// HOW:
+    /// - Construct `Bytes` from static `LONG`, check capacity, truncate to 100 bytes, and check the prefix and `Static` kind.
     #[test]
     fn static_storage() {
         let mut b = Bytes::from_static(LONG);
@@ -866,6 +889,10 @@ mod tests {
         assert_eq!(b.info().kind, info::Kind::Static);
     }
 
+    /// STATEMENT: Inline storage cannot expose data again by extending its end after shortening.
+    ///
+    /// HOW:
+    /// - Copy `INLINE_CAP` bytes inline, set the end to five and then back to capacity, and check only five bytes remain visible.
     #[test]
     fn inline_storage() {
         let cap = super::INLINE_CAP;

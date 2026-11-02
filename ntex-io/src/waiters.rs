@@ -363,6 +363,11 @@ mod tests {
         cnt.0.load(Ordering::Relaxed)
     }
 
+    /// STATEMENT: Waking a tag removes and notifies only that tag's registrations.
+    ///
+    /// HOW:
+    /// - Register three counting wakers across two tags and wake each tag.
+    /// - Check wake counts, registration removal, and that repeated wakes do not notify twice.
     #[test]
     fn wake_by_tag() {
         let mut wakers = Waiters::new();
@@ -391,6 +396,11 @@ mod tests {
         assert_eq!(wakers.len(), 0);
     }
 
+    /// STATEMENT: Waiter tags are created on demand and removed with their final registration.
+    ///
+    /// HOW:
+    /// - Wake an unknown tag, register sparse tags, and remove or wake their entries.
+    /// - Check tag-map sizes, surviving registrations, and notification counts.
     #[test]
     fn dynamic_tags() {
         let mut wakers = Waiters::default();
@@ -427,6 +437,11 @@ mod tests {
         assert!(wakers.tags.is_empty());
     }
 
+    /// STATEMENT: Waiters reuse freed slots at capacity and reject registrations beyond capacity.
+    ///
+    /// HOW:
+    /// - Fill all `u16::MAX` slots, remove one, and verify its index is reused.
+    /// - Catch the panic from one further registration.
     #[test]
     fn capacity() {
         let mut wakers = Waiters::new();
@@ -445,6 +460,10 @@ mod tests {
         assert!(res.is_err());
     }
 
+    /// STATEMENT: Removing head, middle, and tail waiters leaves only live entries to wake.
+    ///
+    /// HOW:
+    /// - Remove three of five registrations, repeat a removal, then check two wake notifications.
     #[test]
     fn remove() {
         let mut wakers = Waiters::new();
@@ -466,6 +485,11 @@ mod tests {
         assert_eq!(wakers.len(), 0);
     }
 
+    /// STATEMENT: Updating a live waiter replaces its waker, while updating a consumed ID fails.
+    ///
+    /// HOW:
+    /// - Replace a counting waker, wake its tag, and verify only the replacement fires.
+    /// - Try updating the now-removed registration and expect `None`.
     #[test]
     fn update() {
         let mut wakers = Waiters::new();
@@ -479,6 +503,11 @@ mod tests {
         assert!(wakers.update(id, &w1).is_none());
     }
 
+    /// STATEMENT: Waiter updates preserve registration order and reuse equivalent local handles.
+    ///
+    /// HOW:
+    /// - Update a custom raw waker with itself and verify no replaced handle is returned.
+    /// - Replace it with a counting waker, wake the tag, and check reverse registration order.
     #[test]
     fn local_handles_keep_reuse_and_wake_order() {
         use std::task::{RawWaker, RawWakerVTable};
@@ -510,6 +539,10 @@ mod tests {
         assert!(wakers.update(first, &noop).is_none());
     }
 
+    /// STATEMENT: Waking all waiters empties every tag and notifies each registration once.
+    ///
+    /// HOW:
+    /// - Wake an empty collection, add four registrations across tags, then check four notifications.
     #[test]
     fn wake_all() {
         let mut wakers = Waiters::new();
@@ -525,6 +558,11 @@ mod tests {
         assert_eq!(wakers.len(), 0);
     }
 
+    /// STATEMENT: Stale waiter IDs cannot modify registrations that reuse the same slot.
+    ///
+    /// HOW:
+    /// - Wake a registration and reuse its index with a different waker.
+    /// - Attempt stale updates/removal and verify the replacement remains registered and wakes once.
     #[test]
     fn stale_ids() {
         let mut wakers = Waiters::new();
@@ -547,6 +585,11 @@ mod tests {
         assert_eq!((count(&c1), count(&c2)), (1, 1));
     }
 
+    /// STATEMENT: Released waiter slots are reused without growing storage or losing live entries.
+    ///
+    /// HOW:
+    /// - Free three of four slots by waking and removing entries, then register three replacements.
+    /// - Verify unchanged storage length, all live IDs, and the final notification count.
     #[test]
     fn free_list_reuse() {
         let mut wakers = Waiters::new();

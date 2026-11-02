@@ -901,8 +901,11 @@ mod tests {
 
     use super::*;
 
-    /// The three public lifecycle predicates answer different questions and
-    /// must not be read as stages of one another.
+    /// STATEMENT: Active, terminating, and closed predicates describe independent lifecycle properties.
+    ///
+    /// HOW:
+    /// - Terminate an active connection and check it becomes inactive before transport closure.
+    /// - Gracefully shut down another connection and verify it closes without reporting termination.
     #[ntex::test]
     async fn lifecycle_predicates_are_independent() {
         // a force termination starts: it ends abnormally and is closing, but
@@ -934,6 +937,11 @@ mod tests {
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
 
+    /// STATEMENT: Connection references preserve identity and propagate data, I/O errors, and termination.
+    ///
+    /// HOW:
+    /// - Compare references and formatting, exchange bytes through receive/decode and encode/send APIs.
+    /// - Inject read/write errors, check closed-state errors, then terminate and shut down a fresh connection.
     #[ntex::test]
     async fn utils() {
         let (client, server) = IoTest::create();
@@ -1014,6 +1022,10 @@ mod tests {
         assert!(state.flags().is_closed());
     }
 
+    /// STATEMENT: A zero-byte transport write fails sending with `WriteZero` and closes the connection.
+    ///
+    /// HOW:
+    /// - Configure a zero-byte write, send a frame, and check the error kind and closed state.
     #[ntex::test]
     async fn zero_byte_write_reports_write_zero() {
         let (client, server) = IoTest::create();
@@ -1033,6 +1045,11 @@ mod tests {
         assert!(state.flags().is_closed());
     }
 
+    /// STATEMENT: Disconnect waiters resolve on transport closure, not merely read EOF.
+    ///
+    /// HOW:
+    /// - Poll original and cloned waiters, close peer input, and verify both still wait.
+    /// - Finish shutdown and check both complete; repeat with a read error and post-close registrations.
     #[ntex::test]
     #[allow(clippy::unit_cmp)]
     async fn on_disconnect() {
@@ -1094,6 +1111,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Terminated connections reject all tested application write entrypoints.
+    ///
+    /// HOW:
+    /// - Terminate a connection and check slice encoding, byte encoding, and write-buffer access fail.
     #[ntex::test]
     async fn write_to_closed_io() {
         let (_client, server) = IoTest::create();
@@ -1140,6 +1161,11 @@ mod tests {
         crate::forward_shutdown!(layer);
     }
 
+    /// STATEMENT: A mapped and sealed filter continues processing reads and queued output.
+    ///
+    /// HOW:
+    /// - Exchange data through a counting wrapper, then receive again.
+    /// - Check payloads and that output was observed in whole four-byte passes at least twice.
     #[ntex::test]
     async fn filter() {
         let out_bytes = Rc::new(Cell::new(0));
@@ -1179,6 +1205,11 @@ mod tests {
         assert_eq!(out_bytes.get() % 4, 0, "{}", out_bytes.get());
     }
 
+    /// STATEMENT: Sealing nested filter wrappers preserves processing order and releases their state.
+    ///
+    /// HOW:
+    /// - Exchange bytes through two counting wrappers and verify output accounting and a drained buffer.
+    /// - Drop the connection, check released counter references, and inspect ordered read/write callbacks.
     #[ntex::test]
     async fn boxed_filter() {
         let out_bytes = Rc::new(Cell::new(0));
@@ -1236,6 +1267,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Connection timers reuse unchanged deadlines, update changed ones, and cancel at zero.
+    ///
+    /// HOW:
+    /// - Start and repeat a timer, change its timeout, and compare handles and remaining durations.
+    /// - Share a deadline with another connection, cancel both, and check timer-handle duration arithmetic.
     #[ntex::test]
     async fn timer_start_update_and_stop() {
         let (_client, server) = IoTest::create();
@@ -1278,6 +1314,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Dispatcher notification wakes a status waiter without manufacturing a status update.
+    ///
+    /// HOW:
+    /// - Register a flag-setting waker with a pending status poll and notify the dispatcher.
+    /// - Check the flag is set while the next status poll remains pending.
     #[ntex::test]
     async fn notify_dispatcher_wakes_status_poll() {
         use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
@@ -1304,6 +1345,11 @@ mod tests {
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
     }
 
+    /// STATEMENT: Connection and reference hashing distinguish identities while deduplicating the same connection.
+    ///
+    /// HOW:
+    /// - Insert repeated references to one connection and a distinct connection into separate hash sets.
+    /// - Check duplicate insertion fails for both `IoRef` and borrowed `Io` keys.
     #[ntex::test]
     #[allow(clippy::mutable_key_type)]
     async fn io_ref_hash() {

@@ -275,6 +275,12 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Local waiter delivery, removal, and runtime shutdown release native task handles.
+    ///
+    /// HOW:
+    /// - Register three runtime tasks, replace one waker with a wrapper, and wake its tag.
+    /// - Check selective completion, remove and re-register the remaining waiter, then shut down.
+    /// - Verify all tasks finish and no task-owned extension references remain.
     #[test]
     fn local_waiters_deliver_and_release_native_handles() {
         let rt = ntex_rt::Runtime::new(Box::new(NoopNotify));
@@ -334,6 +340,11 @@ mod tests {
         assert_eq!(ext.wakers_len(), 0);
     }
 
+    /// STATEMENT: A reentrant panicking wake releases extracted native handles without losing new waiters.
+    ///
+    /// HOW:
+    /// - Register a native task and a waker that adds a nested waiter before panicking.
+    /// - Catch the panic, drain the runtime, and verify task release and independent nested delivery.
     #[test]
     fn local_waiter_wake_unwind_releases_native_handles() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -388,6 +399,12 @@ mod tests {
         assert_eq!(ext.wakers_len(), 0);
     }
 
+    /// STATEMENT: Local waker, timer, and extension registrations remain safe across runtime shutdown.
+    ///
+    /// HOW:
+    /// - Exercise remote, timer, and extension wakes with native and wrapped task wakers.
+    /// - Shut down the runtime, check future release and timer expiry, then wake retained registrations.
+    /// - Verify waiter cleanup and the wrapper notification count.
     #[test]
     fn local_registrations_across_runtime_shutdown() {
         use std::future::poll_fn;
@@ -462,6 +479,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `NullFilter` accepts buffer processing and is immediately ready to shut down.
+    ///
+    /// HOW:
+    /// - Run query, readiness, shutdown, and read/write processing through a fresh buffer stack.
+    /// - Check the query is absent and every operation completes successfully.
     #[ntex::test]
     async fn test_null_filter() {
         let (_, server) = IoTest::create();
@@ -492,6 +514,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Request-state unpacking preserves connection identity and attached state.
+    ///
+    /// HOW:
+    /// - Unpack typed and boxed connections through `RequestState` and compare their IDs.
+    /// - Unpack a sealed connection with state and check both the state value and original ID.
     #[ntex::test]
     async fn request_state_unpack() {
         use ntex_service::state::{RequestState, State};
