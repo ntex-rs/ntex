@@ -230,7 +230,7 @@ impl Certificate {
     /// Borrows the context pointer without transferring a Windows reference.
     ///
     /// Callers must keep an owning certificate alive while using the pointer.
-    pub(super) fn as_ptr(&self) -> *const CERT_CONTEXT {
+    pub(crate) fn as_ptr(&self) -> *const CERT_CONTEXT {
         self.0.cert
     }
 
@@ -238,6 +238,61 @@ impl Certificate {
     #[cfg(test)]
     pub(super) fn from_context(cert: *const CERT_CONTEXT) -> Self {
         Self(Arc::new(CertContext::new(cert)))
+    }
+
+    /// Imports a previously matched PKCS#8 key and leaf-first certificates for Schannel.
+    ///
+    /// The caller checks certificate/key correspondence before this creates a persisted key.
+    pub(crate) fn from_pkcs8(
+        certificates: &[crate::x509::Certificate],
+        key: &[u8],
+    ) -> io::Result<Self> {
+        use windows_sys::Win32::Security::Cryptography::{
+            CERT_STORE_ADD_ALWAYS, CERT_STORE_CREATE_NEW_FLAG, CERT_STORE_PROV_MEMORY,
+            CertAddEncodedCertificateToStore,
+        };
+        // SAFETY: the memory-store provider takes no additional parameters.
+        let store = unsafe {
+            CertOpenStore(
+                CERT_STORE_PROV_MEMORY,
+                0,
+                0,
+                CERT_STORE_CREATE_NEW_FLAG,
+                ptr::null(),
+            )
+        };
+        if store.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let store = Store(store);
+        let mut leaf = None;
+        for cert in certificates {
+            let mut context = ptr::null_mut();
+            let len = u32::try_from(cert.der().len())
+                .map_err(|_| io::Error::other("certificate is too large"))?;
+            // SAFETY: the input is readable; the returned context owns a store reference.
+            if unsafe {
+                CertAddEncodedCertificateToStore(
+                    store.0,
+                    X509_ASN_ENCODING,
+                    cert.der().as_ptr(),
+                    len,
+                    CERT_STORE_ADD_ALWAYS,
+                    &raw mut context,
+                )
+            } == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            let context = CertContext::new(context);
+            if leaf.is_none() {
+                leaf = Some(context);
+            }
+        }
+        let mut cert = leaf.ok_or_else(|| io::Error::other("certificate is missing"))?;
+        persist_pkcs8(cert.cert, key)?;
+        cert.temp_key = true;
+        Ok(Self(Arc::new(cert)))
     }
 }
 
@@ -291,7 +346,11 @@ impl Drop for CertContext {
 /// deletion of the new key is attempted before returning the original error.
 fn persist_key(cert: *const CERT_CONTEXT) -> io::Result<()> {
     let pkcs8 = export_key(cert)?;
+    persist_pkcs8(cert, &pkcs8.0)
+}
 
+/// Persists supplied PKCS#8 bytes under an isolated name and attaches the key to `cert`.
+fn persist_pkcs8(cert: *const CERT_CONTEXT, pkcs8: &[u8]) -> io::Result<()> {
     let mut id = [0u8; 16];
     let status =
         unsafe { BCryptGenRandom(0 as _, id.as_mut_ptr(), 16, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
@@ -324,8 +383,8 @@ fn persist_key(cert: *const CERT_CONTEXT) -> io::Result<()> {
             NCRYPT_PKCS8_PRIVATE_KEY_BLOB,
             &raw const params,
             &raw mut key,
-            pkcs8.0.as_ptr(),
-            u32::try_from(pkcs8.0.len()).expect("key blob fits u32"),
+            pkcs8.as_ptr(),
+            u32::try_from(pkcs8.len()).map_err(|_| io::Error::other("private key is too large"))?,
             NCRYPT_SILENT_FLAG,
         )
     })?;

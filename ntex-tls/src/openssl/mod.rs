@@ -30,6 +30,36 @@ pub use self::accept::SslAcceptor;
 mod alloc;
 pub use self::alloc::use_global_allocator;
 
+/// Configures a fresh OpenSSL context with a portable identity and ordered intermediates.
+///
+/// This does not change peer verification policy or include the self-signed root.
+///
+/// # Errors
+/// Native non-exportable keys are unsupported. Other errors report chain ordering,
+/// key/certificate decoding, or OpenSSL configuration failures.
+pub fn set_identity(
+    context: &mut ssl::SslContextBuilder,
+    identity: &crate::x509::Identity,
+) -> Result<(), crate::x509::Error> {
+    use crate::x509::Error;
+    let invalid = |e: tls_openssl::error::ErrorStack| Error::InvalidIdentity(e.to_string());
+    let key =
+        tls_openssl::pkey::PKey::private_key_from_pkcs8(identity.private_key().export_pkcs8_der()?)
+            .map_err(invalid)?;
+    let cert = X509::from_der(identity.cert().der()).map_err(invalid)?;
+    let chain = identity
+        .ordered_chain(false)?
+        .iter()
+        .map(|cert| X509::from_der(cert.der()).map_err(invalid))
+        .collect::<Result<Vec<_>, _>>()?;
+    context.set_certificate(&cert).map_err(invalid)?;
+    context.set_private_key(&key).map_err(invalid)?;
+    for cert in chain {
+        context.add_extra_chain_cert(cert).map_err(invalid)?;
+    }
+    context.check_private_key().map_err(invalid)
+}
+
 /// The peer's end-entity certificate as an owned OpenSSL reference.
 ///
 /// The query returns no value if the peer did not supply a certificate.
