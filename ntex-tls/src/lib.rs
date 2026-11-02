@@ -11,9 +11,15 @@
 //! - `openssl` exposes OpenSSL acceptors, connectors, and a bidirectional filter.
 //! - `rustls` exposes rustls acceptors, connectors, and client/server filters.
 //!   Supply a crypto provider through rustls configuration; `rustls-ring` enables
-//!   its ring provider and is intended to be used together with `rustls`.
-//! - `schannel` exposes Windows Schannel support on Windows. Protocols, cipher
-//!   suites, and trust defaults depend on the operating system.
+//!   its ring provider and also enables `rustls`.
+//! - `schannel` is kept for compatibility; Windows Schannel support is always
+//!   compiled on Windows (required by `x509`). Protocols, cipher suites, and
+//!   trust defaults depend on the operating system.
+//!
+//! The `x509` module (certificate parsing, trust verification, identities) is
+//! enabled by either TLS feature and always available on Windows. Windows uses
+//! Crypt32/CNG/SymCrypt; elsewhere rustls takes precedence over OpenSSL.
+//! Explicitly enabling `x509` without a backend is an error.
 //!
 //! Certificate verification, identities, and ALPN are configured through the
 //! selected backend. [`TlsConfig`] controls service handshake timeouts, while
@@ -59,8 +65,17 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
-#[cfg(all(windows, feature = "schannel"))]
+#[cfg(windows)]
 pub mod schannel;
+
+#[cfg(all(
+    feature = "x509",
+    not(any(windows, feature = "openssl", feature = "rustls"))
+))]
+compile_error!("ntex-tls x509 requires the openssl or rustls feature outside Windows");
+
+#[cfg(any(windows, feature = "openssl", feature = "rustls"))]
+pub mod x509;
 
 use ntex_util::services::Counter;
 

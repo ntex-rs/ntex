@@ -19,12 +19,14 @@ use tls_rustls::pki_types::CertificateDer;
 mod accept;
 mod client;
 mod connect;
+mod identity;
 mod server;
 mod stream;
 
 pub use self::accept::TlsAcceptor;
 pub use self::client::TlsClientFilter;
 pub use self::connect::TlsConnector;
+pub use self::identity::{certified_key, client_certified_key};
 pub use self::server::TlsServerFilter;
 
 use self::stream::Stream;

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "4.6.0"
+version = "4.7.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]
@@ -23,14 +23,17 @@ workspace = true
 default = []
 
 # openssl
-openssl = ["tls_openssl", "openssl-sys", "foreign-types-shared"]
+openssl = ["x509", "dep:tls_openssl", "dep:openssl-sys", "dep:foreign-types-shared", "dep:libc", "ntex/openssl"]
 
 # rustls support
-rustls = ["tls_rustls", "tls_rustls/std"]
-rustls-ring = ["tls_rustls", "tls_rustls/ring", "tls_rustls/std"]
+rustls = ["x509", "dep:tls_rustls", "tls_rustls/std", "dep:rustls-webpki", "dep:sha1", "dep:sha2", "ntex/rustls"]
+rustls-ring = ["rustls", "tls_rustls/ring"]
 
-# Windows Schannel support
-schannel = ["windows-sys"]
+# Requires OpenSSL, rustls, or the native Windows backend.
+x509 = []
+
+# Windows Schannel support (always compiled on Windows, kept for compatibility)
+schannel = []
 
 [dependencies]
 ntex-bytes = { workspace = true }
@@ -47,12 +50,25 @@ thiserror = { workspace = true }
 tls_openssl = { workspace = true, optional = true }
 openssl-sys = { workspace = true, optional = true }
 foreign-types-shared = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
 
 # rustls
 tls_rustls = { workspace = true, optional = true }
+rustls-webpki = { workspace = true, optional = true }
 
-# Windows Schannel
-windows-sys = { workspace = true, optional = true, features = [
+# x509
+base64-simd = { workspace = true }
+hex = { workspace = true }
+x509-parser = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(not(windows))'.dependencies]
+sha1 = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+symcrypt = { workspace = true }
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security_Authentication_Identity",
     "Win32_Security_Credentials",
@@ -62,11 +78,37 @@ windows-sys = { workspace = true, optional = true, features = [
 ] }
 
 [dev-dependencies]
-ntex = { workspace = true, features = ["openssl", "rustls"] }
+ntex = { workspace = true }
 env_logger = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
+
+[target.'cfg(not(windows))'.dev-dependencies]
 tls_rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+
+[[example]]
+name = "server"
+required-features = ["openssl"]
+
+[[example]]
+name = "simple-client"
+required-features = ["openssl"]
+
+[[example]]
+name = "webserver"
+required-features = ["openssl"]
+
+[[example]]
+name = "webclient"
+required-features = ["openssl"]
+
+[[example]]
+name = "rustls-server"
+required-features = ["rustls"]
+
+[[example]]
+name = "rustls-client"
+required-features = ["rustls"]
 
 [[example]]
 name = "schannel-client"

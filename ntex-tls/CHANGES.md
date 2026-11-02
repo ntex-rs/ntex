@@ -1,5 +1,27 @@
 # Changes
 
+## [4.7.0] - Unreleased
+
+* Add public `x509` module: certificate parsing, thumbprints,
+  peer certificates, CA trust verification (`CaCerts`), identity loading and
+  client identities, backed by Crypt32/CNG/SymCrypt on Windows and otherwise
+  rustls/WebPKI or OpenSSL according to enabled features
+
+* Enable `x509` automatically with either TLS backend or on Windows; explicit
+  `x509` without a backend is an error.
+
+* Add portable PEM/DER PKCS#8 identity loading, opaque signing keys and TLS
+  adapters. PKCS#12 uses native Windows import or requires `openssl` on Unix,
+  even when rustls handles trust. Native keys remain non-exportable.
+
+* Rustls X.509 uses an installed crypto provider (or the explicit `rustls-ring`
+  fallback), with independent SHA-1/SHA-256 thumbprint hashing. WebPKI enforces
+  client-auth EKU and rejects verification times before 1970; anchor validity,
+  exact leaf pinning and verified-path expiry are preserved.
+
+* `schannel` module is always compiled on Windows, the `schannel` feature is
+  kept for compatibility
+
 ## [4.6.0] - 2026-11-01
 
 * `PeerCertDer` and `PskIdentity` hold `Bytes`, `PeerCertChainDer` holds
