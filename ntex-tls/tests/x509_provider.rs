@@ -11,12 +11,9 @@ use ntex_tls::x509::{CaCerts, Certificate, Error, Identity, PeerCerts, TrustErro
 /// - Load its matching key but reject a valid chain, without falling back to another backend.
 #[test]
 fn configured_provider() {
-    let root =
-        Certificate::from_pem(include_bytes!("../src/x509/trust/testdata/root.pem")).unwrap();
-    let inter =
-        Certificate::from_pem(include_bytes!("../src/x509/trust/testdata/inter.pem")).unwrap();
-    let leaf =
-        Certificate::from_pem(include_bytes!("../src/x509/trust/testdata/leaf.pem")).unwrap();
+    let root = Certificate::from_pem(include_bytes!("testdata/root.pem")).unwrap();
+    let inter = Certificate::from_pem(include_bytes!("testdata/inter.pem")).unwrap();
+    let leaf = Certificate::from_pem(include_bytes!("testdata/leaf.pem")).unwrap();
     let now = leaf.not_before() + std::time::Duration::from_secs(60);
     let store = CaCerts::from_certs([root]);
     let peer = PeerCerts::new(leaf, vec![inter]);

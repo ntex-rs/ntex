@@ -192,7 +192,7 @@ fn metrics() {
 #[test]
 fn dropped_pool_releases_workers() {
     // the idle timeout is never reached, workers exit on disconnection
-    let pool = ThreadPool::new("test", 1, Duration::from_secs(60));
+    let pool = ThreadPool::new("test", 1, Duration::from_mins(1));
     let counter = pool.counter.clone();
     let (start_tx, start_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
@@ -228,7 +228,7 @@ fn result_drop_panic_keeps_worker() {
         }
     }
 
-    let pool = ThreadPool::new("test", 1, Duration::from_secs(60));
+    let pool = ThreadPool::new("test", 1, Duration::from_mins(1));
     let (start_tx, start_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
     let first = pool.execute(move || {

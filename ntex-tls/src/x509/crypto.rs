@@ -143,3 +143,77 @@ pub(crate) fn is_self_signed(cert: &Certificate) -> Result<bool, Error> {
     let self_issued = cert.is_self_issued();
     Ok(self_issued && verify_signature(cert, cert)?)
 }
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+    use rcgen::{
+        BasicConstraints, CertificateParams, CustomExtension, DnType, IsCa, Issuer, KeyIdMethod,
+        KeyPair, KeyUsagePurpose,
+    };
+
+    /// STATEMENT: A valid signature alone cannot establish an issuer relationship.
+    ///
+    /// HOW:
+    /// - Sign a leaf with a CA key and require matching SKI/AKI and certificate-signing usage.
+    /// - Reject same-key candidates with the wrong SKI or key usage, despite valid signatures.
+    /// - Reject signed leaves whose AKI serial or issuer name disagrees with the candidate.
+    #[test]
+    fn issuer_metadata() {
+        crate::x509::test_provider();
+        let key = KeyPair::generate().unwrap();
+        let mut ca = CertificateParams::default();
+        ca.distinguished_name.push(DnType::CommonName, "CA");
+        ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+        ca.key_identifier_method = KeyIdMethod::PreSpecified(vec![1]);
+        ca.serial_number = Some(7u64.into());
+        let parent = Certificate::from_der(ca.self_signed(&key).unwrap().der().to_vec()).unwrap();
+        let leaf_key = KeyPair::generate().unwrap();
+        let mut leaf = CertificateParams::default();
+        leaf.use_authority_key_identifier_extension = true;
+        let cert = Certificate::from_der(
+            leaf.signed_by(&leaf_key, &Issuer::from_params(&ca, &key))
+                .unwrap()
+                .der()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(is_issuer(&cert, &parent).unwrap());
+        ca.key_identifier_method = KeyIdMethod::PreSpecified(vec![2]);
+        let wrong_ski =
+            Certificate::from_der(ca.self_signed(&key).unwrap().der().to_vec()).unwrap();
+        assert!(verify_signature(&cert, &wrong_ski).unwrap());
+        assert!(!is_issuer(&cert, &wrong_ski).unwrap());
+        ca.key_identifier_method = KeyIdMethod::PreSpecified(vec![1]);
+        ca.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        let wrong_usage =
+            Certificate::from_der(ca.self_signed(&key).unwrap().der().to_vec()).unwrap();
+        assert!(verify_signature(&cert, &wrong_usage).unwrap());
+        assert!(!is_issuer(&cert, &wrong_usage).unwrap());
+        ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+        leaf.use_authority_key_identifier_extension = false;
+        for (issuer, serial, accepted) in [(b'A', 7, true), (b'A', 8, false), (b'B', 7, false)] {
+            // AKI with directoryName(CN=CA/CB) and authorityCertSerialNumber=7/8.
+            let aki = vec![
+                0x30, 22, 0xa1, 17, 0xa4, 15, 0x30, 13, 0x31, 11, 0x30, 9, 0x06, 3, 0x55, 4, 3,
+                0x0c, 2, b'C', issuer, 0x82, 1, serial,
+            ];
+            leaf.custom_extensions = vec![CustomExtension::from_oid_content(&[2, 5, 29, 35], aki)];
+            let cert = Certificate::from_der(
+                leaf.signed_by(&leaf_key, &Issuer::from_params(&ca, &key))
+                    .unwrap()
+                    .der()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(verify_signature(&cert, &parent).unwrap());
+            assert_eq!(
+                is_issuer(&cert, &parent).unwrap(),
+                accepted,
+                "issuer CN=C{}, serial={serial}",
+                char::from(issuer)
+            );
+        }
+    }
+}

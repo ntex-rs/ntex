@@ -12,7 +12,7 @@
 //! system store, see [`IdentitySource::from_str`](std::str::FromStr). Store sources are
 //! rejected when parsed on non-Windows targets.
 //!
-//! Store selection semantics (from ntex-tls):
+//! Store selection semantics:
 //! - the existing store is opened read-only, a missing store is not created;
 //! - by thumbprint (40 hex chars, SHA-1 of DER): validity dates are ignored;
 //! - by subject: case-insensitive substring of the subject attribute values joined by `", "`
@@ -36,6 +36,8 @@
 //! Chain ordering checks issuer metadata and signatures, but does not check trust or dates.
 //! Rustls adapters are provided in `crate::rustls` when that feature is enabled.
 use std::{fmt, str::FromStr};
+
+use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use crate::x509::{Certificate, Error, PrivateKey, crypto};
 
@@ -247,9 +249,10 @@ impl Identity {
     /// Loads an identity from a DER encoded PKCS#12 archive.
     ///
     /// # Errors
-    /// [`Error::InvalidDer`] if the archive (unix) or a certificate is not valid DER;
+    /// [`Error::InvalidDer`] if the input is not a PKCS#12 archive or a certificate is not valid
+    /// DER;
     /// [`Error::InvalidIdentity`] if the archive cannot be decrypted with `password` or has no
-    /// certificate/private key (on Windows also for archive decoding failures);
+    /// certificate/private key (on Windows also for malformed archive contents);
     /// [`Error::Unsupported`] outside Windows unless Unix and `openssl` are enabled.
     pub fn from_pkcs12(der: &[u8], password: &str) -> Result<Self, Error> {
         #[cfg(all(unix, feature = "openssl"))]
@@ -279,6 +282,7 @@ impl Identity {
         }
         #[cfg(windows)]
         {
+            crate::x509::cng::pfx_blob(der)?;
             let schannel = crate::schannel::Certificate::from_pkcs12(der, password)
                 .map_err(|e| Error::InvalidIdentity(e.to_string()))?;
             Self::from_schannel(schannel)
@@ -489,6 +493,7 @@ impl ClientIdentity {
     /// Parses a DER PKCS#12 archive; on Windows the key is imported into CNG without persisting.
     ///
     /// # Errors
+    /// [`Error::InvalidDer`] if the input is not a PKCS#12 archive,
     /// [`Error::InvalidIdentity`] if the archive cannot be decrypted, has no key, or an issuer
     /// certificate or public key cannot be decoded (Unix),
     /// [`Error::Unsupported`] for unsupported key algorithms or unavailable PKCS#12 loading.
@@ -602,7 +607,7 @@ fn order_chain(
 }
 
 /// Decodes exactly one unencrypted PKCS#8 PEM block without retaining plaintext copies.
-fn pkcs8_pem(pem: &[u8]) -> Result<zeroize::Zeroizing<Vec<u8>>, Error> {
+pub(crate) fn pkcs8_pem(pem: &[u8]) -> Result<zeroize::Zeroizing<Vec<u8>>, Error> {
     let text = std::str::from_utf8(pem).map_err(|e| Error::InvalidPem(e.to_string()))?;
     for block in text.split("-----BEGIN ").skip(1) {
         if let Some((label, _)) = block.split_once("-----")
@@ -633,8 +638,8 @@ fn pkcs8_pem(pem: &[u8]) -> Result<zeroize::Zeroizing<Vec<u8>>, Error> {
             .filter(|b| !b.is_ascii_whitespace())
             .collect::<Vec<_>>(),
     );
-    base64_simd::STANDARD
-        .decode_to_vec(&encoded)
+    base64
+        .decode(encoded.as_slice())
         .map(zeroize::Zeroizing::new)
         .map_err(|e| Error::InvalidPem(e.to_string()))
 }
@@ -676,6 +681,7 @@ pub(crate) fn ecdsa_p1363_to_der(raw: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::x509::testgen::{self, San};
 
     /// STATEMENT: PEM and DER identities load matching keys and produce usable TLS adapters.
     ///
@@ -777,12 +783,13 @@ mod tests {
     /// HOW:
     /// - Pair an EC certificate with the RSA fixture key and reject both facades.
     /// - Reject empty certificate lists, corrupt DER, missing keys and multiple PEM keys.
+    /// - Reject invalid UTF-8/base64, missing end markers and unsupported key labels.
     #[test]
     fn invalid_pem_der_identities() {
         crate::x509::test_provider();
         let pem = include_bytes!("../../examples/cert.pem");
         let key = include_bytes!("../../examples/key.pem");
-        let wrong = include_bytes!("trust/testdata/leaf.pem");
+        let wrong = include_bytes!("../../tests/testdata/leaf.pem");
         assert!(matches!(
             Identity::from_pem(wrong, key),
             Err(Error::InvalidIdentity(_))
@@ -807,6 +814,50 @@ mod tests {
             Identity::from_pem(pem, &mixed),
             Err(Error::InvalidPem(_))
         ));
+        for invalid in [
+            b"\xff".as_slice(),
+            b"-----BEGIN PRIVATE KEY-----\nAAAA",
+            b"-----BEGIN PRIVATE KEY-----\n!\n-----END PRIVATE KEY-----",
+            b"-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----",
+            b"-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----",
+        ] {
+            assert!(matches!(
+                Identity::from_pem(pem, invalid),
+                Err(Error::InvalidPem(_))
+            ));
+            assert!(matches!(
+                ClientIdentity::from_pem(pem, invalid),
+                Err(Error::InvalidPem(_))
+            ));
+        }
+    }
+
+    /// STATEMENT: PEM file-loading errors identify the missing input for both identity facades.
+    ///
+    /// HOW:
+    /// - Use an existing certificate file and a nonexistent child path as each input in turn.
+    /// - Check both loaders return `NotFound` with the failing path, without creating files.
+    #[test]
+    fn pem_source_missing_files() {
+        let certificate = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/cert.pem");
+        let missing = format!("{certificate}/missing");
+        for (certificates, private_key) in [
+            (missing.as_str(), certificate),
+            (certificate, missing.as_str()),
+        ] {
+            let source = IdentitySource::PemFiles {
+                certificates: certificates.into(),
+                private_key: private_key.into(),
+            };
+            for result in [
+                source.load().map(|_| ()),
+                ClientIdentity::load(&source).map(|_| ()),
+            ] {
+                assert!(
+                    matches!(result, Err(Error::NotFound(message)) if message.contains(&missing))
+                );
+            }
+        }
     }
 
     /// STATEMENT: Combined PEM documents and file sources load the same portable identity.
@@ -856,10 +907,12 @@ mod tests {
     #[test]
     fn portable_chain_ordering() {
         crate::x509::test_provider();
-        let leaf = Certificate::from_pem(include_bytes!("trust/testdata/leaf.pem")).unwrap();
-        let inter = Certificate::from_pem(include_bytes!("trust/testdata/inter.pem")).unwrap();
-        let root = Certificate::from_pem(include_bytes!("trust/testdata/root.pem")).unwrap();
-        let other = Certificate::from_pem(include_bytes!("trust/testdata/other.pem")).unwrap();
+        let leaf = Certificate::from_pem(include_bytes!("../../tests/testdata/leaf.pem")).unwrap();
+        let inter =
+            Certificate::from_pem(include_bytes!("../../tests/testdata/inter.pem")).unwrap();
+        let root = Certificate::from_pem(include_bytes!("../../tests/testdata/root.pem")).unwrap();
+        let other =
+            Certificate::from_pem(include_bytes!("../../tests/testdata/other.pem")).unwrap();
         let extras = vec![other, root.clone(), inter.clone()];
         assert_eq!(
             order_chain(&leaf, extras.clone(), false).unwrap(),
@@ -869,10 +922,9 @@ mod tests {
             order_chain(&leaf, extras, true).unwrap(),
             vec![inter.clone(), root.clone()]
         );
-        assert!(
-            order_chain(&leaf, vec![root.clone()], true)
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            order_chain(&leaf, vec![root.clone()], true).unwrap(),
+            Vec::<Certificate>::new()
         );
         let mut der = inter.der().to_vec();
         *der.last_mut().unwrap() ^= 1;
@@ -959,33 +1011,28 @@ mod tests {
     /// HOW:
     /// - Generate and load a password-protected archive, comparing certificates and keys.
     /// - Reject a wrong password, malformed archive, and nonexistent source file.
-    #[cfg(all(unix, feature = "openssl"))]
+    /// - On Windows the chain comes from the platform chain engine, which may not find the
+    ///   untrusted root, so only its contents are checked.
+    #[cfg(any(windows, all(unix, feature = "openssl")))]
     #[test]
     fn pkcs12_roundtrip() {
-        use crate::x509::cert::tests::testgen;
-        use tls_openssl::{pkcs12::Pkcs12, pkey::PKey, stack::Stack};
-
+        let san = San::default();
         let rk = testgen::key();
-        let root = testgen::cert("root", true, None, &rk, None, (-1, 10));
+        let root = testgen::cert("root", true, None, &rk, &san, (-1, 10));
         let lk = testgen::key();
-        let leaf = testgen::cert("leaf", false, Some((&root, &rk)), &lk, None, (-1, 10));
-        let mut ca = Stack::new().unwrap();
-        ca.push(root.clone()).unwrap();
-        let pfx = Pkcs12::builder()
-            .cert(&leaf)
-            .pkey(&lk)
-            .ca(ca)
-            .build2("pw")
-            .unwrap()
-            .to_der()
-            .unwrap();
+        let leaf = testgen::cert("leaf", false, Some((&root, &rk)), &lk, &san, (-1, 10));
+        let pfx = testgen::pkcs12(&leaf, &lk, &[&root], "pw");
 
         let id = Identity::from_pkcs12(&pfx, "pw").unwrap();
-        assert_eq!(id.cert().der().as_ref(), leaf.to_der().unwrap());
-        assert_eq!(id.chain().len(), 1);
-        assert_eq!(id.chain()[0].der().as_ref(), root.to_der().unwrap());
-        let key = PKey::private_key_from_pkcs8(id.private_key_pkcs8_der()).unwrap();
-        assert!(key.public_eq(&lk));
+        assert_eq!(id.cert(), &leaf);
+        if cfg!(windows) {
+            assert!(id.chain().len() <= 1);
+            assert!(id.chain().iter().all(|c| c == &root));
+        } else {
+            assert_eq!(id.chain(), [root]);
+        }
+        assert_eq!(id.private_key().public_key_der(), leaf.public_key_der());
+        #[cfg(not(windows))]
         assert!(!format!("{id:?}").contains(&hex::encode(id.private_key_pkcs8_der())));
         assert!(format!("{id:?}").contains("<redacted>"));
 
@@ -998,6 +1045,10 @@ mod tests {
             Err(Error::InvalidDer(_))
         ));
         assert!(matches!(
+            ClientIdentity::from_pkcs12(b"garbage", ""),
+            Err(Error::InvalidDer(_))
+        ));
+        assert!(matches!(
             IdentitySource::Pkcs12File("/nonexistent/x.pfx".into()).load(),
             Err(Error::NotFound(_))
         ));
@@ -1007,111 +1058,84 @@ mod tests {
     /// `Identity::ordered_chain` appends the root only on request.
     ///
     /// HOW:
-    /// - Load an unordered PKCS#12 archive and check the presented chain and private key.
+    /// - Load unordered certificates and check the presented chain and private key.
     /// - Check `Identity::ordered_chain` with and without the root.
+    /// - With OpenSSL, load the same chain from a PKCS#12 file and install it into a context.
     /// - Check self-signed leaves and missing intermediates yield no additional certificates.
-    #[cfg(all(unix, feature = "openssl"))]
     #[test]
     fn client_identity_chain() {
-        use crate::x509::cert::tests::testgen;
-        use tls_openssl::{pkcs12::Pkcs12, pkey::PKey, stack::Stack};
-
-        fn leaf_of(
-            issuer: &tls_openssl::x509::X509,
-            key: &PKey<tls_openssl::pkey::Private>,
-        ) -> tls_openssl::x509::X509 {
-            testgen::cert(
-                "leaf2",
-                false,
-                Some((issuer, key)),
-                &testgen::key(),
-                None,
-                (-1, 10),
-            )
-        }
-
+        let san = San::default();
         let rk = testgen::key();
-        let root = testgen::cert("root", true, None, &rk, None, (-1, 10));
+        let root = testgen::cert("root", true, None, &rk, &san, (-1, 10));
         let ik = testgen::key();
-        let inter = testgen::cert("inter", true, Some((&root, &rk)), &ik, None, (-1, 10));
+        let inter = testgen::cert("inter", true, Some((&root, &rk)), &ik, &san, (-1, 10));
         let lk = testgen::key();
-        let leaf = testgen::cert("leaf", false, Some((&inter, &ik)), &lk, None, (-1, 10));
-        let other = testgen::cert("other", true, None, &testgen::key(), None, (-1, 10));
-        let der = |c: &tls_openssl::x509::X509| c.to_der().unwrap();
+        let leaf = testgen::cert("leaf", false, Some((&inter, &ik)), &lk, &san, (-1, 10));
+        let other = testgen::cert("other", true, None, &testgen::key(), &san, (-1, 10));
 
-        // archive order is unrelated to chain order, unrelated certificates are dropped
-        let mut ca = Stack::new().unwrap();
-        for c in [&root, &other, &inter] {
-            ca.push(c.clone()).unwrap();
-        }
-        let pfx = Pkcs12::builder()
-            .cert(&leaf)
-            .pkey(&lk)
-            .ca(ca)
-            .build2("")
-            .unwrap()
-            .to_der()
-            .unwrap();
-        let dir =
-            std::env::temp_dir().join(format!("ntex-tls-x509-client-{}.pfx", std::process::id()));
-        std::fs::write(&dir, &pfx).unwrap();
-        let id = ClientIdentity::load(&IdentitySource::Pkcs12File(dir.to_string_lossy().into()))
-            .unwrap();
-        std::fs::remove_file(&dir).unwrap();
-
-        let chain: Vec<_> = id.chain().iter().map(|c| c.der().to_vec()).collect();
-        assert_eq!(chain, vec![der(&leaf), der(&inter)]);
-        assert_eq!(id.cert().der().as_ref(), der(&leaf));
+        // input order is unrelated to chain order, unrelated certificates are dropped
+        let id = testgen::client(&leaf, &lk, &[&root, &other, &inter]);
+        assert_eq!(id.chain(), [leaf.clone(), inter.clone()]);
+        assert_eq!(id.cert(), &leaf);
         assert_eq!(id.cert().key_type(), Some(crate::x509::KeyType::EcP256));
-        assert!(
-            PKey::private_key_from_pkcs8(id.private_key_pkcs8_der())
-                .unwrap()
-                .public_eq(&lk)
-        );
         assert!(format!("{id:?}").contains("<redacted>"));
 
-        let id = Identity::from_pkcs12(&pfx, "").unwrap();
-        let ordered = |root| -> Vec<_> {
-            id.ordered_chain(root)
-                .unwrap()
-                .iter()
-                .map(|c| c.der().to_vec())
-                .collect()
-        };
-        assert_eq!(ordered(false), vec![der(&inter)]);
-        assert_eq!(ordered(true), vec![der(&inter), der(&root)]);
-        let mut context =
-            tls_openssl::ssl::SslContextBuilder::new(tls_openssl::ssl::SslMethod::tls()).unwrap();
-        crate::openssl::set_identity(&mut context, &id).unwrap();
-        let context = context.build();
-        assert_eq!(context.certificate().unwrap().to_der().unwrap(), der(&leaf));
-        assert_eq!(context.extra_chain_certs().len(), 1);
+        let certs = [&leaf, &root, &other, &inter].map(|c| c.der().as_ref());
+        let id = Identity::from_der(&certs, &lk.pkcs8_der()).unwrap();
         assert_eq!(
-            context.extra_chain_certs()[0].to_der().unwrap(),
-            der(&inter)
+            id.ordered_chain(false).unwrap(),
+            std::slice::from_ref(&inter)
+        );
+        assert_eq!(
+            id.ordered_chain(true).unwrap(),
+            [inter.clone(), root.clone()]
         );
 
+        #[cfg(all(unix, feature = "openssl"))]
+        {
+            let pfx = testgen::pkcs12(&leaf, &lk, &[&root, &other, &inter], "");
+            let path = std::env::temp_dir()
+                .join(format!("ntex-tls-x509-client-{}.pfx", std::process::id()));
+            std::fs::write(&path, &pfx).unwrap();
+            let src = IdentitySource::Pkcs12File(path.to_string_lossy().into());
+            let id = ClientIdentity::load(&src).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            assert_eq!(id.chain(), [leaf.clone(), inter.clone()]);
+            assert_eq!(id.private_key_pkcs8_der(), lk.pkcs8_der());
+
+            let id = Identity::from_pkcs12(&pfx, "").unwrap();
+            assert_eq!(
+                id.ordered_chain(true).unwrap(),
+                [inter.clone(), root.clone()]
+            );
+            let mut context =
+                tls_openssl::ssl::SslContextBuilder::new(tls_openssl::ssl::SslMethod::tls())
+                    .unwrap();
+            crate::openssl::set_identity(&mut context, &id).unwrap();
+            let context = context.build();
+            let der = |c: &tls_openssl::x509::X509Ref| c.to_der().unwrap();
+            assert_eq!(der(context.certificate().unwrap()), leaf.der().as_ref());
+            assert_eq!(context.extra_chain_certs().len(), 1);
+            assert_eq!(der(&context.extra_chain_certs()[0]), inter.der().as_ref());
+        }
+
         // self-signed leaf: no chain
-        let leaf = Certificate::from_der(der(&root)).unwrap();
-        assert!(
-            order_chain(
-                &leaf,
-                vec![Certificate::from_der(der(&inter)).unwrap()],
-                true
-            )
-            .unwrap()
-            .is_empty()
+        assert_eq!(
+            order_chain(&root, vec![inter.clone()], true).unwrap(),
+            Vec::<Certificate>::new()
         );
         // missing intermediate: nothing to present
-        let leaf_c = Certificate::from_der(der(&leaf_of(&inter, &ik))).unwrap();
-        assert!(
-            order_chain(
-                &leaf_c,
-                vec![Certificate::from_der(der(&root)).unwrap()],
-                true
-            )
-            .unwrap()
-            .is_empty()
+        let leaf2 = testgen::cert(
+            "leaf2",
+            false,
+            Some((&inter, &ik)),
+            &testgen::key(),
+            &san,
+            (-1, 10),
+        );
+        assert_eq!(
+            order_chain(&leaf2, vec![root.clone()], true).unwrap(),
+            Vec::<Certificate>::new()
         );
     }
 
@@ -1123,47 +1147,22 @@ mod tests {
     #[cfg(all(unix, feature = "openssl", not(feature = "rustls")))]
     #[test]
     fn openssl_canonical_issuer() {
-        use crate::x509::cert::tests::testgen;
+        let san = San::default();
         let key = testgen::key();
-        let root = testgen::cert("Root CA", true, None, &key, None, (-1, 10));
-        let alias = testgen::cert(" root  ca ", true, None, &key, None, (-1, 10));
+        let root = testgen::cert("Root CA", true, None, &key, &san, (-1, 10));
+        let alias = testgen::cert(" root  ca ", true, None, &key, &san, (-1, 10));
         let leaf = testgen::cert(
             "leaf",
             false,
             Some((&root, &key)),
             &testgen::key(),
-            None,
+            &san,
             (-1, 10),
         );
-        let leaf = Certificate::from_der(leaf.to_der().unwrap()).unwrap();
-        let alias = Certificate::from_der(alias.to_der().unwrap()).unwrap();
         assert_eq!(
             order_chain(&leaf, vec![alias.clone()], true).unwrap(),
             vec![alias]
         );
-    }
-
-    #[cfg(all(unix, feature = "openssl"))]
-    fn client_from_archive(
-        leaf: &tls_openssl::x509::X509,
-        key: &tls_openssl::pkey::PKey<tls_openssl::pkey::Private>,
-        extras: &[&tls_openssl::x509::X509],
-    ) -> ClientIdentity {
-        use tls_openssl::{pkcs12::Pkcs12, stack::Stack};
-
-        let mut ca = Stack::new().unwrap();
-        for cert in extras {
-            ca.push((*cert).clone()).unwrap();
-        }
-        let pfx = Pkcs12::builder()
-            .cert(leaf)
-            .pkey(key)
-            .ca(ca)
-            .build2("")
-            .unwrap()
-            .to_der()
-            .unwrap();
-        ClientIdentity::from_pkcs12(&pfx, "").unwrap()
     }
 
     /// STATEMENT: Self-issued rollover certificates remain in the presented chain.
@@ -1171,80 +1170,50 @@ mod tests {
     /// HOW:
     /// - Generate a CA with its parent's subject but a new EC key, using EC and RSA parent keys.
     /// - Generate a leaf signed by the rollover CA.
-    /// - Load archives with and without the old root and check the rollover CA is retained.
+    /// - Load identities with and without the old root and check the rollover CA is retained.
     /// - Load the rollover CA as the identity leaf and check its issuer is still followed.
-    #[cfg(all(unix, feature = "openssl"))]
     #[test]
     fn client_identity_rollover() {
-        use crate::x509::cert::tests::testgen;
-        use tls_openssl::{pkey::PKey, rsa::Rsa};
-
-        for rk in [
-            testgen::key(),
-            PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap(),
-        ] {
-            let root = testgen::cert("root", true, None, &rk, None, (-1, 10));
+        let san = San::default();
+        for rk in [testgen::key(), testgen::rsa_key()] {
+            let root = testgen::cert("root", true, None, &rk, &san, (-1, 10));
             let ik = testgen::key();
-            let inter = testgen::cert("root", true, Some((&root, &rk)), &ik, None, (-1, 10));
+            let inter = testgen::cert("root", true, Some((&root, &rk)), &ik, &san, (-1, 10));
             let lk = testgen::key();
-            let leaf = testgen::cert("leaf", false, Some((&inter, &ik)), &lk, None, (-1, 10));
+            let leaf = testgen::cert("leaf", false, Some((&inter, &ik)), &lk, &san, (-1, 10));
             for extras in [&[&root, &inter][..], &[&inter][..]] {
-                let id = client_from_archive(&leaf, &lk, extras);
-                assert_eq!(
-                    id.chain()
-                        .iter()
-                        .map(|c| c.der().to_vec())
-                        .collect::<Vec<_>>(),
-                    vec![leaf.to_der().unwrap(), inter.to_der().unwrap()]
-                );
+                let id = testgen::client(&leaf, &lk, extras);
+                assert_eq!(id.chain(), [leaf.clone(), inter.clone()]);
             }
 
             // A self-issued leaf can also have a non-root issuer with the same subject.
             let next_key = testgen::key();
-            let next = testgen::cert("root", true, Some((&inter, &ik)), &next_key, None, (-1, 10));
-            let id = client_from_archive(&next, &next_key, &[&root, &inter]);
-            assert_eq!(
-                id.chain()
-                    .iter()
-                    .map(|c| c.der().to_vec())
-                    .collect::<Vec<_>>(),
-                vec![next.to_der().unwrap(), inter.to_der().unwrap()]
-            );
+            let next = testgen::cert("root", true, Some((&inter, &ik)), &next_key, &san, (-1, 10));
+            let id = testgen::client(&next, &next_key, &[&root, &inter]);
+            assert_eq!(id.chain(), [next, inter]);
         }
     }
 
     /// STATEMENT: Same-subject issuer candidates are selected by key, not archive order.
     ///
     /// HOW:
-    /// - Generate same-subject intermediates with different EC/RSA keys and no AKI/SKI extensions.
-    /// - Sign a leaf with one key and load both archive orders.
+    /// - Generate same-subject intermediates with different EC/RSA keys and no AKI extension.
+    /// - Sign a leaf with one key and load both input orders.
     /// - Check only the intermediate whose key verifies the leaf is presented.
-    #[cfg(all(unix, feature = "openssl"))]
     #[test]
     fn client_identity_same_subject_issuers() {
-        use crate::x509::cert::tests::testgen;
-        use tls_openssl::{pkey::PKey, rsa::Rsa};
-
+        let san = San::default();
         let rk = testgen::key();
-        let root = testgen::cert("root", true, None, &rk, None, (-1, 10));
+        let root = testgen::cert("root", true, None, &rk, &san, (-1, 10));
         let ik = testgen::key();
-        let inter = testgen::cert("inter", true, Some((&root, &rk)), &ik, None, (-1, 10));
+        let inter = testgen::cert("inter", true, Some((&root, &rk)), &ik, &san, (-1, 10));
         let lk = testgen::key();
-        let leaf = testgen::cert("leaf", false, Some((&inter, &ik)), &lk, None, (-1, 10));
-        for key in [
-            testgen::key(),
-            PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap(),
-        ] {
-            let other = testgen::cert("inter", true, Some((&root, &rk)), &key, None, (-1, 10));
+        let leaf = testgen::cert("leaf", false, Some((&inter, &ik)), &lk, &san, (-1, 10));
+        for key in [testgen::key(), testgen::rsa_key()] {
+            let other = testgen::cert("inter", true, Some((&root, &rk)), &key, &san, (-1, 10));
             for extras in [[&other, &inter, &root], [&inter, &other, &root]] {
-                let id = client_from_archive(&leaf, &lk, &extras);
-                assert_eq!(
-                    id.chain()
-                        .iter()
-                        .map(|c| c.der().to_vec())
-                        .collect::<Vec<_>>(),
-                    vec![leaf.to_der().unwrap(), inter.to_der().unwrap()]
-                );
+                let id = testgen::client(&leaf, &lk, &extras);
+                assert_eq!(id.chain(), [leaf.clone(), inter.clone()]);
             }
         }
     }

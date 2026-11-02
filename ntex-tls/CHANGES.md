@@ -14,6 +14,10 @@
   adapters. PKCS#12 uses native Windows import or requires `openssl` on Unix,
   even when rustls handles trust. Native keys remain non-exportable.
 
+* Add `testgen` feature with public `x509::testgen` test certificate generators
+  (CNG/Crypt32 on Windows, OpenSSL on Unix), and `testgen-rcgen` feature with an
+  `rcgen` backend for rustls-only builds
+
 * Rustls X.509 uses an installed crypto provider (or the explicit `rustls-ring`
   fallback), with independent SHA-1/SHA-256 thumbprint hashing. WebPKI enforces
   client-auth EKU and rejects verification times before 1970; anchor validity,

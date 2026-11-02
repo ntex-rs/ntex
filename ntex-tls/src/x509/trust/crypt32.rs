@@ -5,10 +5,13 @@
 //! - `hExclusiveRoot` holds only the registered certificates, the Windows root store is never
 //!   consulted; with `CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG` registered intermediate CAs are trust
 //!   anchors too (partial chain);
-//! - `hRestrictedOther`/`hRestrictedTrust` are empty, intermediates come only from the peer chain
-//!   (not from the system `CA` store);
+//! - Windows rejects `hRestrictedOther`/`hRestrictedTrust` together with `hExclusiveRoot`
+//!   (`E_INVALIDARG`), so the engine may look up intermediates in the system stores; a built
+//!   chain containing a certificate that is neither sent by the peer nor registered is rejected;
 //! - no network access (`CERT_CHAIN_DISABLE_AIA`, cache-only URL retrieval) and no revocation
 //!   checks;
+//! - the engine does not check the validity period of the trust anchor, the validity of every
+//!   certificate on the built chain is checked against `now` after chain building;
 //! - the client authentication usage is requested, a certificate with an extended key usage
 //!   that does not contain `clientAuth` invalidates the chain.
 //!
@@ -172,11 +175,10 @@ impl Builder {
 
 /// Private chain engine, see the module docs.
 ///
-/// Owns the stores it was configured with; the handle is freed before the stores close.
+/// Owns the root store it was configured with; the handle is freed before the store closes.
 struct Engine {
     handle: HCERTCHAINENGINE,
     _roots: MemStore,
-    _empty: MemStore,
 }
 
 // SAFETY: chain engines are thread safe, the handle is only freed on drop.
@@ -186,12 +188,12 @@ unsafe impl Sync for Engine {}
 
 impl Engine {
     fn new(roots: MemStore) -> Result<Self, String> {
-        let empty = MemStore::new()?;
         let config = CERT_CHAIN_ENGINE_CONFIG {
             cbSize: u32::try_from(mem::size_of::<CERT_CHAIN_ENGINE_CONFIG>()).expect("fits u32"),
             hRestrictedRoot: ptr::null_mut(),
-            hRestrictedTrust: empty.0,
-            hRestrictedOther: empty.0,
+            // must be null with `hExclusiveRoot`
+            hRestrictedTrust: ptr::null_mut(),
+            hRestrictedOther: ptr::null_mut(),
             cAdditionalStore: 0,
             rghAdditionalStore: ptr::null_mut(),
             dwFlags: CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL,
@@ -203,7 +205,7 @@ impl Engine {
             dwExclusiveFlags: CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG,
         };
         let mut h: HCERTCHAINENGINE = ptr::null_mut();
-        // SAFETY: config is fully initialized, the stores outlive the engine.
+        // SAFETY: config is fully initialized, the root store outlives the engine.
         if unsafe { CertCreateCertificateChainEngine(&raw const config, &raw mut h) } == 0 {
             Err(format!(
                 "CertCreateCertificateChainEngine failed: {}",
@@ -213,7 +215,6 @@ impl Engine {
             Ok(Engine {
                 handle: h,
                 _roots: roots,
-                _empty: empty,
             })
         }
     }
@@ -339,12 +340,16 @@ impl Store {
             let der = unsafe {
                 std::slice::from_raw_parts(cert.pbCertEncoded, cert.cbCertEncoded as usize)
             };
-            let not_after = std::iter::once(leaf)
+            let cert = std::iter::once(leaf)
                 .chain(peer.chain())
                 .chain(&self.anchors)
                 .find(|c| c.der().as_ref() == der)
-                .map(Certificate::not_after)
-                .ok_or_else(|| internal("chain contains an unknown certificate"))?;
+                .ok_or_else(|| rejected("chain uses a certificate not sent by the peer"))?;
+            // the chain engine does not check the validity of trust anchors
+            if now < cert.not_before() || now > cert.not_after() {
+                return Err(rejected(error_names(CERT_TRUST_IS_NOT_TIME_VALID)));
+            }
+            let not_after = cert.not_after();
             expiry = Some(expiry.map_or(not_after, |e| e.min(not_after)));
         }
         expiry.ok_or_else(|| internal("empty chain"))
@@ -366,7 +371,7 @@ mod tests {
         for (time, ticks) in [
             (UNIX_EPOCH - Duration::from_secs(FILETIME_UNIX_OFFSET), 0),
             (
-                UNIX_EPOCH - Duration::from_secs(60),
+                UNIX_EPOCH - Duration::from_mins(1),
                 unix_ticks - 600_000_000,
             ),
             (UNIX_EPOCH - Duration::from_nanos(100), unix_ticks - 1),

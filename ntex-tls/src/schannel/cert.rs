@@ -235,7 +235,7 @@ impl Certificate {
     }
 
     /// Takes ownership of a certificate context.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "openssl"))]
     pub(super) fn from_context(cert: *const CERT_CONTEXT) -> Self {
         Self(Arc::new(CertContext::new(cert)))
     }

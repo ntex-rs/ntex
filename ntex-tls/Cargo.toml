@@ -32,6 +32,13 @@ rustls-ring = ["rustls", "tls_rustls/ring"]
 # Requires OpenSSL, rustls, or the native Windows backend.
 x509 = []
 
+# Public test certificate generators (`x509::testgen`) using the native Windows backend
+# or OpenSSL on Unix.
+testgen = ["x509"]
+
+# `rcgen` backend for `testgen`, required on Unix builds without `openssl`.
+testgen-rcgen = ["testgen", "dep:rcgen"]
+
 # Windows Schannel support (always compiled on Windows, kept for compatibility)
 schannel = []
 
@@ -57,7 +64,7 @@ tls_rustls = { workspace = true, optional = true }
 rustls-webpki = { workspace = true, optional = true }
 
 # x509
-base64-simd = { workspace = true }
+base64 = { workspace = true }
 hex = { workspace = true }
 x509-parser = { workspace = true }
 zeroize = { workspace = true }
@@ -65,6 +72,7 @@ zeroize = { workspace = true }
 [target.'cfg(not(windows))'.dependencies]
 sha1 = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+rcgen = { workspace = true, optional = true, features = ["ring"] }
 
 [target.'cfg(windows)'.dependencies]
 symcrypt = { workspace = true }
@@ -82,9 +90,10 @@ ntex = { workspace = true }
 env_logger = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
+tls_rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 
 [target.'cfg(not(windows))'.dev-dependencies]
-tls_rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+rcgen = { workspace = true, features = ["ring"] }
 
 [[example]]
 name = "server"
