@@ -30,7 +30,7 @@ use windows_sys::Win32::Security::Cryptography::{
     CertGetCertificateChain, CertOpenStore, CertVerifyTimeValidity,
     CryptVerifyCertificateSignatureEx, HCERTCHAINENGINE, HCERTSTORE, NCRYPT_KEY_HANDLE,
     NCRYPT_PAD_PKCS1_FLAG, NCRYPT_PAD_PSS_FLAG, NCRYPT_SILENT_FLAG, NCryptFreeObject,
-    NCryptSignHash, PFXImportCertStore, PKCS_7_ASN_ENCODING, PKCS12_ALWAYS_CNG_KSP,
+    NCryptSignHash, PFXImportCertStore, PFXIsPFXBlob, PKCS_7_ASN_ENCODING, PKCS12_ALWAYS_CNG_KSP,
     PKCS12_NO_PERSIST_KEY, X509_ASN_ENCODING,
 };
 
@@ -153,13 +153,26 @@ impl fmt::Debug for CngKey {
     }
 }
 
-/// Loads the identity from a DER PKCS#12 archive: leaf-first chain without root, and its key.
-pub(crate) fn from_pkcs12(der: &[u8], password: &str) -> Result<(Vec<Certificate>, CngKey), Error> {
+/// Wraps `der` for `PFXImportCertStore`.
+///
+/// # Errors
+/// [`Error::InvalidDer`] if `der` is not a PKCS#12 archive (same as the Unix decoder).
+pub(crate) fn pfx_blob(der: &[u8]) -> Result<CRYPT_INTEGER_BLOB, Error> {
     let blob = CRYPT_INTEGER_BLOB {
         cbData: u32::try_from(der.len())
             .map_err(|_| Error::InvalidIdentity("PKCS#12 archive is too large".into()))?,
         pbData: der.as_ptr().cast_mut(),
     };
+    // SAFETY: `blob` points to `der`, which outlives the call.
+    if unsafe { PFXIsPFXBlob(&raw const blob) } == 0 {
+        return Err(Error::InvalidDer("not a PKCS#12 archive".into()));
+    }
+    Ok(blob)
+}
+
+/// Loads the identity from a DER PKCS#12 archive: leaf-first chain without root, and its key.
+pub(crate) fn from_pkcs12(der: &[u8], password: &str) -> Result<(Vec<Certificate>, CngKey), Error> {
+    let blob = pfx_blob(der)?;
     let flags = PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP;
     let wide_pw = wide(password);
     // SAFETY: `blob` points to `der`, the password is NUL terminated.
@@ -421,7 +434,7 @@ fn public_key_der(key: NCRYPT_KEY_HANDLE) -> Result<Vec<u8>, Error> {
     Ok(der)
 }
 
-fn status(code: i32) -> Result<(), Error> {
+pub(crate) fn status(code: i32) -> Result<(), Error> {
     if code == 0 {
         Ok(())
     } else {
@@ -429,7 +442,7 @@ fn status(code: i32) -> Result<(), Error> {
     }
 }
 
-fn win32(ok: i32) -> Result<(), Error> {
+pub(crate) fn win32(ok: i32) -> Result<(), Error> {
     if ok != 0 {
         Ok(())
     } else {
@@ -598,7 +611,7 @@ fn acquire_key(cert: *const CERT_CONTEXT) -> Option<KeyHandle> {
     (spec == CERT_NCRYPT_KEY_SPEC).then_some(key)
 }
 
-fn wide(s: &str) -> Vec<u16> {
+pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
@@ -615,7 +628,7 @@ impl Drop for KeyHandle {
 }
 
 /// Owned certificate store handle; open certificate contexts keep the store alive.
-struct Store(HCERTSTORE);
+pub(crate) struct Store(pub(crate) HCERTSTORE);
 
 impl Drop for Store {
     fn drop(&mut self) {
@@ -625,10 +638,10 @@ impl Drop for Store {
 }
 
 /// Owned certificate context.
-struct CertCtx(*mut CERT_CONTEXT);
+pub(crate) struct CertCtx(pub(crate) *mut CERT_CONTEXT);
 
 impl CertCtx {
-    fn from_der(der: &[u8]) -> Result<Self, Error> {
+    pub(crate) fn from_der(der: &[u8]) -> Result<Self, Error> {
         let len = u32::try_from(der.len())
             .map_err(|_| Error::InvalidDer("certificate is too large".into()))?;
         // SAFETY: DER is readable for len bytes; the API copies it into an owned context.

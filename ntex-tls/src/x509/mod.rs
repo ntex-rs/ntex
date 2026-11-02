@@ -1,8 +1,5 @@
 //! X.509 certificate handling: parsing, thumbprints, trust verification and identity loading.
 //!
-//! TLS acceptor/connector construction stays in the backend modules; certificate parsing,
-//! thumbprints, trust verification and identity loading live here.
-//!
 //! # Backends
 //!
 //! Windows always uses native APIs. Elsewhere `rustls` takes precedence over `openssl`.
@@ -33,6 +30,14 @@ mod error;
 pub mod identity;
 pub mod key;
 pub mod peer;
+#[cfg(any(test, feature = "testgen"))]
+pub mod testgen;
+#[cfg(all(
+    feature = "testgen",
+    not(test),
+    not(any(windows, all(unix, feature = "openssl"), feature = "testgen-rcgen"))
+))]
+compile_error!("`testgen` requires Windows, `openssl` on Unix, or the `testgen-rcgen` feature");
 pub mod trust;
 
 pub use self::cert::{Certificate, KeyType, SanIp, SubjectAltNames, pem_encode};

@@ -16,8 +16,7 @@
 use std::net::IpAddr;
 use std::time::SystemTime;
 
-use crate::x509::Certificate;
-use crate::x509::digest::Algorithm;
+use crate::x509::{Certificate, digest::Algorithm};
 
 /// Certificate field used as the client name.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -149,23 +148,15 @@ pub fn verify_thumbprint<'a>(
     }
 }
 
-#[cfg(all(test, unix, feature = "openssl"))]
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use tls_openssl::x509::extension::SubjectAlternativeName;
-
     use super::*;
-    use crate::x509::cert::tests::testgen;
+    use crate::x509::testgen::{self, San};
 
-    fn cert(san: Option<SubjectAlternativeName>) -> Certificate {
-        let k = testgen::key();
-        Certificate::from_der(
-            testgen::cert("Client1", false, None, &k, san, (-1, 1))
-                .to_der()
-                .unwrap(),
-        )
-        .unwrap()
+    fn cert(san: &San<'_>) -> Certificate {
+        testgen::cert("Client1", false, None, &testgen::key(), san, (-1, 1))
     }
 
     /// STATEMENT: Name matching normalizes case and addresses but rejects ambiguous SAN fields.
@@ -174,7 +165,7 @@ mod tests {
     /// - Generate subject-only and multi-SAN certificates and check matches and field errors.
     #[test]
     fn names() {
-        let c = cert(None);
+        let c = cert(&San::default());
         assert_eq!(name_matches(&c, NameField::Subject, "CLIENT1"), Ok(()));
         assert_eq!(
             name_matches(&c, NameField::Dns, "client1"),
@@ -187,9 +178,12 @@ mod tests {
         assert_eq!(field(&c, NameField::Subject), Ok(Some("client1".into())));
         assert_eq!(field(&c, NameField::Email), Ok(None));
 
-        let mut san = SubjectAlternativeName::new();
-        san.dns("A.b").dns("c.d").ip("::1").email("X@y");
-        let c = cert(Some(san));
+        let c = cert(&San {
+            dns: &["A.b", "c.d"],
+            email: &["X@y"],
+            ip: &["::1".parse().unwrap()],
+            ..San::default()
+        });
         assert_eq!(name_matches(&c, NameField::Dns, "c.D"), Ok(()));
         assert_eq!(name_matches(&c, NameField::Ip, "::0:1"), Ok(()));
         assert_eq!(
@@ -206,7 +200,7 @@ mod tests {
     /// - Check both hash algorithms, malformed/mismatched values, and times outside validity.
     #[test]
     fn thumbprints_and_validity() {
-        let c = cert(None);
+        let c = cert(&San::default());
         let now = SystemTime::now();
         let sha1 = c.thumbprint(Algorithm::Sha1).to_uppercase();
         let sha256 = c.thumbprint(Algorithm::Sha256);

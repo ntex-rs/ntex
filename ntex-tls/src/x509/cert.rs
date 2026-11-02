@@ -18,7 +18,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 use std::{fmt, ops::Range};
 
-use base64_simd::STANDARD as base64;
+use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use ntex_bytes::Bytes;
 use x509_parser::asn1_rs::{Any, Tag};
 use x509_parser::extensions::GeneralName;
@@ -339,7 +339,7 @@ fn key_type(spki: &x509_parser::x509::SubjectPublicKeyInfo<'_>) -> Option<KeyTyp
 /// Encodes DER as PEM with the given `label` (64 column base64 lines, trailing newline).
 #[must_use]
 pub fn pem_encode(label: &str, der: &[u8]) -> String {
-    let b64 = base64.encode_to_string(der);
+    let b64 = base64.encode(der);
     let mut pem = String::with_capacity(b64.len() + b64.len() / 64 + 2 * label.len() + 32);
     pem.push_str("-----BEGIN ");
     pem.push_str(label);
@@ -441,8 +441,10 @@ fn decode_string(value: &Any<'_>) -> Option<String> {
                 return None;
             }
             char::decode_utf16(
-                data.chunks_exact(2)
-                    .map(|c| u16::from_be_bytes([c[0], c[1]])),
+                data.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&c| u16::from_be_bytes(c)),
             )
             .collect::<Result<String, _>>()
             .ok()
@@ -451,8 +453,10 @@ fn decode_string(value: &Any<'_>) -> Option<String> {
             if !data.len().is_multiple_of(4) {
                 return None;
             }
-            data.chunks_exact(4)
-                .map(|c| char::from_u32(u32::from_be_bytes([c[0], c[1], c[2], c[3]])))
+            data.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&c| char::from_u32(u32::from_be_bytes(c)))
                 .collect()
         }
         _ => None,
@@ -486,7 +490,7 @@ fn pem_blocks(pem: &[u8]) -> impl Iterator<Item = Result<Bytes, Error>> + '_ {
                 .collect();
             blocks.push(
                 base64
-                    .decode_to_vec(&b64)
+                    .decode(&b64)
                     .map(Bytes::from)
                     .map_err(|e| Error::InvalidPem(e.to_string())),
             );
@@ -502,98 +506,33 @@ pub(crate) mod tests {
     #[cfg(all(unix, feature = "openssl"))]
     use crate::x509::digest::Algorithm;
 
-    #[cfg(all(unix, feature = "openssl"))]
-    pub(crate) mod testgen {
-        use tls_openssl::asn1::Asn1Time;
-        use tls_openssl::bn::BigNum;
-        use tls_openssl::ec::{EcGroup, EcKey};
-        use tls_openssl::hash::MessageDigest;
-        use tls_openssl::nid::Nid;
-        use tls_openssl::pkey::{PKey, Private};
-        use tls_openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
-        use tls_openssl::x509::{X509, X509NameBuilder};
+    use crate::x509::testgen::{self, San};
 
-        pub(crate) fn key() -> PKey<Private> {
-            crate::x509::test_provider();
-            let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
-            PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap()
-        }
-
-        /// Generates a certificate; `issuer` None means self-signed.
-        pub(crate) fn cert(
-            cn: &str,
-            ca: bool,
-            issuer: Option<(&X509, &PKey<Private>)>,
-            key: &PKey<Private>,
-            san: Option<SubjectAlternativeName>,
-            days: (i64, i64),
-        ) -> X509 {
-            let mut name = X509NameBuilder::new().unwrap();
-            name.append_entry_by_nid(Nid::COMMONNAME, cn).unwrap();
-            let name = name.build();
-            let mut b = X509::builder().unwrap();
-            b.set_version(2).unwrap();
-            b.set_serial_number(&BigNum::from_u32(0x0a0b).unwrap().to_asn1_integer().unwrap())
-                .unwrap();
-            b.set_subject_name(&name).unwrap();
-            b.set_issuer_name(issuer.map_or(&name, |(c, _)| c.subject_name()))
-                .unwrap();
-            b.set_pubkey(key).unwrap();
-            let now = i64::try_from(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            )
-            .unwrap();
-            b.set_not_before(&Asn1Time::from_unix(now + days.0 * 86400).unwrap())
-                .unwrap();
-            b.set_not_after(&Asn1Time::from_unix(now + days.1 * 86400).unwrap())
-                .unwrap();
-            if ca {
-                b.append_extension(BasicConstraints::new().critical().ca().build().unwrap())
-                    .unwrap();
-            }
-            if let Some(san) = san {
-                let ext = san
-                    .build(&b.x509v3_context(issuer.map(|(c, _)| c.as_ref()), None))
-                    .unwrap();
-                b.append_extension(ext).unwrap();
-            }
-            b.sign(issuer.map_or(key, |(_, k)| k), MessageDigest::sha256())
-                .unwrap();
-            b.build()
-        }
+    fn sample() -> Certificate {
+        let ips = ["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()];
+        let san = San {
+            dns: &["Host.Example"],
+            uri: &["https://Uri"],
+            email: &["A@b.c"],
+            ip: &ips,
+        };
+        testgen::cert("Client1", false, None, &testgen::key(), &san, (-1, 1))
     }
 
-    #[cfg(all(unix, feature = "openssl"))]
-    fn sample() -> (tls_openssl::x509::X509, Certificate) {
-        let key = testgen::key();
-        let mut san = tls_openssl::x509::extension::SubjectAlternativeName::new();
-        san.dns("Host.Example")
-            .uri("https://Uri")
-            .email("A@b.c")
-            .ip("127.0.0.1")
-            .ip("::1");
-        let x = testgen::cert("Client1", false, None, &key, Some(san), (-1, 1));
-        let c = Certificate::from_der(x.to_der().unwrap()).unwrap();
-        (x, c)
-    }
-
-    /// STATEMENT: Parsed certificate metadata and encodings agree with OpenSSL.
+    /// STATEMENT: Certificate metadata is parsed on every backend.
     ///
     /// HOW:
-    /// - Generate a certificate with multiple SAN kinds and compare its fields, digests,
-    ///   public key, PEM encoding, and validity against OpenSSL.
-    #[cfg(all(unix, feature = "openssl"))]
+    /// - Generate a certificate with multiple SAN kinds with the platform generator.
+    /// - Check version, serial, names, SANs, validity order and the debug output.
     #[test]
-    fn parity_with_openssl() {
-        let (x, c) = sample();
+    fn metadata() {
+        let c = sample();
         assert_eq!(c.version(), 3);
         assert_eq!(c.serial_hex(), "0A0B");
         assert_eq!(c.subject_cn(), Some("Client1"));
         assert_eq!(c.subject(), "CN=Client1");
         assert_eq!(c.issuer(), "CN=Client1");
+        assert!(c.is_self_issued());
         assert_eq!(c.san().dns, vec!["Host.Example"]);
         assert_eq!(c.san().uri, vec!["https://Uri"]);
         assert_eq!(c.san().email, vec!["A@b.c"]);
@@ -604,6 +543,23 @@ pub(crate) mod tests {
             .map(|i| i.addr().unwrap().to_string())
             .collect();
         assert_eq!(ips, vec!["127.0.0.1", "::1"]);
+        assert!(c.not_before() < SystemTime::now());
+        assert!(c.not_before() < c.not_after());
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("serial_number: \"0A0B\""), "{dbg}");
+        assert!(dbg.contains("127.0.0.1"), "{dbg}");
+    }
+
+    /// STATEMENT: Parsed certificate digests and encodings agree with OpenSSL.
+    ///
+    /// HOW:
+    /// - Compare digests, public key, PEM encoding, and validity of a generated certificate
+    ///   against OpenSSL.
+    #[cfg(all(unix, feature = "openssl"))]
+    #[test]
+    fn parity_with_openssl() {
+        let c = sample();
+        let x = tls_openssl::x509::X509::from_der(c.der()).unwrap();
         assert_eq!(c.sha1(), &tls_openssl::sha::sha1(&x.to_der().unwrap()));
         assert_eq!(
             c.thumbprint(Algorithm::Sha1),
@@ -628,10 +584,6 @@ pub(crate) mod tests {
             c.not_after(),
             SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
         );
-        assert!(c.not_before() < c.not_after());
-        let dbg = format!("{c:?}");
-        assert!(dbg.contains("serial_number: \"0A0B\""), "{dbg}");
-        assert!(dbg.contains("127.0.0.1"), "{dbg}");
     }
 
     /// STATEMENT: Certificate parsing supports PEM bundles and excludes trailing DER data.
@@ -639,16 +591,18 @@ pub(crate) mod tests {
     /// HOW:
     /// - Round-trip a generated certificate, parse a bundle, and check malformed inputs fail.
     /// - Append bytes to DER and check the parsed certificate retains only its encoding.
-    #[cfg(all(unix, feature = "openssl"))]
     #[test]
     fn pem_roundtrip_and_trailing_data() {
-        let (x, c) = sample();
+        let c = sample();
         let mut doc = b"junk\n".to_vec();
-        doc.extend_from_slice(&x.to_pem().unwrap());
-        doc.extend_from_slice(&x.to_pem().unwrap());
+        doc.extend_from_slice(c.to_pem().as_bytes());
+        doc.extend_from_slice(c.to_pem().as_bytes());
         assert_eq!(Certificate::from_pem(&doc).unwrap(), c);
         assert_eq!(Certificate::from_pem_multi(&doc).unwrap().len(), 2);
-        assert!(Certificate::from_pem_multi(b"").unwrap().is_empty());
+        assert_eq!(
+            Certificate::from_pem_multi(b"").unwrap(),
+            Vec::<Certificate>::new()
+        );
         assert!(matches!(
             Certificate::from_pem(b"nothing"),
             Err(Error::InvalidPem(_))
@@ -658,7 +612,7 @@ pub(crate) mod tests {
             Err(Error::InvalidPem(_))
         ));
 
-        let mut der = x.to_der().unwrap();
+        let mut der = c.der().to_vec();
         let len = der.len();
         der.extend_from_slice(b"trailing");
         let c2 = Certificate::from_der(der).unwrap();
@@ -685,7 +639,7 @@ pub(crate) mod tests {
     }
 
     fn edit_tbs(edit: impl FnOnce(&[u8]) -> Vec<u8>) -> Vec<u8> {
-        let cert = Certificate::from_pem(include_bytes!("trust/testdata/root.pem")).unwrap();
+        let cert = Certificate::from_pem(include_bytes!("../../tests/testdata/root.pem")).unwrap();
         let (_, outer) = Any::from_der(cert.der()).unwrap();
         let (rest, tbs) = Any::from_der(outer.data).unwrap();
         let mut body = sequence(&edit(tbs.data));

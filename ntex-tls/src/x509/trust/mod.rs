@@ -162,6 +162,7 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
+    use crate::x509::testgen::{self, San};
 
     /// Fixed-date fixtures (P-256, SHA-256) so the tests run on every backend:
     /// - `root` 2020..2120 -> `inter` (CA) 2021..2110 -> `leaf` 2022..2100;
@@ -170,12 +171,12 @@ mod tests {
     fn c(name: &str) -> Certificate {
         crate::x509::test_provider();
         let pem: &[u8] = match name {
-            "root" => include_bytes!("testdata/root.pem"),
-            "inter" => include_bytes!("testdata/inter.pem"),
-            "leaf" => include_bytes!("testdata/leaf.pem"),
-            "other" => include_bytes!("testdata/other.pem"),
-            "shortroot" => include_bytes!("testdata/shortroot.pem"),
-            "shortleaf" => include_bytes!("testdata/shortleaf.pem"),
+            "root" => include_bytes!("../../../tests/testdata/root.pem"),
+            "inter" => include_bytes!("../../../tests/testdata/inter.pem"),
+            "leaf" => include_bytes!("../../../tests/testdata/leaf.pem"),
+            "other" => include_bytes!("../../../tests/testdata/other.pem"),
+            "shortroot" => include_bytes!("../../../tests/testdata/shortroot.pem"),
+            "shortleaf" => include_bytes!("../../../tests/testdata/shortleaf.pem"),
             _ => unreachable!(),
         };
         Certificate::from_pem(pem).unwrap()
@@ -338,5 +339,125 @@ mod tests {
             store.is_trusted(&peer, UNIX_EPOCH - Duration::from_secs(1)),
             Err(TrustError::Internal(_))
         ));
+    }
+
+    /// STATEMENT: Trust expires with an intermediate even when the leaf and root outlive it.
+    ///
+    /// HOW:
+    /// - Generate a chain whose intermediate expires before its leaf and root.
+    /// - Require the intermediate's expiry now and reject the chain a day after it.
+    #[test]
+    fn intermediate_expiry() {
+        let san = San::default();
+        let (rk, ik) = (testgen::key(), testgen::key());
+        let root = testgen::cert("root", true, None, &rk, &san, (-1, 3000));
+        let inter = testgen::cert("inter", true, Some((&root, &rk)), &ik, &san, (-1, 1000));
+        let leaf = testgen::cert(
+            "leaf",
+            false,
+            Some((&inter, &ik)),
+            &testgen::key(),
+            &san,
+            (-1, 2000),
+        );
+        let store = CaCerts::from_certs([root]);
+        let peer = PeerCerts::new(leaf, vec![inter.clone()]);
+        let now = SystemTime::now();
+        assert_eq!(store.is_trusted(&peer, now).unwrap(), inter.not_after());
+        let later = inter.not_after() + Duration::from_hours(24);
+        assert!(later < peer.leaf().not_after());
+        assert!(matches!(
+            store.is_trusted(&peer, later),
+            Err(TrustError::Unauthenticated(_))
+        ));
+    }
+
+    /// STATEMENT: CA trust enforces client-auth EKU while exact leaf pinning remains explicit.
+    ///
+    /// HOW:
+    /// - Issue leaves without EKU, with client-auth, with both, and server-auth only.
+    /// - Reject only the server-auth leaf under the CA, but permit each exact leaf pin.
+    /// - Reject a client-auth leaf issued by a server-auth-only intermediate.
+    #[cfg(any(windows, feature = "rustls"))]
+    #[test]
+    fn client_auth_usage() {
+        use crate::x509::testgen::ExtKeyUsage::{ClientAuth, ServerAuth};
+        let san = San::default();
+        let now = SystemTime::now();
+        let ck = testgen::key();
+        let ca = testgen::cert("ca", true, None, &ck, &san, (-1, 10));
+        let store = CaCerts::from_certs([ca.clone()]);
+        let issue = |issuer, ca, eku| {
+            testgen::cert_with_eku("x", ca, Some(issuer), &testgen::key(), &san, (-1, 10), eku)
+        };
+        for (eku, accepted) in [
+            (&[][..], true),
+            (&[ClientAuth][..], true),
+            (&[ServerAuth, ClientAuth][..], true),
+            (&[ServerAuth][..], false),
+        ] {
+            let peer = PeerCerts::new(issue((&ca, &ck), false, eku), vec![]);
+            assert_eq!(store.is_trusted(&peer, now).is_ok(), accepted, "{eku:?}");
+            let pinned = CaCerts::from_certs([peer.leaf().clone()]);
+            assert_eq!(
+                pinned.is_trusted(&peer, now).unwrap(),
+                peer.leaf().not_after()
+            );
+        }
+
+        let ik = testgen::key();
+        let inter = testgen::cert_with_eku(
+            "inter",
+            true,
+            Some((&ca, &ck)),
+            &ik,
+            &san,
+            (-1, 10),
+            &[ServerAuth],
+        );
+        let peer = PeerCerts::new(issue((&inter, &ik), false, &[ClientAuth]), vec![inter]);
+        assert!(matches!(
+            store.is_trusted(&peer, now),
+            Err(TrustError::Unauthenticated(_))
+        ));
+    }
+
+    /// STATEMENT: Rejected anchors invoke their callback and do not displace valid deduplicated anchors.
+    ///
+    /// HOW:
+    /// - Supply a CA with duplicate basic constraints between two copies of a valid root.
+    /// - Check its callback fires once and the remaining store still authenticates the fixture chain.
+    #[cfg(all(not(windows), feature = "rustls"))]
+    #[test]
+    fn rejected_anchor_callback() {
+        use rcgen::{BasicConstraints, CertificateParams, CustomExtension, IsCa, KeyPair};
+        use std::cell::RefCell;
+        let mut bad = CertificateParams::default();
+        bad.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        bad.custom_extensions = vec![CustomExtension::from_oid_content(
+            &[2, 5, 29, 19],
+            vec![0x30, 0],
+        )];
+        let bad = bad.self_signed(&KeyPair::generate().unwrap()).unwrap();
+        let bad = Certificate::from_der(bad.der().to_vec()).unwrap();
+        let rejected = RefCell::new(Vec::new());
+        let store =
+            CaCerts::from_certs_with([c("root"), bad, c("root")].into_iter().enumerate().map(
+                |(index, cert)| {
+                    let rejected = &rejected;
+                    (cert, move |error: &str| {
+                        rejected.borrow_mut().push((index, error.to_owned()));
+                    })
+                },
+            ));
+        assert_eq!(rejected.borrow().len(), 1);
+        assert_eq!(rejected.borrow()[0].0, 1);
+        assert_ne!(rejected.borrow()[0].1, "");
+        assert_eq!(store.certs(), &[c("root")]);
+        let peer = PeerCerts::new(c("leaf"), vec![c("inter")]);
+        assert_eq!(
+            store.is_trusted(&peer, year(NOW)).unwrap(),
+            peer.leaf().not_after()
+        );
     }
 }

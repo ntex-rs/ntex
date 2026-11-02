@@ -208,3 +208,124 @@ impl fmt::Debug for PrivateKey {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::x509::Identity;
+    use tls_rustls::SignatureScheme as S;
+
+    fn verify(cert: &Certificate, scheme: S, message: &[u8], signature: &[u8]) -> bool {
+        use x509_parser::prelude::{FromDer, X509Certificate};
+        let (_, cert) = X509Certificate::from_der(cert.der()).unwrap();
+        let provider = tls_rustls::crypto::ring::default_provider();
+        provider
+            .signature_verification_algorithms
+            .mapping
+            .iter()
+            .find(|(candidate, _)| *candidate == scheme)
+            .unwrap()
+            .1
+            .iter()
+            .any(|algorithm| {
+                algorithm
+                    .verify_signature(
+                        &cert.public_key().subject_public_key.data,
+                        message,
+                        signature,
+                    )
+                    .is_ok()
+            })
+    }
+
+    /// STATEMENT: RSA signing uses the requested padding and digest for all supported hashes.
+    ///
+    /// HOW:
+    /// - Sign with PKCS#1 and PSS using SHA-256, SHA-384 and SHA-512.
+    /// - Verify with independently selected ring algorithms and reject modified messages.
+    /// - Reject each signature under the other padding mode.
+    #[test]
+    fn rsa_signature_schemes() {
+        crate::x509::test_provider();
+        let identity = Identity::from_pem(
+            include_bytes!("../../examples/cert.pem"),
+            include_bytes!("../../examples/key.pem"),
+        )
+        .unwrap();
+        for (hash, pkcs1, pss) in [
+            (HashAlg::Sha256, S::RSA_PKCS1_SHA256, S::RSA_PSS_SHA256),
+            (HashAlg::Sha384, S::RSA_PKCS1_SHA384, S::RSA_PSS_SHA384),
+            (HashAlg::Sha512, S::RSA_PKCS1_SHA512, S::RSA_PSS_SHA512),
+        ] {
+            for (scheme, expected, other) in [
+                (SignScheme::RsaPkcs1(hash), pkcs1, pss),
+                (SignScheme::RsaPss(hash), pss, pkcs1),
+            ] {
+                let signature = identity.private_key().sign(scheme, b"message").unwrap();
+                assert!(verify(identity.cert(), expected, b"message", &signature));
+                assert!(!verify(identity.cert(), expected, b"modified", &signature));
+                assert!(!verify(identity.cert(), other, b"message", &signature));
+            }
+        }
+    }
+
+    /// STATEMENT: EC identities require the matching key and produce interoperable DER signatures.
+    ///
+    /// HOW:
+    /// - Generate P-256 and P-384 identities, rejecting a different key on the same curve.
+    /// - Verify each signature and reject RSA schemes for EC keys.
+    /// - Export/reload the key, then exercise its rustls adapter when available.
+    #[cfg(not(windows))]
+    #[test]
+    fn ec_identity_signatures() {
+        crate::x509::test_provider();
+        for (algorithm, hash, scheme) in [
+            (
+                &rcgen::PKCS_ECDSA_P256_SHA256,
+                HashAlg::Sha256,
+                S::ECDSA_NISTP256_SHA256,
+            ),
+            (
+                &rcgen::PKCS_ECDSA_P384_SHA384,
+                HashAlg::Sha384,
+                S::ECDSA_NISTP384_SHA384,
+            ),
+        ] {
+            let key = rcgen::KeyPair::generate_for(algorithm).unwrap();
+            let cert = rcgen::CertificateParams::default()
+                .self_signed(&key)
+                .unwrap();
+            let other = rcgen::KeyPair::generate_for(algorithm).unwrap();
+            assert!(matches!(
+                Identity::from_der(&[cert.der()], other.serialized_der()),
+                Err(Error::InvalidIdentity(_))
+            ));
+            let identity = Identity::from_der(&[cert.der()], key.serialized_der()).unwrap();
+            let key = PrivateKey::from_pkcs8(
+                identity.cert(),
+                identity.private_key().export_pkcs8_der().unwrap(),
+            )
+            .unwrap();
+            let signature = key.sign(SignScheme::Ecdsa(hash), b"message").unwrap();
+            assert!(verify(identity.cert(), scheme, b"message", &signature));
+            assert!(!verify(identity.cert(), scheme, b"modified", &signature));
+            assert!(matches!(
+                key.sign(SignScheme::RsaPss(hash), b"message"),
+                Err(Error::Unsupported(_))
+            ));
+            #[cfg(feature = "rustls")]
+            {
+                let certified = crate::rustls::certified_key(&identity).unwrap();
+                assert!(certified.key.choose_scheme(&[S::RSA_PSS_SHA256]).is_none());
+                let signer = certified.key.choose_scheme(&[scheme]).unwrap();
+                assert_eq!(signer.scheme(), scheme);
+                assert!(verify(
+                    identity.cert(),
+                    scheme,
+                    b"message",
+                    &signer.sign(b"message").unwrap()
+                ));
+            }
+        }
+    }
+}

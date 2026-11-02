@@ -5,8 +5,8 @@ use crate::x509::{Certificate, Error};
 
 /// Leaf certificate and additional chain certificates presented by a TLS peer.
 ///
-/// Built from ntex-tls `PeerCertDer` / `PeerCertChainDer` (moved out of the io query with
-/// `QueryItem::into_inner`, so no copy). Presence of a chain does **not** imply trust,
+/// Built from `PeerCertDer` / `PeerCertChainDer` (moved out of the io query with
+/// `QueryItem::into_inner`). Presence of a chain does **not** imply trust,
 /// use [`crate::x509::trust::CaCerts::is_trusted`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerCerts {
@@ -58,10 +58,10 @@ impl PeerCerts {
     }
 }
 
-#[cfg(all(test, unix, feature = "openssl"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::x509::cert::tests::testgen;
+    use crate::x509::testgen::{self, San};
 
     /// STATEMENT: Peer parsing removes the redundant leaf but retains issuer certificates.
     ///
@@ -70,11 +70,12 @@ mod tests {
     #[test]
     fn strips_leaf_from_chain() {
         let k = testgen::key();
-        let ca = testgen::cert("ca", true, None, &k, None, (-1, 1));
+        let san = San::default();
+        let ca = testgen::cert("ca", true, None, &k, &san, (-1, 1));
         let k2 = testgen::key();
-        let leaf = testgen::cert("leaf", false, Some((&ca, &k)), &k2, None, (-1, 1));
-        let leaf_der = Bytes::from(leaf.to_der().unwrap());
-        let ca_der = Bytes::from(ca.to_der().unwrap());
+        let leaf = testgen::cert("leaf", false, Some((&ca, &k)), &k2, &san, (-1, 1));
+        let leaf_der = leaf.der().clone();
+        let ca_der = ca.der().clone();
 
         let p =
             PeerCerts::from_der(leaf_der.clone(), vec![leaf_der.clone(), ca_der.clone()]).unwrap();
@@ -85,7 +86,7 @@ mod tests {
         let p = PeerCerts::from_der(leaf_der.clone(), vec![ca_der]).unwrap();
         assert_eq!(p.chain().len(), 1);
         let p = PeerCerts::from_der(leaf_der.clone(), vec![]).unwrap();
-        assert!(p.chain().is_empty());
+        assert_eq!(p.chain(), []);
         assert!(PeerCerts::from_der(leaf_der, vec![Bytes::from_static(b"x")]).is_err());
     }
 }
