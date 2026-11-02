@@ -238,6 +238,11 @@ async fn test_cached_service_binding_scopes() {
     drop(ready);
 }
 
+/// STATEMENT: A web route returns its complete response body.
+///
+/// HOW:
+/// - Serve `STR` from an app route and send GET.
+/// - Assert success and a response body equal to `STR`.
 #[ntex::test]
 async fn test_body() {
     let srv = test::server(async |_| {
@@ -252,6 +257,11 @@ async fn test_body() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Gzip middleware compresses an HTTP/1 response body.
+///
+/// HOW:
+/// - Request gzip with automatic decompression disabled from an app using `Compress::new(ContentEncoding::Gzip)`.
+/// - Assert success, manually decode with `GzDecoder`, and compare with `STR`.
 #[ntex::test]
 async fn test_body_gzip() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -279,6 +289,11 @@ async fn test_body_gzip() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Gzip middleware compresses a response converted to `Body`.
+///
+/// HOW:
+/// - Convert the handler response using `into_body::<Body>` and request raw gzip bytes.
+/// - Assert success and manual gzip decoding reproduces `STR`.
 #[ntex::test]
 async fn test_body_gzip2() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -308,6 +323,11 @@ async fn test_body_gzip2() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Automatic compression ignores unsupported Brotli and selects supported encodings.
+///
+/// HOW:
+/// - Request `gzip, deflate, br, zstd`, assert zstd is selected, and decode the body to `STR`.
+/// - Repeat without zstd and assert gzip is selected and decodes to `STR`.
 #[ntex::test]
 async fn test_body_auto_skips_brotli() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -345,6 +365,11 @@ async fn test_body_auto_skips_brotli() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Zstd middleware preserves a one-megabyte random response body.
+///
+/// HOW:
+/// - Generate random data, serve it through zstd compression, and request raw zstd bytes.
+/// - Assert success and the encoding header, then decode with `zstd::decode_all` and compare every byte.
 #[ntex::test]
 async fn test_body_zstd_large() {
     let data: String = rand::rng()
@@ -376,6 +401,11 @@ async fn test_body_zstd_large() {
     assert_eq!(zstd::decode_all(&bytes[..]).unwrap(), data.as_bytes());
 }
 
+/// STATEMENT: The server decodes zstd request bodies before extraction.
+///
+/// HOW:
+/// - Compress both `STR` and 200,000 random characters and POST each with `CONTENT_ENCODING` set to zstd.
+/// - Assert successful echo responses match each uncompressed input.
 #[ntex::test]
 async fn test_zstd_encoding() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -405,6 +435,11 @@ async fn test_zstd_encoding() {
     }
 }
 
+/// STATEMENT: Response-specific deflate encoding overrides gzip middleware configuration.
+///
+/// HOW:
+/// - Return deflate-selected responses through both the builder and a raw `HttpResponse` under gzip middleware.
+/// - Request raw deflate bytes for both routes, decode them with `ZlibDecoder`, and assert success and `STR` contents.
 #[ntex::test]
 async fn test_body_encoding_override() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -464,6 +499,11 @@ async fn test_body_encoding_override() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Gzip middleware preserves a large repetitive response returned inside `Result`.
+///
+/// HOW:
+/// - Serve `STR.repeat(10)` through gzip middleware and request compressed bytes.
+/// - Assert success and manual gzip decoding equals the original data.
 #[ntex::test]
 async fn test_body_gzip_large() {
     let data = STR.repeat(10);
@@ -497,6 +537,11 @@ async fn test_body_gzip_large() {
     assert_eq!(Bytes::from(dec), Bytes::from(data));
 }
 
+/// STATEMENT: Gzip middleware preserves a large random response.
+///
+/// HOW:
+/// - Serve 70,000 random characters and request raw gzip output.
+/// - Assert success, decode with `GzDecoder`, and compare both length and contents.
 #[ntex::test]
 async fn test_body_gzip_large_random() {
     let data = rand::rng()
@@ -535,6 +580,11 @@ async fn test_body_gzip_large_random() {
     assert_eq!(Bytes::from(dec), Bytes::from(data));
 }
 
+/// STATEMENT: A gzip-compressed streaming response uses implicit HTTP/1 chunking.
+///
+/// HOW:
+/// - Stream `STR` through `TestBody` in 24-byte chunks and request raw gzip bytes.
+/// - Assert success and `TRANSFER_ENCODING: chunked`, then manually decode and verify `STR`.
 #[ntex::test]
 async fn test_body_chunked_implicit() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -568,6 +618,11 @@ async fn test_body_chunked_implicit() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: A HEAD response advertises its body length without sending body bytes.
+///
+/// HOW:
+/// - Return `STR` from a HEAD route with an initially different explicit length.
+/// - Assert success, a `CONTENT_LENGTH` equal to `STR.len()`, and an empty received body.
 #[ntex::test]
 async fn test_head_binary() {
     let srv =
@@ -590,6 +645,11 @@ async fn test_head_binary() {
     assert!(bytes.is_empty());
 }
 
+/// STATEMENT: `no_chunking` sends a fixed-length streaming response without transfer encoding.
+///
+/// HOW:
+/// - Stream `STR` in 24-byte chunks with explicit length and `no_chunking`.
+/// - Assert success, no `TRANSFER_ENCODING` header, and the complete original body.
 #[ntex::test]
 async fn test_no_chunking() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -610,6 +670,11 @@ async fn test_no_chunking() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Deflate middleware produces a valid compressed response.
+///
+/// HOW:
+/// - Request raw deflate output from a route serving `STR` under deflate compression.
+/// - Assert success, decode using `ZlibDecoder`, and compare with `STR`.
 #[ntex::test]
 async fn test_body_deflate() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -637,6 +702,11 @@ async fn test_body_deflate() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Request decompression and response compression compose correctly.
+///
+/// HOW:
+/// - POST gzip-compressed `STR` to an echo route wrapped with default `Compress`.
+/// - Assert success and the client's decoded response equals the original `STR`.
 #[ntex::test]
 async fn test_encoding() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -664,6 +734,11 @@ async fn test_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: The server decodes gzip request bodies for byte extraction.
+///
+/// HOW:
+/// - POST gzip-compressed `STR` with the gzip content-encoding header to a byte-echo route.
+/// - Assert success and an uncompressed response body equal to `STR`.
 #[ntex::test]
 async fn test_gzip_encoding() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -689,6 +764,11 @@ async fn test_gzip_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: The server decodes a large repetitive gzip request body.
+///
+/// HOW:
+/// - Compress `STR.repeat(10)` and POST it to a byte-echo route.
+/// - Assert success and the echoed body equals the uncompressed input.
 #[ntex::test]
 async fn test_gzip_encoding_large() {
     let data = STR.repeat(10);
@@ -715,6 +795,11 @@ async fn test_gzip_encoding_large() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
+/// STATEMENT: Gzip request decompression preserves large random input.
+///
+/// HOW:
+/// - Compress 60,000 random characters and POST them with gzip content encoding.
+/// - Assert success and equality of both decoded length and bytes.
 #[ntex::test]
 async fn test_reading_gzip_encoding_large_random() {
     let data = rand::rng()
@@ -747,6 +832,11 @@ async fn test_reading_gzip_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
+/// STATEMENT: The server decodes deflate request bodies before byte extraction.
+///
+/// HOW:
+/// - Compress `STR` with `ZlibEncoder` and POST with deflate content encoding.
+/// - Assert success and the echoed body equals `STR`.
 #[ntex::test]
 async fn test_reading_deflate_encoding() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -772,6 +862,11 @@ async fn test_reading_deflate_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Deflate request decompression preserves large repetitive input.
+///
+/// HOW:
+/// - Compress `STR.repeat(10)` and POST to a byte-echo route.
+/// - Assert success and the echoed body equals the original uncompressed data.
 #[ntex::test]
 async fn test_reading_deflate_encoding_large() {
     let data = STR.repeat(10);
@@ -798,6 +893,11 @@ async fn test_reading_deflate_encoding_large() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
+/// STATEMENT: Deflate request decompression preserves large random input.
+///
+/// HOW:
+/// - Compress 160,000 random characters and POST with deflate content encoding.
+/// - Assert success and equality of both decoded length and bytes.
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random() {
     let data = rand::rng()
@@ -830,6 +930,11 @@ async fn test_reading_deflate_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
+/// STATEMENT: A rustls server decodes a streamed deflate request without altering the input.
+///
+/// HOW:
+/// - Stream compressed 160,000-character random data in 16 KiB `TestBody` chunks to a rustls echo route using identity response encoding.
+/// - Assert success and the response length and bytes match the original data.
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls() {
@@ -871,6 +976,11 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
+/// STATEMENT: A rustls HTTP/1 server decodes a streamed deflate request without altering the input.
+///
+/// HOW:
+/// - Force HTTP/1 and stream compressed 160,000-character random data in 16 KiB `TestBody` chunks to an identity-encoded echo route.
+/// - Assert success and the response length and bytes match the original data.
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h1() {
@@ -912,6 +1022,11 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
+/// STATEMENT: A rustls HTTP/2 server decodes a streamed deflate request without altering the input.
+///
+/// HOW:
+/// - Force HTTP/2 and stream compressed 160,000-character random data in 16 KiB `TestBody` chunks to an identity-encoded echo route.
+/// - Assert success and the response length and bytes match the original data.
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h2() {
@@ -953,6 +1068,11 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
+/// STATEMENT: Response cookies replace duplicate names and remain separate `Set-Cookie` headers.
+///
+/// HOW:
+/// - Build a response containing one HTTP-only cookie and two values for the same second cookie name.
+/// - Assert success, exactly two parsed cookies with the final values, and exactly two matching raw `SET_COOKIE` headers in either order.
 #[ntex::test]
 async fn test_server_cookies() {
     use ntex::http::HttpMessage;
@@ -1000,6 +1120,11 @@ async fn test_server_cookies() {
     }
 }
 
+/// STATEMENT: The web server times out both absent and incomplete request heads.
+///
+/// HOW:
+/// - Set a one-second client timeout and open concurrent raw connections sending no request or only a partial head.
+/// - Read each connection to closure and assert both responses start with HTTP 408.
 #[ntex::test]
 async fn test_slow_request() {
     use std::net;
@@ -1030,6 +1155,11 @@ async fn test_slow_request() {
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"), "{data:?}");
 }
 
+/// STATEMENT: Custom web errors control the error response while successful handlers retain normal bodies.
+///
+/// HOW:
+/// - Install a custom state and `WebResponseError` mapping `TestError` to a JSON-typed bad request.
+/// - Assert the successful route's length and `STR` body, then assert the error route returns 400 with `application/json`.
 #[ntex::test]
 async fn test_custom_error() {
     #[derive(Debug, thiserror::Error)]
@@ -1097,6 +1227,11 @@ async fn test_custom_error() {
     assert_eq!("application/json", tp.to_str().unwrap());
 }
 
+/// STATEMENT: A web server accepts requests using supplied listener and I/O/HTTP configuration.
+///
+/// HOW:
+/// - Start a server on another system thread with shutdown and read-rate settings on an existing TCP listener.
+/// - Send GET with a configured client, assert success, and stop the server system.
 #[ntex::test]
 async fn test_web_server() {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -1144,7 +1279,11 @@ async fn test_web_server() {
     system.stop();
 }
 
-/// Websocket connection, no ws handler and response contains payload
+/// STATEMENT: Unaccepted WebSocket upgrade requests still deliver ordinary response payloads.
+///
+/// HOW:
+/// - Send WebSocket upgrade headers to routes returning fixed and 24-byte-chunked `STR` bodies without a WebSocket handler.
+/// - Read both responses and assert each complete body equals `STR`.
 #[ntex::test]
 async fn web_no_ws_with_response_payload() {
     let srv = test::server_with(test::config().h1(), async |_| {
@@ -1185,6 +1324,11 @@ async fn web_no_ws_with_response_payload() {
     assert_eq!(body, STR);
 }
 
+/// STATEMENT: Middleware, app filters, resource filters, and handlers share mapped request state.
+///
+/// HOW:
+/// - Map request state from unit to `100` in middleware, assert it in the app filter, and change it to `10`.
+/// - Assert the resource filter and state-aware handler see `10`, then require a successful GET response.
 #[ntex::test]
 async fn test_request_state() {
     use ntex::{Ctx, Middleware, Service, web::WebRequest, web::WebResponse};

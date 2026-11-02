@@ -304,12 +304,20 @@ impl ClientConfig {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Disabling the client timeout removes its deadline.
+    ///
+    /// HOW:
+    /// - Disable timeout on a new configuration and verify the stored duration is zero.
     #[test]
     fn basics() {
         let cfg = ClientConfig::new().disable_timeout();
         assert_eq!(cfg.timeout, Millis::ZERO);
     }
 
+    /// STATEMENT: HTTP/2 pool settings can be changed independently of HTTP/1 settings.
+    ///
+    /// HOW:
+    /// - Check defaults, replace HTTP/2 connection/stream limits and lifetimes, and verify HTTP/1 values remain unchanged.
     #[test]
     fn h2_settings() {
         let cfg = ClientConfig::new();
@@ -333,6 +341,10 @@ mod tests {
         assert_eq!(cfg.h1_lifetime, Duration::from_secs(75));
     }
 
+    /// STATEMENT: Client configuration accepts a custom response payload limit.
+    ///
+    /// HOW:
+    /// - Check the default limit, replace it, and verify the configured limit.
     #[test]
     fn response_payload_limit() {
         let cfg = ClientConfig::new();
@@ -342,6 +354,10 @@ mod tests {
         assert_eq!(cfg.pl_limit, 10);
     }
 
+    /// STATEMENT: Client configuration accepts a custom response payload timeout.
+    ///
+    /// HOW:
+    /// - Check the default timeout, replace it, and verify the configured duration.
     #[test]
     fn response_payload_timeout() {
         let cfg = ClientConfig::default();
@@ -351,18 +367,30 @@ mod tests {
         assert_eq!(cfg.pl_timeout, Millis(10));
     }
 
+    /// STATEMENT: Valid header names are accepted as client defaults.
+    ///
+    /// HOW:
+    /// - Configure a string header name and check that it appears in the default headers.
     #[test]
     fn valid_header_name() {
         let cfg = ClientConfig::new().set_header("Content-Length", 1).unwrap();
         assert!(cfg.headers.contains_key("Content-Length"));
     }
 
+    /// STATEMENT: Invalid client-default header names are rejected.
+    ///
+    /// HOW:
+    /// - Configure a name containing spaces and verify an error is returned.
     #[test]
     fn invalid_header_name() {
         let res = ClientConfig::new().set_header("no valid header name", 1);
         assert!(res.is_err());
     }
 
+    /// STATEMENT: Typed header values are preserved when configured as client defaults.
+    ///
+    /// HOW:
+    /// - Set a numeric `HeaderValue` by reference and compare the stored value.
     #[test]
     fn valid_header_value() {
         let valid_header_value = HeaderValue::from(1234);
@@ -372,6 +400,10 @@ mod tests {
         assert_eq!(cfg.headers.get("Content-Length"), Some(&valid_header_value));
     }
 
+    /// STATEMENT: Invalid client-default header values are rejected.
+    ///
+    /// HOW:
+    /// - Configure a newline as a header value and verify construction fails.
     #[test]
     fn invalid_header_value() {
         let res = ClientConfig::new()
@@ -380,6 +412,10 @@ mod tests {
         assert!(res);
     }
 
+    /// STATEMENT: Client Basic authentication encodes credentials with an optional password.
+    ///
+    /// HOW:
+    /// - Configure credentials with and without a password and compare the resulting authorization headers.
     #[test]
     fn client_basic_auth() {
         let cfg = ClientConfig::new()
@@ -407,6 +443,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Client bearer authentication uses the configured token in its authorization header.
+    ///
+    /// HOW:
+    /// - Configure a token and compare the complete generated authorization value.
     #[test]
     fn client_bearer_auth() {
         let cfg = ClientConfig::new()

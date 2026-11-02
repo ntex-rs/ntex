@@ -540,6 +540,10 @@ impl<T: Head> MessagePool<T> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Dropping messages nested in extensions permits reentrant pool cleanup.
+    ///
+    /// HOW:
+    /// - Nest request and response messages in extensions, drop the outer owner, and allocate from both pools again.
     #[test]
     fn nested_message_drop() {
         let inner = Message::<RequestHead>::new();
@@ -556,6 +560,11 @@ mod tests {
         let _ = Message::<ResponseHead>::new();
     }
 
+    /// STATEMENT: Messages can be dropped or allocated after their thread-local pools have been destroyed.
+    ///
+    /// HOW:
+    /// - Arrange a thread-local holder to outlive both pools and manipulate messages in its destructor.
+    /// - Join the thread and verify teardown completes without panic.
     #[test]
     fn message_drop_after_pool_destroyed() {
         struct Holder(Option<Message<RequestHead>>, Option<Message<ResponseHead>>);
@@ -581,6 +590,10 @@ mod tests {
         .unwrap();
     }
 
+    /// STATEMENT: Response connection defaults depend on HTTP version and can be overridden explicitly.
+    ///
+    /// HOW:
+    /// - Inspect an HTTP/1.1 response, switch to HTTP/1.0, then force keepalive and compare each result.
     #[test]
     fn response_connection_type() {
         let mut res = Message::<ResponseHead>::with_status(StatusCode::OK);
@@ -591,6 +604,10 @@ mod tests {
         assert_eq!(res.connection_type(), ConnectionType::KeepAlive);
     }
 
+    /// STATEMENT: Message clones expose the original request metadata, and absent I/O can be taken safely.
+    ///
+    /// HOW:
+    /// - Clone a POST request message and inspect its method, then verify taking absent current I/O returns none.
     #[test]
     fn message_clone() {
         let mut msg = Message::<RequestHead>::new();

@@ -440,6 +440,12 @@ mod tests {
     use super::*;
     use crate::web::test::{TestRequest, from_request};
 
+    /// STATEMENT: Payload configuration enforces exact or predicate-based media-type requirements.
+    ///
+    /// HOW:
+    /// - Require JSON and assert missing/form types fail while JSON passes.
+    /// - Require plain text through a predicate and assert JSON fails and parameterized plain text passes.
+    /// - Assert debug output identifies `PayloadConfig`.
     #[crate::rt_test]
     async fn test_payload_config() {
         let req = TestRequest::default().to_http_request();
@@ -469,6 +475,11 @@ mod tests {
         assert!(format!("{cfg:?}").contains("PayloadConfig"));
     }
 
+    /// STATEMENT: Extracted `Payload` streams expose the request's original bytes.
+    ///
+    /// HOW:
+    /// - Extract `Payload` from a request containing `hello=world`.
+    /// - Receive through `stream_recv` and assert the exact byte chunk.
     #[crate::rt_test]
     async fn test_payload() {
         let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
@@ -482,6 +493,11 @@ mod tests {
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
 
+    /// STATEMENT: `Payload::recv` retrieves the extracted request body chunk.
+    ///
+    /// HOW:
+    /// - Extract a payload containing `hello=world`.
+    /// - Await `recv` and assert its successful bytes match the supplied body.
     #[crate::rt_test]
     async fn test_payload_recv() {
         let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
@@ -495,6 +511,11 @@ mod tests {
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
 
+    /// STATEMENT: Byte extraction preserves body bytes and honors configured media-type validation.
+    ///
+    /// HOW:
+    /// - Extract `Bytes` from a request and assert the exact body.
+    /// - Require JSON on an otherwise identical request lacking that type and assert extraction fails.
     #[crate::rt_test]
     async fn test_bytes() {
         let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
@@ -511,6 +532,11 @@ mod tests {
         assert!(from_request::<_, Bytes>(&(), &req, &mut pl).await.is_err());
     }
 
+    /// STATEMENT: String extraction supports default and declared charsets while enforcing MIME constraints.
+    ///
+    /// HOW:
+    /// - Extract the same ASCII body without a charset and with CP1251 and assert the decoded text.
+    /// - Configure a JSON MIME requirement on a request lacking it and assert extraction fails.
     #[crate::rt_test]
     async fn test_string() {
         let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
@@ -534,6 +560,12 @@ mod tests {
         assert!(from_request::<_, String>(&(), &req, &mut pl).await.is_err());
     }
 
+    /// STATEMENT: `HttpMessageBody` validates declared lengths and limits streamed bodies.
+    ///
+    /// HOW:
+    /// - Assert malformed and oversized content lengths yield `UnknownLength` and `Overflow`.
+    /// - Read a body without a length and assert its bytes.
+    /// - Read a larger undeclared body with a five-byte limit and assert overflow.
     #[crate::rt_test]
     async fn test_message_body() {
         let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "xxxx")
@@ -570,6 +602,12 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Payload extraction rejects unknown charsets, malformed MIME types, and non-UTF-8 lengths.
+    ///
+    /// HOW:
+    /// - Check an explicit configuration limit, then assert string extraction rejects an unknown charset.
+    /// - Validate an invalid media type and assert `PayloadError::ContentType`.
+    /// - Read a non-UTF-8 length header and assert the nested `UnknownLength` error.
     #[crate::rt_test]
     async fn test_payload_errors() {
         let cfg = PayloadConfig::new(5);

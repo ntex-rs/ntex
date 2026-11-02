@@ -293,6 +293,11 @@ mod tests {
     use crate::router::ResourceDef;
     use crate::web::test::TestRequest;
 
+    /// STATEMENT: HTTP request debug formatting supports headers and queries without changing defaults.
+    ///
+    /// HOW:
+    /// - Format requests with a content-type header and a query-bearing URI.
+    /// - Assert both identify `HttpRequest`, and the latter has no peer and uses GET.
     #[test]
     fn test_debug() {
         let req = TestRequest::with_header("content-type", "text/plain").to_http_request();
@@ -306,6 +311,11 @@ mod tests {
         assert_eq!(req.method(), &Method::GET);
     }
 
+    /// STATEMENT: A request without cookie headers yields an empty cookie collection.
+    ///
+    /// HOW:
+    /// - Build the default request and parse its cookies.
+    /// - Assert parsing succeeds and the collection is empty.
     #[cfg(feature = "cookie")]
     #[test]
     fn test_no_request_cookies() {
@@ -313,6 +323,11 @@ mod tests {
         assert!(req.cookies().unwrap().is_empty());
     }
 
+    /// STATEMENT: Multiple cookie headers support ordered parsing and lookup by name.
+    ///
+    /// HOW:
+    /// - Supply two cookie headers and assert both parsed names and values in order.
+    /// - Look up the first cookie and an unknown name, asserting a matching cookie and `None`.
     #[cfg(feature = "cookie")]
     #[test]
     fn test_request_cookies() {
@@ -339,12 +354,23 @@ mod tests {
         assert!(cookie.is_none());
     }
 
+    /// STATEMENT: `query_string` exposes the URI query without the leading question mark.
+    ///
+    /// HOW:
+    /// - Build a request for `/?id=test`.
+    /// - Assert the query string is `id=test`.
     #[test]
     fn test_request_query() {
         let req = TestRequest::with_uri("/?id=test").to_http_request();
         assert_eq!(req.query_string(), "id=test");
     }
 
+    /// STATEMENT: Named URL generation substitutes parameters and reports missing resources or values.
+    ///
+    /// HOW:
+    /// - Register `/user/{name}.{ext}` and build a request with an explicit host.
+    /// - Assert unknown names and insufficient elements return their specific errors.
+    /// - Supply both elements and assert the complete absolute URL.
     #[test]
     fn test_url_for() {
         let mut res = ResourceDef::new("/user/{name}.{ext}");
@@ -374,6 +400,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Static named resources generate absolute URLs using the request host.
+    ///
+    /// HOW:
+    /// - Register `/index.html` as `index` and set the request host.
+    /// - Call `url_for_static` and assert the generated URL points to that host and resource.
     #[test]
     fn test_url_for_static() {
         let mut rdef = ResourceDef::new("/index.html");
@@ -395,6 +426,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: External named resources retain their own origin during URL generation.
+    ///
+    /// HOW:
+    /// - Register an external URL template and create a request using its resource map.
+    /// - Substitute the video ID and assert the complete external HTTPS URL.
     #[test]
     fn test_url_for_external() {
         let mut rdef = ResourceDef::new("https://youtube.com/watch/{video_id}");

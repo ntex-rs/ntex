@@ -359,6 +359,11 @@ mod tests {
         false
     }
 
+    /// STATEMENT: `Form` exposes mutable inner fields and delegates useful formatting.
+    ///
+    /// HOW:
+    /// - Wrap an `Info` value, read and change its `hello` field, and assert both values.
+    /// - Assert debug output identifies `Form` and display output includes the changed text.
     #[test]
     fn test_basic() {
         let mut f = Form(Info {
@@ -372,6 +377,11 @@ mod tests {
         assert!(format!("{f}").contains("test"));
     }
 
+    /// STATEMENT: Form extraction deserializes fields and rejects an invalid content length.
+    ///
+    /// HOW:
+    /// - Extract `Form<Info>` from a URL-encoded body and assert both fields.
+    /// - Repeat with a nonnumeric `Content-Length` and assert `UnknownLength`.
     #[crate::rt_test]
     async fn test_form() {
         let (req, mut pl, ()) =
@@ -400,6 +410,11 @@ mod tests {
         assert!(eq(&res.err().unwrap(), &UrlencodedError::UnknownLength));
     }
 
+    /// STATEMENT: URL-encoded reading rejects unknown lengths, oversized declarations, and wrong types.
+    ///
+    /// HOW:
+    /// - Construct bodies with a malformed length, a very large length, and `text/plain`.
+    /// - Assert `UnknownLength`, `Overflow`, and `ContentType` error variants, respectively.
     #[crate::rt_test]
     async fn test_urlencoded_error() {
         let (req, mut pl, ()) =
@@ -426,6 +441,11 @@ mod tests {
         assert!(eq(&info.err().unwrap(), &UrlencodedError::ContentType));
     }
 
+    /// STATEMENT: URL-encoded reading accepts mixed-case media types and supported charset parameters.
+    ///
+    /// HOW:
+    /// - Deserialize the same form with ordinary and mixed-case media types and UTF-8/CP1251 charsets.
+    /// - Assert the expected fields for the ordinary and charset cases and success for mixed case.
     #[crate::rt_test]
     async fn test_urlencoded() {
         let (req, mut pl, ()) =
@@ -485,6 +505,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Form responders serialize fields with the URL-encoded media type.
+    ///
+    /// HOW:
+    /// - Respond with `Form<Info>` containing a string and counter.
+    /// - Assert OK, `application/x-www-form-urlencoded`, and the exact encoded body.
     #[crate::rt_test]
     async fn test_responder() {
         let req = TestRequest::default().to_http_request();
@@ -503,6 +528,11 @@ mod tests {
         assert_eq!(resp.get_body_ref(), b"hello=world&counter=123");
     }
 
+    /// STATEMENT: URL-encoded reading validates charset, header encoding, and streamed size limits.
+    ///
+    /// HOW:
+    /// - Supply an unknown charset and a non-UTF-8 length header and assert their respective errors.
+    /// - Omit content length, read a body beyond a five-byte limit, and assert `Overflow`.
     #[crate::rt_test]
     async fn test_urlencoded_errors2() {
         let (req, mut pl, ()) = TestRequest::with_header(
@@ -532,6 +562,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: An unserializable form value produces an internal-server-error response.
+    ///
+    /// HOW:
+    /// - Respond with `Form(1)`, which cannot be encoded as form fields.
+    /// - Assert status `INTERNAL_SERVER_ERROR`.
     #[crate::rt_test]
     async fn test_responder_error() {
         let req = TestRequest::default().to_http_request();

@@ -483,6 +483,11 @@ mod tests {
     use crate::io::{Io, IoBoxed, testing::IoTest};
     use crate::{SharedCfg, time::sleep};
 
+    /// STATEMENT: HTTP/2 requests discard connection-specific headers and normalize the permitted trailers declaration.
+    ///
+    /// HOW:
+    /// - Combine request and extra headers containing forbidden fields, custom fields, and varied `TE` values.
+    /// - Check only custom fields and normalized `te: trailers` remain.
     #[test]
     fn test_connection_headers_are_removed() {
         let mut head = Message::<crate::http::RequestHead>::new();
@@ -521,6 +526,11 @@ mod tests {
         assert_eq!(hdrs.get(header::TE).unwrap().as_bytes(), b"trailers");
     }
 
+    /// STATEMENT: HTTP/2 client requests skip interim responses and return the final head and payload state.
+    ///
+    /// HOW:
+    /// - Inject `103` and `100` HEADERS frames followed by a final `200` with END_STREAM.
+    /// - Verify the request returns OK with no payload.
     #[crate::rt_test]
     async fn test_skip_interim_responses() {
         let (io, server) = IoTest::create();
@@ -549,5 +559,91 @@ mod tests {
         let (head, payload) = fut.await.unwrap().unwrap();
         assert_eq!(head.status, StatusCode::OK);
         assert!(matches!(payload, Payload::None));
+    }
+
+    /// STATEMENT: HTTP/2 response trailers follow the last data chunk without being discarded by the forwarding task.
+    ///
+    /// HOW:
+    /// - Open a stream on a test transport and inject a final response head, data, and trailing headers.
+    /// - Verify data precedes EOF and the trailer value becomes available afterward.
+    #[crate::rt_test]
+    async fn test_response_trailers() {
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            false,
+            ByteString::from_static("localhost"),
+        );
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        let (_, recv) = client
+            .send(Method::GET, "/".into(), HeaderMap::new(), true)
+            .await
+            .unwrap();
+        server.write([0, 0, 1, 1, 4, 0, 0, 0, 1, 0x88]);
+        let (head, mut payload) = crate::time::timeout(Millis(5_000), get_response(recv, None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(head.status, StatusCode::OK);
+        assert!(payload.trailers().is_none());
+
+        server.write([0, 0, 4, 0, 0, 0, 0, 0, 1, b'd', b'a', b't', b'a']);
+        // Literal HPACK field: x-end: done, with END_HEADERS and END_STREAM.
+        server.write([
+            0, 0, 12, 1, 5, 0, 0, 0, 1, 0, 5, b'x', b'-', b'e', b'n', b'd', 4, b'd', b'o', b'n',
+            b'e',
+        ]);
+        let data = crate::time::timeout(Millis(5_000), payload.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(data, "data");
+        assert!(
+            crate::time::timeout(Millis(5_000), payload.recv())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(payload.trailers().unwrap().get("x-end").unwrap(), "done");
+    }
+
+    /// STATEMENT: An HTTP/2 response interrupted by reset or disconnect reports a payload error rather than clean EOF.
+    ///
+    /// HOW:
+    /// - Receive a response head without END_STREAM, then reset the stream or close the peer transport.
+    /// - Bound the next payload read and verify it yields an error.
+    #[crate::rt_test]
+    async fn test_response_payload_interrupted() {
+        for reset in [false, true] {
+            let (io, server) = IoTest::create();
+            io.remote_buffer_cap(64 * 1024);
+            let client = SimpleClient::new(
+                IoBoxed::from(Io::new(io, SharedCfg::default())),
+                false,
+                ByteString::from_static("localhost"),
+            );
+            server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+            let (_, recv) = client
+                .send(Method::GET, "/".into(), HeaderMap::new(), true)
+                .await
+                .unwrap();
+            server.write([0, 0, 1, 1, 4, 0, 0, 0, 1, 0x88]);
+            let (_, mut payload) = crate::time::timeout(Millis(5_000), get_response(recv, None))
+                .await
+                .unwrap()
+                .unwrap();
+            if reset {
+                // RST_STREAM with CANCEL.
+                server.write([0, 0, 4, 3, 0, 0, 0, 0, 1, 0, 0, 0, 8]);
+            } else {
+                server.close().await;
+            }
+            let item = crate::time::timeout(Millis(5_000), payload.recv())
+                .await
+                .expect("interrupted payload stalled");
+            assert!(matches!(item, Some(Err(_))), "{item:?}");
+        }
     }
 }

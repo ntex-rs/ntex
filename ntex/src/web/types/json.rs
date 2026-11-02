@@ -420,6 +420,11 @@ mod tests {
         false
     }
 
+    /// STATEMENT: `Json` exposes mutable data and formatting, and custom configurations remain debuggable.
+    ///
+    /// HOW:
+    /// - Read and change the wrapped object's name and check debug/display output.
+    /// - Install a custom MIME predicate and assert debug output identifies `JsonConfig`.
     #[test]
     fn test_json() {
         let mut j = Json(MyObject {
@@ -437,6 +442,11 @@ mod tests {
         assert!(format!("{cfg:?}").contains("JsonConfig"));
     }
 
+    /// STATEMENT: JSON responders serialize wrapped values with the JSON content type.
+    ///
+    /// HOW:
+    /// - Respond with a named object wrapped in `Json`.
+    /// - Assert OK, `application/json`, and the exact serialized body.
     #[crate::rt_test]
     async fn test_responder() {
         let req = TestRequest::default().to_http_request();
@@ -454,6 +464,11 @@ mod tests {
         assert_eq!(resp.get_body_ref(), b"{\"name\":\"test\"}");
     }
 
+    /// STATEMENT: JSON serialization failures become internal-server-error responses.
+    ///
+    /// HOW:
+    /// - Implement a serializer that always fails and wrap its value in `Json`.
+    /// - Render it and assert `INTERNAL_SERVER_ERROR`.
     #[crate::rt_test]
     async fn test_responder_serialize_error() {
         struct Invalid;
@@ -469,6 +484,12 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    /// STATEMENT: JSON extraction returns decoded objects and reports configured size or syntax errors.
+    ///
+    /// HOW:
+    /// - Extract a valid object and assert its field and `into_inner` value.
+    /// - Set a ten-byte `JsonConfig` limit and assert the overflow error text.
+    /// - Supply malformed JSON and assert its error is a deserialization failure.
     #[crate::rt_test]
     async fn test_extract() {
         let (req, mut pl, ()) = TestRequest::default()
@@ -527,6 +548,12 @@ mod tests {
         assert!(format!("{:?}", s.err().unwrap()).contains("Deserialize(Error("));
     }
 
+    /// STATEMENT: `JsonBody` validates media types and lengths before decoding valid JSON.
+    ///
+    /// HOW:
+    /// - Check absent/wrong content types and an oversized declared length return the expected variants.
+    /// - Decode a valid object and assert its value.
+    /// - Use a malformed length and assert a nested `PayloadError::UnknownLength`.
     #[crate::rt_test]
     async fn test_json_body() {
         let (req, mut pl, ()) = TestRequest::default().to_http_parts();
@@ -603,6 +630,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Default JSON extraction rejects a plain-text media type even with valid JSON bytes.
+    ///
+    /// HOW:
+    /// - Supply valid JSON as `text/plain` with a configured size limit.
+    /// - Extract `Json<MyObject>` and assert failure.
     #[crate::rt_test]
     async fn test_with_json_and_bad_content_type() {
         let (req, mut pl, ()) = TestRequest::with_header(
@@ -621,6 +653,11 @@ mod tests {
         assert!(s.is_err());
     }
 
+    /// STATEMENT: A custom JSON content-type predicate can accept plain-text requests.
+    ///
+    /// HOW:
+    /// - Supply valid JSON as `text/plain` and configure a predicate accepting that MIME type.
+    /// - Extract `Json<MyObject>` and assert success.
     #[crate::rt_test]
     async fn test_with_json_and_good_custom_content_type() {
         let (req, mut pl, ()) = TestRequest::with_header(
@@ -641,6 +678,11 @@ mod tests {
         assert!(s.is_ok());
     }
 
+    /// STATEMENT: Custom JSON content-type predicates still reject nonmatching media types.
+    ///
+    /// HOW:
+    /// - Supply valid JSON as `text/html` while the predicate accepts only `text/plain`.
+    /// - Extract `Json<MyObject>` and assert failure.
     #[crate::rt_test]
     async fn test_with_json_and_bad_custom_content_type() {
         let (req, mut pl, ()) = TestRequest::with_header(

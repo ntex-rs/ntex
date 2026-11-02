@@ -614,6 +614,10 @@ mod tests {
     use crate::http::RequestHead;
     use crate::http::header::{AUTHORIZATION, HeaderValue};
 
+    /// STATEMENT: Chunked transfer encoding ignores empty chunks and stops accepting data after explicit EOF.
+    ///
+    /// HOW:
+    /// - Encode data, an empty chunk, more data, EOF, and late data, then compare the exact chunked wire bytes.
     #[test]
     fn test_chunked_te() {
         let mut bytes = BytePages::default();
@@ -632,6 +636,11 @@ mod tests {
         assert_eq!(data, b"4\r\ntest\r\n4\r\nline\r\n0\r\n\r\n");
     }
 
+    /// STATEMENT: Extra request headers override original values while preserving generated framing headers.
+    ///
+    /// HOW:
+    /// - Encode an empty close-delimited request with overridden authorization and an explicit date.
+    /// - Inspect authorization, date, content-length, and connection lines.
     #[test]
     fn test_extra_headers() {
         let mut bytes = BytePages::default();
@@ -663,6 +672,11 @@ mod tests {
         assert!(data.contains("date: date\r\n"));
     }
 
+    /// STATEMENT: CONNECT uses authority-form targets while ordinary requests use path-and-query targets.
+    ///
+    /// HOW:
+    /// - Encode HTTP/HTTPS, explicit/default ports, scheme-relative, and IPv6 destinations.
+    /// - Compare complete request lines, including fragment removal and default slash for GET.
     #[test]
     fn test_connect_authority_form() {
         let encode = |method: Method, uri: &str| {
@@ -703,6 +717,10 @@ mod tests {
         assert_eq!(encode(Method::GET, "//example.com"), "GET / HTTP/1.1");
     }
 
+    /// STATEMENT: Request encoding does not generate a date header.
+    ///
+    /// HOW:
+    /// - Encode a default bodyless request and check date absence and complete header termination.
     #[crate::rt_test]
     async fn test_request_without_date() {
         let mut bytes = BytePages::default();
@@ -719,6 +737,11 @@ mod tests {
         assert!(data.ends_with("\r\n\r\n"), "{data:?}");
     }
 
+    /// STATEMENT: Streaming requests require a declared length when chunking is unsupported or disabled.
+    ///
+    /// HOW:
+    /// - Encode HTTP/1.0 and HTTP/1.1 streams with chunking and length combinations.
+    /// - Compare framing headers or the expected unknown-length error.
     #[crate::rt_test]
     async fn test_request_stream_framing() {
         let encode = |version: Version, chunking: bool, cl: bool| {
@@ -767,6 +790,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Decimal length encoding preserves values across digit widths and optional line termination.
+    ///
+    /// HOW:
+    /// - Encode zero, representative widths, and the maximum integer with and without CRLF and compare text.
     #[test]
     fn test_convert_usize() {
         for n in [0, 7, 42, 999, 10_000, 123_456_789, u64::MAX] {
@@ -779,6 +806,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Chunk-size encoding uses uppercase hexadecimal followed by CRLF across width boundaries.
+    ///
+    /// HOW:
+    /// - Encode values around hexadecimal digit transitions and the maximum size, comparing complete output.
     #[test]
     fn test_write_chunk_size() {
         for n in [
@@ -805,6 +836,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Content-length formatting preserves decimal values and HTTP line boundaries.
+    ///
+    /// HOW:
+    /// - Encode lengths across one-, two-, three-, four-, and five-digit cases and compare exact header bytes.
     #[test]
     fn test_write_content_length() {
         let mut b = BytePages::default();
@@ -833,6 +868,10 @@ mod tests {
         assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 25999\r\n");
     }
 
+    /// STATEMENT: Status-line formatting supports standard and custom three-digit statuses.
+    ///
+    /// HOW:
+    /// - Encode several status classes with a supplied reason and compare the complete HTTP/1.1 line.
     #[test]
     fn test_write_status_line() {
         for n in [100, 101, 200, 204, 404, 599, 999] {
@@ -846,6 +885,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Header and status-line writes preserve data across byte-page boundaries.
+    ///
+    /// HOW:
+    /// - Vary prefilled capacity so the header ends before, on, and after a page boundary.
+    /// - Drain pages and compare both the untouched prefix and appended header/status bytes.
     #[test]
     fn test_put_header_page_boundary() {
         use crate::util::BytePageSize;

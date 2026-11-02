@@ -769,6 +769,12 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Resource fallbacks and application fallbacks handle different routing misses.
+    ///
+    /// HOW:
+    /// - Check a registered path succeeds and an unknown path defaults to 404.
+    /// - Configure application and resource defaults, then assert 405 for an unknown path,
+    ///   OK for a matching GET, and 201 for a method miss on the configured resource.
     #[crate::rt_test]
     async fn test_default_resource() {
         let srv = App::new()
@@ -817,6 +823,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
+    /// STATEMENT: Application filters execute before successful route handling.
+    ///
+    /// HOW:
+    /// - Install a filter that sets a shared flag and forwards the request.
+    /// - Call `/test` and assert an OK response and the flag being set.
     #[crate::rt_test]
     async fn test_filter() {
         let filter = Rc::new(Cell::new(false));
@@ -836,6 +847,11 @@ mod tests {
         assert!(filter.get());
     }
 
+    /// STATEMENT: Application middleware adds configured default response headers.
+    ///
+    /// HOW:
+    /// - Wrap an application route with `DefaultHeaders` specifying content type `0001`.
+    /// - Request the route and assert OK and the configured header value.
     #[crate::rt_test]
     async fn test_wrap() {
         let srv = init_service(
@@ -856,6 +872,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Middleware surrounding the application router modifies routed responses.
+    ///
+    /// HOW:
+    /// - Install `DefaultHeaders` around a router serving `/test`.
+    /// - Call the route and assert OK and the middleware's content-type header.
     #[crate::rt_test]
     async fn test_router_wrap() {
         let srv = init_service(
@@ -876,6 +897,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Case-insensitive routing accepts paths differing only in letter case.
+    ///
+    /// HOW:
+    /// - Enable `case_insensitive_routing` and register `/test`.
+    /// - Request `/test` and `/Test` and assert both responses are OK.
     #[crate::rt_test]
     async fn test_case_insensitive_router() {
         let srv = init_service(
@@ -893,6 +919,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Application configuration state is available to filters and handlers.
+    ///
+    /// HOW:
+    /// - Store `10usize` through `WebAppConfig` and read it in a filter and HTTP handler.
+    /// - Assert both reads return 10 and the request completes with OK.
     #[crate::rt_test]
     async fn test_extension() {
         let cfg = WebAppConfig::new().set_state(10usize);
@@ -916,6 +947,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Application external resources generate URLs inside request handlers.
+    ///
+    /// HOW:
+    /// - Register a named YouTube template and return `url_for` from `/test`.
+    /// - Assert OK and the complete URL containing the supplied video ID.
     #[crate::rt_test]
     async fn test_external_resource() {
         use crate::util::Bytes;
@@ -939,6 +975,11 @@ mod tests {
         assert_eq!(body, Bytes::from_static(b"https://youtube.com/watch/12345"));
     }
 
+    /// STATEMENT: Reused requests retain the resource map of the application currently serving them.
+    ///
+    /// HOW:
+    /// - Initialize two applications with the same resource name but different external origins.
+    /// - Alternate repeated calls and assert every generated URL uses that application's origin.
     #[crate::rt_test]
     async fn test_pooled_request_resource_map() {
         use crate::util::Bytes;
@@ -972,6 +1013,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `App::default` dispatches unmatched requests to its custom default service.
+    ///
+    /// HOW:
+    /// - Configure a default service returning `Created` and request `/any`.
+    /// - Assert status 201 and shut down the service.
     #[crate::rt_test]
     async fn test_app_default_service() {
         let srv =
@@ -982,6 +1028,12 @@ mod tests {
         srv.shutdown().await;
     }
 
+    /// STATEMENT: Failed lazy service initialization is retried and successful instances are cached.
+    ///
+    /// HOW:
+    /// - Register route and default factories that alternate initialization failure and success.
+    /// - Call each path three times and assert statuses 500, OK, and OK.
+    /// - Assert only four total factory attempts occurred.
     #[crate::rt_test]
     async fn test_app_service_init_errors() {
         use crate::service::{fn_factory, fn_service};
@@ -1138,6 +1190,11 @@ mod tests {
         assert_eq!((route.shutdowns.get(), default.shutdowns.get()), (1, 1));
     }
 
+    /// STATEMENT: Application filter errors become responses instead of reaching the route handler.
+    ///
+    /// HOW:
+    /// - Reject `/denied` in a filter with a permission-denied I/O error and allow other paths.
+    /// - Assert `/allowed` returns OK and `/denied` returns `FORBIDDEN`.
     #[crate::rt_test]
     async fn test_app_filter_error() {
         let srv = init_service(

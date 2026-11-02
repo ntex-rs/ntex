@@ -327,6 +327,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Frame parsing waits for payload bytes and preserves text opcode and fragmentation state.
+    ///
+    /// HOW:
+    /// - Parse an incomplete one-byte frame, append its payload, and inspect the decoded frame.
     #[test]
     fn test_parse() {
         let mut buf = BytesMut::from(&[0b0000_0001u8, 0b0000_0001u8][..]);
@@ -341,6 +345,10 @@ mod tests {
         assert_eq!(frame.payload.as_ref(), &b"1"[..]);
     }
 
+    /// STATEMENT: Empty text fragments decode without requiring payload bytes.
+    ///
+    /// HOW:
+    /// - Parse a zero-length nonfinal text frame and check opcode, finality, and empty payload.
     #[test]
     fn test_parse_length0() {
         let mut buf = BytesMut::from(&[0b0000_0001u8, 0b0000_0000u8][..]);
@@ -350,6 +358,10 @@ mod tests {
         assert!(frame.payload.is_empty());
     }
 
+    /// STATEMENT: Unnegotiated reserved frame bits are rejected.
+    ///
+    /// HOW:
+    /// - Set each reserved bit and their combination on a text frame and inspect the reserved-bits error.
     #[test]
     fn test_reserved_bits() {
         for reserved in [0x10, 0x20, 0x40, 0x70] {
@@ -361,6 +373,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Control frames cannot be fragmented or exceed their payload limit.
+    ///
+    /// HOW:
+    /// - Parse a nonfinal ping and an oversized close header and compare specific protocol errors.
     #[test]
     fn test_invalid_control_frames() {
         let mut fragmented = BytesMut::from(&[0x09, 0][..]);
@@ -376,6 +392,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Two-byte extended frame lengths wait for complete input and decode the declared payload.
+    ///
+    /// HOW:
+    /// - Parse an incomplete extended header, then supply a 126-byte text payload and inspect the frame.
     #[test]
     fn test_parse_length2() {
         let mut buf = BytesMut::from(&[0b0000_0001u8, 126u8][..]);
@@ -391,6 +411,10 @@ mod tests {
         assert_eq!(frame.payload.len(), 126);
     }
 
+    /// STATEMENT: Eight-byte extended frame lengths support payloads at the 64 KiB boundary.
+    ///
+    /// HOW:
+    /// - Check incomplete-length input returns no frame, then decode a complete 65,536-byte text fragment.
     #[test]
     fn test_parse_length4() {
         let mut buf = BytesMut::from(&[0b0000_0001u8, 127u8][..]);
@@ -406,6 +430,10 @@ mod tests {
         assert_eq!(frame.payload.len(), 65_536);
     }
 
+    /// STATEMENT: Frame length encodings must use the shortest legal representation and keep the high bit clear.
+    ///
+    /// HOW:
+    /// - Parse overlong short/medium lengths and a high-bit-set length and expect invalid-length-encoding errors.
     #[test]
     fn test_noncanonical_lengths() {
         let mut short = BytesMut::from(&[0x82, 126, 0, 125][..]);
@@ -427,6 +455,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Masked frames are accepted only from clients and their payload is unmasked correctly.
+    ///
+    /// HOW:
+    /// - Reject a masked frame in client mode, then parse the unchanged buffer in server mode and inspect payload metadata.
     #[test]
     fn test_parse_frame_mask() {
         let mut buf = BytesMut::from(&[0b0000_0001u8, 0b1000_0001u8][..]);
@@ -441,6 +473,10 @@ mod tests {
         assert_eq!(frame.payload, Bytes::from(vec![1u8]));
     }
 
+    /// STATEMENT: Unmasked frames are accepted only from servers.
+    ///
+    /// HOW:
+    /// - Reject an unmasked frame in server mode, then decode it in client mode and compare the text fragment.
     #[test]
     fn test_parse_frame_no_mask() {
         let mut buf = BytesMut::from(&[0b0000_0001u8, 0b0000_0001u8][..]);
@@ -454,6 +490,10 @@ mod tests {
         assert_eq!(frame.payload, Bytes::from(vec![1u8]));
     }
 
+    /// STATEMENT: Frame parsing rejects invalid masking and payload lengths above the configured maximum.
+    ///
+    /// HOW:
+    /// - Parse an unmasked payload under server rules, then enforce a zero-size client limit and inspect overflow.
     #[test]
     fn test_parse_frame_max_size() {
         let mut buf = BytesMut::from(&[0b0000_0001u8, 0b0000_0010u8][..]);
@@ -467,6 +507,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Masked frame generation round-trips data and varies generated masking keys.
+    ///
+    /// HOW:
+    /// - Encode and decode the same binary payload several times, checking finality, opcode, and bytes.
+    /// - Compare captured mask keys and verify they are not all identical.
     #[test]
     fn test_masked_frames_roundtrip_with_distinct_masks() {
         let mut masks = Vec::new();
@@ -486,6 +531,10 @@ mod tests {
         assert!(masks.len() > 1);
     }
 
+    /// STATEMENT: Ping encoding produces the final control opcode and exact payload length.
+    ///
+    /// HOW:
+    /// - Encode an unmasked ping and compare its entire wire frame.
     #[test]
     fn test_ping_frame() {
         let mut buf = BytePages::default();
@@ -496,6 +545,10 @@ mod tests {
         assert_eq!(&Bytes::from(buf)[..], &v[..]);
     }
 
+    /// STATEMENT: Pong encoding produces the final control opcode and exact payload length.
+    ///
+    /// HOW:
+    /// - Encode an unmasked pong and compare its entire wire frame.
     #[test]
     fn test_pong_frame() {
         let mut buf = BytePages::default();
@@ -506,6 +559,10 @@ mod tests {
         assert_eq!(&Bytes::from(buf)[..], &v[..]);
     }
 
+    /// STATEMENT: Close encoding includes a network-order status code followed by the reason text.
+    ///
+    /// HOW:
+    /// - Encode a normal close with a description and compare all header and payload bytes.
     #[test]
     fn test_close_frame() {
         let mut buf = BytePages::default();
@@ -517,6 +574,10 @@ mod tests {
         assert_eq!(&Bytes::from(buf)[..], &v[..]);
     }
 
+    /// STATEMENT: A close without a reason encodes as an empty final control frame.
+    ///
+    /// HOW:
+    /// - Encode a reasonless close and compare its two wire bytes.
     #[test]
     fn test_empty_close_frame() {
         let mut buf = BytePages::default();
@@ -524,6 +585,11 @@ mod tests {
         assert_eq!(&Bytes::from(buf)[..], &[0x88, 0x00]);
     }
 
+    /// STATEMENT: Close parsing and control-frame encoding reject malformed payloads, invalid codes, and illegal framing.
+    ///
+    /// HOW:
+    /// - Reject one-byte close data, reserved status, invalid UTF-8, oversized ping, and fragmented pong.
+    /// - Reject invalid/server-forbidden close codes and a reason exceeding the control payload limit.
     #[test]
     fn test_close_validation() {
         assert!(matches!(
@@ -589,6 +655,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Frame parsing handles extended-length overflow, partial masks, and optional close reasons.
+    ///
+    /// HOW:
+    /// - Reject a length above the configured maximum and wait on an incomplete mask key.
+    /// - Parse empty and populated close payloads and compare reason fields.
     #[test]
     fn test_parse_edge_cases() {
         // 64-bit length over the max size
@@ -610,6 +681,10 @@ mod tests {
         assert_eq!(reason.description.as_deref(), Some("ok"));
     }
 
+    /// STATEMENT: Large binary frames use extended length encoding without altering payload bytes.
+    ///
+    /// HOW:
+    /// - Encode a 70,000-byte frame, inspect its length discriminator, and decode it back to the original payload.
     #[test]
     fn test_large_frame_roundtrip() {
         let payload = Bytes::from(vec![7u8; 70_000]);

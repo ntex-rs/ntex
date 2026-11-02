@@ -87,6 +87,10 @@ mod tests {
     use crate::http::body::Body;
     use crate::http::response::Response;
 
+    /// STATEMENT: The OK response convenience builder produces an OK response.
+    ///
+    /// HOW:
+    /// - Build an empty response through `Response::Ok` and check its status.
     #[test]
     fn test_build() {
         let resp = Response::Ok().body(Body::Empty);

@@ -121,6 +121,10 @@ impl Stream for Payload {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Payload debug output identifies storage variants without increasing optional-payload layout size.
+    ///
+    /// HOW:
+    /// - Format absent, HTTP/1, and boxed-stream payloads and compare payload and optional-payload sizes.
     #[test]
     fn payload_debug() {
         assert!(format!("{:?}", Payload::None).contains("Payload::None"));
@@ -145,6 +149,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Payload conversions preserve stream delivery, EOF, and ownership-taking semantics.
+    ///
+    /// HOW:
+    /// - Convert HTTP/1 and boxed receivers, feed data or EOF, and inspect items and absent trailers.
+    /// - Take a stream payload and verify its original slot becomes empty.
     #[crate::rt_test]
     async fn payload_conversions() {
         use crate::http::h1;

@@ -301,6 +301,10 @@ impl ErrorDiagnostic for ClientError {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Invalid connection input retains its classification through conversion and cloning.
+    ///
+    /// HOW:
+    /// - Convert the base invalid-input error and check its variant, signature, and cloned variant.
     #[test]
     fn connect_error_from() {
         let err = ConnectError::from(crate::connect::ConnectError::InvalidInput);
@@ -309,6 +313,10 @@ mod tests {
         assert!(matches!(err.clone(), ConnectError::InvalidInput));
     }
 
+    /// STATEMENT: Client connection errors preserve their classifications and useful details when cloned.
+    ///
+    /// HOW:
+    /// - Convert resolver, address, and I/O errors; compare signatures and inspect cloned disconnection details.
     #[test]
     fn connect_error_conversions() {
         use crate::connect::ConnectError as Base;
@@ -346,6 +354,11 @@ mod tests {
         assert!(e.to_string().contains("gone"), "{e}");
     }
 
+    /// STATEMENT: Client error conversions and clones preserve signatures and relevant underlying error details.
+    ///
+    /// HOW:
+    /// - Exercise URL, connection, codec, HTTP, timeout, generic, and HTTP/2 errors and compare clones.
+    /// - Check read/write I/O conversions retain their kind and message within the send-error variant.
     #[test]
     fn client_error_clone_and_signature() {
         let errs = [
@@ -413,6 +426,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Payload errors retain their classification while non-cloneable JSON details are omitted on clone.
+    ///
+    /// HOW:
+    /// - Convert payload and JSON errors, compare signatures, and inspect cloned deserialize and payload variants.
     #[test]
     fn payload_errors() {
         let err = ClientPayloadError::from(PayloadError::Overflow);

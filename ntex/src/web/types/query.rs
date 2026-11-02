@@ -161,6 +161,11 @@ mod tests {
         id: String,
     }
 
+    /// STATEMENT: Direct query parsing requires fields and exposes mutable, formatted decoded values.
+    ///
+    /// HOW:
+    /// - Parse requests without and with `id=test`, asserting failure and the decoded ID.
+    /// - Assert display/debug text, mutate the ID, and check `into_inner` retains the change.
     #[crate::rt_test]
     async fn test_service_request_extract() {
         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
@@ -177,6 +182,11 @@ mod tests {
         assert_eq!(s.id, "test1");
     }
 
+    /// STATEMENT: Query extraction rejects missing fields and returns an accessible mutable value.
+    ///
+    /// HOW:
+    /// - Extract `Query<Id>` without and with the required query parameter.
+    /// - Assert failure or the decoded ID, check formatting, then mutate and unwrap the value.
     #[crate::rt_test]
     async fn test_request_extract() {
         let req = TestRequest::with_uri("/name/user1/").to_srv_request();

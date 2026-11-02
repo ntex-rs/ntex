@@ -25,6 +25,11 @@ async fn ws_service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>,
     Ok(Some(msg))
 }
 
+/// STATEMENT: The WebSocket client exchanges data and control frames through a dispatcher-backed server.
+///
+/// HOW:
+/// - Upgrade into an echo dispatcher and send text, binary, ping, and Normal close messages.
+/// - Assert matching text/binary echoes, a pong, and the Normal close reply.
 #[ntex::test]
 async fn test_simple() {
     let srv = test_server(async |_| {
@@ -85,6 +90,11 @@ async fn test_simple() {
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Normal.into())));
 }
 
+/// STATEMENT: A client WebSocket transport exposes echoed binary messages as bytes.
+///
+/// HOW:
+/// - Connect to an echo dispatcher and convert the connection with `into_transport`.
+/// - Send `text` using `BytesCodec` and assert the received bytes match.
 #[ntex::test]
 async fn test_transport() {
     let srv = test_server(async |_| {
@@ -125,6 +135,11 @@ async fn test_transport() {
     assert_eq!(item, Bytes::from_static(b"text"));
 }
 
+/// STATEMENT: An idle WebSocket connection closes after the server's keepalive timeout.
+///
+/// HOW:
+/// - Set the upgraded server I/O keepalive to one second and connect with a sink and receiver.
+/// - Verify a binary echo, then assert the next receive returns `None` without more traffic.
 #[ntex::test]
 async fn test_keepalive_timeout() {
     let srv = test_server(async |_| {
@@ -187,6 +202,11 @@ async fn test_keepalive_timeout() {
     assert!(item.is_none());
 }
 
+/// STATEMENT: A WebSocket handshake can complete after the web handler yields.
+///
+/// HOW:
+/// - Have a web route await a zero-duration sleep before calling `web::ws::start`.
+/// - Connect with a one-second handshake timeout and require successful negotiation.
 #[ntex::test]
 async fn test_upgrade_handler_with_await() {
     async fn ws_service(_: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
@@ -214,6 +234,11 @@ async fn test_upgrade_handler_with_await() {
     .unwrap();
 }
 
+/// STATEMENT: Dropping an idle WebSocket receiver initiates a Normal closing handshake.
+///
+/// HOW:
+/// - Connect to a server recording close frames, retain the sink, and confirm its I/O is active.
+/// - Drop the receiver, await disconnect within three seconds, and assert the peer received a Normal close.
 #[ntex::test]
 async fn test_receiver_drop_closes_connection() {
     let (closed_tx, closed_rx) = std::sync::mpsc::channel();
@@ -335,6 +360,11 @@ async fn close_handshake_client(
     .seal()
 }
 
+/// STATEMENT: A WebSocket receiver answers a peer-initiated close exactly once with the same code.
+///
+/// HOW:
+/// - Use `close_handshake_server(true)` to send an Away close first.
+/// - Assert the receiver yields that close then EOF, and the server records exactly one echoed Away close.
 #[ntex::test]
 async fn test_receiver_answers_peer_close() {
     let (srv, frames) = close_handshake_server(true);
@@ -353,6 +383,11 @@ async fn test_receiver_answers_peer_close() {
     );
 }
 
+/// STATEMENT: A WebSocket receiver does not answer the peer's reply to a locally initiated close.
+///
+/// HOW:
+/// - Send a Normal close to `close_handshake_server(false)` and receive its empty close reply.
+/// - Assert the receiver ends and the server recorded only the original Normal close, with no extra reply.
 #[ntex::test]
 async fn test_receiver_does_not_answer_close_reply() {
     let (srv, frames) = close_handshake_server(false);
@@ -376,6 +411,11 @@ async fn test_receiver_does_not_answer_close_reply() {
     );
 }
 
+/// STATEMENT: WebSocket handshake failures retain the configured service identity.
+///
+/// HOW:
+/// - Return a regular OK response to an upgrade request using configuration tagged `ws-client-svc`.
+/// - Assert `WsClientError::InvalidResponseStatus` and the diagnostic's matching service name.
 #[ntex::test]
 async fn test_handshake_error_has_service() {
     use ntex::error::ErrorDiagnostic;
@@ -397,6 +437,11 @@ async fn test_handshake_error_has_service() {
     assert_eq!(err.service(), Some("ws-client-svc"));
 }
 
+/// STATEMENT: The WebSocket `Host` header contains only the authority without user information.
+///
+/// HOW:
+/// - Capture the upgrade request's `HOST` header while connecting with a URL containing user information and an explicit socket address.
+/// - Require successful negotiation and assert the captured header equals the socket address string.
 #[ntex::test]
 async fn test_host_header_excludes_userinfo() {
     let (host_tx, host_rx) = std::sync::mpsc::channel();
@@ -436,6 +481,11 @@ async fn test_host_header_excludes_userinfo() {
     assert_eq!(host, addr.to_string().as_str());
 }
 
+/// STATEMENT: A client WebSocket protocol error sends a Protocol close and exhausts the receiver.
+///
+/// HOW:
+/// - After upgrading, have the server send a raw frame with a reserved opcode.
+/// - Assert a protocol error followed by EOF and exactly one Protocol close recorded by the server.
 #[ntex::test]
 async fn test_protocol_error_sends_close() {
     let (frames_tx, frames_rx) = std::sync::mpsc::channel();

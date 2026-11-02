@@ -89,6 +89,10 @@ pub(crate) fn push_cookie(buf: &mut Vec<u8>, name: &str, value: &str) {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Body extraction copies only when retaining the buffer would waste excessive capacity.
+    ///
+    /// HOW:
+    /// - Extract nearly-full and half-full buffers and compare bytes, pointer reuse, and emptied source buffers.
     #[test]
     fn trimmed() {
         let mut buf = BytesMut::with_capacity(1024);
@@ -108,6 +112,10 @@ mod tests {
         assert!(buf.is_empty());
     }
 
+    /// STATEMENT: Direct JSON body serialization matches string serialization and stores small results inline.
+    ///
+    /// HOW:
+    /// - Serialize small and large collections, a map, and an empty string, then compare bytes and inline storage.
     #[test]
     fn json_body_matches_to_string() {
         let small = vec![1, 2, 3];
@@ -132,6 +140,10 @@ mod tests {
         assert!(json_body(&small).unwrap().is_inline());
     }
 
+    /// STATEMENT: Direct JSON body serialization propagates unsupported map-key errors.
+    ///
+    /// HOW:
+    /// - Serialize a map with a vector key and verify serialization fails.
     #[test]
     fn json_body_error() {
         let mut map = std::collections::HashMap::new();

@@ -108,6 +108,10 @@ mod tests {
     use super::*;
     use crate::http::header;
 
+    /// STATEMENT: Test response construction preserves protocol version and configured headers.
+    ///
+    /// HOW:
+    /// - Build an HTTP/2 response with a date header and an optional cookie, then inspect its version and headers.
     #[crate::rt_test]
     async fn test_basics() {
         let res = {
@@ -133,6 +137,10 @@ mod tests {
         assert_eq!(res.version(), Version::HTTP_2);
     }
 
+    /// STATEMENT: Test responses emit separate encoded cookie headers and preserve cookie attributes.
+    ///
+    /// HOW:
+    /// - Build two cookies including a space-containing value and a path, then decode and compare both cookies.
     #[cfg(feature = "cookie")]
     #[crate::rt_test]
     async fn test_cookies() {

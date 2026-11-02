@@ -265,6 +265,10 @@ mod tests {
         assert!(io.is_closed());
     }
 
+    /// STATEMENT: Invalid client framing closes the WebSocket byte transport with a protocol error.
+    ///
+    /// HOW:
+    /// - Inject an unmasked binary frame and verify invalid-data receive failure, a protocol close frame, and closed transport.
     #[crate::rt_test]
     async fn invalid_frame_sends_protocol_close() {
         // an unmasked frame from a client
@@ -273,6 +277,10 @@ mod tests {
         error_sends_close(client, Io::from(server), input, CloseCode::Protocol).await;
     }
 
+    /// STATEMENT: Protocol-error close frames propagate through an inner transport filter.
+    ///
+    /// HOW:
+    /// - Inject an unmasked frame through a passthrough filter and check receive failure, close code, and shutdown.
     #[crate::rt_test]
     async fn invalid_frame_sends_protocol_close_over_inner_filter() {
         let (client, server) = IoTest::create();
@@ -281,6 +289,10 @@ mod tests {
         error_sends_close(client, io, input, CloseCode::Protocol).await;
     }
 
+    /// STATEMENT: The binary-only WebSocket transport rejects text with an unsupported-data close.
+    ///
+    /// HOW:
+    /// - Send a valid masked text frame and verify invalid-data failure and the emitted unsupported close code.
     #[crate::rt_test]
     async fn text_frame_sends_unsupported_close() {
         let (client, server) = IoTest::create();
@@ -307,18 +319,30 @@ mod tests {
         assert!(done.get());
     }
 
+    /// STATEMENT: Transport shutdown sends close and waits for the peer's close reply.
+    ///
+    /// HOW:
+    /// - Start shutdown, verify a normal close and incomplete shutdown, then send the peer reply and observe completion.
     #[crate::rt_test]
     async fn shutdown_waits_for_close_reply() {
         let (client, server) = IoTest::create();
         shutdown_waits_for_peer_close(client, Io::from(server)).await;
     }
 
+    /// STATEMENT: Filtered WebSocket transports retain the close-reply handshake during shutdown.
+    ///
+    /// HOW:
+    /// - Start shutdown over a passthrough filter, inspect the close frame, and verify completion only after a peer reply.
     #[crate::rt_test]
     async fn shutdown_waits_for_close_reply_over_inner_filter() {
         let (client, server) = IoTest::create();
         shutdown_waits_for_peer_close(client, Io::from(server).add_filter(Passthrough)).await;
     }
 
+    /// STATEMENT: Peer read EOF releases WebSocket shutdown even without a close reply.
+    ///
+    /// HOW:
+    /// - Begin shutdown, verify it is waiting after sending close, then close the peer and observe completion.
     #[crate::rt_test]
     async fn shutdown_completes_on_read_eof() {
         let (client, server) = IoTest::create();
@@ -346,6 +370,10 @@ mod tests {
         assert!(io.is_closed());
     }
 
+    /// STATEMENT: Peer close reasons are echoed except the client-only extension code, which becomes normal closure.
+    ///
+    /// HOW:
+    /// - Send away, empty, and extension close frames and inspect response codes, receive EOF, and closed state.
     #[crate::rt_test]
     async fn peer_close_code_is_echoed() {
         peer_close_is_echoed(Some(CloseCode::Away), Some(CloseCode::Away)).await;
@@ -364,6 +392,11 @@ mod tests {
         Bytes::from(dst)
     }
 
+    /// STATEMENT: WebSocket byte transport forwards binary fragments, ignores pong, answers ping, and frames outbound bytes.
+    ///
+    /// HOW:
+    /// - Send interleaved binary fragments and controls and compare the assembled byte stream and automatic pong.
+    /// - Send outbound bytes and decode the peer's binary frame.
     #[crate::rt_test]
     async fn binary_frames_are_forwarded() {
         let (client, server) = IoTest::create();
@@ -407,6 +440,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Starting a fragmented text message is unsupported by the binary WebSocket transport.
+    ///
+    /// HOW:
+    /// - Send an initial text fragment and verify invalid-data failure, unsupported close code, and shutdown.
     #[crate::rt_test]
     async fn text_continuation_sends_unsupported_close() {
         let (client, server) = IoTest::create();

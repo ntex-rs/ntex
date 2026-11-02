@@ -171,6 +171,11 @@ mod tests {
     use super::*;
     use crate::web::test::TestRequest;
 
+    /// STATEMENT: Connection information uses defaults and supported forwarding headers.
+    ///
+    /// HOW:
+    /// - Build requests with no headers, `Forwarded`, `Host`, and each `X-Forwarded-*` header.
+    /// - Assert the expected scheme, host, and optional remote address for each source.
     #[test]
     fn test_forwarded() {
         let req = TestRequest::default().to_http_request();
@@ -219,6 +224,11 @@ mod tests {
         assert_eq!(info.scheme(), "https");
     }
 
+    /// STATEMENT: Forwarded connection information retains the first recognized values.
+    ///
+    /// HOW:
+    /// - Supply multiple `for`, `host`, and `proto` values plus ignored items.
+    /// - Assert the first remote address, host, and scheme are selected.
     #[test]
     fn test_forwarded_ignored_items() {
         let req = TestRequest::default()
@@ -233,6 +243,12 @@ mod tests {
         assert_eq!(info.scheme(), "https");
     }
 
+    /// STATEMENT: Host selection respects absolute targets and skips invalid authority values.
+    ///
+    /// HOW:
+    /// - Combine an absolute target containing userinfo with a conflicting `Host` header.
+    /// - Assert the target authority wins without userinfo, then check invalid forwarded hosts
+    ///   fall back to `Host` or the configured default.
     #[test]
     fn test_host_sources() {
         // absolute-form target takes precedence over `Host`, userinfo is dropped
@@ -256,6 +272,11 @@ mod tests {
         assert_eq!(req.connection_info().host(), "localhost:8080");
     }
 
+    /// STATEMENT: Secure application configuration determines the default connection scheme.
+    ///
+    /// HOW:
+    /// - Create `ConnectionInfo` for the same request with secure and ordinary configurations.
+    /// - Assert their schemes are `https` and `http`, respectively.
     #[test]
     fn test_secure_config() {
         let req = TestRequest::default().to_http_request();
@@ -266,6 +287,11 @@ mod tests {
         assert_eq!(info.scheme(), "http");
     }
 
+    /// STATEMENT: A forwarded remote address takes precedence over the transport peer address.
+    ///
+    /// HOW:
+    /// - Build requests with a peer address, with and without `X-Forwarded-For`.
+    /// - Assert the remote value is the peer socket first and the forwarded address second.
     #[crate::rt_test]
     async fn test_peer_addr() {
         let req = TestRequest::default()

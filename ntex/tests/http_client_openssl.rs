@@ -32,6 +32,11 @@ fn ssl_acceptor() -> SslAcceptor {
     builder.build()
 }
 
+/// STATEMENT: The OpenSSL HTTP client reuses one negotiated HTTP/2 connection.
+///
+/// HOW:
+/// - Count accepted connections and configure the client to offer HTTP/2 and HTTP/1.1 over TLS.
+/// - Send GET then POST, assert successful statuses and HTTP/2 on the latter, and assert one accepted connection.
 #[ntex::test]
 async fn test_connection_reuse_h2() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -77,6 +82,11 @@ async fn test_connection_reuse_h2() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
+/// STATEMENT: An HTTP/2 stream limit remains occupied until the response payload completes.
+///
+/// HOW:
+/// - Limit connections and streams to one and obtain a response whose body is delayed 500 ms.
+/// - Time a second request, require at least 300 ms of waiting and success, verify the first body, and assert one connection.
 #[ntex::test]
 async fn test_h2_stream_limit_waits_for_payload() {
     use ntex::client::ClientConfig;
@@ -136,6 +146,11 @@ async fn test_h2_stream_limit_waits_for_payload() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
+/// STATEMENT: An HTTP/2 connection is not idle while an upload outlives its response.
+///
+/// HOW:
+/// - Configure one-second keepalive, stream ten delayed request chunks, and let the server drain them after responding `ok`.
+/// - Verify HTTP/2 and the response body, wait 1.5 seconds, then assert another request succeeds on the same connection.
 #[ntex::test]
 async fn test_h2_keepalive_waits_for_request_body() {
     use ntex::client::ClientConfig;
@@ -195,6 +210,11 @@ async fn test_h2_keepalive_waits_for_request_body() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
+/// STATEMENT: An HTTP/2 server's unread-body reset stops a still-producing client upload.
+///
+/// HOW:
+/// - Send a guarded stream of delayed chunks to a handler responding immediately without consuming its body.
+/// - Assert the HTTP/2 `ok` response and require the upload's drop guard to fire within one second.
 #[ntex::test]
 async fn test_h2_unread_request_body_is_reset() {
     use std::sync::atomic::AtomicBool;
@@ -252,6 +272,11 @@ async fn test_h2_unread_request_body_is_reset() {
     .expect("request body upload is not stopped");
 }
 
+/// STATEMENT: An HTTP/2 reset drops a client upload even when its source is permanently pending.
+///
+/// HOW:
+/// - Send a guarded stream yielding one chunk and then waiting forever to a handler that ignores its request body.
+/// - Assert the HTTP/2 `ok` response and require the stalled upload's drop guard within one second.
 #[ntex::test]
 async fn test_h2_stalled_request_body_is_dropped_on_reset() {
     use std::sync::atomic::AtomicBool;
@@ -308,6 +333,11 @@ async fn test_h2_stalled_request_body_is_dropped_on_reset() {
     .expect("stalled request body upload is not dropped");
 }
 
+/// STATEMENT: Dropping a server request payload after responding stops the client's ongoing upload.
+///
+/// HOW:
+/// - Have the handler move its payload into a task that reads only one chunk, then immediately return `ok`.
+/// - Send a guarded delayed stream, verify the HTTP/2 response, and require the upload guard to drop within one second.
 #[ntex::test]
 async fn test_h2_request_body_dropped_after_response_is_reset() {
     use std::sync::atomic::AtomicBool;

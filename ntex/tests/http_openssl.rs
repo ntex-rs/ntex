@@ -59,6 +59,11 @@ fn ssl_acceptor() -> SslAcceptor {
     builder.build()
 }
 
+/// STATEMENT: An HTTP/2-only service accepts secure GET requests through OpenSSL.
+///
+/// HOW:
+/// - Start a TLS-wrapped `HttpService::h2` and send a secure GET.
+/// - Assert the response status is successful.
 #[ntex::test]
 async fn test_h2() -> io::Result<()> {
     let srv = test_server(async move |_| {
@@ -73,6 +78,11 @@ async fn test_h2() -> io::Result<()> {
     Ok(())
 }
 
+/// STATEMENT: HTTP/2 expect control can acknowledge or reject a request through OpenSSL.
+///
+/// HOW:
+/// - Count control messages and echo a POST carrying `EXPECT: 100-continue`; assert HTTP/2, success, the echoed body, and a control invocation.
+/// - Send another expect request to `/reject` and assert `EXPECTATION_FAILED`.
 #[ntex::test]
 async fn test_h2_control() -> io::Result<()> {
     let num = Arc::new(AtomicUsize::new(0));
@@ -123,6 +133,11 @@ async fn test_h2_control() -> io::Result<()> {
     Ok(())
 }
 
+/// STATEMENT: An HTTP/1-only service accepts secure GET requests through OpenSSL.
+///
+/// HOW:
+/// - Start a TLS-wrapped `HttpService::h1` and send a secure GET.
+/// - Assert the response status is successful.
 #[ntex::test]
 async fn test_h1() -> io::Result<()> {
     let srv = test_server(async move |_| {
@@ -145,6 +160,11 @@ async fn test_h1() -> io::Result<()> {
     Ok(())
 }
 
+/// STATEMENT: Pooled HTTP/2 request headers do not leak between requests through OpenSSL.
+///
+/// HOW:
+/// - Repeatedly send headers `x-a` and `x-b`, then a separate request with only `x-c`.
+/// - Assert HTTP/2 on the first response and each echoed header list contains only its own request's headers.
 #[ntex::test]
 async fn test_h2_request_headers_not_shared() -> io::Result<()> {
     let srv = test_server(async move |_| {
@@ -186,6 +206,11 @@ async fn test_h2_request_headers_not_shared() -> io::Result<()> {
     Ok(())
 }
 
+/// STATEMENT: The combined HTTP service dispatches negotiated HTTP/2 requests with peer metadata through OpenSSL.
+///
+/// HOW:
+/// - Start `HttpService::new` over TLS and send secure GET.
+/// - Assert the handler sees a peer address and `Version::HTTP_2`, and the response succeeds.
 #[ntex::test]
 async fn test_h2_1() -> io::Result<()> {
     let srv = test_server(async move |_| {
@@ -204,6 +229,11 @@ async fn test_h2_1() -> io::Result<()> {
     Ok(())
 }
 
+/// STATEMENT: A large HTTP/2 request payload survives an echo round trip through OpenSSL.
+///
+/// HOW:
+/// - Send `HELLOWORLD` repeated 65,536 times to a handler collecting `Request::take_payload`.
+/// - Assert success and a response body byte-for-byte equal to the sent data.
 #[ntex::test]
 async fn test_h2_body() -> io::Result<()> {
     let data = "HELLOWORLD".to_owned().repeat(64 * 1024);
@@ -231,6 +261,11 @@ async fn test_h2_body() -> io::Result<()> {
     Ok(())
 }
 
+/// STATEMENT: HTTP/2 content-length headers respect bodyless and empty-body statuses through OpenSSL.
+///
+/// HOW:
+/// - Return 204, 200, or 404 based on the request path.
+/// - Assert 204 GET and HEAD omit `content-length`, while empty 200 and 404 GET responses advertise `0`.
 #[ntex::test]
 async fn test_h2_content_length() {
     let srv = test_server(async move |_| {
@@ -274,6 +309,11 @@ async fn test_h2_content_length() {
     }
 }
 
+/// STATEMENT: A large HTTP/2 response header block does not corrupt its body through OpenSSL.
+///
+/// HOW:
+/// - Return 90 long custom headers alongside `STR.repeat(10)`.
+/// - Assert success and the complete response body matches the original data.
 #[ntex::test]
 async fn test_h2_headers() {
     let data = STR.repeat(10);
@@ -338,6 +378,11 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World";
 
+/// STATEMENT: An HTTP/2 fixed response body is delivered intact through OpenSSL.
+///
+/// HOW:
+/// - Serve `STR` from an HTTP/2-only service and send secure GET.
+/// - Assert success and the collected body equals `STR`.
 #[ntex::test]
 async fn test_h2_body2() {
     let srv = test_server(async move |_| {
@@ -355,6 +400,11 @@ async fn test_h2_body2() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: HTTP/2 HEAD advertises the response size but sends no payload through OpenSSL.
+///
+/// HOW:
+/// - Serve `STR` and send HEAD.
+/// - Assert success, `Version::HTTP_2`, `CONTENT_LENGTH` equal to `STR.len()`, and an empty received body.
 #[ntex::test]
 async fn test_h2_head_empty() {
     let srv = test_server(async move |_| {
@@ -378,6 +428,11 @@ async fn test_h2_head_empty() {
     assert!(bytes.is_empty());
 }
 
+/// STATEMENT: HTTP/2 HEAD preserves explicit body length without sending the payload through OpenSSL.
+///
+/// HOW:
+/// - Serve `STR` with explicit `content_length` and send HEAD.
+/// - Assert success, the expected `CONTENT_LENGTH`, and an empty received body.
 #[ntex::test]
 async fn test_h2_head_binary() {
     let srv = test_server(async move |_| {
@@ -402,7 +457,11 @@ async fn test_h2_head_binary() {
     assert!(bytes.is_empty());
 }
 
-/// Server must send content-length, but no payload
+/// STATEMENT: HTTP/2 HEAD derives content length from a fixed body through OpenSSL.
+///
+/// HOW:
+/// - Serve `STR` without explicitly setting its length and send HEAD.
+/// - Assert success and `CONTENT_LENGTH` equal to `STR.len()`.
 #[ntex::test]
 async fn test_h2_head_binary2() {
     let srv = test_server(async move |_| {
@@ -421,6 +480,11 @@ async fn test_h2_head_binary2() {
     }
 }
 
+/// STATEMENT: A sized streaming HTTP/2 response delivers its complete payload through OpenSSL.
+///
+/// HOW:
+/// - Wrap a one-chunk `STR` stream in `SizedStream` using its known length.
+/// - Send secure GET, assert success, and compare the collected body with `STR`.
 #[ntex::test]
 async fn test_h2_body_length() {
     let srv = test_server(async move |_| {
@@ -443,6 +507,11 @@ async fn test_h2_body_length() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: HTTP/2 strips HTTP/1 chunked transfer encoding while delivering a streaming body through OpenSSL.
+///
+/// HOW:
+/// - Return a one-chunk `STR` stream with an explicit `TRANSFER_ENCODING: chunked` header.
+/// - Assert success, absence of the transfer-encoding header, and the original response bytes.
 #[ntex::test]
 async fn test_h2_body_chunked_explicit() {
     let srv = test_server(async move |_| {
@@ -470,6 +539,11 @@ async fn test_h2_body_chunked_explicit() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Invalid response headers become an HTTP/2 error response through OpenSSL.
+///
+/// HOW:
+/// - Build a response containing NUL bytes in `CONTENT_TYPE`.
+/// - Assert status 500 and the body `Invalid HTTP header value`.
 #[ntex::test]
 async fn test_h2_response_http_error_handling() {
     let srv = test_server(async move |_| {
@@ -494,6 +568,11 @@ async fn test_h2_response_http_error_handling() {
     assert_eq!(bytes, Bytes::from_static(b"Invalid HTTP header value"));
 }
 
+/// STATEMENT: A service error becomes its configured HTTP/2 status and body through OpenSSL.
+///
+/// HOW:
+/// - Return `InternalError` containing `error` and `StatusCode::BAD_REQUEST`.
+/// - Assert status 400 and the exact `error` response body.
 #[ntex::test]
 async fn test_h2_service_error() {
     let srv = test_server(async move |_| {
@@ -522,6 +601,11 @@ impl Drop for SetOnDrop {
     }
 }
 
+/// STATEMENT: Dropping an in-flight HTTP/2 request cancels its server handler through OpenSSL.
+///
+/// HOW:
+/// - Run a long-sleeping handler with a `SetOnDrop` guard, wait for its started flag, and drop the request via `select`.
+/// - Assert the started branch wins and the handler's drop counter becomes exactly `1`.
 #[ntex::test]
 async fn test_h2_client_drop() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
@@ -567,6 +651,11 @@ async fn test_h2_client_drop() -> io::Result<()> {
     Ok(())
 }
 
+/// STATEMENT: An incomplete OpenSSL TLS handshake closes without application response bytes.
+///
+/// HOW:
+/// - Configure a one-second handshake timeout and open a raw TCP connection without sending a handshake.
+/// - Read until closure and assert the resulting application data string is empty.
 #[ntex::test]
 async fn test_ssl_handshake_timeout() {
     use std::io::Read;
@@ -587,6 +676,11 @@ async fn test_ssl_handshake_timeout() {
     assert!(data.is_empty());
 }
 
+/// STATEMENT: A secure WebSocket byte transport echoes binary data and close codes through OpenSSL.
+///
+/// HOW:
+/// - Upgrade an HTTP/1 request into `WsTransport` over TLS and send a binary `text` frame.
+/// - Assert the binary echo, then send Away close and assert the same close code is echoed.
 #[ntex::test]
 async fn test_ws_transport() {
     let srv = test_server(async |_| {
@@ -641,6 +735,11 @@ async fn test_ws_transport() {
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
 }
 
+/// STATEMENT: Graceful HTTP/2 shutdown waits for active handlers to finish through OpenSSL.
+///
+/// HOW:
+/// - Start two delayed requests and assert both handlers are active before `stop(true)`.
+/// - Assert the client tasks observe their expected success and HTTP/2 error outcomes, and the active-handler counter is `0` after shutdown.
 #[ntex::test]
 async fn test_h2_graceful_shutdown() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));

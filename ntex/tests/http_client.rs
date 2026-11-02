@@ -36,6 +36,11 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World";
 
+/// STATEMENT: The client receives complete bodies for GET and POST requests.
+///
+/// HOW:
+/// - Serve `STR`, send GET with a custom header and POST with a request timeout.
+/// - Assert both statuses succeed and both bodies equal `STR`.
 #[ntex::test]
 async fn test_simple() {
     let srv = test::server(async |_| {
@@ -58,6 +63,11 @@ async fn test_simple() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: `send_json` produces a body accepted by the JSON extractor.
+///
+/// HOW:
+/// - Serve a route extracting `Json<String>` and send a string with `send_json`.
+/// - Assert the response status is successful.
 #[ntex::test]
 async fn test_json() {
     let srv = test::server(async |_| {
@@ -75,6 +85,11 @@ async fn test_json() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: `send_form` produces a body accepted by the form extractor.
+///
+/// HOW:
+/// - Serve a route extracting `Form<HashMap<String, String>>` and send a map containing `key`.
+/// - Assert the response status is successful.
 #[ntex::test]
 async fn test_form() {
     let srv = test::server(async |_| {
@@ -91,6 +106,11 @@ async fn test_form() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: A configured response timeout fails a request whose handler is too slow.
+///
+/// HOW:
+/// - Delay the response five seconds and configure a 300 ms response timeout.
+/// - Send GET and assert `ClientError::Timeout`.
 #[ntex::test]
 async fn test_timeout() {
     let srv = test::server(async |_| {
@@ -110,6 +130,11 @@ async fn test_timeout() {
     assert!(matches!(err.into_error(), ClientError::Timeout));
 }
 
+/// STATEMENT: A request-specific timeout overrides a longer client-wide timeout.
+///
+/// HOW:
+/// - Delay the handler two seconds and configure a 50-second client timeout.
+/// - Set a 200 ms request timeout and assert `ClientError::Timeout`.
 #[ntex::test]
 async fn test_timeout_override() {
     let srv = test::server(async |_| {
@@ -130,6 +155,11 @@ async fn test_timeout_override() {
     assert!(matches!(err.unwrap().into_error(), ClientError::Timeout));
 }
 
+/// STATEMENT: A zero request timeout disables the client-wide response timeout.
+///
+/// HOW:
+/// - Configure a 100 ms response timeout against a handler delayed 500 ms.
+/// - Override with `Millis::ZERO` and assert a successful response.
 #[ntex::test]
 async fn test_timeout_disable_override() {
     let srv = test::server(async |_| {
@@ -151,6 +181,11 @@ async fn test_timeout_disable_override() {
     assert!(res.status().is_success());
 }
 
+/// STATEMENT: Sequential GET and POST requests reuse an HTTP/1 connection.
+///
+/// HOW:
+/// - Count accepted connections and send GET then POST with one client.
+/// - Assert both statuses succeed and only one connection was accepted.
 #[ntex::test]
 async fn test_connection_reuse() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -183,6 +218,11 @@ async fn test_connection_reuse() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
+/// STATEMENT: A force-close request still receives a successful response.
+///
+/// HOW:
+/// - Serve a body through `HttpService` and send GET with `force_close`.
+/// - Assert the response status succeeds.
 #[ntex::test]
 async fn test_connection_close() {
     let srv = test_server(async move |_| {
@@ -198,6 +238,11 @@ async fn test_connection_close() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: Force-close requests from separate clients use separate connections.
+///
+/// HOW:
+/// - Count accepted connections and send one force-close request from each of two clients.
+/// - Assert both responses succeed and the connection count is `2`.
 #[ntex::test]
 async fn test_connection_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -231,6 +276,11 @@ async fn test_connection_force_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
+/// STATEMENT: Server-forced closure prevents connection reuse.
+///
+/// HOW:
+/// - Serve responses with `force_close` and count accepted connections.
+/// - Send GET then POST from one client and assert successful responses on two connections.
 #[ntex::test]
 async fn test_connection_server_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -263,6 +313,11 @@ async fn test_connection_server_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
+/// STATEMENT: A one-connection pool reuses its connection after the first payload is consumed.
+///
+/// HOW:
+/// - Set the HTTP/1 connection limit to `1`, obtain the first response, and construct a second request future.
+/// - Read and verify the first body, await the second response, and assert both succeed with one accepted connection.
 #[ntex::test]
 async fn test_connection_wait_queue() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -306,6 +361,11 @@ async fn test_connection_wait_queue() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
+/// STATEMENT: A one-connection pool opens a replacement after a force-close response.
+///
+/// HOW:
+/// - Limit the pool to one connection while the server force-closes responses; construct a second request after obtaining the first response.
+/// - Read and verify the first body, await the second response, and assert two accepted connections.
 #[ntex::test]
 async fn test_connection_wait_queue_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -349,6 +409,11 @@ async fn test_connection_wait_queue_force_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
+/// STATEMENT: Relative and absolute request URLs retain query parameters.
+///
+/// HOW:
+/// - Serve success only when `query_string` contains `qp`.
+/// - Send `/?qp=5` through both request-building paths and assert successful responses.
 #[ntex::test]
 async fn test_with_query_parameter() {
     let srv = test::server(async |_| {
@@ -369,6 +434,11 @@ async fn test_with_query_parameter() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: `no_decompress` preserves gzip bytes for GET and POST.
+///
+/// HOW:
+/// - Serve gzip through `Compress` and disable decompression on both requests.
+/// - Assert successful statuses, manually decode each body with `GzDecoder`, and compare with `STR`.
 #[ntex::test]
 async fn test_no_decompress() {
     let srv = test::server(async |_| {
@@ -415,6 +485,11 @@ async fn test_no_decompress() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: The client advertises supported encodings and transparently decodes zstd.
+///
+/// HOW:
+/// - Assert the request advertises `gzip, deflate, zstd` and return a zstd-encoded `STR`.
+/// - Assert success, removal of `content-encoding`, and the decoded body equals `STR`.
 #[ntex::test]
 async fn test_client_zstd_encoding() {
     let srv = test::server(async |_| {
@@ -436,6 +511,11 @@ async fn test_client_zstd_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: Automatic gzip decompression removes encoded-payload headers, while opt-out preserves them.
+///
+/// HOW:
+/// - Return gzip-encoded `STR`; assert the default response has neither encoding nor length headers and its body equals `STR`.
+/// - Repeat with `no_decompress` and assert the gzip header, advertised compressed length, and different body bytes.
 #[ntex::test]
 async fn test_client_gzip_encoding() {
     let srv = test::server(async |_| {
@@ -477,6 +557,11 @@ async fn test_client_gzip_encoding() {
     assert_ne!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: The client decompresses a large repetitive gzip response.
+///
+/// HOW:
+/// - Serve gzip-compressed `STR.repeat(10)` and send POST.
+/// - Assert a successful response whose decoded body equals the original repeated string.
 #[ntex::test]
 async fn test_client_gzip_encoding_large() {
     let srv = test::server(async |_| {
@@ -500,6 +585,11 @@ async fn test_client_gzip_encoding_large() {
     assert_eq!(bytes, Bytes::from(STR.repeat(10)));
 }
 
+/// STATEMENT: The client decompresses a near-megabyte random gzip response within configured payload limits.
+///
+/// HOW:
+/// - Generate 1,048,500 random characters, raise the request payload limit, and POST them to a gzip-encoding echo handler.
+/// - Read with a 1 MiB response limit and assert success and exact original bytes.
 #[ntex::test]
 async fn test_client_gzip_encoding_large_random() {
     let data = rand::rng()
@@ -536,6 +626,11 @@ async fn test_client_gzip_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
+/// STATEMENT: The client transparently decompresses a deflate response.
+///
+/// HOW:
+/// - POST `STR` to a handler that returns its zlib-compressed bytes with `content-encoding: deflate`.
+/// - Assert success and a decoded response body equal to `STR`.
 #[ntex::test]
 async fn test_client_deflate_encoding() {
     let srv = test::server(async |_| {
@@ -559,6 +654,11 @@ async fn test_client_deflate_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: The client decompresses a large random deflate response.
+///
+/// HOW:
+/// - POST 70,000 random characters to a zlib-encoding echo handler.
+/// - Assert success and the decoded body matches the original data.
 #[ntex::test]
 async fn test_client_deflate_encoding_large_random() {
     let data = rand::rng()
@@ -608,6 +708,11 @@ async fn test_client_deflate_encoding_large_random() {
 //     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 // }
 
+/// STATEMENT: Request cookies reach the handler and response cookies retain their values and attributes.
+///
+/// HOW:
+/// - Send two cookies, one with domain, path, secure, and HTTP-only attributes, and validate both values in the handler.
+/// - Return both cookies and assert a successful status and equality with the originals.
 #[ntex::test]
 async fn test_client_cookie_handling() {
     use std::io::{Error as IoError, ErrorKind};
@@ -660,6 +765,11 @@ async fn test_client_cookie_handling() {
     assert_eq!(c2, cookie2);
 }
 
+/// STATEMENT: The HTTP test client applies its configured response deadline.
+///
+/// HOW:
+/// - Delay the `HttpService` handler ten seconds and set the test client's timeout to one second.
+/// - Send a force-close GET and assert `ClientError::Timeout`.
 #[ntex::test]
 async fn test_client_timeout() {
     let srv = test_server(async move |_| {
@@ -680,6 +790,11 @@ async fn test_client_timeout() {
     assert!(matches!(err.into_error(), ClientError::Timeout));
 }
 
+/// STATEMENT: The client reads an HTTP/1.0 body delimited by connection closure.
+///
+/// HOW:
+/// - Run a raw TCP server returning an HTTP/1.0 response without a length and close the socket.
+/// - Assert a successful status and the complete `welcome!` body.
 #[ntex::test]
 async fn client_read_until_eof() {
     let addr = ntex::server::TestServer::unused_addr();
@@ -731,6 +846,11 @@ fn raw_server(response: &'static [u8]) -> std::net::SocketAddr {
     addr
 }
 
+/// STATEMENT: The client reads an HTTP/1.1 body delimited by connection closure.
+///
+/// HOW:
+/// - Use `raw_server` to send `connection: close` without a content length.
+/// - Assert a successful response containing `welcome!`.
 #[ntex::test]
 async fn client_read_until_eof_http11() {
     let addr = raw_server(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nwelcome!");
@@ -745,6 +865,11 @@ async fn client_read_until_eof_http11() {
     assert_eq!(bytes, Bytes::from_static(b"welcome!"));
 }
 
+/// STATEMENT: A completed client payload remains exhausted when polled again.
+///
+/// HOW:
+/// - Serve an eight-byte fixed-length response and take its undecoded payload stream.
+/// - Assert the first chunk is `welcome!` and two subsequent receives both return `None`.
 #[ntex::test]
 async fn client_payload_poll_after_eof() {
     let addr = raw_server(b"HTTP/1.1 200 OK\r\ncontent-length: 8\r\n\r\nwelcome!");
@@ -765,6 +890,11 @@ async fn client_payload_poll_after_eof() {
     assert!(ntex::util::stream_recv(&mut payload).await.is_none());
 }
 
+/// STATEMENT: An early error response is readable even when the peer closes with an unread request body.
+///
+/// HOW:
+/// - POST a 64 MiB body to a raw server that sends a 413 response before draining the request and closes shortly afterward.
+/// - Assert `PAYLOAD_TOO_LARGE` and the complete `too big!` response body.
 #[ntex::test]
 async fn client_early_response() {
     let addr = ntex::server::TestServer::unused_addr();
@@ -793,6 +923,11 @@ async fn client_early_response() {
     assert_eq!(bytes, Bytes::from_static(b"too big!"));
 }
 
+/// STATEMENT: Premature EOF in a fixed-length HTTP/1.0 body is an error.
+///
+/// HOW:
+/// - Serve `welcome!` while advertising a 20-byte content length, then close.
+/// - Assert the response head succeeds but reading its body fails.
 #[ntex::test]
 async fn client_truncated_body_http10() {
     let addr = raw_server(b"HTTP/1.0 200 OK\r\ncontent-length: 20\r\n\r\nwelcome!");
@@ -806,6 +941,11 @@ async fn client_truncated_body_http10() {
     assert!(response.body().await.is_err());
 }
 
+/// STATEMENT: `basic_auth` sends the expected Base64 authorization value.
+///
+/// HOW:
+/// - Serve success only for the expected Basic header encoding `username:password`.
+/// - Send the credentials through `basic_auth` and assert success.
 #[ntex::test]
 async fn client_basic_auth() {
     let srv = test::server(async |_| {
@@ -834,6 +974,11 @@ async fn client_basic_auth() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: `bearer_auth` produces a request accepted by the handler's authorization check.
+///
+/// HOW:
+/// - Serve a handler that compares the authorization header with its expected value.
+/// - Send a bearer-authenticated request and assert a successful status.
 #[ntex::test]
 async fn client_bearer_auth() {
     let srv = test::server(async |_| {
@@ -862,6 +1007,11 @@ async fn client_bearer_auth() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: Client middleware surrounds the service call and leaves the response readable.
+///
+/// HOW:
+/// - Install `fn_layer` recording the URI before and after the inner call; check the initial service request has no headers or address.
+/// - Assert client readiness, success, the full `STR` body, and the ordered before/after records.
 #[ntex::test]
 async fn middleware() {
     let srv = test::server(async |_| {
@@ -903,6 +1053,11 @@ async fn middleware() {
     );
 }
 
+/// STATEMENT: The low-level HTTP test client reads GET and POST responses.
+///
+/// HOW:
+/// - Serve `STR` through `HttpService`, then send GET, GET with a custom header, and POST.
+/// - Assert all statuses succeed and the latter two bodies equal `STR`.
 #[ntex::test]
 async fn test_h1_v2() {
     let srv = test_server(async move |_| {
@@ -928,7 +1083,11 @@ async fn test_h1_v2() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-/// Server receives the truncated Host header.
+/// STATEMENT: The generated `Host` header retains the server's nondefault port.
+///
+/// HOW:
+/// - Echo the request's `HOST` header from a local route.
+/// - Send an absolute-URL GET and assert the body is `localhost` followed by the server port.
 #[ntex::test]
 async fn untruncated_host_header() {
     let srv = test::server(async |_| {
@@ -956,7 +1115,11 @@ async fn untruncated_host_header() {
     assert_eq!(received, format!("localhost:{port}"));
 }
 
-/// Test the newly added QUERY method.
+/// STATEMENT: The QUERY method routes and transports its request body.
+///
+/// HOW:
+/// - Register a `web::query` route that collects and echoes its payload.
+/// - Send `SuperBody` with the client's `query` method and assert the response body matches.
 #[ntex::test]
 async fn test_query_method() {
     use ntex::util::BytesMut;
@@ -985,6 +1148,11 @@ async fn test_query_method() {
     assert_eq!(test_body, body);
 }
 
+/// STATEMENT: Malformed chunk framing surfaces as a payload decode error.
+///
+/// HOW:
+/// - Serve a successful response head followed by an invalid chunk terminator through `raw_server`.
+/// - Assert the head succeeds and reading the body yields `PayloadError::Decode`.
 #[ntex::test]
 async fn client_invalid_chunked_body() {
     let addr =
@@ -1003,6 +1171,11 @@ async fn client_invalid_chunked_body() {
     );
 }
 
+/// STATEMENT: Closure before any response head produces a disconnected connection error.
+///
+/// HOW:
+/// - Use `raw_server` with an empty response and issue GET.
+/// - Assert `ClientError::Connect` contains `ConnectError::Disconnected`.
 #[ntex::test]
 async fn client_no_response() {
     let addr = raw_server(b"");
@@ -1018,6 +1191,11 @@ async fn client_no_response() {
     ));
 }
 
+/// STATEMENT: An invalid status line produces a response parsing error.
+///
+/// HOW:
+/// - Serve an HTTP/1.1 status containing `2x0` through `raw_server`.
+/// - Assert sending the request fails with `ClientError::Response`.
 #[ntex::test]
 async fn client_invalid_response_head() {
     let addr = raw_server(b"HTTP/1.1 2x0 OK\r\n\r\n");

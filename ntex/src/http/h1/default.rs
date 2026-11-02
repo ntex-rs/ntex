@@ -50,6 +50,10 @@ mod tests {
     use crate::http::{Request, h1::control::ControlResult};
     use crate::{Pipeline, io::Base};
 
+    /// STATEMENT: The default control service publishes requests and stops disabled-keepalive connections.
+    ///
+    /// HOW:
+    /// - Build its pipeline, send request and keepalive controls, and compare acknowledgment variants.
     #[crate::rt_test]
     async fn default_acks() {
         let svc: Pipeline<Control<Base, io::Error>, _, _> =

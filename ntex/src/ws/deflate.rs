@@ -504,6 +504,10 @@ mod tests {
         )
     }
 
+    /// STATEMENT: Deflate configuration exposes defaults and clamps compression/window settings to supported ranges.
+    ///
+    /// HOW:
+    /// - Inspect defaults, apply out-of-range levels/windows and takeover flags, then compare normalized values and debug output.
     #[test]
     fn config() {
         let cfg = DeflateConfig::default();
@@ -528,6 +532,10 @@ mod tests {
         assert!(format!("{:?}", Deflate::new(cfg)).contains("Deflate"));
     }
 
+    /// STATEMENT: Deflate offers serialize default capabilities and explicit takeover/window constraints.
+    ///
+    /// HOW:
+    /// - Compare complete extension header strings for default and fully configured offers.
     #[test]
     fn offer() {
         assert_eq!(
@@ -546,12 +554,21 @@ mod tests {
         );
     }
 
+    /// STATEMENT: An absent extension response declines a deflate offer without error.
+    ///
+    /// HOW:
+    /// - Accept an empty response header map and verify no compression configuration is negotiated.
     #[test]
     fn accept_declined() {
         let offer = DeflateConfig::new();
         assert_eq!(offer.accept(&HeaderMap::new()).unwrap(), None);
     }
 
+    /// STATEMENT: Deflate negotiation parses permitted syntax while preserving stricter local limits.
+    ///
+    /// HOW:
+    /// - Accept case/spacing/quoting variants and compare takeover flags, windows, and retained compression level.
+    /// - Negotiate relaxed client and constrained server windows and verify the resulting limits.
     #[test]
     fn accept_params() {
         let offer = DeflateConfig::new().set_compression_level(1);
@@ -604,6 +621,11 @@ mod tests {
         assert_eq!(agreed.server_max_window_bits(), Some(10));
     }
 
+    /// STATEMENT: Deflate negotiation rejects unoffered extensions, malformed or repeated parameters, and unmet server constraints.
+    ///
+    /// HOW:
+    /// - Exercise invalid extension names, duplicate offers, parameter syntax/window bounds, and missing requested limits.
+    /// - Check unexpected/invalid extension errors, including repeated and non-text headers.
     #[test]
     fn accept_errors() {
         let offer = DeflateConfig::new();
@@ -675,6 +697,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Deflate round trips preserve payloads, reuse history, omit final trailers, and enforce expanded-size bounds.
+    ///
+    /// HOW:
+    /// - Compress repeated, empty, and large incompressible messages and compare decoded bytes.
+    /// - Inspect compression/trailer behavior and reject a limit one byte below the expanded payload.
     #[test]
     fn compress_roundtrip() {
         let server = Deflate::new(DeflateConfig::new());
@@ -715,6 +742,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Fragment compression retains intermediate flush trailers and supports empty intermediate or final fragments.
+    ///
+    /// HOW:
+    /// - Compress/decompress fragment sequences with empty pieces and inspect trailer presence.
+    /// - Compare reassembled messages and verify the next message still decodes correctly.
     #[test]
     fn compress_fragments() {
         let server = Deflate::new(DeflateConfig::new());
@@ -745,6 +777,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Empty last fragments finalize compressed messages without disturbing subsequent context reuse.
+    ///
+    /// HOW:
+    /// - Decode repeated payloads split into seven-byte pieces plus empty finals.
+    /// - Decode a wholly empty fragmented message and then a nonempty message, comparing all output.
     #[test]
     fn empty_last_fragment() {
         // a compressed payload split into fragments, the last one is empty
@@ -770,6 +807,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Empty compressed messages use the RFC representation and do not consume following messages.
+    ///
+    /// HOW:
+    /// - Compare repeated empty encodings with a zero byte and interleave empty/nonempty decoding.
+    /// - Accept both encoded-empty and zero-length peer payloads without losing later data.
     #[test]
     fn empty_messages() {
         let server = Deflate::new(DeflateConfig::new());
@@ -800,6 +842,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Disabling server context takeover resets server compression and peer decompression, but not client compression.
+    ///
+    /// HOW:
+    /// - Compare repeated server encodings and decode both, then verify repeated client encodings differ through history reuse.
     #[test]
     fn no_context_takeover() {
         let cfg = DeflateConfig::new().set_server_no_context_takeover(true);
@@ -823,6 +869,11 @@ mod tests {
         assert_ne!(client.compress(b"Hello", true, false), first);
     }
 
+    /// STATEMENT: Negotiated window sizes round-trip data, including stored-block fallback for the smallest window.
+    ///
+    /// HOW:
+    /// - Compress and decompress repeated large payloads for every supported window size.
+    /// - Verify only the eight-bit-window encoding expands beyond the input length.
     #[test]
     fn window_bits() {
         let data: Vec<u8> = b"0123456789abcdef".repeat(4096);
@@ -846,6 +897,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Invalid deflate blocks and impossible back-references fail, and a failed decoder can accept a fresh stream.
+    ///
+    /// HOW:
+    /// - Reject a reserved block type, decode a valid message afterward, and separately reject a reference before stream start.
     #[test]
     fn invalid_data() {
         let client = Deflate::new(DeflateConfig::new());

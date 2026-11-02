@@ -116,6 +116,10 @@ mod tests {
     use super::*;
     use crate::{SharedCfg, io::Io, testing::IoTest, time::Millis, time::timeout};
 
+    /// STATEMENT: WebSocket sink clones share close state and reject data after a clone encodes close.
+    ///
+    /// HOW:
+    /// - Encode close through a cloned sink, then inspect the original and attempt to send text.
     #[crate::rt_test]
     async fn clones_share_codec_state() {
         let (client, server) = IoTest::create();
@@ -134,6 +138,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Write backpressure delays data sends but allows control frames until transport capacity returns.
+    ///
+    /// HOW:
+    /// - Block peer writes, exceed the high watermark, send a ping, and observe a pending text send.
+    /// - Restore peer capacity and verify the blocked send completes within a timeout.
     #[crate::rt_test]
     async fn send_waits_for_write_backpressure() {
         let (client, server) = IoTest::create();
@@ -170,6 +179,10 @@ mod tests {
         assert!(sent.get());
     }
 
+    /// STATEMENT: Disconnecting a backpressured transport releases a waiting WebSocket send.
+    ///
+    /// HOW:
+    /// - Saturate the write buffer, terminate the transport from another task, and bound send completion by a timeout.
     #[crate::rt_test]
     async fn send_on_disconnect_does_not_wait() {
         let (client, server) = IoTest::create();
@@ -195,6 +208,11 @@ mod tests {
             .unwrap();
     }
 
+    /// STATEMENT: An unanswered WebSocket close keeps the connection briefly active before its configured timeout closes it.
+    ///
+    /// HOW:
+    /// - Send close, check immediate transport activity, and wait with an outer timeout for shutdown.
+    /// - Verify elapsed time is at least the configured close timeout.
     #[crate::rt_test]
     async fn close_timeout() {
         let (client, server) = IoTest::create();

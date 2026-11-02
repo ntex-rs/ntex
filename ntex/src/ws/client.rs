@@ -571,12 +571,20 @@ impl<F> fmt::Debug for WsConnection<F> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: WebSocket client debug output identifies the client type.
+    ///
+    /// HOW:
+    /// - Construct and format a client and inspect the type label.
     #[crate::rt_test]
     async fn test_debug() {
         let client = WsClient::new("http://localhost", SharedCfg::default());
         assert!(format!("{client:?}").contains("WsClient"));
     }
 
+    /// STATEMENT: Handshake request construction preserves repeated headers and joins configured cookies.
+    ///
+    /// HOW:
+    /// - Configure repeated accept/cookie values plus a cookie object and inspect the generated request head.
     #[crate::rt_test]
     async fn request_head_keeps_all_header_values() {
         let mut cfg = WsClientConfig::new();
@@ -601,6 +609,10 @@ mod tests {
         assert_eq!(head.headers.get(header::COOKIE).unwrap(), "x=1; y=2; z=3");
     }
 
+    /// STATEMENT: Setting a WebSocket client header again replaces its previous value.
+    ///
+    /// HOW:
+    /// - Set content type twice and inspect the final configured header.
     #[crate::rt_test]
     async fn header_override() {
         let cfg = WsClientConfig::new()
@@ -619,6 +631,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Subprotocol configuration serializes valid tokens, removes empty offers, and rejects invalid tokens.
+    ///
+    /// HOW:
+    /// - Configure two protocols, clear them, and reject newline, whitespace, and comma-containing protocol names.
     #[test]
     fn protocols() {
         let cfg = WsClientConfig::new()
@@ -648,6 +664,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Subprotocol negotiation accepts one offered token and rejects unoffered or multiple selections.
+    ///
+    /// HOW:
+    /// - Validate selections against compact and spaced offers.
+    /// - Reject unknown tokens, comma-separated selections, and repeated selection headers.
     #[test]
     fn negotiation() {
         let configured = WsClientConfig::new()
@@ -705,6 +726,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: A client without extension configuration accepts no extensions and rejects unsolicited deflate.
+    ///
+    /// HOW:
+    /// - Negotiate empty headers, then add a deflate response and inspect the unexpected-extension error.
     #[crate::rt_test]
     async fn unexpected_extensions() {
         let client = WsClient::new("ws://localhost", SharedCfg::default());
@@ -721,6 +746,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Invalid WebSocket URLs report specific configuration errors before connecting.
+    ///
+    /// HOW:
+    /// - Attempt connections with missing scheme, unsupported scheme, and missing host and compare error variants.
     #[crate::rt_test]
     async fn basic_errs() {
         let err = WsClient::new("//localhost", SharedCfg::default())
@@ -754,6 +783,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Basic authentication encodes credentials correctly and replaces earlier authorization.
+    ///
+    /// HOW:
+    /// - Configure credentials with and without a password, update them, and compare complete authorization values.
     #[crate::rt_test]
     async fn basic_auth() {
         let cfg = WsClientConfig::new()
@@ -791,6 +824,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Bearer authorization is stored as a sensitive header whose textual view is redacted.
+    ///
+    /// HOW:
+    /// - Configure a bearer token and verify its header text is masked.
     #[crate::rt_test]
     async fn bearer_auth() {
         let cfg = WsClientConfig::new()
@@ -806,6 +843,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Client options retain server mode and frame limits, and malformed URLs record construction errors.
+    ///
+    /// HOW:
+    /// - Build a configuration with origin, protocols, headers, cookie, mode, and size settings.
+    /// - Check mode/size and inspect error state for missing or invalid URL components.
     #[cfg(feature = "cookie")]
     #[crate::rt_test]
     async fn basics() {
@@ -863,6 +905,10 @@ mod tests {
         String::from_utf8(req).unwrap()
     }
 
+    /// STATEMENT: Recycling an HTTP request head does not change the WebSocket handshake method from GET.
+    ///
+    /// HOW:
+    /// - Return a POST head to the pool, perform an in-memory handshake, and inspect its wire request line.
     #[crate::rt_test]
     async fn pooled_request_head_method_is_get() {
         // a request head released back to the thread-local message pool keeps its
@@ -876,6 +922,10 @@ mod tests {
         assert!(req.starts_with("GET / HTTP/1.1\r\n"), "{req}");
     }
 
+    /// STATEMENT: Deflate is offered only when configured and replaces an existing extension header.
+    ///
+    /// HOW:
+    /// - Capture default and deflate-enabled handshake requests and compare their extension lines.
     #[cfg(feature = "compress")]
     #[crate::rt_test]
     async fn deflate_offer() {
@@ -898,6 +948,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Successful deflate negotiation configures frame decoding, while a declined offer leaves compression disabled.
+    ///
+    /// HOW:
+    /// - Complete an in-memory compressed handshake, inspect agreed options, and receive a compressed message.
+    /// - Drop the receiver and check normal close, then verify a declined offer yields no deflate configuration.
     #[cfg(feature = "compress")]
     #[crate::rt_test]
     async fn deflate_connection() {
@@ -932,6 +987,11 @@ mod tests {
         assert_eq!(res.unwrap().codec().deflate(), None);
     }
 
+    /// STATEMENT: Cookie objects extend an explicitly configured cookie header rather than replacing it.
+    ///
+    /// HOW:
+    /// - Capture handshakes with cookie objects alone and with an existing cookie header.
+    /// - Compare all cookie pairs and verify the original header value remains first.
     #[cfg(feature = "cookie")]
     #[crate::rt_test]
     async fn cookies_extend_configured_header() {
@@ -1017,6 +1077,11 @@ mod tests {
         connect_with(cfg, io_cfg, |accept| valid(&accept)).await
     }
 
+    /// STATEMENT: Invalid upgrade responses produce component-specific WebSocket client errors.
+    ///
+    /// HOW:
+    /// - Answer in-memory handshakes with invalid/missing upgrade, connection, and accept headers.
+    /// - Compare error variants and retained invalid header values.
     #[crate::rt_test]
     async fn handshake_response_errors() {
         async fn err(response: impl FnOnce(String) -> String) -> WsClientError {
@@ -1060,6 +1125,11 @@ mod tests {
             .unwrap()
     }
 
+    /// STATEMENT: Server-mode connections accept extension close codes but reply with a server-valid normal close.
+    ///
+    /// HOW:
+    /// - Complete a handshake, inspect response/codec state, and send a masked client extension close.
+    /// - Check the delivered reason and decode the normal-close reply.
     #[crate::rt_test]
     async fn server_mode_connection() {
         let cfg = WsClientConfig::new().set_server_mode();
@@ -1084,6 +1154,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A WebSocket application service failure sends an away close and returns the service error.
+    ///
+    /// HOW:
+    /// - Deliver text to a failing service and compare the returned error and peer-visible close reason.
     #[crate::rt_test]
     async fn start_service_error_sends_away_close() {
         let (res, client) = connected(WsClientConfig::new(), SharedCfg::default()).await;
@@ -1106,6 +1180,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Invalid messages returned by a WebSocket service surface as protocol encoding errors.
+    ///
+    /// HOW:
+    /// - Return an oversized ping after receiving text and verify the invalid-length error.
     #[crate::rt_test]
     async fn start_encoder_error() {
         let (res, client) = connected(WsClientConfig::new(), SharedCfg::default()).await;
@@ -1127,6 +1205,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: WebSocket dispatch preserves transport failures as disconnect errors.
+    ///
+    /// HOW:
+    /// - Inject a read error into a connected transport and inspect the dispatch result.
     #[crate::rt_test]
     async fn start_io_error() {
         let (res, client) = connected(WsClientConfig::new(), SharedCfg::default()).await;
@@ -1140,6 +1222,10 @@ mod tests {
         assert!(matches!(err, WsError::Disconnected(Some(_))));
     }
 
+    /// STATEMENT: An idle WebSocket dispatcher terminates on its configured keepalive deadline.
+    ///
+    /// HOW:
+    /// - Start a connection with a short keepalive timeout and no peer frames and verify the keepalive error.
     #[crate::rt_test]
     async fn start_keepalive() {
         let io_cfg = SharedCfg::new("KA")

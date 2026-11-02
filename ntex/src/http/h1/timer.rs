@@ -392,8 +392,11 @@ mod tests {
     use super::*;
     use crate::io::{Io, testing::IoTest};
 
-    /// Decoding buffered requests during write backpressure does not restart
-    /// the write timer.
+    /// STATEMENT: Write deadlines survive request resets and payload-timer transitions.
+    ///
+    /// HOW:
+    /// - Start a write timer, reset request state, and enter/leave payload timing while checking the same deadline.
+    /// - Stop writing during payload timing and verify paused payload state with no active timer.
     #[crate::rt_test]
     async fn test_write_timer_survives_decoded_requests() {
         let (_client, server) = IoTest::create();
@@ -430,8 +433,10 @@ mod tests {
         assert!(!io.timer_handle().is_set());
     }
 
-    /// Bytes consumed by a request-head decode attempt are not counted
-    /// again, and do not hide input received before the next attempt.
+    /// STATEMENT: Header-rate progress counts newly received bytes once despite partial decoder consumption.
+    ///
+    /// HOW:
+    /// - Start with a partial head, report successive buffered/remaining sizes, and compare accumulated input progress.
     #[crate::rt_test]
     async fn test_headers_progress_follows_decoded_input() {
         let (_client, server) = IoTest::create();
@@ -457,8 +462,11 @@ mod tests {
         assert_eq!(timers.progress.consumed, 15);
     }
 
-    /// The keep-alive timer is not restarted for every request of a
-    /// persistent connection.
+    /// STATEMENT: Keepalive deadlines are reused across requests without leaking old timeout notifications into payload timing.
+    ///
+    /// HOW:
+    /// - Reset and restart keepalive while checking timer identity, then inject an idle timeout.
+    /// - Start payload timing and verify no stale status notification remains.
     #[crate::rt_test]
     async fn test_keepalive_timer_is_reused() {
         let (_client, server) = IoTest::create();
@@ -497,6 +505,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Read timeout periods consume their remaining budget without exceeding it.
+    ///
+    /// HOW:
+    /// - Compute successive periods with full, partial, shorter-than-period, and unlimited budgets.
+    /// - Compare each selected timeout and remaining budget.
     #[test]
     fn test_read_timeout_is_bounded_by_maximum() {
         let (timeout, remaining) = read_timeout(Seconds(10), Seconds(15));

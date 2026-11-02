@@ -207,6 +207,11 @@ impl fmt::Debug for Request {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Request mutations remain visible through headers, extensions, URI, chunking, and debug access.
+    ///
+    /// HOW:
+    /// - Construct requests without I/O, mutate metadata through request and head accessors, and compare the results.
+    /// - Toggle chunking and inspect both request and head debug representations.
     #[test]
     fn test_basics() {
         let msg = Message::new();
@@ -250,6 +255,10 @@ mod tests {
         assert!(s.contains("RequestHead { id: 0, uri:"));
     }
 
+    /// STATEMENT: Default requests use GET and have no attached transport.
+    ///
+    /// HOW:
+    /// - Construct a default request and inspect its method and I/O reference.
     #[test]
     fn test_default() {
         let req = Request::default();

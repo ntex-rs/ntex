@@ -147,6 +147,10 @@ mod tests {
     use super::*;
     use crate::http::test::TestRequest;
 
+    /// STATEMENT: Content-type access returns only the media type and treats an absent header as empty.
+    ///
+    /// HOW:
+    /// - Query plain, parameterized, and missing content-type headers and compare their strings.
     #[test]
     fn test_content_type() {
         let req = TestRequest::with_header("content-type", "text/plain").build();
@@ -158,6 +162,11 @@ mod tests {
         assert_eq!(req.content_type(), "");
     }
 
+    /// STATEMENT: MIME parsing preserves media type parameters and distinguishes a missing header.
+    ///
+    /// HOW:
+    /// - Parse JSON headers with and without a charset and inspect type, subtype, and parameter values.
+    /// - Verify an absent header yields no MIME type.
     #[test]
     fn test_mime_type() {
         let req = TestRequest::with_header("content-type", "application/json").build();
@@ -172,6 +181,10 @@ mod tests {
         assert_eq!(mt.subtype(), mime::JSON);
     }
 
+    /// STATEMENT: Malformed media types return a content-type parse error.
+    ///
+    /// HOW:
+    /// - Supply a content type without valid type/subtype syntax and inspect the error.
     #[test]
     fn test_mime_type_error() {
         let req =
@@ -180,6 +193,10 @@ mod tests {
         assert_eq!(Err(ContentTypeError::ParseError), req.mime_type());
     }
 
+    /// STATEMENT: Message encoding defaults to UTF-8 and honors a recognized charset.
+    ///
+    /// HOW:
+    /// - Inspect encoding with no header, JSON without charset, and an explicit ISO-8859-2 charset.
     #[test]
     fn test_encoding() {
         let req = TestRequest::builder().build();
@@ -193,6 +210,10 @@ mod tests {
         assert_eq!(ISO_8859_2, req.encoding().unwrap());
     }
 
+    /// STATEMENT: Encoding lookup distinguishes malformed content types from unknown charsets.
+    ///
+    /// HOW:
+    /// - Supply each invalid form and compare the parse and unknown-encoding errors.
     #[test]
     fn test_encoding_error() {
         let req = TestRequest::with_header("content-type", "applicatjson").build();
@@ -206,6 +227,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Chunked detection handles absent, valid, and non-text transfer-encoding headers.
+    ///
+    /// HOW:
+    /// - Query requests with each header form and verify false, true, and error results respectively.
     #[test]
     fn test_chunked() {
         let req = TestRequest::builder().build();
@@ -223,6 +248,10 @@ mod tests {
         assert!(req.chunked().is_err());
     }
 
+    /// STATEMENT: MIME parsing rejects content-type values containing non-UTF-8 bytes.
+    ///
+    /// HOW:
+    /// - Construct a raw header containing an invalid byte and verify a parse error.
     #[test]
     fn test_mime_type_not_utf8() {
         let req = TestRequest::default()
@@ -234,6 +263,10 @@ mod tests {
         assert_eq!(req.mime_type(), Err(ContentTypeError::ParseError));
     }
 
+    /// STATEMENT: Cookie lookup returns no match for an absent name after parsing a trailing separator.
+    ///
+    /// HOW:
+    /// - Parse one cookie followed by a semicolon, verify the parsed count, and query a different name.
     #[cfg(feature = "cookie")]
     #[test]
     fn test_cookie_not_found() {

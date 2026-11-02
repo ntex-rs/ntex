@@ -80,6 +80,12 @@ mod tests {
         Chunks(items.iter().map(|b| Ok(Bytes::from_static(b))).collect())
     }
 
+    /// STATEMENT: Body collection preserves contents, avoids unnecessary retention, and enforces limits.
+    ///
+    /// HOW:
+    /// - Check a static single chunk is reused, an empty stream is empty, and multiple chunks concatenate.
+    /// - Assert oversized backing storage is copied away and an accumulated body has no unused capacity.
+    /// - Exceed a six-byte limit with different chunk layouts and assert overflow reports seven bytes.
     #[crate::rt_test]
     async fn test_read_body() {
         let data: &'static [u8] = b"single chunk";

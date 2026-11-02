@@ -222,6 +222,11 @@ mod tests {
         AcceptEncoding::parse([raw].into_iter(), encoding)
     }
 
+    /// STATEMENT: Quality parsing accepts HTTP q-values with at most three fractional digits.
+    ///
+    /// HOW:
+    /// - Parse valid zero/one and fractional values and assert their thousandths representation.
+    /// - Assert empty, malformed, overprecise, negative, and out-of-range values are rejected.
     #[test]
     fn test_parse_q() {
         for (val, q) in [
@@ -244,6 +249,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Encoding entries parse tokens, optional quality parameters, and wildcard values.
+    ///
+    /// HOW:
+    /// - Check gzip defaults, whitespace, case-insensitive `q`, extra parameters, and invalid quality.
+    /// - Assert wildcard has no specific encoding and an empty entry is ignored.
     #[test]
     fn test_accept_encoding_entry() {
         let entry = |tag| AcceptEncoding::new(tag).unwrap();
@@ -263,6 +273,11 @@ mod tests {
         assert!(AcceptEncoding::new(" ").is_none());
     }
 
+    /// STATEMENT: Automatic compression selects supported encodings rather than unsupported preferences.
+    ///
+    /// HOW:
+    /// - Parse combinations of zstd, gzip, deflate, and Brotli with automatic selection.
+    /// - Assert supported server preferences, identity fallback, whitespace handling, and explicit Brotli selection.
     #[test]
     fn test_auto_skips_unsupported_encodings() {
         let auto = ContentEncoding::Auto;
@@ -278,6 +293,11 @@ mod tests {
         assert_eq!(parse("", auto), ContentEncoding::Identity);
     }
 
+    /// STATEMENT: Automatic compression honors quality weights, first duplicates, and server tie-breaking.
+    ///
+    /// HOW:
+    /// - Parse unequal, zero, malformed, and duplicate quality entries and assert the selected encoding.
+    /// - Check equal weights follow server preference and `x-gzip` resolves to gzip.
     #[test]
     fn test_auto_honours_q() {
         let auto = ContentEncoding::Auto;
@@ -302,6 +322,11 @@ mod tests {
         assert_eq!(parse("x-gzip", auto), ContentEncoding::Gzip);
     }
 
+    /// STATEMENT: Wildcard quality supplies defaults while explicit encoding weights take precedence.
+    ///
+    /// HOW:
+    /// - Combine wildcard entries with explicit exclusions and weighted supported encodings.
+    /// - Assert the selected encoding follows explicit weights, first wildcard, and identity fallback.
     #[test]
     fn test_auto_wildcard() {
         let auto = ContentEncoding::Auto;
@@ -319,6 +344,11 @@ mod tests {
         assert_eq!(parse("*;q=0, *, zstd;q=0", auto), ContentEncoding::Identity);
     }
 
+    /// STATEMENT: Explicit compression uses only the configured encoding when the client accepts it.
+    ///
+    /// HOW:
+    /// - Configure gzip and parse direct matches, other encodings, zero/positive qualities, and wildcards.
+    /// - Assert gzip is selected only when accepted, with explicit gzip weights overriding wildcards.
     #[test]
     fn test_explicit_encoding() {
         let gzip = ContentEncoding::Gzip;
@@ -332,6 +362,11 @@ mod tests {
         assert_eq!(parse("*;q=0, gzip", gzip), gzip);
     }
 
+    /// STATEMENT: Encoding negotiation considers values from repeated request headers together.
+    ///
+    /// HOW:
+    /// - Parse separate header values excluding zstd and weighting gzip above deflate.
+    /// - Assert automatic negotiation selects gzip.
     #[test]
     fn test_repeated_headers() {
         let values = ["zstd;q=0", "gzip;q=0.5, deflate;q=0.1"];
@@ -341,6 +376,12 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Compression middleware negotiates valid repeated headers and skips invalid or disabled encodings.
+    ///
+    /// HOW:
+    /// - Serve a compressible body and assert gzip requests receive `Content-Encoding: gzip`.
+    /// - Assert invalid-only and zero-quality headers produce no encoding.
+    /// - Combine repeated valid/invalid values and assert gzip or deflate is selected from valid entries.
     #[crate::rt_test]
     async fn test_compress_accept_encoding() {
         use crate::http::header::{CONTENT_ENCODING, HeaderValue};

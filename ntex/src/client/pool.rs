@@ -644,6 +644,10 @@ mod tests {
     use crate::time::{Millis, Seconds, sleep};
     use crate::{io as nio, testing::IoTest, util::lazy};
 
+    /// STATEMENT: HTTP/2 authority excludes user information and default ports while retaining nondefault ports and IPv6 brackets.
+    ///
+    /// HOW:
+    /// - Derive authorities from varied URLs and a relative path and compare the expected strings.
     #[test]
     fn test_h2_authority() {
         for (uri, auth) in [
@@ -659,6 +663,10 @@ mod tests {
         assert_eq!(h2_authority(&Url::from_static("/path")), "");
     }
 
+    /// STATEMENT: An unlimited HTTP/1 pool can satisfy concurrent acquisitions for the same host.
+    ///
+    /// HOW:
+    /// - Delay connector completion, acquire twice concurrently, and verify both connections and acquisition counts.
     #[crate::rt_test]
     async fn test_unlimited_concurrent_connect() {
         let store = Rc::new(RefCell::new(Vec::new()));
@@ -762,6 +770,10 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Idle-expired HTTP/2 connections are removed and closed rather than reused.
+    ///
+    /// HOW:
+    /// - Age a pooled connection beyond keepalive, attempt acquisition, and verify removal and peer closure.
     #[crate::rt_test]
     async fn test_expired_h2_is_closed() {
         let (_, pool) = h2_pool(ClientConfig::new().set_h2_keepalive(Seconds(1)));
@@ -778,6 +790,10 @@ mod tests {
         assert!(server.is_closed());
     }
 
+    /// STATEMENT: HTTP/2 lifetime expiration prevents reuse even when recent activity is recorded.
+    ///
+    /// HOW:
+    /// - Age only the connection's creation time, attempt acquisition, and verify the peer is closed.
     #[crate::rt_test]
     async fn test_expired_h2_lifetime() {
         let (_, pool) = h2_pool(ClientConfig::new().set_h2_lifetime(Seconds(1)));
@@ -789,6 +805,11 @@ mod tests {
         assert!(server.is_closed());
     }
 
+    /// STATEMENT: Expired HTTP/2 connections stop accepting requests but wait for reserved requests before closing.
+    ///
+    /// HOW:
+    /// - Reserve a stream, expire the connection, and verify pool removal without immediate peer closure.
+    /// - Drop the reservation and check the connection then closes.
     #[crate::rt_test]
     async fn test_expired_h2_lifetime_waits_for_reserved() {
         let (_, pool) = h2_pool(ClientConfig::new().set_h2_lifetime(Seconds(1)));
@@ -810,6 +831,11 @@ mod tests {
         assert!(server.is_closed());
     }
 
+    /// STATEMENT: HTTP/2 keepalive is independent of HTTP/1 settings and starts when active requests finish.
+    ///
+    /// HOW:
+    /// - Age a connection with an outstanding reservation and verify acquisitions still succeed.
+    /// - Release requests, check the idle timer resets, then age the idle connection and verify expiration.
     #[crate::rt_test]
     async fn test_h2_lifecycle_settings() {
         // http/1 settings do not apply to http/2 connections
@@ -839,6 +865,11 @@ mod tests {
         assert!(pool.0.inner.borrow().h2.is_empty());
     }
 
+    /// STATEMENT: HTTP/2 stream capacity controls waiters independently of the HTTP/1 acquisition limit.
+    ///
+    /// HOW:
+    /// - Fill stream capacity, block another request, and also mark the HTTP/1 pool full.
+    /// - Release a stream and verify the waiting HTTP/2 request resumes with correct stream and acquisition counts.
     #[crate::rt_test]
     async fn test_h2_streams_limit() {
         let (pipe, pool) = h2_pool(
@@ -887,6 +918,11 @@ mod tests {
         assert_eq!(h2.streams(), 0);
     }
 
+    /// STATEMENT: Increasing peer HTTP/2 stream capacity wakes pool waiters without a request completing.
+    ///
+    /// HOW:
+    /// - Advertise zero concurrent streams, register a waiting acquisition, then advertise one.
+    /// - Verify the pending acquisition completes with an HTTP/2 connection.
     #[crate::rt_test]
     async fn test_h2_waiter_woken_by_connection_capacity() {
         fn settings(max_streams: u8) -> [u8; 15] {
@@ -923,6 +959,11 @@ mod tests {
         assert_eq!(conn.protocol(), HttpProtocol::Http2);
     }
 
+    /// STATEMENT: A GOAWAY connection is removed from the pool even when its stream counter suggests capacity.
+    ///
+    /// HOW:
+    /// - Reserve a request, inject GOAWAY, and check acquisition permits a replacement connection.
+    /// - Verify pool removal and closure after dropping the outstanding reservation.
     #[crate::rt_test]
     async fn test_h2_goaway_connection_is_removed() {
         let (_, pool) = h2_pool(ClientConfig::new().set_h2_connection_limit(1));
@@ -952,6 +993,11 @@ mod tests {
         assert!(h2.is_closed());
     }
 
+    /// STATEMENT: HTTP/2 pooling opens capacity within its connection limit and selects the least-loaded connection.
+    ///
+    /// HOW:
+    /// - Saturate one connection, add a second, and check acquisitions balance their stream counts.
+    /// - Fill both and verify further acquisition reports no capacity.
     #[crate::rt_test]
     async fn test_h2_new_connection_when_saturated() {
         let (_, pool) = h2_pool(
@@ -983,6 +1029,11 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Pool shutdown closes idle connections, fails waiters, and rejects new acquisitions.
+    ///
+    /// HOW:
+    /// - Populate HTTP/1 and HTTP/2 pools, fill active capacity, and register a waiting request.
+    /// - Shut down and check empty pools, peer closure, waiter failure, and no new connector calls.
     #[crate::rt_test]
     async fn test_shutdown_closes_pool() {
         let store = Rc::new(RefCell::new(Vec::new()));
@@ -1043,6 +1094,10 @@ mod tests {
         assert_eq!(store.borrow().len(), 3);
     }
 
+    /// STATEMENT: Zero HTTP/1 keepalive and lifetime independently disable their respective expiration checks.
+    ///
+    /// HOW:
+    /// - Age pooled connections under both-disabled and individually-disabled settings and compare reuse decisions.
     #[crate::rt_test]
     async fn test_h1_zero_keepalive_lifetime() {
         async fn reused(cfg: ClientConfig) -> bool {
@@ -1087,6 +1142,10 @@ mod tests {
         assert!(!reused(ClientConfig::new().set_h1_keepalive(Seconds::ZERO)).await);
     }
 
+    /// STATEMENT: Releasing an acquired connection after pool shutdown does not repopulate the pool.
+    ///
+    /// HOW:
+    /// - Acquire a connection, shut down the pool, release it, and verify zero acquisitions and no idle entries.
     #[crate::rt_test]
     async fn test_release_after_stop() {
         let store = Rc::new(RefCell::new(Vec::new()));
@@ -1118,6 +1177,11 @@ mod tests {
         assert!(pool.0.inner.borrow().available.is_empty());
     }
 
+    /// STATEMENT: HTTP/1 pooling enforces acquisition limits, reuses eligible connections, and cleans cancelled waiters.
+    ///
+    /// HOW:
+    /// - Acquire, wait, release, close, cancel, and switch hosts while checking connector calls and pool counters.
+    /// - Verify invalid authority rejection and readiness/shutdown completion.
     #[crate::rt_test]
     async fn test_basics() {
         let store = Rc::new(RefCell::new(Vec::new()));
@@ -1230,6 +1294,11 @@ mod tests {
         assert!(lazy(|cx| pipe.poll_shutdown(cx)).await.is_ready());
     }
 
+    /// STATEMENT: HTTP/1 connections with observed EOF are rejected both on release and later acquisition.
+    ///
+    /// HOW:
+    /// - Close a peer before release and verify no idle entry is retained.
+    /// - Close another peer after release and check the next acquisition creates a fresh connection.
     #[crate::rt_test]
     async fn clean_eof_connections_are_not_reused() {
         let store = Rc::new(RefCell::new(Vec::new()));

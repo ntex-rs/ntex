@@ -295,7 +295,11 @@ mod tests {
         }
     }
 
-    /// A pending read does not wake the payload io task, only dropping the payload does.
+    /// STATEMENT: Pending payload reads do not wake cancellation monitoring, but payload drop does.
+    ///
+    /// HOW:
+    /// - Register a counting cancellation waker, poll an empty payload repeatedly, and check no wakes.
+    /// - Drop the payload and verify one wake and cancellation readiness.
     #[crate::rt_test]
     async fn test_pending_read_does_not_wake_io_task() {
         let (io, server) = IoTest::create();
@@ -330,8 +334,11 @@ mod tests {
         assert!(sender.on_cancel(&io_waker).is_ready());
     }
 
-    /// A ready read does not register the reader waker, new data does not wake
-    /// a reader that is not waiting.
+    /// STATEMENT: Reading an already-ready chunk does not register a waker for subsequent data.
+    ///
+    /// HOW:
+    /// - Feed two HTTP/2 chunks separately around a ready read and inspect the reader's wake count.
+    /// - Verify both chunks are readable without a wake between them.
     #[crate::rt_test]
     async fn test_ready_read_does_not_register_waker() {
         let (io, server) = IoTest::create();
@@ -377,7 +384,11 @@ mod tests {
         assert!(matches!(payload.poll_read(&mut cx), Poll::Ready(Some(Ok(ref d))) if d == "cd"));
     }
 
-    /// Trailers are available after all queued data is read.
+    /// STATEMENT: HTTP/2 trailers become visible after queued payload data is consumed and ignore later errors.
+    ///
+    /// HOW:
+    /// - Feed data, trailers, and a late error, then check trailer visibility before and after reading the data.
+    /// - Verify subsequent reads report EOF and retain the trailers.
     #[crate::rt_test]
     async fn test_trailers_after_data() {
         let (io, server) = IoTest::create();
@@ -421,6 +432,10 @@ mod tests {
         assert!(payload.trailers().is_some());
     }
 
+    /// STATEMENT: HTTP/2 payloads expose capacity in debug output and stream EOF after trailer-only completion.
+    ///
+    /// HOW:
+    /// - Format a payload, feed trailers without data, then poll its stream and inspect the retained trailers.
     #[crate::rt_test]
     async fn test_debug_and_stream() {
         use crate::util::stream_recv;

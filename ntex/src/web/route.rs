@@ -349,6 +349,12 @@ mod tests {
         name: String,
     }
 
+    /// STATEMENT: Routes dispatch by method and guards and render handler results or errors.
+    ///
+    /// HOW:
+    /// - Register synchronous-result and delayed handlers, including a header-guarded PATCH route.
+    /// - Exercise supported, guarded, and unsupported methods and assert their distinct statuses.
+    /// - Check a JSON handler's exact body and inspect route/factory debug metadata and creation.
     #[crate::rt_test]
     async fn test_route() {
         let srv = init_service(
@@ -458,6 +464,11 @@ mod tests {
         assert!(repr.contains("guards: AllGuard()"));
     }
 
+    /// STATEMENT: Route arrays select handlers independently of another route's extractor failures.
+    ///
+    /// HOW:
+    /// - Register GET with a numeric `Path` extractor and POST without that extractor.
+    /// - Assert numeric GET returns its value, invalid GET returns 404, and invalid-path POST returns 201.
     #[crate::rt_test]
     async fn test_route_array_and_extractor_error() {
         let srv = init_service(App::new().service(web::resource("/test/{id}").route([
@@ -484,6 +495,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
+    /// STATEMENT: Route debug output distinguishes stateless and state-aware handlers.
+    ///
+    /// HOW:
+    /// - Build routes with `to` and `to_with_state` and format them.
+    /// - Assert their debug output identifies `HandlerNoState` and `HandlerSt`, respectively.
     #[test]
     fn test_route_debug() {
         let route: web::Route<(), ()> = web::get().to(async || HttpResponse::Ok());

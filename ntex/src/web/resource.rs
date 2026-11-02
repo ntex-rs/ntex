@@ -775,6 +775,11 @@ mod tests {
     use crate::web::test::{TestRequest, call_service, init_service};
     use crate::web::{self, App, HttpResponse, guard, request::WebRequest};
 
+    /// STATEMENT: Resource filters execute before a matching route handler.
+    ///
+    /// HOW:
+    /// - Attach a flag-setting filter and GET handler to `/test`.
+    /// - Call it and assert OK and that the shared flag was set.
     #[crate::rt_test]
     async fn test_filter() {
         let filter = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -912,6 +917,11 @@ mod tests {
         assert_eq!((filter.binds.get(), default.binds.get()), (1, 1));
     }
 
+    /// STATEMENT: `Resource::to` supports handlers that complete asynchronously.
+    ///
+    /// HOW:
+    /// - Register `/test` with a handler that sleeps before returning OK.
+    /// - Await a request and assert its status is OK.
     #[crate::rt_test]
     async fn test_to() {
         let srv = init_service(App::new().service(web::resource("/test").to(async || {
@@ -924,6 +934,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: One resource can serve multiple path patterns.
+    ///
+    /// HOW:
+    /// - Register `/test` and `/test2` together with one OK handler.
+    /// - Request both paths and assert OK for each response.
     #[crate::rt_test]
     async fn test_pattern() {
         let srv = init_service(
@@ -938,6 +953,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// STATEMENT: Resource method misses use the resource fallback rather than the application default.
+    ///
+    /// HOW:
+    /// - Register a GET-only resource and a bad-request application default; assert GET is OK and POST is 405.
+    /// - Add a bad-request resource default and assert GET stays OK while POST now returns 400.
     #[crate::rt_test]
     async fn test_default_resource() {
         let srv = init_service(
@@ -980,6 +1000,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// STATEMENT: Resource guards distinguish otherwise identical parameterized paths by method.
+    ///
+    /// HOW:
+    /// - Register GET-, PUT-, and DELETE-guarded resources at `/test/{p}`.
+    /// - Call each method and assert statuses OK, `CREATED`, and `NO_CONTENT`, respectively.
     #[crate::rt_test]
     async fn test_resource_guards() {
         let srv = init_service(
@@ -1021,6 +1046,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
+    /// STATEMENT: Resource middleware applies to both matching handlers and fallback responses.
+    ///
+    /// HOW:
+    /// - Add a default content-type header around a GET-only resource.
+    /// - Send GET and POST and assert both responses contain `text/plain`.
     #[crate::rt_test]
     async fn test_middleware() {
         use crate::http::header::{CONTENT_TYPE, HeaderValue};
@@ -1044,6 +1074,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: An empty resource path matches a scope root without accepting an extra slash.
+    ///
+    /// HOW:
+    /// - Register an empty resource under `/app`.
+    /// - Assert `/app` returns OK and `/app/` returns 404.
     #[crate::rt_test]
     async fn test_empty_path_in_scope() {
         let srv = init_service(App::new().service(
@@ -1056,6 +1091,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// STATEMENT: Converting a resource into a factory preserves its routes and default service.
+    ///
+    /// HOW:
+    /// - Convert a GET resource with a 405 default through `IntoServiceFactory` and build its pipeline.
+    /// - Call with GET and PUT and assert OK and `METHOD_NOT_ALLOWED`, respectively.
     #[crate::rt_test]
     async fn test_into_factory() {
         use crate::service::{IntoServiceFactory, ServiceFactory};

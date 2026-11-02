@@ -678,6 +678,11 @@ impl DateService {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Date header serialization reuses cached values until the date service invalidates them.
+    ///
+    /// HOW:
+    /// - Compare repeated writes through both buffer APIs and match the cached header value.
+    /// - Update the service, verify cache invalidation, and check the regenerated value length.
     #[crate::rt_test]
     async fn test_date() {
         let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
@@ -701,6 +706,10 @@ mod tests {
         assert_eq!(DateService::header_value().len(), 29);
     }
 
+    /// STATEMENT: Optional timeout values convert into disabled or timed keepalive settings.
+    ///
+    /// HOW:
+    /// - Convert absent and present integer durations and compare the resulting keepalive variants.
     #[test]
     fn keep_alive() {
         assert_eq!(KeepAlive::Disabled, Option::<usize>::None.into());
@@ -710,6 +719,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Keepalive modes distinguish OS-managed persistence, disabled persistence, and configured timeouts.
+    ///
+    /// HOW:
+    /// - Apply each mode, including a zero timeout, and compare timeout and enablement fields.
     #[test]
     fn keep_alive_settings() {
         let cfg = HttpServiceConfig::new().set_keepalive(KeepAlive::Os);
@@ -729,6 +742,10 @@ mod tests {
         assert!(!cfg.ka_enabled);
     }
 
+    /// STATEMENT: Zero read-rate intervals disable header and payload rate enforcement.
+    ///
+    /// HOW:
+    /// - Configure nonzero rates, verify both are present, then replace intervals with zero and check both are absent.
     #[test]
     fn read_rate_settings() {
         let cfg = HttpServiceConfig::new()

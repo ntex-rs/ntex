@@ -260,6 +260,10 @@ fn release_connection(io: IoBoxed, force_close: bool, created: Instant, pool: Op
 mod tests {
     use super::*;
 
+    /// STATEMENT: Host headers omit scheme-default ports and preserve nondefault ports and IPv6 brackets.
+    ///
+    /// HOW:
+    /// - Derive headers for HTTP, HTTPS, WS, WSS, and IPv6 URLs and verify a relative path has no host.
     #[test]
     fn test_host_header() {
         for (uri, host) in [
