@@ -1241,7 +1241,8 @@ impl Future for PinnedFuture {
             this.address.set(address);
             *this.waker.borrow_mut() = Some(crate::LocalWaker::from_waker(cx.waker()));
             // Reenter spawning and grow the unfinished-task list.
-            for _ in 0..128 {
+            let tasks = if cfg!(miri) { 4 } else { 128 };
+            for _ in 0..tasks {
                 this.rt.spawn_detached(async {});
             }
             Poll::Pending
@@ -1263,7 +1264,8 @@ impl Drop for PinnedFuture {
 /// STATEMENT: A pinned future stays at its owner-thread address while reentrant spawning grows the task list.
 ///
 /// HOW:
-/// - Poll a non-`Unpin` future that records its address, saves a local waker, and spawns 128 detached tasks.
+/// - Poll a non-`Unpin` future that records its address, saves a local waker, and spawns detached tasks.
+/// - Spawn 128 tasks natively or four under Miri to grow the unfinished-task list reentrantly.
 /// - Check its core address and `LISTED` state, then wake and complete it with address checks in poll and drop.
 /// - Check one drop, unlinking, and a successful join; verify stale local wakes stay idle and final release reclaims storage.
 #[test]
@@ -1314,7 +1316,10 @@ impl Drop for DropCheck {
     fn drop(&mut self) {
         assert_eq!(thread::current().id(), self.owner);
         self.drops.set(self.drops.get() + 1);
-        assert!(!self.panics, "future drop panic");
+        if self.panics {
+            // Exercise unwind cleanup without invoking panic hooks or backtraces.
+            std::panic::resume_unwind(Box::new("future drop panic"));
+        }
     }
 }
 
@@ -1353,7 +1358,9 @@ fn unlink_on_completion_cancel_panic_and_shutdown() {
         };
         let future = async move {
             let _guard = guard;
-            assert_ne!(path, 2, "poll panic");
+            if path == 2 {
+                std::panic::resume_unwind(Box::new("poll panic"));
+            }
             if path != 0 {
                 pending::<()>().await;
             }

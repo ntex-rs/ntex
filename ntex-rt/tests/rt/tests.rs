@@ -735,7 +735,7 @@ fn busy_duration_is_monotonic() {
     let th = thread::spawn(move || {
         let rt = Runtime::new(Box::new(NoopNotify));
         tx.send(rt.handle()).unwrap();
-        for _ in 0..100 {
+        for _ in 0..iters(100, 4) {
             drop(rt.spawn(async { thread::sleep(Duration::from_micros(500)) }));
             assert_eq!(rt.poll(), PollResult::Pending);
             thread::sleep(Duration::from_micros(200));
@@ -1163,6 +1163,7 @@ fn remote_wakers() {
 ///
 /// HOW:
 /// - Run a future with a fixed poll target while four threads wake, wake by reference, and clone/drop.
+/// - Under Miri, limit each worker to one operation per observed poll without adding synchronization.
 /// - Poll until finished, stop and join the workers, and check the result and poll count equal the target.
 #[test]
 fn remote_wakers_stress() {
@@ -1178,9 +1179,23 @@ fn remote_wakers_stress() {
         .map(|i| {
             let slot = slot.clone();
             let stop = stop.clone();
+            let polls = polls.clone();
             thread::spawn(move || {
+                let mut last_poll = 0;
                 while !stop.load(Ordering::SeqCst) {
+                    let polled = if cfg!(miri) {
+                        polls.load(Ordering::Relaxed)
+                    } else {
+                        0
+                    };
+                    if cfg!(miri) && polled == last_poll {
+                        thread::yield_now();
+                        continue;
+                    }
                     let w = slot.lock().unwrap().clone();
+                    if w.is_some() {
+                        last_poll = polled;
+                    }
                     match (w, i % 3) {
                         (Some(w), 0) => w.wake(),
                         (Some(w), 1) => w.wake_by_ref(),
@@ -1309,7 +1324,8 @@ fn panic_in_poll() {
     let flag = DropFlag(dropped.clone());
     let h = rt.spawn(async move {
         let _flag = flag;
-        panic!("task panic");
+        // Exercise unwinding without invoking panic hooks or backtraces.
+        std::panic::resume_unwind(Box::new("task panic"));
     });
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         CURRENT_RUNTIME.set(&rt, || rt.poll())
@@ -1455,41 +1471,36 @@ fn block_on_backtrace_cutoff() {
 /// STATEMENT: Nested `block_on` is rejected for both the current runtime and a different runtime.
 ///
 /// HOW:
-/// - Attempt both nesting cases inside an outer `block_on` and catch the rejection panic.
-/// - Check each rejection and successfully block on another future using the outer runtime afterward.
+/// - Attempt both nesting cases from an outer `block_on` driver and catch the rejection panic.
+/// - Check each rejection, complete the outer future, and successfully block on another future afterward.
 #[test]
 fn block_on_rejects_nesting() {
-    struct BusyDriver;
+    struct NestedDriver(bool);
 
-    impl Driver for BusyDriver {
+    impl Driver for NestedDriver {
         fn handle(&self) -> Box<dyn Notify> {
             Box::new(NoopNotify)
         }
 
         fn run(&self, rt: &Runtime) -> io::Result<()> {
-            while rt.poll() != PollResult::Ready {}
-            Ok(())
+            // Avoid deep task-poll stacks in the expected rejection backtraces.
+            let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if self.0 {
+                    Runtime::with_current(|rt| rt.block_on(async {}, &PollDriver));
+                } else {
+                    Runtime::new(Box::new(NoopNotify)).block_on(async {}, &PollDriver);
+                }
+            }));
+            assert!(nested.is_err());
+            PollDriver.run(rt)
         }
     }
 
     for same in [true, false] {
         let rt = Runtime::new(Box::new(NoopNotify));
-        let nested = rt.block_on(
-            async {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    if same {
-                        Runtime::with_current(|rt| rt.block_on(async {}, &BusyDriver));
-                    } else {
-                        Runtime::new(Box::new(NoopNotify)).block_on(async {}, &BusyDriver);
-                    }
-                }))
-                .is_err()
-            },
-            &BusyDriver,
-        );
-        assert!(nested);
+        assert_eq!(rt.block_on(async { 1 }, &NestedDriver(same)), 1);
         // the runtime is usable after the rejected call
-        assert_eq!(rt.block_on(async { 1 }, &BusyDriver), 1);
+        assert_eq!(rt.block_on(async { 2 }, &PollDriver), 2);
     }
 }
 
@@ -1538,7 +1549,7 @@ fn block_on_drops_future_on_driver_panic() {
 
         fn run(&self, rt: &Runtime) -> io::Result<()> {
             rt.poll();
-            panic!("driver panic");
+            std::panic::resume_unwind(Box::new("driver panic"));
         }
     }
 
@@ -2229,7 +2240,7 @@ fn join_completion_survives_waker_clone_panic() {
         let waker = Hook::waker(
             Some(Box::new(|| {
                 Runtime::with_current(drain);
-                panic!("clone after completion");
+                std::panic::resume_unwind(Box::new("clone after completion"));
             })),
             Some(Box::new(move || drop(flag))),
         );
@@ -2285,7 +2296,7 @@ fn panic_in_future_drop() {
     impl Drop for PanicOnDrop {
         fn drop(&mut self) {
             self.0.inc();
-            panic!("drop panic");
+            std::panic::resume_unwind(Box::new("drop panic"));
         }
     }
 

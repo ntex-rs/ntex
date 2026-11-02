@@ -497,7 +497,7 @@ fn finish_unshared() {
 
     impl Drop for PanicOnDrop {
         fn drop(&mut self) {
-            panic!("output drop");
+            std::panic::resume_unwind(Box::new("output drop"));
         }
     }
 
@@ -1067,50 +1067,48 @@ fn queued_then_finished() {
 /// STATEMENT: Shutdown destroys pending futures despite surviving handles and standard wakers.
 ///
 /// HOW:
-/// - Vary local versus remote submission, handle detachment, and local or remote waker drop or wake.
+/// - Vary local handle detachment and remote submission, with local or remote waker drop or wake.
 /// - Poll once, shut down, and check one future drop plus finished, empty joins for surviving handles.
 /// - Release the remaining waker and check the driver queue is not retained.
 #[test]
 fn shutdown_drops_pending() {
     // Shutdown drops pending futures despite surviving standard wakers.
-    for remote_spawn in [false, true] {
-        for detach in [false, true] {
-            for release in 0..4 {
-                let rt = new_rt();
-                let queue = Arc::downgrade(&rt.queue);
-                let p = Probe::default();
-                let fut = p.future(Res::Pending);
-                let (task, r) = if remote_spawn {
-                    let handle = rt.handle();
-                    on_thread(move || drop(handle.spawn(fut)));
-                    (None, one_remote(&rt).unwrap())
-                } else {
-                    (Some(spawn(&rt, fut)), one_local(&rt))
-                };
-                assert!(!r.run());
-                let w = p.waker();
-                let mut task = if detach {
-                    drop(task);
-                    None
-                } else {
-                    task
-                };
-                drop(rt);
-                p.check(1, 1, 0);
-                if let Some(task) = &mut task {
-                    assert!(task.is_finished());
-                    assert!(matches!(join(task), Poll::Ready(None)));
-                }
+    for (remote_spawn, detach) in [(false, false), (false, true), (true, true)] {
+        for release in 0..4 {
+            let rt = new_rt();
+            let queue = Arc::downgrade(&rt.queue);
+            let p = Probe::default();
+            let fut = p.future(Res::Pending);
+            let (task, r) = if remote_spawn {
+                let handle = rt.handle();
+                on_thread(move || drop(handle.spawn(fut)));
+                (None, one_remote(&rt).unwrap())
+            } else {
+                (Some(spawn(&rt, fut)), one_local(&rt))
+            };
+            assert!(!r.run());
+            let w = p.waker();
+            let mut task = if detach {
                 drop(task);
-                assert!(queue.upgrade().is_none());
-                match release {
-                    0 => drop(w),
-                    1 => w.wake(),
-                    2 => on_thread(move || drop(w)),
-                    _ => on_thread(move || w.wake()),
-                }
-                assert!(queue.upgrade().is_none(), "task alive");
+                None
+            } else {
+                task
+            };
+            drop(rt);
+            p.check(1, 1, 0);
+            if let Some(task) = &mut task {
+                assert!(task.is_finished());
+                assert!(matches!(join(task), Poll::Ready(None)));
             }
+            drop(task);
+            assert!(queue.upgrade().is_none());
+            match release {
+                0 => drop(w),
+                1 => w.wake(),
+                2 => on_thread(move || drop(w)),
+                _ => on_thread(move || w.wake()),
+            }
+            assert!(queue.upgrade().is_none(), "task alive");
         }
     }
 }
@@ -1139,7 +1137,10 @@ fn shutdown_drop_wakes_and_spawns() {
             pending_with_drop(move || {
                 w1.wake();
                 unsafe { task::spawn_detached::<_, false>(fut2, &q, Location::caller()) };
-                assert!(!panics, "reentrant cleanup panic");
+                if panics {
+                    // Exercise unwind cleanup without invoking panic hooks or backtraces.
+                    std::panic::resume_unwind(Box::new("reentrant cleanup panic"));
+                }
             }),
         );
         one_local(&rt).run();
@@ -1234,14 +1235,15 @@ fn shutdown_completion_panics() {
         fn wake(self: Arc<Self>) {
             assert!(!self.drops, "detached awaiter was woken");
             self.calls.inc();
-            panic!("completion panic");
+            // Exercise unwind cleanup without invoking panic hooks or backtraces.
+            std::panic::resume_unwind(Box::new("completion panic"));
         }
     }
     impl Drop for PanicWake {
         fn drop(&mut self) {
             if self.drops {
                 self.calls.inc();
-                panic!("completion panic");
+                std::panic::resume_unwind(Box::new("completion panic"));
             }
         }
     }
@@ -1412,7 +1414,8 @@ fn shutdown_panic_waits_for_admitted_publication() {
         &rt,
         pending_with_drop(move || {
             d.inc();
-            panic!("first future panic");
+            // Exercise unwind cleanup without invoking panic hooks or backtraces.
+            std::panic::resume_unwind(Box::new("first future panic"));
         }),
     );
     let (q, d) = (rt.queue.clone(), drops.clone());
@@ -1748,7 +1751,9 @@ fn local_waker_completion_and_shutdown() {
                     *saved.borrow_mut() = Some(LocalWaker::from_waker(cx.waker()));
                     return Poll::Pending;
                 }
-                assert_ne!(result, Res::Panic, "task panic");
+                if result == Res::Panic {
+                    std::panic::resume_unwind(Box::new("task panic"));
+                }
                 Poll::Ready(Rc::new(42))
             })
             .await
@@ -2029,7 +2034,7 @@ fn panicking_completion_waker() {
     struct PanicWake;
     impl std::task::Wake for PanicWake {
         fn wake(self: Arc<Self>) {
-            panic!("completion waker panic");
+            std::panic::resume_unwind(Box::new("completion waker panic"));
         }
     }
     let rt = new_rt();
@@ -2062,7 +2067,7 @@ fn panicking_detached_awaiter_drop() {
     }
     impl Drop for PanicDrop {
         fn drop(&mut self) {
-            panic!("completion waker drop panic");
+            std::panic::resume_unwind(Box::new("completion waker drop panic"));
         }
     }
     let rt = new_rt();
@@ -2079,8 +2084,12 @@ fn panicking_detached_awaiter_drop() {
 }
 
 fn panic_clone_waker() -> Waker {
-    static PANIC: std::task::RawWakerVTable =
-        std::task::RawWakerVTable::new(|_| panic!("waker clone panic"), |_| (), |_| (), |_| ());
+    static PANIC: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
+        |_| std::panic::resume_unwind(Box::new("waker clone panic")),
+        |_| (),
+        |_| (),
+        |_| (),
+    );
     unsafe { Waker::from_raw(std::task::RawWaker::new(std::ptr::null(), &PANIC)) }
 }
 

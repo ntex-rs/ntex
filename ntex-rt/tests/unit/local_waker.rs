@@ -1,4 +1,4 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Poll, Wake};
 use std::{future::poll_fn, ptr, sync::Arc};
@@ -103,7 +103,8 @@ fn fallback_clone_parts_and_owned_conversion() {
 #[test]
 fn fallback_null_data_and_clone_unwind() {
     static PANIC: RawWakerVTable = RawWakerVTable::new(
-        |_| panic!("clone"),
+        // Exercise unwinding without invoking panic hooks or backtraces.
+        |_| resume_unwind(Box::new("clone")),
         |data| assert!(data.is_null()),
         |data| assert!(data.is_null()),
         |data| assert!(data.is_null()),
@@ -141,18 +142,18 @@ fn fallback_wake_and_drop_unwind() {
         |data| {
             let counter = unsafe { Arc::from_raw(data.cast::<Counter>()) };
             counter.0.fetch_add(1, Ordering::Relaxed);
-            panic!("wake");
+            resume_unwind(Box::new("wake"));
         },
         |data| {
             unsafe { &*data.cast::<Counter>() }
                 .0
                 .fetch_add(1, Ordering::Relaxed);
-            panic!("wake_by_ref");
+            resume_unwind(Box::new("wake_by_ref"));
         },
         |data| {
             let counter = unsafe { Arc::from_raw(data.cast::<Counter>()) };
             counter.0.fetch_add(1, Ordering::Relaxed);
-            panic!("drop");
+            resume_unwind(Box::new("drop"));
         },
     );
     let counter = Arc::new(Counter::default());
