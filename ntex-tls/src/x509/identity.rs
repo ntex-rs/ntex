@@ -37,9 +37,9 @@
 //! Rustls adapters are provided in `crate::rustls` when that feature is enabled.
 use std::{fmt, str::FromStr};
 
-use base64::{Engine, engine::general_purpose::STANDARD as base64};
+use base64::Engine;
 
-use crate::x509::{Certificate, Error, PrivateKey, crypto};
+use crate::x509::{BASE64, Certificate, Error, PrivateKey, crypto};
 
 #[cfg(windows)]
 pub use crate::x509::cng::CngKey;
@@ -638,7 +638,7 @@ pub(crate) fn pkcs8_pem(pem: &[u8]) -> Result<zeroize::Zeroizing<Vec<u8>>, Error
             .filter(|b| !b.is_ascii_whitespace())
             .collect::<Vec<_>>(),
     );
-    base64
+    BASE64
         .decode(encoded.as_slice())
         .map(zeroize::Zeroizing::new)
         .map_err(|e| Error::InvalidPem(e.to_string()))

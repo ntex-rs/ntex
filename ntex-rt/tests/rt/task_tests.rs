@@ -151,7 +151,8 @@ impl Future for Fut {
         match this.res {
             Res::Pending => Poll::Pending,
             Res::Ready => Poll::Ready(this.p.outputs.token()),
-            Res::Panic => panic!("task panic"),
+            // These probes exercise unwinding, not panic hooks or backtraces.
+            Res::Panic => std::panic::resume_unwind(Box::new("task panic")),
         }
     }
 }
@@ -981,7 +982,10 @@ fn release_output_after_shutdown() {
         fn drop(&mut self) {
             // The output guard becomes the last reference during destruction.
             drop(self.waker.take());
-            assert!(!self.panics, "output drop");
+            if self.panics {
+                // Exercise unwind cleanup without invoking panic hooks or backtraces.
+                std::panic::resume_unwind(Box::new("output drop"));
+            }
         }
     }
 
@@ -1171,7 +1175,8 @@ fn shutdown_continues_after_panics() {
                 assert_eq!(thread::current().id(), owner);
                 drops.inc();
                 if panics_on_drop {
-                    std::panic::panic_any(panics.0.fetch_add(1, Ordering::SeqCst));
+                    // Exercise unwind cleanup without invoking panic hooks or backtraces.
+                    std::panic::resume_unwind(Box::new(panics.0.fetch_add(1, Ordering::SeqCst)));
                 }
             });
             let task = if path == 2 {
@@ -2200,9 +2205,18 @@ fn stress_worker(mut rng: u64, slots: &[Slot], queue: &Arc<RunnableQueue>, futs:
                 }
             }
         }
-        while slots[idx].left.load(Ordering::Relaxed) != 0 {
-            if let Some(w) = slot_waker(slots, idx) {
+        let mut last_woken = usize::MAX;
+        loop {
+            let left = slots[idx].left.load(Ordering::Relaxed);
+            if left == 0 {
+                break;
+            }
+            // Under Miri, wait for a poll before queuing another wake for this task.
+            if (!cfg!(miri) || left != last_woken)
+                && let Some(w) = slot_waker(slots, idx)
+            {
                 w.wake();
+                last_woken = left;
             }
             thread::yield_now();
         }

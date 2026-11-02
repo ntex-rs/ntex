@@ -47,6 +47,20 @@ pub use self::key::{HashAlg, PrivateKey, SignScheme};
 pub use self::peer::PeerCerts;
 pub use self::trust::{CaCerts, TrustError};
 
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_feature = "neon")
+))]
+static BASE64: std::sync::LazyLock<base64::engine::Simd> = std::sync::LazyLock::new(|| {
+    base64::engine::Simd::standard(base64::engine::general_purpose::PAD)
+});
+
+#[cfg(not(any(
+    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_feature = "neon")
+)))]
+use base64::engine::general_purpose::STANDARD as BASE64;
+
 /// Installs a provider only in unit-test processes; production never installs one implicitly.
 #[cfg(test)]
 pub(crate) fn test_provider() {

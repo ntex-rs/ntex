@@ -18,14 +18,14 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 use std::{fmt, ops::Range};
 
-use base64::{Engine, engine::general_purpose::STANDARD as base64};
+use base64::Engine;
 use ntex_bytes::Bytes;
 use x509_parser::asn1_rs::{Any, Tag};
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::{FromDer, X509Certificate};
 use x509_parser::time::ASN1Time;
 
-use crate::x509::{Error, digest};
+use crate::x509::{BASE64, Error, digest};
 
 const PEM_BEGIN: &str = "-----BEGIN ";
 const PEM_END: &str = "-----END ";
@@ -339,7 +339,7 @@ fn key_type(spki: &x509_parser::x509::SubjectPublicKeyInfo<'_>) -> Option<KeyTyp
 /// Encodes DER as PEM with the given `label` (64 column base64 lines, trailing newline).
 #[must_use]
 pub fn pem_encode(label: &str, der: &[u8]) -> String {
-    let b64 = base64.encode(der);
+    let b64 = BASE64.encode(der);
     let mut pem = String::with_capacity(b64.len() + b64.len() / 64 + 2 * label.len() + 32);
     pem.push_str("-----BEGIN ");
     pem.push_str(label);
@@ -489,7 +489,7 @@ fn pem_blocks(pem: &[u8]) -> impl Iterator<Item = Result<Bytes, Error>> + '_ {
                 .filter(|b| !b.is_ascii_whitespace())
                 .collect();
             blocks.push(
-                base64
+                BASE64
                     .decode(&b64)
                     .map(Bytes::from)
                     .map_err(|e| Error::InvalidPem(e.to_string())),
