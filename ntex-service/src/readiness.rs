@@ -6,6 +6,23 @@ use std::{fmt, marker::PhantomData, mem, pin::Pin, rc::Rc, thread, thread::Threa
 
 use crate::ctx::WaitersInner;
 
+const UNBOUND: &str = "ReadyBinding must be registered by Service::bind before use: \
+    the parent's `Service::bind` must call `ctx.bind(&self.inner)` for every child service \
+    (or use `forward_bind!`/`forward_pl_bind!`); create lazy children with `Ctx::create`";
+
+const UNLINKED: &str = "ReadyBinding must be registered by Service::bind before use: \
+    it is bound to another parent; the calling service's `Service::bind` must also call \
+    `ctx.bind(&child)` (or use `forward_bind!`)";
+
+const FOREIGN: &str = "ReadyBinding cannot be shared across pipelines: \
+    share a `Pipeline` instead and register it with `Pipeline::bind_to` \
+    (or `forward_pl_bind!`)";
+
+const UNLINKED_FOREIGN: &str = "ReadyBinding must be registered by Service::bind before use: \
+    it is bound to another pipeline; the calling service's `Service::bind` must call \
+    `ctx.bind(&child)`, and a service used by several pipelines must be shared as a \
+    `Pipeline` registered with `Pipeline::bind_to` (or `forward_pl_bind!`)";
+
 thread_local! {
     static NOTIFICATION: RefCell<u64> = const { RefCell::new(0) };
 }
@@ -421,9 +438,7 @@ impl ReadyScope {
     ///
     /// Panics if service binding has not assigned this handle to a store.
     fn bound(&self) -> &ScopeRef {
-        self.0
-            .get()
-            .expect("ReadyBinding must be registered by Service::bind before use")
+        self.0.get().expect(UNBOUND)
     }
 
     /// Accesses this scope while holding an immutable borrow of its store's table.
@@ -587,10 +602,7 @@ impl ReadyScope {
                 id,
             }
         });
-        assert!(
-            Rc::ptr_eq(&parent.store, &child.store),
-            "ReadyBinding cannot be shared across pipelines; use ReadyLink with a shared Pipeline"
-        );
+        assert!(Rc::ptr_eq(&parent.store, &child.store), "{FOREIGN}");
         if parent.id != child.id {
             parent
                 .store
@@ -603,18 +615,20 @@ impl ReadyScope {
     ///
     /// Panics for unbound handles, foreign stores, or missing dependency edges.
     pub(crate) fn assert_dependency(&self, child: &Self) {
+        let child = child.0.get().expect(UNBOUND);
+        let parent = self.bound();
         assert!(
-            child.0.get().is_some_and(|child| {
-                let parent = self.bound();
-                Rc::ptr_eq(&parent.store, &child.store)
-                    && (parent.id == child.id
-                        || parent
-                            .store
-                            .scopes
-                            .with(child.id, |s| s.parents.borrow().contains(&parent.id))
-                            == Some(true))
-            }),
-            "ReadyBinding must be registered by Service::bind before use"
+            Rc::ptr_eq(&parent.store, &child.store),
+            "{UNLINKED_FOREIGN}"
+        );
+        assert!(
+            parent.id == child.id
+                || parent
+                    .store
+                    .scopes
+                    .with(child.id, |s| s.parents.borrow().contains(&parent.id))
+                    == Some(true),
+            "{UNLINKED}"
         );
     }
 
