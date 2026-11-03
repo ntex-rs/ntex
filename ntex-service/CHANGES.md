@@ -1,5 +1,13 @@
 # Changes
 
+## [5.6.0] - 2026-11-03
+
+* Add `ReadyBinding::get_ref()` to access the wrapped service
+
+* Add `ReadyBinding::map()` to transform a service while preserving its readiness
+  scope, cached readiness, pipeline owner, and callback data. The transformation
+  must preserve readiness dependencies, notification sources, and cache validity
+
 ## [5.5.0] - 2026-10-31
 
 * Rename `ServiceBinding` to `ReadyBinding` and `ServiceBindingMiddleware` to

@@ -91,6 +91,25 @@ impl<S> ReadyBinding<S> {
         }
     }
 
+    /// Returns a reference to the wrapped service.
+    pub fn get_ref(&self) -> &S {
+        &self.service
+    }
+
+    /// Transforms the service while preserving its scope, cached readiness, and data.
+    ///
+    /// The transformation must preserve the service's readiness dependencies,
+    /// notification sources, and the validity of any cached readiness. This does
+    /// not rebind the service or invalidate its cache. Use [`Self::new`] for a
+    /// replacement with different dependencies.
+    pub fn map<T>(self, f: impl FnOnce(S) -> T) -> ReadyBinding<T> {
+        ReadyBinding {
+            service: f(self.service),
+            scope: self.scope,
+            data: self.data,
+        }
+    }
+
     /// Enters this binding's scope from a scope that has bound it.
     fn enter<'a, T, St>(&'a self, ctx: Ctx<'a, Self, St>) -> Ctx<'a, T, St> {
         ctx.scope().assert_dependency(&self.scope);
