@@ -374,8 +374,10 @@ impl<S: Service<(), u8>> Service<(), u8> for Limited<S> {
 
 When a child implements `Service` for several request types, pass the types
 explicitly, for example `ctx.bind::<_, St, Req>(&self.first)`. Services that
-only forward to their children can use the `forward_bind!(St, field, ...)` or
-`forward_pl_bind!` macros. The default `bind()` does nothing, which is correct
+wrap child services can use `forward!(St, field, ...)`, which forwards
+`bind()`, `ready()`, and `shutdown()` to every listed field. Use
+`map_err = f` as the last argument to convert readiness errors. Register
+`Pipeline` fields with `pipeline.bind_to(&ctx)`. The default `bind()` does nothing, which is correct
 for leaf services that have no notification sources.
 
 A few rules follow from this design:
@@ -385,7 +387,7 @@ A few rules follow from this design:
 - Using a `ReadyBinding` that its parent did not bind panics, so a missing
   `bind()` forward is detected instead of silently losing notifications. The
   panic message names the fix: call `ctx.bind(&child)` in the parent's `bind`,
-  or use `forward_bind!` / `forward_pl_bind!`.
+  or use `forward!`.
 - Shared services can be bound more than once. Repeated subscriptions are
   idempotent.
 - Children created lazily at runtime must use `ctx.create(&factory).await`,

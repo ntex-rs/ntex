@@ -427,9 +427,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     ///     type Res = S::Res;
     ///     type Error = S::Error;
     ///
-    ///     ntex_service::forward_bind!((), inner);
-    ///     ntex_service::forward_ready!((), inner);
-    ///     ntex_service::forward_shutdown!((), inner);
+    ///     ntex_service::forward!((), inner);
     ///
     ///     async fn call(&self, req: usize, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
     ///         ctx.call(&self.inner, req).await

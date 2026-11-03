@@ -163,7 +163,7 @@ pub trait Service<St, Req> {
     ///
     /// Binding is synchronous. Shared services can be bound to multiple parents;
     /// implementations must support repeated binding.
-    /// [`forward_bind!`] and [`forward_pl_bind!`] handle simple forwarding.
+    /// [`forward!`] forwards to one or several service fields. Register [`Pipeline`] fields with [`Pipeline::bind_to`].
     /// Ordinary readiness checks, calls, and shutdown do not add dependencies.
     fn bind(&self, ctx: BindCtx<'_>) {}
 
@@ -538,6 +538,12 @@ where
 ///
 /// - [Service Pipelines](https://docs.ntex.rs/2-pipeline.html)
 /// - [Service State](https://docs.ntex.rs/3-state.html)
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::readiness::Generation;
+    pub use crate::util::{join, ready_field, ready_join};
+}
+
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
     pub use crate::apply::{Apply, ApplyCtx, ApplyFactory};

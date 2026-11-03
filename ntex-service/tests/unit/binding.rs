@@ -2362,8 +2362,13 @@ impl<E: 'static> Service<State, usize> for PipelineForward<E> {
         ctx.subscribe_pipeline(&self.inner.readiness_link());
     }
 
-    crate::forward_pl_ready!(State, self.inner);
-    crate::forward_pl_shutdown!(State, self.inner);
+    async fn ready(&self, _: Ctx<'_, Self, State>) -> Result<(), E> {
+        self.inner.ready().await
+    }
+
+    async fn shutdown(&self, _: Ctx<'_, Self, State>) {
+        self.inner.shutdown().await;
+    }
 
     async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, E> {
         self.inner.call(req).await
@@ -2427,8 +2432,13 @@ impl Service<State, usize> for BindingForward {
     type Res = usize;
     type Error = &'static str;
 
-    crate::forward_pl_bind!(State, self.inner);
-    crate::forward_pl_ready!(State, self.inner, |_| "unavailable");
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.inner.bind_to(&ctx);
+    }
+
+    async fn ready(&self, _: Ctx<'_, Self, State>) -> Result<(), Self::Error> {
+        self.inner.ready().await.map_err(|_| "unavailable")
+    }
 
     async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Self::Error> {
         self.inner.call(req).await.map_err(|_| "unavailable")
@@ -2489,8 +2499,13 @@ impl Service<State, usize> for ShutdownForward {
     type Res = usize;
     type Error = Error;
 
-    crate::forward_pl_bind!(State, self.inner);
-    crate::forward_pl_shutdown!(State, self.inner);
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.inner.bind_to(&ctx);
+    }
+
+    async fn shutdown(&self, _: Ctx<'_, Self, State>) {
+        self.inner.shutdown().await;
+    }
 
     async fn call(&self, req: usize, _: Ctx<'_, Self, State>) -> Result<usize, Error> {
         self.inner.call(req).await

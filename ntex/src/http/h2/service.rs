@@ -13,7 +13,7 @@ use crate::http::{DateService, Method, Request, Response, StatusCode, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
 use crate::service::cfg::Configuration;
 use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineFactory};
-use crate::service::{Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
+use crate::service::{BindCtx, Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
 use crate::util::{Bytes, HashMap};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
@@ -158,7 +158,9 @@ impl Service<(), h2::Control<Error<H2Error>>> for ControlService {
     type Res = h2::ControlAck;
     type Error = DispatchError;
 
-    crate::service::forward_pl_bind!((), self.inner);
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.inner.bind_to(&ctx);
+    }
 
     async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
         self.inner.ready().await
@@ -240,7 +242,10 @@ where
 
     // Keep payload delivery independent of application capacity.
     // New requests check readiness through `self.svc.call`.
-    crate::service::forward_pl_bind!((), svc, control);
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.svc.bind_to(&ctx);
+        self.control.bind_to(&ctx);
+    }
 
     async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
         self.svc.shutdown().await;

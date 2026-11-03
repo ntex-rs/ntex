@@ -55,9 +55,17 @@ impl Service<usize, usize> for FwdPl {
     type Res = usize;
     type Error = &'static str;
 
-    crate::forward_pl_bind!(usize, pl);
-    crate::forward_pl_ready!(usize, pl);
-    crate::forward_pl_shutdown!(usize, pl);
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.pl.bind_to(&ctx);
+    }
+
+    async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), &'static str> {
+        self.pl.ready().await
+    }
+
+    async fn shutdown(&self, _: Ctx<'_, Self, usize>) {
+        self.pl.shutdown().await;
+    }
 
     async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, &'static str> {
         self.pl.call(req).await
@@ -72,8 +80,13 @@ impl Service<usize, usize> for FwdPlErr {
     type Res = usize;
     type Error = usize;
 
-    crate::forward_pl_bind!(usize, pl);
-    crate::forward_pl_ready!(usize, pl, str::len);
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.pl.bind_to(&ctx);
+    }
+
+    async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), usize> {
+        self.pl.ready().await.map_err(str::len)
+    }
 
     async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, usize> {
         self.pl.call(req).await.map_err(str::len)
@@ -126,7 +139,7 @@ async fn service_wrappers() {
     );
     assert_eq!(pl.call(1).await, Ok(11));
     pl.shutdown().await;
-    // inner pipeline readiness is checked once, by `forward_pl_ready!`
+    // inner pipeline readiness is checked once, by `FwdPl::ready`
     assert_eq!(cnt.get(), 506);
 
     let pl = Pipeline::new(
@@ -138,6 +151,153 @@ async fn service_wrappers() {
     assert_eq!(pl.call(0).await, Err(4));
     pl.shutdown().await;
     assert_eq!(cnt.get(), 507);
+}
+
+struct NotReady;
+
+impl Service<usize, usize> for NotReady {
+    type Res = usize;
+    type Error = &'static str;
+
+    async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), Self::Error> {
+        Err("down")
+    }
+
+    async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
+        Ok(req)
+    }
+}
+
+struct FwdAll(ReadyBinding<Srv>);
+
+impl Service<usize, usize> for FwdAll {
+    type Res = usize;
+    type Error = &'static str;
+
+    crate::forward!(usize, 0);
+
+    async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
+        ctx.call(&self.0, req).await
+    }
+}
+
+struct FwdAllErr {
+    inner: NotReady,
+}
+
+impl Service<usize, usize> for FwdAllErr {
+    type Res = usize;
+    type Error = usize;
+
+    crate::forward!(usize, inner, map_err = str::len);
+
+    async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, usize> {
+        ctx.call(&self.inner, req).await.map_err(str::len)
+    }
+}
+
+struct FwdMany {
+    a: ReadyBinding<Srv>,
+    b: ReadyBinding<Srv>,
+    c: Srv,
+}
+
+impl Service<usize, usize> for FwdMany {
+    type Res = usize;
+    type Error = &'static str;
+
+    crate::forward!(usize, a, b, c);
+
+    async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
+        let res = ctx.call(&self.a, req).await?;
+        ctx.call(&self.b, res).await
+    }
+}
+
+struct FwdManyTuple(ReadyBinding<Srv>, ReadyBinding<Srv>);
+
+impl Service<usize, usize> for FwdManyTuple {
+    type Res = usize;
+    type Error = &'static str;
+
+    crate::forward!(usize, 0, 1,);
+
+    async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
+        let res = ctx.call(&self.0, req).await?;
+        ctx.call(&self.1, res).await
+    }
+}
+
+struct FwdManyErr {
+    a: Srv,
+    b: NotReady,
+}
+
+impl Service<usize, usize> for FwdManyErr {
+    type Res = usize;
+    type Error = usize;
+
+    crate::forward!(usize, a, b, map_err = str::len);
+
+    async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, usize> {
+        ctx.call(&self.b, req).await.map_err(str::len)
+    }
+}
+
+/// STATEMENT: `forward!` wires bind, readiness, error mapping, and shutdown for one or several service fields.
+///
+/// HOW:
+/// - Call through a `ReadyBinding` tuple field, which panics if `bind` is not forwarded.
+/// - Repeat with several named and tuple fields, checking that every field is readied and shut down.
+/// - Check readiness and shutdown counters, and verify mapped readiness errors.
+#[ntex::test]
+async fn forward_macro() {
+    let cnt = Rc::new(Cell::new(0));
+
+    let pl = Pipeline::new(1, FwdAll(ReadyBinding::new(Srv(cnt.clone()))));
+    assert_eq!(pl.call(1).await, Ok(2));
+    assert_eq!(cnt.get(), 1);
+    pl.shutdown().await;
+    assert_eq!(cnt.get(), 101);
+
+    let pl = Pipeline::new(1, FwdAllErr { inner: NotReady });
+    assert_eq!(pl.call(1).await, Err(4));
+
+    let cnt = Rc::new(Cell::new(0));
+    let pl = Pipeline::new(
+        1,
+        FwdMany {
+            a: ReadyBinding::new(Srv(cnt.clone())),
+            b: ReadyBinding::new(Srv(cnt.clone())),
+            c: Srv(cnt.clone()),
+        },
+    );
+    assert_eq!(pl.call(1).await, Ok(3));
+    assert_eq!(cnt.get(), 3);
+    pl.shutdown().await;
+    assert_eq!(cnt.get(), 303);
+
+    let cnt = Rc::new(Cell::new(0));
+    let pl = Pipeline::new(
+        1,
+        FwdManyTuple(
+            ReadyBinding::new(Srv(cnt.clone())),
+            ReadyBinding::new(Srv(cnt.clone())),
+        ),
+    );
+    assert_eq!(pl.call(1).await, Ok(3));
+    assert_eq!(cnt.get(), 2);
+    pl.shutdown().await;
+    assert_eq!(cnt.get(), 202);
+
+    let pl = Pipeline::new(
+        1,
+        FwdManyErr {
+            a: Srv(cnt.clone()),
+            b: NotReady,
+        },
+    );
+    assert_eq!(pl.call(1).await, Err(4));
 }
 
 /// STATEMENT: Pipeline call entry points share cached readiness until shutdown invalidates it.

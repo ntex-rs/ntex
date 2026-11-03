@@ -120,11 +120,11 @@ Use `ctx.call(&self.inner, req).await` even after an explicit readiness check:
 it retains the cached fast path while observing intervening invalidation.
 
 `Ctx` also provides `ready()` and `shutdown()` operations. Wrappers must forward
-`Service::bind` and readiness to their children, for example with
-`forward_bind!` and `forward_ready!`. Services whose readiness changes must
-subscribe to a `ReadyNotifier` in `bind` and notify on every relevant change.
-A raw `Ctx::ready` call does not populate an upstream cache; use `ready(svc)`
-when a child needs independent persistent readiness.
+`Service::bind` and readiness to their children, for example with `forward!`.
+Services whose readiness changes must subscribe to a `ReadyNotifier` in `bind`
+and notify on every relevant change. A raw `Ctx::ready` call does not populate
+an upstream cache; use `ready(svc)` when a child needs independent persistent
+readiness.
 
 Readiness checks and their wake sources run on the pipeline's thread. This
 local-only requirement is specific to readiness; ordinary call, shutdown,
