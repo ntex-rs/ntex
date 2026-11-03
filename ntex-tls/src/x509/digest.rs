@@ -1,13 +1,13 @@
 //! Message digests used for certificate thumbprints.
 //!
-//! Windows uses `SymCrypt`. Elsewhere rustls uses standalone `RustCrypto` hash implementations
+//! Windows uses the native CNG hash providers (`BCrypt`). Elsewhere rustls uses standalone `RustCrypto` hash implementations
 //! (independent of its TLS crypto provider); OpenSSL-only builds use OpenSSL.
 //!
 //! | Target  | Backend                 |
 //! |---------|-------------------------|
 //! | rustls, non-Windows | `sha1` / `sha2` |
 //! | OpenSSL only, non-Windows | OpenSSL (`tls_openssl::sha`) |
-//! | windows | `SymCrypt` (`symcrypt::hash`) |
+//! | windows | CNG (`BCryptHashData`) |
 //!
 //! SHA-1 is provided only because the public API accepts 40 hex character
 //! thumbprints (`allowedThumbprints`) which are SHA-1 digests of the DER
@@ -36,7 +36,7 @@ pub fn sha1(data: &[u8]) -> [u8; SHA1_LEN] {
     }
     #[cfg(windows)]
     {
-        symcrypt::hash::sha1(data)
+        cng::hash(cng::BCRYPT_SHA1_ALG_HANDLE, data)
     }
 }
 
@@ -54,7 +54,74 @@ pub fn sha256(data: &[u8]) -> [u8; SHA256_LEN] {
     }
     #[cfg(windows)]
     {
-        symcrypt::hash::sha256(data)
+        cng::hash(cng::BCRYPT_SHA256_ALG_HANDLE, data)
+    }
+}
+
+#[cfg(windows)]
+pub(crate) mod cng {
+    use std::ptr;
+
+    pub(crate) use windows_sys::Win32::Security::Cryptography::{
+        BCRYPT_ALG_HANDLE, BCRYPT_SHA1_ALG_HANDLE, BCRYPT_SHA256_ALG_HANDLE,
+        BCRYPT_SHA384_ALG_HANDLE, BCRYPT_SHA512_ALG_HANDLE,
+    };
+    use windows_sys::Win32::Security::Cryptography::{
+        BCRYPT_HASH_HANDLE, BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash, BCryptHashData,
+    };
+
+    /// Destroys the hash object on every exit path.
+    struct Hash(BCRYPT_HASH_HANDLE);
+
+    impl Drop for Hash {
+        fn drop(&mut self) {
+            // SAFETY: the handle was created by `BCryptCreateHash` and is destroyed once.
+            unsafe { BCryptDestroyHash(self.0) };
+        }
+    }
+
+    fn check(status: i32, op: &str) {
+        assert!(status >= 0, "{op} failed: NTSTATUS {status:#010x}");
+    }
+
+    /// Hashes `data` with a CNG algorithm pseudo-handle producing an `N`-byte digest.
+    ///
+    /// # Panics
+    /// If CNG fails, which does not happen for the built-in SHA providers.
+    pub(crate) fn hash<const N: usize>(alg: BCRYPT_ALG_HANDLE, data: &[u8]) -> [u8; N] {
+        let mut handle = ptr::null_mut();
+        // SAFETY: pseudo-handles are always valid; CNG allocates the hash object itself
+        // because no object buffer is supplied.
+        check(
+            unsafe {
+                BCryptCreateHash(alg, &raw mut handle, ptr::null_mut(), 0, ptr::null(), 0, 0)
+            },
+            "BCryptCreateHash",
+        );
+        let hash = Hash(handle);
+        for chunk in data.chunks(u32::MAX as usize) {
+            // SAFETY: the hash handle is live and `chunk` is valid for its length,
+            // which fits in `u32`.
+            check(
+                unsafe {
+                    BCryptHashData(
+                        hash.0,
+                        chunk.as_ptr(),
+                        u32::try_from(chunk.len()).unwrap_or(u32::MAX),
+                        0,
+                    )
+                },
+                "BCryptHashData",
+            );
+        }
+        let mut out = [0; N];
+        let len = u32::try_from(N).expect("digest size fits in u32");
+        // SAFETY: the hash handle is live and `out` is valid for `N` bytes, the digest size.
+        check(
+            unsafe { BCryptFinishHash(hash.0, out.as_mut_ptr(), len, 0) },
+            "BCryptFinishHash",
+        );
+        out
     }
 }
 

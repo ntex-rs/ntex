@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "4.7.1"
+version = "4.7.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]
@@ -75,7 +75,6 @@ sha2 = { workspace = true, optional = true }
 rcgen = { workspace = true, optional = true, features = ["ring"] }
 
 [target.'cfg(windows)'.dependencies]
-symcrypt = { workspace = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security_Authentication_Identity",

@@ -8,7 +8,7 @@
 //!
 //! | Configuration | Thumbprints | Trust | PKCS#12 |
 //! |---------------|-------------|-------|---------|
-//! | Windows | `SymCrypt` | Crypt32 | Native |
+//! | Windows | CNG (`BCrypt`) | Crypt32 | Native |
 //! | rustls | SHA-1/SHA-256 crates | `WebPKI` | OpenSSL feature required on Unix |
 //! | OpenSSL only | OpenSSL | OpenSSL (`PARTIAL_CHAIN`) | OpenSSL on Unix |
 //!

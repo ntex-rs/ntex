@@ -1,6 +1,6 @@
 //! Crypt32 trust backend (Windows).
 //!
-//! Chain building, signature verification (`SymCrypt` via CNG) and validity checks are done by
+//! Chain building, signature verification (CNG) and validity checks are done by
 //! a private chain engine (`CertCreateCertificateChainEngine`):
 //! - `hExclusiveRoot` holds only the registered certificates, the Windows root store is never
 //!   consulted; with `CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG` registered intermediate CAs are trust

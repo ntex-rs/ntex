@@ -1,5 +1,9 @@
 # Changes
 
+## [4.7.2] - 2026-11-03
+
+* Use native CNG (`BCrypt`) hashing on Windows and drop the `symcrypt` dependency
+
 ## [4.7.1] - 2026-11-02
 
 * Use base64 simd engine for PEM encoding/decoding
