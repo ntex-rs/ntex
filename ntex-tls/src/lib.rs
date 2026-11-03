@@ -18,7 +18,7 @@
 //!
 //! The `x509` module (certificate parsing, trust verification, identities) is
 //! enabled by either TLS feature and always available on Windows. Windows uses
-//! Crypt32/CNG/SymCrypt; elsewhere rustls takes precedence over OpenSSL.
+//! Crypt32/CNG; elsewhere rustls takes precedence over OpenSSL.
 //! Explicitly enabling `x509` without a backend is an error.
 //!
 //! Certificate verification, identities, and ALPN are configured through the

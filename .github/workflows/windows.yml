@@ -80,21 +80,6 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\bin
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
-      - name: Install SymCrypt
-        shell: pwsh
-        run: |
-          $archive = Join-Path $env:RUNNER_TEMP "symcrypt.zip"
-          $symcrypt = Join-Path $env:RUNNER_TEMP "symcrypt"
-          Invoke-WebRequest -Uri "https://github.com/microsoft/SymCrypt/releases/download/v103.13.0/symcrypt-windows-amd64-release-103.13.0-286762b7.zip" -OutFile $archive
-          $expected = "90ea7631331d23a43e0abc7f7af89b44bda67cfa183a70a8b76d988d9d3036b8"
-          if ((Get-FileHash -Path $archive -Algorithm SHA256).Hash -ne $expected) {
-            throw "SymCrypt archive checksum mismatch"
-          }
-          Expand-Archive -Path $archive -DestinationPath $symcrypt
-          $lib = Join-Path $symcrypt "dll"
-          "SYMCRYPT_LIB_PATH=$lib" >> $env:GITHUB_ENV
-          $lib >> $env:GITHUB_PATH
-
       - name: Clippy (neon)
         if: matrix.version == 'stable'
         run: |

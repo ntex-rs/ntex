@@ -2,7 +2,7 @@
 //!
 //! The private key is never exported: it stays in its CNG key storage provider (software KSP,
 //! TPM, ...) and every TLS handshake signature is made in place with `NCryptSignHash`. The
-//! message is hashed with `SymCrypt`, so no OpenSSL is involved on Windows.
+//! message is hashed with CNG (`BCrypt`), so no OpenSSL is involved on Windows.
 //!
 //! Loading:
 //! - PKCS#12: `PFXImportCertStore` with `PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP`, the key
@@ -34,6 +34,7 @@ use windows_sys::Win32::Security::Cryptography::{
     PKCS12_NO_PERSIST_KEY, X509_ASN_ENCODING,
 };
 
+use crate::x509::digest::cng as digest;
 use crate::x509::identity::{StoreLocation, StoreSelector};
 use crate::x509::key::{HashAlg, SignScheme};
 use crate::x509::{Certificate, Error, KeyType};
@@ -84,15 +85,15 @@ impl CngKey {
         };
         let (digest, alg) = match hash {
             HashAlg::Sha256 => (
-                symcrypt::hash::sha256(msg).to_vec(),
+                digest::hash::<32>(digest::BCRYPT_SHA256_ALG_HANDLE, msg).to_vec(),
                 BCRYPT_SHA256_ALGORITHM,
             ),
             HashAlg::Sha384 => (
-                symcrypt::hash::sha384(msg).to_vec(),
+                digest::hash::<48>(digest::BCRYPT_SHA384_ALG_HANDLE, msg).to_vec(),
                 BCRYPT_SHA384_ALGORITHM,
             ),
             HashAlg::Sha512 => (
-                symcrypt::hash::sha512(msg).to_vec(),
+                digest::hash::<64>(digest::BCRYPT_SHA512_ALG_HANDLE, msg).to_vec(),
                 BCRYPT_SHA512_ALGORITHM,
             ),
         };
