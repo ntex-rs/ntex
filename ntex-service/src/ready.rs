@@ -1,6 +1,6 @@
 use crate::{
-    Ctx, IntoService, IntoServiceFactory, ReadyBinding, Service, ServiceChain, ServiceChainFactory,
-    ServiceFactory,
+    BindCtx, Ctx, IntoService, IntoServiceFactory, ReadyBinding, Service, ServiceChain,
+    ServiceChainFactory, ServiceFactory,
 };
 
 /// Wraps a service with independent, notification-invalidated readiness.
@@ -64,7 +64,10 @@ where
     type Res = S::Res;
     type Error = S::Error;
 
-    crate::forward_bind!(St, service);
+    #[inline]
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, _>(&self.service);
+    }
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {

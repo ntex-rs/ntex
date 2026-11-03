@@ -112,7 +112,10 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for OneRequestService<S> {
         ctx.call(&self.service, req).await
     }
 
-    ntex_service::forward_shutdown!(St, service);
+    #[inline]
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.shutdown(&self.service).await;
+    }
 }
 
 #[cfg(test)]

@@ -72,9 +72,7 @@ where
     type Res = WebResponse;
     type Error = S::Error;
 
-    crate::forward_bind!(St, service);
-    crate::forward_ready!(St, service);
-    crate::forward_shutdown!(St, service);
+    crate::forward!(St, service);
 
     async fn call(
         &self,

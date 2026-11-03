@@ -1,4 +1,4 @@
-use super::{Ctx, Service, ServiceFactory, util};
+use super::{BindCtx, Ctx, Service, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
 /// Passes a service's complete call result to a second service.
@@ -66,7 +66,11 @@ where
     type Res = B::Res;
     type Error = B::Error;
 
-    crate::forward_bind!(St, svc1, svc2);
+    #[inline]
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, _>(&self.svc1);
+        ctx.bind::<_, St, _>(&self.svc2);
+    }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {

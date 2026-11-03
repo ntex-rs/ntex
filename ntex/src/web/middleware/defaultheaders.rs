@@ -114,9 +114,7 @@ where
     type Res = WebResponse;
     type Error = S::Error;
 
-    crate::forward_bind!(St, service);
-    crate::forward_ready!(St, service);
-    crate::forward_shutdown!(St, service);
+    crate::forward!(St, service);
 
     async fn call(&self, r: WebRequest<In>, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
         let mut res = ctx.call(&self.service, r).await?;
