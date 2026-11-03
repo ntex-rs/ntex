@@ -124,6 +124,13 @@ pub use crate::state::{RequestState, State};
 /// - [Service Model](https://docs.ntex.rs/1-service.html)
 /// - [Service Pipelines](https://docs.ntex.rs/2-pipeline.html)
 /// - [Service State](https://docs.ntex.rs/3-state.html)
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a `Service<{St}, {Req}>`",
+    label = "expected a service for `{Req}` requests with `{St}` state",
+    note = "the state type comes first: `impl Service<St, Req> for T`; use `()` for no state",
+    note = "check that `St` and `Req` match the pipeline or parent service exactly",
+    note = "wrap async functions with `fn_service` (`async |req| ..`) or `fn_service_st` (`async |st, req| ..`)"
+)]
 pub trait Service<St, Req> {
     /// Response produced by the service.
     type Res;
@@ -264,6 +271,13 @@ pub trait Service<St, Req> {
 /// `St` is the state type shared by the factory and its services.
 ///
 /// Simple factories can often use [`fn_factory`] to reduce boilerplate.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a `ServiceFactory<{St}, {Req}>`",
+    label = "expected a factory of services for `{Req}` requests with `{St}` state",
+    note = "the state type comes first: `impl ServiceFactory<St, Req> for T`; use `()` for no state",
+    note = "a `Service` is not a factory; use `fn_factory(async |st| Ok(service))` to create it per pipeline",
+    note = "async functions `async |req| ..` and `async |st, req| ..` convert into factories automatically"
+)]
 pub trait ServiceFactory<St, Req> {
     /// Response produced by the created services.
     type Res;
@@ -453,6 +467,12 @@ pub trait ServiceCaller<Req, Res, Err> {
 }
 
 /// Conversion into a [`Service`].
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be converted into a `Service<{St}, {Req}>`",
+    label = "expected a service or an async function for `{Req}` requests",
+    note = "accepted values: a `Service<{St}, {Req}>`, `async |req: {Req}| -> Result<Res, Err>`, or `async |st: &{St}, req: {Req}| -> Result<Res, Err>`",
+    note = "async functions must return `Result`"
+)]
 pub trait IntoService<S, St, Req>
 where
     S: Service<St, Req>,
@@ -462,6 +482,12 @@ where
 }
 
 /// Conversion into a [`ServiceFactory`].
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be converted into a `ServiceFactory<{St}, {Req}>`",
+    label = "expected a service factory or an async function for `{Req}` requests",
+    note = "accepted values: a `ServiceFactory<{St}, {Req}>`, a `Clone` async function `async |req: {Req}| -> Result<Res, Err>` or `async |st: &{St}, req: {Req}| -> Result<Res, Err>`, or `async |st: &{St}| -> Result<impl Service, Err>`",
+    note = "a `Service` value is not a factory; wrap its construction with `fn_factory`"
+)]
 pub trait IntoServiceFactory<Sf, St, Req>
 where
     Sf: ServiceFactory<St, Req>,

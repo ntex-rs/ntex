@@ -31,6 +31,11 @@
 //! See [Carrying state with a request](https://docs.ntex.rs/3-state.html#carrying-state-with-a-request).
 
 /// A request that carries state for a service call.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not carry state for `{Req}` requests",
+    label = "expected `State {{ state, req }}` or a `(state, req)` tuple",
+    note = "pair the request with its state using `State {{ state, req: {Req} }}` or `(state, req)`"
+)]
 pub trait RequestState<Req> {
     /// State extracted from the request.
     type State: 'static;
