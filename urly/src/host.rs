@@ -114,7 +114,7 @@ pub(crate) fn normalize_host(s: &str) -> Result<Cow<'_, str>, InvalidUrl> {
         });
     }
 
-    let decoded = unquote_with(s, false, &NONE);
+    let decoded = unquote_with::<false>(s, &NONE);
     let host = if !decoded.is_ascii() {
         Cow::Owned(
             idna::domain_to_ascii(&decoded).ok_or(InvalidUrl::at(ErrorKind::InvalidHost, 0))?,

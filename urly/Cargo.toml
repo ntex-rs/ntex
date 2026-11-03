@@ -1,6 +1,6 @@
 [package]
 name = "urly"
-version = "1.2.0"
+version = "1.2.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Yet another URL library"
 keywords = ["ntex", "url", "uri"]
@@ -37,4 +37,9 @@ serde = { workspace = true, optional = true }
 simdutf8 = { workspace = true }
 
 [dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 serde_json = { workspace = true }
+
+[[bench]]
+name = "quoting"
+harness = false
