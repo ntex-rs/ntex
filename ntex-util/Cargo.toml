@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "4.5.1"
+version = "4.6.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -25,6 +25,7 @@ ntex-error = { workspace = true }
 ntex-service = { workspace = true }
 ntex-rt = { workspace = true }
 
+backoff = { workspace = true }
 bitflags = { workspace = true }
 foldhash = { workspace = true }
 futures-timer = { workspace = true }
