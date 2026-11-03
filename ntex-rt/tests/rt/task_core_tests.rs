@@ -27,6 +27,72 @@ fn drain(rt: &Runtime) {
     while rt.poll() == PollResult::PollAgain {}
 }
 
+/// STATEMENT: Task diagnostics preserve task ownership and report locations without traversing queue links.
+///
+/// HOW:
+/// - Format empty and populated local queues and task lists.
+/// - Format a runnable and join handle, run the task, and verify its output remains retrievable.
+#[test]
+fn debug_task_handles_and_lists() {
+    let rt = runtime();
+    assert_eq!(format!("{:?}", rt.queue.local_queue), "LocalQueue { .. }");
+    assert_eq!(format!("{:?}", rt.queue.tasks), "TaskList { .. }");
+    let mut task = spawn(&rt, async { 7usize });
+    assert_eq!(format!("{:?}", rt.queue.local_queue), "LocalQueue { .. }");
+    assert_eq!(format!("{:?}", rt.queue.tasks), "TaskList { .. }");
+    let location = header(task.h).location;
+    let expected = format!("Task {{ location: {location:?} }}");
+    assert_eq!(format!("{task:?}"), expected);
+    let runnable = rt.queue.pop_local().unwrap();
+    assert_eq!(
+        format!("{runnable:?}"),
+        format!("Runnable {{ location: {location:?} }}")
+    );
+    assert!(!task.is_finished());
+    runnable.run();
+    assert_eq!(format!("{task:?}"), expected);
+    assert_eq!(
+        task.poll_join(&Context::from_waker(Waker::noop())),
+        Poll::Ready(Some(7))
+    );
+    drop(task);
+    assert_eq!(rt.queue.task_count(), 0);
+}
+
+/// STATEMENT: Runtime queue and remote submission diagnostics are safe to format off the owner thread.
+///
+/// HOW:
+/// - Format a live queue and an unpolled remote task on another thread, then return the task.
+/// - Check queue metadata and the opaque remote label, then run and reclaim the task on its owner.
+#[test]
+fn debug_remote_task_and_queue() {
+    let rt = runtime();
+    let remote = Remote(alloc(
+        Stage::Running(async {}),
+        &rt.queue,
+        Location::caller(),
+        SCHEDULED | DETACHED,
+        1,
+    ));
+    let queue = rt.queue.clone();
+    let id = queue.id;
+    let remote = thread::spawn(move || {
+        let debug = format!("{queue:?}");
+        assert!(debug.starts_with(&format!("RunnableQueue {{ id: {id:?},")));
+        assert!(debug.contains("event_interval: "));
+        assert!(debug.contains("notified: false, admission: 0"));
+        assert!(debug.contains("polls: 0, polls_again: 0, self_wakes: 0"));
+        assert!(!debug.contains("local_queue"));
+        assert_eq!(format!("{remote:?}"), "Remote");
+        remote
+    })
+    .join()
+    .unwrap();
+    assert_eq!(rt.queue.task_count(), 1);
+    remote.into_runnable().run();
+    assert_eq!(rt.queue.task_count(), 0);
+}
+
 /// STATEMENT: Final releases of untouched owner-local tasks reclaim storage without FIFO service.
 ///
 /// HOW:

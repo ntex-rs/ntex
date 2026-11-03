@@ -765,6 +765,55 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Reconnect diagnostics delegate to the inner state without requiring child or policy `Debug`.
+    ///
+    /// HOW:
+    /// - Create a lazy wrapper with a closure policy and a non-`Debug` child.
+    /// - Compare wrapper and inner formatting, then change retry state and check the reported fields.
+    /// - Verify formatting never initializes the child.
+    #[ntex::test]
+    async fn debug_reconnect_state() {
+        let service = Reconnect::new(
+            "debug-reconnect",
+            fn_factory(async |(): &()| {
+                Ok::<_, io::Error>(Probe {
+                    id: 1,
+                    ready: Cell::new(true),
+                    fail: Cell::new(false),
+                    changed: ReadyNotifier::new(),
+                })
+            }),
+        )
+        .retry(7)
+        .policy(|_: &io::Error| true)
+        .create(&())
+        .await
+        .unwrap();
+        let inner = service.inner.get_ref();
+        let initial = format!("{service:?}");
+        assert_eq!(initial, format!("{inner:?}"));
+        assert!(initial.starts_with("ReconnectService { name: \"debug-reconnect\","));
+        assert!(initial.contains(std::any::type_name::<Probe>()));
+        assert!(initial.contains(std::any::type_name_of_val(&inner.policy)));
+        assert!(initial.contains(std::any::type_name_of_val(inner.factory.as_ref())));
+        assert!(initial.contains("err: Cell { value: false }"));
+        assert!(initial.contains("retry: Cell { value: 7 }, max_retry: 7"));
+        assert!(initial.contains("backoff_active: Cell { value: false }"));
+        assert!(initial.contains("retry_at: Cell { value: None }"));
+
+        inner.err.set(true);
+        inner.retry.set(6);
+        inner.backoff_active.set(true);
+        inner.retry_at.set(Some(Instant::now()));
+        let retrying = format!("{service:?}");
+        assert_eq!(retrying, format!("{inner:?}"));
+        assert!(retrying.contains("err: Cell { value: true }"));
+        assert!(retrying.contains("retry: Cell { value: 6 }, max_retry: 7"));
+        assert!(retrying.contains("backoff_active: Cell { value: true }"));
+        assert!(retrying.contains("retry_at: Cell { value: Some("));
+        assert!(inner.service.take().is_none());
+    }
+
     /// STATEMENT: Cloned reconnect factories preserve policy and retries while deferring child state.
     ///
     /// HOW:

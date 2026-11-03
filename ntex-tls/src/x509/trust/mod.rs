@@ -198,6 +198,31 @@ mod tests {
 
     const NOW: u64 = 2050;
 
+    /// STATEMENT: Trust store diagnostics list registered certificates once without exposing backend internals.
+    ///
+    /// HOW:
+    /// - Format an empty store and a store constructed with a duplicate root.
+    /// - Compare the output with the single retained certificate's representation.
+    #[test]
+    fn debug_ca_certs() {
+        let root = c("root");
+        assert_eq!(format!("{:?}", CaCerts::default()), "CaCerts([])");
+        let store = CaCerts::from_certs([root.clone(), root.clone()]);
+        assert_eq!(format!("{store:?}"), format!("CaCerts([{root:?}])"));
+    }
+
+    /// STATEMENT: Generated EC and RSA private keys are redacted in normal and pretty diagnostics.
+    ///
+    /// HOW:
+    /// - Generate both supported key kinds and check both formatting modes against the redacted label.
+    #[test]
+    fn debug_generated_keys_are_redacted() {
+        for key in [testgen::key(), testgen::rsa_key()] {
+            assert_eq!(format!("{key:?}"), "Key(<redacted>)");
+            assert_eq!(format!("{key:#?}"), "Key(<redacted>)");
+        }
+    }
+
     /// STATEMENT: Empty stores reject every peer.
     ///
     /// HOW:

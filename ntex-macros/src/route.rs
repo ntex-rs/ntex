@@ -180,6 +180,26 @@ mod tests {
         parse(args).err().unwrap().to_string()
     }
 
+    /// STATEMENT: Route diagnostics identify the handler without dumping route arguments or its body.
+    ///
+    /// HOW:
+    /// - Construct a route with a named handler, guarded path and body.
+    /// - Check its exact handler-only representation.
+    #[test]
+    fn debug_route() {
+        let route = Route {
+            name: Ident::new("handler", Span::call_site()),
+            args: parse(r#""/private", guard = "check""#).ok().unwrap(),
+            ast: quote!(
+                async fn handler() {
+                    unreachable!()
+                }
+            ),
+            method: MethodType::Get,
+        };
+        assert_eq!(format!("{route:?}"), format!("Route({:?})", route.name));
+    }
+
     #[test]
     fn args() {
         let args = parse(r#""/a", guard = "g1", guard = "g2", state = St"#)

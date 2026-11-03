@@ -770,6 +770,42 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Pool and HTTP/2 client diagnostics reflect reservations and closure without consuming capacity.
+    ///
+    /// HOW:
+    /// - Format an empty pool, add an HTTP/2 connection and reserve a stream.
+    /// - Check the pool includes its connector, waiters and active stream count.
+    /// - Release the reservation, close the connection and check the updated client state.
+    #[crate::rt_test]
+    async fn debug_pool_and_h2_client() {
+        let (_pipe, pool) = h2_pool(ClientConfig::new());
+        let debug = format!("{pool:?}");
+        assert!(debug.starts_with("ConnectionPool { svc: "));
+        assert!(debug.contains("inner: RefCell"));
+        assert!(debug.contains("waiters: RefCell"));
+        assert!(debug.contains("h2: {}"));
+        let (client, _server) = h2_conn(&pool);
+        assert_eq!(
+            format!("{client:?}"),
+            "H2Client { streams: 0, closed: false }"
+        );
+        let reservation = client.begin().unwrap();
+        let debug = format!("{pool:?}");
+        assert!(debug.contains("H2Client { streams: 1, closed: false }"));
+        assert_eq!(client.streams(), 1);
+        drop(reservation);
+        assert_eq!(
+            format!("{client:?}"),
+            "H2Client { streams: 0, closed: false }"
+        );
+        client.close();
+        wait_closed(&client).await;
+        assert_eq!(
+            format!("{client:?}"),
+            "H2Client { streams: 0, closed: true }"
+        );
+    }
+
     /// STATEMENT: Idle-expired HTTP/2 connections are removed and closed rather than reused.
     ///
     /// HOW:

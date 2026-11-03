@@ -730,6 +730,31 @@ mod tests {
     use super::*;
     use crate::{Io, testing::IoTest};
 
+    /// STATEMENT: Layer diagnostics report installed filters without borrowing their buffer contents.
+    ///
+    /// HOW:
+    /// - Grow a stack from zero to three layers and format it with its write buffer mutably borrowed.
+    /// - Check each layer count and verify buffered bytes remain intact.
+    #[test]
+    fn debug_layers() {
+        let stack = Stack::new(BytePageSize::Size8);
+        for count in 0..=3 {
+            let layers = stack.borrow();
+            let mut write = layers.app.write.borrow_mut();
+            write.append(ntex_bytes::Bytes::from_static(b"buffered"));
+            assert_eq!(
+                format!("{layers:?}"),
+                format!("Layers {{ layers: {count} }}")
+            );
+            assert_eq!(write.len(), 8);
+            drop(write);
+            drop(layers);
+            if count != 3 {
+                stack.add_layer(BytePageSize::Size8);
+            }
+        }
+    }
+
     /// STATEMENT: Adding outer filter layers preserves existing buffers and nested borrow accounting.
     ///
     /// HOW:

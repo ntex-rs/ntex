@@ -176,6 +176,7 @@ fn fallback_wake_and_drop_unwind() {
 ///
 /// HOW:
 /// - Inspect a task's waker under the selected runtime and check native identity detection.
+/// - Check diagnostics identify native and wrapped wakers without changing wake counts.
 /// - Wake through a counting wrapper, then use retained wakers after task completion.
 #[test]
 fn selected_runtime_and_wrapped_waker() {
@@ -198,6 +199,14 @@ fn selected_runtime_and_wrapped_waker() {
                     !cfg!(any(feature = "tokio", feature = "compio"))
                 );
                 assert!(local.will_wake(cx.waker()));
+                assert_eq!(
+                    format!("{local:?}"),
+                    format!(
+                        "LocalWaker {{ data: {:p}, native: {} }}",
+                        local.data,
+                        !cfg!(any(feature = "tokio", feature = "compio"))
+                    )
+                );
                 if polled {
                     return Poll::Ready(local);
                 }
@@ -206,6 +215,11 @@ fn selected_runtime_and_wrapped_waker() {
                 let wrapped = Waker::from(Arc::new(Forward(cx.waker().clone(), counter.clone())));
                 let handle = LocalWaker::from_waker(&wrapped);
                 assert!(!handle.is_native());
+                assert_eq!(
+                    format!("{handle:?}"),
+                    format!("LocalWaker {{ data: {:p}, native: false }}", handle.data)
+                );
+                assert_eq!(counter.0.load(Ordering::Relaxed), 0);
                 handle.wake();
                 assert_eq!(counter.0.load(Ordering::Relaxed), 1);
                 local.wake();
