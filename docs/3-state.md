@@ -116,12 +116,8 @@ only the target service on a cache miss. A child wrapped with `ready(svc)` also
 checks its own independent cache. Cached success is not consumed by calls, and
 the valid-cache path adds no readiness allocations.
 
-[`Ctx::call_nowait`] is deprecated. Use `ctx.call(&self.inner, req).await` even
-after an explicit readiness check: it retains the cached fast path while
-observing intervening invalidation. The deprecated method still bypasses
-readiness, including through transparent adapters; it has not been changed to
-wait. Audit intentional bypasses before replacing them because `call` can wait
-or return a readiness error.
+Use `ctx.call(&self.inner, req).await` even after an explicit readiness check:
+it retains the cached fast path while observing intervening invalidation.
 
 `Ctx` also provides `ready()` and `shutdown()` operations. Wrappers must forward
 `Service::bind` and readiness to their children, for example with
@@ -242,7 +238,6 @@ for an example that wraps an accepted `Io` in `State`.
 
 [`Ctx`]: https://docs.ntex.rs/api/ntex/struct.Ctx.html
 [`Ctx::call`]: https://docs.ntex.rs/api/ntex/struct.Ctx.html#method.call
-[`Ctx::call_nowait`]: https://docs.ntex.rs/api/ntex/struct.Ctx.html#method.call_nowait
 [`fn_service_st`]: https://docs.ntex.rs/api/ntex/service/fn.fn_service_st.html
 [`IntoService`]: https://docs.ntex.rs/api/ntex/trait.IntoService.html
 [`map_state`]: https://docs.ntex.rs/api/ntex/service/fn.map_state.html

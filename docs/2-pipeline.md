@@ -347,7 +347,7 @@ passed to `bind()` registers dependencies in the current readiness scope:
   to report changes in its own readiness.
 - `ctx.bind(&child)` binds a child service. It must be called for every child
   the service uses, including children that are only called and never checked
-  for readiness. A raw child shares the current scope. A `ServiceBinding` or
+  for readiness. A raw child shares the current scope. A `ReadyBinding` or
   `ready()` child links its own scope below the current one.
 - `ctx.on_notify(&callback)` optionally registers a `ReadyCallback` that runs
   when a notification reaches the current scope.
@@ -382,8 +382,10 @@ A few rules follow from this design:
 
 - All dependencies must be known at bind time. `ready()` and `call()` cannot
   register new ones.
-- Using a `ServiceBinding` that its parent did not bind panics, so a missing
-  `bind()` forward is detected instead of silently losing notifications.
+- Using a `ReadyBinding` that its parent did not bind panics, so a missing
+  `bind()` forward is detected instead of silently losing notifications. The
+  panic message names the fix: call `ctx.bind(&child)` in the parent's `bind`,
+  or use `forward_bind!` / `forward_pl_bind!`.
 - Shared services can be bound more than once. Repeated subscriptions are
   idempotent.
 - Children created lazily at runtime must use `ctx.create(&factory).await`,
@@ -396,7 +398,7 @@ is notified that readiness has changed. Not every node of the tree has its own
 scope. Scopes exist only at:
 
 - the pipeline root,
-- each [`ServiceBinding`](https://docs.ntex.rs/api/ntex_service/struct.ServiceBinding.html),
+- each [`ReadyBinding`](https://docs.ntex.rs/api/ntex_service/struct.ReadyBinding.html),
 - each service wrapped with `ready()` or created by `ready_factory()`.
 
 Plain services and combinators such as `and_then`, `then`, and `apply` store
@@ -504,7 +506,7 @@ instances, including the nearest readiness scope above the current service.
 | `ctx.ready(&binding)` | Reuses the binding's scope, re-checking only after a notification. |
 
 The same rules apply to services wrapped with `ready()`, which use a
-`ServiceBinding` internally. This allows backpressure to propagate through the
+`ReadyBinding` internally. This allows backpressure to propagate through the
 chain, even if readiness changes while a request is being processed.
 
 Use `ready()` when a child needs its own readiness, independent of its siblings.
@@ -519,7 +521,7 @@ A useful mental model is:
 - `ServiceChain` describes how the steps are connected.
 - [`Pipeline`](https://docs.ntex.rs/api/ntex_service/pipeline/struct.Pipeline.html)
   owns the runnable graph and its root readiness scope.
-- `ServiceBinding` and `ready()` add independent readiness scopes inside the
+- `ReadyBinding` and `ready()` add independent readiness scopes inside the
   graph.
 - [`Ctx`](https://docs.ntex.rs/api/ntex_service/struct.Ctx.html)
   controls how execution moves safely between services.

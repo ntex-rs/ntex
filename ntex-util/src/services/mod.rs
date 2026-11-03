@@ -107,13 +107,9 @@ mod tests {
             }
         }
 
-        #[allow(deprecated, reason = "verify limiter safety under the legacy bypass")]
+        // with `bypass`, calls reuse this scope's cached readiness
         async fn call(&self, req: (), ctx: Ctx<'_, Self>) -> Result<(), ()> {
-            if self.bypass {
-                ctx.call_nowait(&self.service, req).await
-            } else {
-                ctx.call(&self.service, req).await
-            }
+            ctx.call(&self.service, req).await
         }
     }
 
@@ -277,7 +273,7 @@ mod tests {
         }
     }
 
-    /// STATEMENT: Legacy readiness bypass still checks inner readiness and releases limiter permits.
+    /// STATEMENT: Skipping outer readiness still checks inner readiness and releases limiter permits.
     ///
     /// HOW:
     /// - Keep the bypass inside the shared limiter pipeline reached by two linked roots.
@@ -324,7 +320,7 @@ mod tests {
     /// HOW:
     /// - Share each limiter through one owning pipeline linked to two outer roots.
     /// - Catch entry-notification and call panics for both limiters and verify later calls succeed.
-    /// - Panic during active-call cancellation under bypass and verify release and waiter wakeup.
+    /// - Panic during active-call cancellation with skipped readiness and verify release and waiter wakeup.
     #[ntex::test]
     async fn panicking_notification_or_inner_call_releases_permit() {
         for (probe, [first, second]) in limiters(false) {

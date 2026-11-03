@@ -148,9 +148,7 @@ where
 
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let ctx = self.enter::<Self, _>(ctx);
-        if !ctx.is_call_nowait() {
-            ctx.ready_cached(self).await?;
-        }
+        ctx.ready_cached(self).await?;
         self.service.call(req, ctx.cast()).await
     }
 

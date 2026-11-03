@@ -1,5 +1,14 @@
 # Changes
 
+## [5.6.1] - 2026-11-04
+
+* Remove deprecated `ServiceBinding` and `ServiceBindingMiddleware` aliases,
+  use `ReadyBinding` and `ReadyBindingMiddleware`
+
+* Remove deprecated `Ctx::call_nowait`, use `Ctx::call`
+
+* Make missing-bind and cross-pipeline panic messages describe the fix
+
 ## [5.6.0] - 2026-11-03
 
 * Add `ReadyBinding::get_ref()` to access the wrapped service

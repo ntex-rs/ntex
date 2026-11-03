@@ -362,12 +362,11 @@ fn bound_callbacks_observe_their_scope_and_propagated_notifications() {
 ///
 /// HOW:
 /// - Register one callback on a pipeline root, a tagged parent and child, and an untagged binding.
-/// - Construct the untagged `ReadyBinding` through `ServiceBinding::new`, expecting deprecation.
+/// - Construct an untagged `ReadyBinding` with `ReadyBinding::new`.
 /// - Notify the child and verify root, parent, and full-width child payloads in propagation order.
 /// - Rebind the child and verify duplicate subscriptions retain its data without duplicating callbacks per visit.
 /// - Notify the untagged binding and verify both it and the root supply zero.
 #[test]
-#[expect(deprecated, reason = "verify the deprecated binding constructor")]
 fn shared_callbacks_receive_each_scopes_data() {
     let received = Rc::new(RefCell::new(Vec::new()));
     let captured = received.clone();
@@ -384,7 +383,7 @@ fn shared_callbacks_receive_each_scopes_data() {
     parent.bind(BindCtx::new(waiters.scope()));
     let child = ReadyBinding::with_data(probe(), usize::MAX);
     child.bind(BindCtx::new(&parent.scope));
-    let untagged: crate::ReadyBinding<_> = crate::ServiceBinding::new(probe());
+    let untagged = ReadyBinding::new(probe());
     untagged.bind(BindCtx::new(waiters.scope()));
 
     child.service.0.changed.notify();
@@ -403,15 +402,10 @@ fn shared_callbacks_receive_each_scopes_data() {
 /// STATEMENT: Cloning a tagged binding preserves callback data without sharing its readiness scope.
 ///
 /// HOW:
-/// - Expect deprecation when using `ServiceBinding::with_data` and its legacy type name.
 /// - Cache a tagged binding, clone it into another pipeline, and require a separate readiness check.
 /// - Notify their shared source and verify both scopes deliver the original payload.
 /// - Drop the first pipeline and verify only the surviving scope still delivers its data.
 #[test]
-#[expect(
-    deprecated,
-    reason = "verify the deprecated tagged binding compatibility alias"
-)]
 fn cloned_bindings_preserve_callback_data() {
     let received = Rc::new(RefCell::new(Vec::new()));
     let captured = received.clone();
@@ -422,13 +416,12 @@ fn cloned_bindings_preserve_callback_data() {
         available: Cell::new(true),
         ..ProbeState::default()
     }));
-    let binding: Rc<crate::ReadyBinding<_>> =
-        Rc::new(crate::ServiceBinding::with_data(probe.clone(), 42));
+    let binding: Rc<crate::ReadyBinding<_>> = Rc::new(ReadyBinding::with_data(probe.clone(), 42));
     let first = Pipeline::new(State(10), binding.clone());
     assert_eq!(run(first.ready()), Ok(()));
     assert_eq!(probe.0.starts.get(), 1);
 
-    let cloned: crate::ServiceBinding<_> = binding.as_ref().clone();
+    let cloned: ReadyBinding<_> = binding.as_ref().clone();
     let second = Pipeline::new(State(20), cloned);
     assert_eq!(run(second.ready()), Ok(()));
     assert_eq!(probe.0.starts.get(), 2);
@@ -610,13 +603,9 @@ fn all_sources_and_parent_edges_are_live_before_first_readiness() {
 /// STATEMENT: Runtime operations reject an unbound parent rather than silently repairing its dependency.
 ///
 /// HOW:
-/// - Invoke ready, call, legacy nowait, and shutdown through fresh unregistered contexts.
+/// - Invoke ready, call, and shutdown through fresh unregistered contexts.
 /// - Catch the binding panic and verify no extra binds, calls, or parent subscriptions are introduced.
 #[test]
-#[allow(
-    deprecated,
-    reason = "verify the legacy bypass still rejects unbound scopes"
-)]
 fn runtime_operations_reject_missing_parent_binding_without_repair() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -624,7 +613,7 @@ fn runtime_operations_reject_missing_parent_binding_without_repair() {
     let child = Rc::new(ReadyBinding::new(probe.clone()));
     let pl = Pipeline::new(State(0), child.clone());
     assert_eq!(run(pl.ready()), Ok(()));
-    for path in 0..4 {
+    for path in 0..3 {
         let waiters = WaitersRef::new();
         let st = State(0);
         let ctx = Ctx::<(), State>::new(0, &waiters, &st);
@@ -632,9 +621,6 @@ fn runtime_operations_reject_missing_parent_binding_without_repair() {
             0 => run(ctx.ready(&child)).unwrap(),
             1 => {
                 run(ctx.call(&child, 1)).unwrap();
-            }
-            2 => {
-                run(ctx.call_nowait(&child, 1)).unwrap();
             }
             _ => run(ctx.shutdown(&child)),
         }));
@@ -911,13 +897,12 @@ fn waiting_child_calls_observe_cache_success_before_an_unrelated_check_finishes(
     }
 }
 
-/// STATEMENT: Built-in calls use child caches independently of unrelated checks and clear nested legacy bypasses.
+/// STATEMENT: Built-in calls use child caches independently of unrelated checks.
 ///
 /// HOW:
 /// - Call `Then`, `AndThen`, and apply services while another readiness owner remains pending.
-/// - Invalidate child caches into errors and verify a legacy outer bypass still checks nested calls.
+/// - Invalidate child caches into errors and verify a direct outer call still checks nested calls.
 #[test]
-#[allow(deprecated, reason = "verify nested calls clear the legacy bypass")]
 fn built_in_calls_use_child_caches_while_an_unrelated_check_is_pending() {
     for path in 0..3 {
         let waiters = WaitersRef::new();
@@ -956,9 +941,10 @@ fn built_in_calls_use_child_caches_while_an_unrelated_check_is_pending() {
         a.0.changed.notify();
         b.0.fail.set(true);
         b.0.changed.notify();
-        assert_eq!(run(owner_ctx.call_nowait(&service, 2)), Err(Error));
-        assert_eq!(a.0.starts.get(), usize::from(path != 2));
-        assert_eq!(b.0.starts.get(), 2);
+        assert_eq!(run(service.call(2, owner_ctx.cast())), Err(Error));
+        assert_eq!(a.0.starts.get(), 2 * usize::from(path != 2));
+        // `AndThen` stops at the first error, `Then` recovers through `b`
+        assert_eq!(b.0.starts.get(), if path == 0 { 1 } else { 2 });
         assert_eq!(b.0.calls.get(), 1);
     }
 }
@@ -1740,16 +1726,12 @@ fn scheduling_invalidation_is_observed_before_dispatch() {
     }
 }
 
-/// STATEMENT: Raw, cached, direct, and legacy-bypass calls preserve their target and supplied state.
+/// STATEMENT: Raw, cached, and direct calls preserve their target and supplied state.
 ///
 /// HOW:
 /// - Compare raw rechecks with cached binding calls across two local contexts and states.
-/// - Invalidate and exercise legacy bypass plus direct call recovery, checking results and check counts.
+/// - Invalidate and exercise direct call recovery, checking results and check counts.
 #[test]
-#[allow(
-    deprecated,
-    reason = "verify legacy bypass compatibility with cached calls"
-)]
 fn cached_and_raw_calls_keep_their_target_and_state() {
     let waiters = WaitersRef::new();
     let st = State(10);
@@ -1774,8 +1756,6 @@ fn cached_and_raw_calls_keep_their_target_and_state() {
 
     probe.0.available.set(false);
     probe.0.changed.notify();
-    assert_eq!(run(ctx.call_nowait(&bound, 6)), Ok(16));
-    assert_eq!(probe.0.starts.get(), 3, "legacy bypass does not check");
     probe.0.available.set(true);
     probe.0.changed.notify();
     assert_eq!(run(bound.call(7, ctx.cast())), Ok(17));
@@ -1863,60 +1843,6 @@ fn bound_calls_do_not_borrow_a_ready_outer_scope() {
     assert!(!parent.is_ready(), "calls retain the parent dependency");
     assert_eq!(run(child_ctx.call(&bound, 5)), Ok(15));
     assert_eq!(probe.0.starts.get(), 4);
-}
-
-/// STATEMENT: Legacy nowait traverses transparent bindings but does not bypass nested context calls.
-///
-/// HOW:
-/// - Call a closed service through erased, mapped, and nested bindings without readiness checks.
-/// - Add a forwarding context call and verify pending readiness, cancellation cleanup, and error propagation.
-#[test]
-#[allow(
-    deprecated,
-    reason = "verify legacy bypass forwarding, errors and cancellation"
-)]
-fn nowait_bypasses_transparent_bindings_but_not_nested_context_calls() {
-    let waiters = WaitersRef::new();
-    let st = State(0);
-    let ctx = Ctx::<(), State>::new(0, &waiters, &st);
-    let probe = Probe::new();
-    probe.0.available.set(false);
-    let bound = Rc::new(ReadyBinding::new(ReadyBinding::new(probe.clone())));
-    let erased = crate::boxed::service(crate::map_state(
-        State(10),
-        Box::new(bound.clone())
-            .map(|res| res + 100)
-            .map_err(|err| err),
-    ));
-    erased.bind(BindCtx::new(waiters.scope()));
-    assert_eq!(run(ctx.call_nowait(&&erased, 1)), Ok(111));
-    assert_eq!(probe.0.starts.get(), 0);
-    assert!(!bound.is_ready());
-
-    probe.0.call_fail.set(true);
-    assert_eq!(run(ctx.call_nowait(&&erased, 2)), Err(Error));
-    assert_eq!(probe.0.starts.get(), 0, "only the call error is returned");
-    probe.0.call_fail.set(false);
-
-    let parent = ReadyBinding::new(Forward(bound));
-    parent.bind(BindCtx::new(waiters.scope()));
-    let mut call = Box::pin(ctx.call_nowait(&parent, 2));
-    let mut cx = Context::from_waker(Waker::noop());
-    assert!(call.as_mut().poll(&mut cx).is_pending());
-    assert_eq!(probe.0.starts.get(), 1);
-    assert_eq!(probe.0.calls.get(), 2);
-    drop(call);
-    assert_eq!(probe.0.active.get(), 0);
-    assert_eq!(probe.0.drops.get(), 1);
-
-    let mut call = Box::pin(ctx.call_nowait(&parent, 3));
-    assert!(call.as_mut().poll(&mut cx).is_pending());
-    assert_eq!(probe.0.starts.get(), 2);
-    probe.0.available.set(true);
-    probe.0.fail.set(true);
-    probe.0.changed.notify();
-    assert_eq!(call.as_mut().poll(&mut cx), Poll::Ready(Err(Error)));
-    assert_eq!(probe.0.calls.get(), 2);
 }
 
 struct Forward<S>(S);

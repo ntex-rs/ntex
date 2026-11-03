@@ -21,7 +21,6 @@ pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     st: &'a St,
     waiters: &'a WaitersRef,
     scope: &'a ReadyScope,
-    call_nowait: bool,
     // Readiness checks made while handling a call don't wait for the pipeline gate.
     in_call: bool,
     _t: marker::PhantomData<Rc<Svc>>,
@@ -296,7 +295,6 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             waiters,
             st,
             scope: &waiters.scope,
-            call_nowait: false,
             in_call: false,
             _t: marker::PhantomData,
         }
@@ -316,19 +314,9 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             st: self.st,
             waiters: self.waiters,
             scope,
-            call_nowait: self.call_nowait,
             in_call: self.in_call,
             _t: marker::PhantomData,
         }
-    }
-
-    pub(crate) fn is_call_nowait(&self) -> bool {
-        self.call_nowait
-    }
-
-    pub(crate) fn without_bypass(mut self) -> Self {
-        self.call_nowait = false;
-        self
     }
 
     /// Marks a context passed to [`Service::call`].
@@ -418,9 +406,9 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     /// checks its own cache when called directly, independently of this scope.
     /// Calls do not consume cached readiness.
     ///
-    /// Prefer this method to [`Self::call_nowait`], including after an explicit
-    /// readiness check. A valid cache avoids another readiness check or readiness
-    /// allocation, while invalidation before dispatch is still observed.
+    /// Calling after an explicit readiness check is cheap: a valid cache avoids
+    /// another readiness check or readiness allocation, while invalidation before
+    /// dispatch is still observed.
     /// Raw [`Self::ready`] calls do not populate the upstream cache; use
     /// [`crate::ready()`] for independent child caching.
     ///
@@ -452,7 +440,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     where
         S: Service<St, Req>,
     {
-        let ctx = self.without_bypass().cast();
+        let ctx = self.cast();
         ctx.ready_cached(svc).await?;
 
         svc.call(req, ctx.into_call()).await
@@ -489,47 +477,6 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Calls `svc` without checking readiness.
-    ///
-    /// The caller must ensure that `svc` is ready. This also bypasses bindings
-    /// behind transparent adapters, but nested calls through [`Ctx::call`]
-    /// still perform their normal cache-aware readiness checks.
-    ///
-    /// Deprecated in favor of [`Self::call`], whose valid-cache path adds no
-    /// readiness check or readiness allocation. This method retains its legacy
-    /// bypass during the compatibility period: it does not wait for readiness
-    /// or report readiness errors. Audit intentional bypasses before migrating;
-    /// `call` can wait or fail if readiness was invalidated after a prior check.
-    /// Services whose readiness changes must subscribe in [`Service::bind`] and
-    /// notify through [`crate::ReadyNotifier`].
-    ///
-    /// The legacy spelling is rejected when deprecation warnings are denied:
-    ///
-    /// ```compile_fail
-    /// #![deny(deprecated)]
-    /// use ntex_service::{Ctx, Service};
-    ///
-    /// async fn dispatch<'a, S: Service<(), usize>>(
-    ///     ctx: Ctx<'a, S>,
-    ///     service: &'a S,
-    /// ) -> Result<S::Res, S::Error> {
-    ///     ctx.call_nowait(service, 1).await
-    /// }
-    /// ```
-    #[deprecated(
-        since = "5.3.0",
-        note = "use Ctx::call; valid cached readiness skips the readiness check"
-    )]
-    pub async fn call_nowait<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
-    where
-        S: Service<St, Req>,
-    {
-        let mut ctx = self.cast().into_call();
-        ctx.call_nowait = true;
-        svc.call(req, ctx).await
-    }
-
-    #[inline]
     /// Shuts down `svc`.
     pub async fn shutdown<S, Req>(&self, svc: &'a S)
     where
@@ -546,7 +493,6 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             idx: self.idx,
             waiters: self.waiters,
             scope: self.scope,
-            call_nowait: self.call_nowait,
             in_call: self.in_call,
             _t: marker::PhantomData,
         }

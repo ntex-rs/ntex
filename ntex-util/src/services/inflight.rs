@@ -85,7 +85,7 @@ where
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         if !self.count.is_available() {
-            // Bypassed calls can wait independently of the shared readiness check.
+            // Callers that skip readiness wait here for a free slot.
             self.count.clone().available().await;
         }
         let _guard = self.count.get();
@@ -341,12 +341,9 @@ mod tests {
 
         ntex_service::forward_bind!((), 0);
 
-        #[allow(
-            deprecated,
-            reason = "exercise limiter enforcement under the legacy bypass"
-        )]
+        // `ready` is not forwarded, so calls reuse this scope's cached readiness
         async fn call(&self, req: (), ctx: Ctx<'_, Self>) -> Result<(), ()> {
-            ctx.call_nowait(&self.0, req).await
+            ctx.call(&self.0, req).await
         }
     }
 
@@ -384,11 +381,11 @@ mod tests {
         assert_eq!(run_concurrent(2, 4).await, 2, "inflight limit 2");
     }
 
-    /// STATEMENT: A zero in-flight limit blocks calls even through the legacy readiness bypass.
+    /// STATEMENT: A zero in-flight limit blocks calls even when the caller skips readiness.
     ///
     /// HOW:
     /// - Poll readiness and a normal call against a zero-limit service.
-    /// - Poll a bypassed call and verify all operations remain pending.
+    /// - Poll a call that skips readiness and verify all operations remain pending.
     #[ntex::test]
     async fn test_zero_limit() {
         let (_tx, rx) = mpmc::unbounded();

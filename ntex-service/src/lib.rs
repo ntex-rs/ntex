@@ -58,14 +58,6 @@ pub use crate::readiness::{ReadyCallback, ReadyLink, ReadyNotifier};
 pub use crate::ready::{ready, ready_factory};
 pub use crate::state::{RequestState, State};
 
-/// Backward-compatible name for [`ReadyBinding`].
-#[deprecated(since = "5.5.0", note = "use ReadyBinding instead")]
-pub type ServiceBinding<S> = ReadyBinding<S>;
-
-/// Backward-compatible name for [`ReadyBindingMiddleware`].
-#[deprecated(since = "5.5.0", note = "use ReadyBindingMiddleware instead")]
-pub type ServiceBindingMiddleware = ReadyBindingMiddleware;
-
 #[allow(unused_variables)]
 /// An asynchronous operation from a request to a response.
 ///

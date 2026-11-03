@@ -73,7 +73,7 @@ where
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
         let result = self.svc1.call(req, ctx.cast()).await?;
-        self.svc2.call(result, ctx.without_bypass().cast()).await
+        self.svc2.call(result, ctx.cast()).await
     }
 
     #[inline]

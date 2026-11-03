@@ -350,19 +350,16 @@ mod tests {
 
         ntex_service::forward_bind!((), 0);
 
-        #[allow(
-            deprecated,
-            reason = "verify reset after an intentional readiness bypass"
-        )]
+        // `ready` is not forwarded, so calls reuse this scope's cached readiness
         async fn call(&self, req: usize, ctx: Ctx<'_, Self>) -> Result<usize, TestErr> {
-            ctx.call_nowait(&self.0, req).await
+            ctx.call(&self.0, req).await
         }
     }
 
-    /// STATEMENT: An intentionally bypassed call rearms an expired keep-alive timer.
+    /// STATEMENT: A call from a parent that skips readiness rearms an expired keep-alive timer.
     ///
     /// HOW:
-    /// - Wait for expiry, then call through a wrapper that bypasses readiness.
+    /// - Wait for expiry, then call through a wrapper that does not check readiness.
     /// - Check readiness recovers and the rearmed timer later expires again.
     #[ntex::test]
     async fn bypassed_call_rearms_an_expired_timer() {

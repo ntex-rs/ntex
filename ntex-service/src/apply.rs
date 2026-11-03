@@ -130,16 +130,13 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     ///
     /// This does not independently check readiness for a raw inner service.
     /// An inner [`crate::ready()`] wrapper still checks its own readiness
-    /// cache, even when the outer middleware was invoked through a legacy
-    /// readiness bypass.
+    /// cache.
     ///
     /// Returns the inner response and error types without applying the outer
     /// middleware's conversions.
     #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
-        self.service
-            .call(req, self.ctx.without_bypass().cast())
-            .await
+        self.service.call(req, self.ctx.cast()).await
     }
 }
 

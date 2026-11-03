@@ -78,12 +78,11 @@ removed; use `call()`. With notification-based readiness, successful readiness
 is cached until a subscribed `ReadyNotifier` invalidates it; calls do not
 consume that success.
 
-`Ctx::call_nowait()` is deprecated in `ntex-service` 5.3. Replace ordinary nested
-dispatch with `ctx.call(&inner, req).await`, even after explicitly checking
-readiness. Valid cached readiness avoids another readiness check or allocation.
-The legacy method remains available with its bypass semantics; unlike it,
-`call()` can wait or fail after readiness changes. Audit intentional bypasses,
-forward `Service::bind` through wrappers, and notify every readiness-changing
+`Ctx::call_nowait()` was removed. Use `ctx.call(&inner, req).await` for
+nested dispatch, even after explicitly checking readiness. Valid cached
+readiness avoids another readiness check or allocation. Unlike the removed
+bypass, `call()` can wait or fail after readiness changes. Forward
+`Service::bind` through wrappers, and notify every readiness-changing
 transition before relying on persistent caching. Raw `Ctx::ready()` calls do
 not populate the upstream cache; use `ready(svc)` for independent child caching.
 Primitive `Service::call()` is not deprecated.
