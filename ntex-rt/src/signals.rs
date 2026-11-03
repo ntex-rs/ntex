@@ -130,47 +130,9 @@ static SIG_HANDLERS: Mutex<(
 ///
 /// Returns `false` if signals are handled by another system.
 pub(crate) fn start(sys: &System) -> bool {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-
     if let Some(_registration) = register_system(sys) {
-        use nix::sys::signal;
         use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR2};
         use signal_hook::{iterator::Signals, low_level::register};
-
-        ONCE.call_once(|| {
-            // Use u128 for alignment.
-            let buf = Vec::leak(vec![0u128; 4096]);
-            let stack = libc::stack_t {
-                ss_sp: buf.as_ptr() as *mut libc::c_void,
-                ss_flags: 0,
-                ss_size: std::mem::size_of_val(buf),
-            };
-            let mut old = libc::stack_t {
-                ss_sp: std::ptr::null_mut(),
-                ss_flags: 0,
-                ss_size: 0,
-            };
-            let result = unsafe { libc::sigaltstack(&raw const stack, &raw mut old) };
-            if result != 0 {
-                log::error!("Cannot set signal stack");
-            }
-
-            let sig_action = signal::SigAction::new(
-                signal::SigHandler::Handler(sig_segv),
-                signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
-                signal::SigSet::empty(),
-            );
-            unsafe {
-                match signal::sigaction(signal::SIGSEGV, &sig_action) {
-                    Ok(prev) => _ = PREV_SIGSEGV.set(prev),
-                    Err(_) => log::error!("Cannot install signal handler for SIGSEGV"),
-                }
-                match signal::sigaction(signal::SIGABRT, &sig_action) {
-                    Ok(prev) => _ = PREV_SIGABRT.set(prev),
-                    Err(_) => log::error!("Cannot install signal handler for SIGABRT"),
-                }
-            }
-        });
 
         // signal handlers only write to a self-pipe, signals are
         // dispatched from a regular thread
@@ -294,37 +256,6 @@ async fn signals(rx: oneshot::AsyncReceiver<()>) {
         }
     })
     .await;
-}
-
-#[cfg(target_family = "unix")]
-static PREV_SIGSEGV: std::sync::OnceLock<nix::sys::signal::SigAction> = std::sync::OnceLock::new();
-#[cfg(target_family = "unix")]
-static PREV_SIGABRT: std::sync::OnceLock<nix::sys::signal::SigAction> = std::sync::OnceLock::new();
-
-#[cfg(target_family = "unix")]
-extern "C" fn sig_segv(v: i32) {
-    use nix::sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet};
-
-    let (sig, prev, name) = if v == libc::SIGABRT {
-        (signal::SIGABRT, &PREV_SIGABRT, "SIGABRT")
-    } else {
-        (signal::SIGSEGV, &PREV_SIGSEGV, "SIGSEGV")
-    };
-    eprintln!("{name} Received:\n{:?}", backtrace::Backtrace::new());
-    // best effort, waking the system is not signal-safe
-    if let Some(mut sigs) = SIGS.try_lock() {
-        sigs.push(Signal::Panic(PanicSource::Sig(name)));
-    }
-
-    // restore the previous handler, it handles the signal raised again by
-    // the faulting instruction or by `abort()`, otherwise the process never exits
-    let prev = prev
-        .get()
-        .copied()
-        .unwrap_or_else(|| SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty()));
-    unsafe {
-        let _ = signal::sigaction(sig, &prev);
-    }
 }
 
 /// Installs the panic hook, once per process.
