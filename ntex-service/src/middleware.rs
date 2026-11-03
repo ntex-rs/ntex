@@ -102,12 +102,7 @@ where
 ///     type Res = S::Res;
 ///     type Error = TimeoutError<S::Error>;
 ///
-///     ntex_service::forward_bind!((), service);
-///     ntex_service::forward_shutdown!((), service);
-///
-///     async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
-///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
-///     }
+///     ntex_service::forward!((), service, map_err = TimeoutError::Service);
 ///
 ///     async fn call(&self, req: R, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
 ///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {

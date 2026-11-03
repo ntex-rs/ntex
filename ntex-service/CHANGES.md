@@ -1,13 +1,20 @@
 # Changes
 
-## [5.6.1] - 2026-11-04
+## [5.7.0] - 2026-11-04
 
 * Remove deprecated `ServiceBinding` and `ServiceBindingMiddleware` aliases,
   use `ReadyBinding` and `ReadyBindingMiddleware`
 
 * Remove deprecated `Ctx::call_nowait`, use `Ctx::call`
 
+* Remove `forward_pl_bind!`, `forward_pl_ready!`, and `forward_pl_shutdown!`
+  macros, call `Pipeline::bind_to()`, `Pipeline::ready()`, and
+  `Pipeline::shutdown()` directly
+
 * Make missing-bind and cross-pipeline panic messages describe the fix
+
+* Add `forward!` macro that forwards `bind`, `ready`, and `shutdown` to one or
+  several service fields
 
 * Add `#[diagnostic::on_unimplemented]` hints to `Service`, `ServiceFactory`,
   `IntoService`, `IntoServiceFactory`, `Middleware`, and `RequestState`

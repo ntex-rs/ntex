@@ -1,6 +1,6 @@
 use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
 
-use crate::{Ctx, Service};
+use crate::{Ctx, Service, readiness::Generation};
 
 pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
 
@@ -9,8 +9,35 @@ where
     A: Service<St, RA>,
     B: Service<St, RB>,
 {
-    let mut fut1 = pin::pin!(ctx.shutdown(svc1));
-    let mut fut2 = pin::pin!(ctx.shutdown(svc2));
+    join(ctx.shutdown(svc1), ctx.shutdown(svc2)).await;
+}
+
+pub(crate) async fn ready<S, St, A, B, RA, RB>(
+    svc1: &A,
+    svc2: &B,
+    ctx: Ctx<'_, S, St>,
+) -> Result<(), A::Error>
+where
+    A: Service<St, RA>,
+    B: Service<St, RB, Error = A::Error>,
+{
+    ready_join(
+        ctx,
+        || ctx.ready_generation(svc1),
+        || ctx.ready_generation(svc2),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Polls both futures concurrently until both complete.
+pub async fn join<A, B>(fut1: A, fut2: B)
+where
+    A: Future<Output = ()>,
+    B: Future<Output = ()>,
+{
+    let mut fut1 = pin::pin!(fut1);
+    let mut fut2 = pin::pin!(fut2);
 
     let mut ready1 = false;
     let mut ready2 = false;
@@ -31,24 +58,30 @@ where
     .await;
 }
 
-pub(crate) async fn ready<S, St, A, B, RA, RB>(
-    svc1: &A,
-    svc2: &B,
+/// Waits until both readiness checks complete without an intervening invalidation.
+///
+/// A completed check is restarted when the scope is invalidated before the
+/// other one completes. Returns the generation at which both are ready.
+pub async fn ready_join<S, St, E, F1, Fut1, F2, Fut2>(
     ctx: Ctx<'_, S, St>,
-) -> Result<(), A::Error>
+    f1: F1,
+    f2: F2,
+) -> Result<Generation, E>
 where
-    A: Service<St, RA>,
-    B: Service<St, RB, Error = A::Error>,
+    F1: Fn() -> Fut1,
+    Fut1: Future<Output = Result<Generation, E>>,
+    F2: Fn() -> Fut2,
+    Fut2: Future<Output = Result<Generation, E>>,
 {
-    let mut fut1 = pin::pin!(Some(ctx.ready_generation(svc1)));
-    let mut fut2 = pin::pin!(Some(ctx.ready_generation(svc2)));
+    let mut fut1 = pin::pin!(Some(f1()));
+    let mut fut2 = pin::pin!(Some(f2()));
     let scope = ctx.scope();
     let mut generation1 = scope.generation();
     let mut generation2 = scope.generation();
 
     poll_fn(|cx| {
         if is_idle(&mut fut1) && !scope.is_current(generation1) {
-            fut1.set(Some(ctx.ready_generation(svc1)));
+            fut1.set(Some(f1()));
         }
         if let Some(fut) = fut1.as_mut().as_pin_mut()
             && let Poll::Ready(generation) = fut.poll(cx)?
@@ -58,7 +91,7 @@ where
         }
 
         if is_idle(&mut fut2) && !scope.is_current(generation2) {
-            fut2.set(Some(ctx.ready_generation(svc2)));
+            fut2.set(Some(f2()));
         }
         if let Some(fut) = fut2.as_mut().as_pin_mut()
             && let Poll::Ready(generation) = fut.poll(cx)?
@@ -70,7 +103,7 @@ where
         let current1 = scope.is_current(generation1);
         let current2 = scope.is_current(generation2);
         if is_idle(&mut fut1) && is_idle(&mut fut2) && current1 && current2 {
-            Poll::Ready(Ok(()))
+            Poll::Ready(Ok(generation1))
         } else {
             // A later poll or future drop can invalidate a completed sibling.
             // Retain pending work, but schedule another check for the dirty child.
@@ -81,6 +114,18 @@ where
         }
     })
     .await
+}
+
+/// Checks one field's readiness and maps its error.
+pub async fn ready_field<'a, S, St, T, Req, E>(
+    ctx: Ctx<'a, S, St>,
+    svc: &'a T,
+    map_err: impl FnOnce(T::Error) -> E,
+) -> Result<Generation, E>
+where
+    T: Service<St, Req>,
+{
+    ctx.ready_generation(svc).await.map_err(map_err)
 }
 
 // `Option::is_none()` would take `&Option<F>`, which retags the whole future

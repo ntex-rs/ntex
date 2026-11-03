@@ -1,5 +1,10 @@
 # Changes
 
+## [4.5.1] - 2026-11-04
+
+* Hide `forward_bind!`, `forward_ready!`, and `forward_shutdown!` re-exports from
+  docs, use `forward!`
+
 ## [4.5.0] - 2026-10-31
 
 * web: Make request-target validation and normalization opt-in with

@@ -8,20 +8,19 @@ use crate::ctx::WaitersInner;
 
 const UNBOUND: &str = "ReadyBinding must be registered by Service::bind before use: \
     the parent's `Service::bind` must call `ctx.bind(&self.inner)` for every child service \
-    (or use `forward_bind!`/`forward_pl_bind!`); create lazy children with `Ctx::create`";
+    (or use `forward!`); create lazy children with `Ctx::create`";
 
 const UNLINKED: &str = "ReadyBinding must be registered by Service::bind before use: \
     it is bound to another parent; the calling service's `Service::bind` must also call \
-    `ctx.bind(&child)` (or use `forward_bind!`)";
+    `ctx.bind(&child)` (or use `forward!`)";
 
 const FOREIGN: &str = "ReadyBinding cannot be shared across pipelines: \
-    share a `Pipeline` instead and register it with `Pipeline::bind_to` \
-    (or `forward_pl_bind!`)";
+    share a `Pipeline` instead and register it with `Pipeline::bind_to`";
 
 const UNLINKED_FOREIGN: &str = "ReadyBinding must be registered by Service::bind before use: \
     it is bound to another pipeline; the calling service's `Service::bind` must call \
     `ctx.bind(&child)`, and a service used by several pipelines must be shared as a \
-    `Pipeline` registered with `Pipeline::bind_to` (or `forward_pl_bind!`)";
+    `Pipeline` registered with `Pipeline::bind_to`";
 
 thread_local! {
     static NOTIFICATION: RefCell<u64> = const { RefCell::new(0) };
@@ -378,7 +377,7 @@ impl ScopeStore {
 
 /// A snapshot for one scope's readiness check, not a transferable readiness permit.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Generation {
+pub struct Generation {
     value: u64,
     direct: u64,
 }
