@@ -9,6 +9,9 @@
 
 * Make missing-bind and cross-pipeline panic messages describe the fix
 
+* Add `#[diagnostic::on_unimplemented]` hints to `Service`, `ServiceFactory`,
+  `IntoService`, `IntoServiceFactory`, `Middleware`, and `RequestState`
+
 ## [5.6.0] - 2026-11-03
 
 * Add `ReadyBinding::get_ref()` to access the wrapped service

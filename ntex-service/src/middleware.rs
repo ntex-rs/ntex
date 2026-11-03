@@ -145,6 +145,13 @@ where
 ///     }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a `Middleware<{S}, {St}>`",
+    label = "expected middleware that wraps `{S}` with `{St}` state",
+    note = "implement it generically over the wrapped service: `impl<S, St> Middleware<S, St> for T`",
+    note = "add only the bounds `create` needs; `Service<St, Req>` bounds belong on the wrapper's `Service` impl",
+    note = "use `apply_fn` for middleware written as an async function"
+)]
 pub trait Middleware<S, St> {
     /// Wrapper returned by [`Self::create`].
     ///
