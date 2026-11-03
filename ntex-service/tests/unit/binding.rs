@@ -183,6 +183,47 @@ fn compose_probes(
     }
 }
 
+/// STATEMENT: Mapping a binding preserves its cached readiness, dependencies, and pipeline owner.
+///
+/// HOW:
+/// - Bind and check a probe, then type-erase it without rebinding or repeating readiness.
+/// - Notify unavailability and verify a call waits until the probe becomes available.
+/// - Reject binding the mapped service into a different pipeline.
+#[test]
+fn map_preserves_readiness_and_owner() {
+    let probe = Probe::new();
+    let waiters = WaitersRef::new();
+    let state = State(10);
+    let ctx = Ctx::<(), _>::new(0, &waiters, &state);
+    let binding = ReadyBinding::new(probe.clone());
+    binding.bind(BindCtx::new(waiters.scope()));
+    run(ctx.ready(&binding)).unwrap();
+
+    let binding = binding.map(crate::boxed::service);
+    assert_eq!(run(ctx.call(&binding, 1)), Ok(11));
+    assert_eq!(probe.0.binds.get(), 1);
+    assert_eq!(probe.0.starts.get(), 1);
+    probe.0.available.set(false);
+    probe.0.changed.notify();
+    let mut call = pin!(ctx.call(&binding, 2));
+    assert!(
+        call.as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    probe.0.available.set(true);
+    probe.0.changed.notify();
+    assert_eq!(run(call), Ok(12));
+
+    let other = WaitersRef::new();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            binding.bind(BindCtx::new(other.scope()));
+        }))
+        .is_err()
+    );
+}
+
 /// STATEMENT: `ReadyBindingMiddleware` and its legacy name create independent readiness scopes.
 ///
 /// HOW:

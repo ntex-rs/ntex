@@ -1,5 +1,12 @@
 # Changes
 
+## [4.6.0] - 2026-11-03
+
+* Add `services::reconnect` with `Reconnect`, `ReconnectService`, and configurable
+  error policies for lazy service creation and reconnection. Creation and
+  readiness failures use bounded retries and cancellation-safe exponential
+  backoff; failed requests are never replayed
+
 ## [4.5.1] - 2026-10-31
 
 * Make join_all return impl Future
