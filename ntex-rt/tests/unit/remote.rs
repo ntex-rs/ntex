@@ -82,6 +82,54 @@ fn pinned_job(ready: bool, panics: bool) -> (Arc<Job<PinnedFuture>>, Arc<Probe>)
     (job, probe)
 }
 
+/// STATEMENT: Remote join diagnostics report completion without consuming a non-`Debug` output.
+///
+/// HOW:
+/// - Format a pending job, complete it, and format its join handle again.
+/// - Retrieve the output afterward and verify formatting did not drop it.
+#[test]
+fn debug_remote_join() {
+    let (job, probe) = pinned_job(true, false);
+    let mut runner = Runner(job.clone());
+    let join = RemoteJoin::new(job);
+    assert_eq!(format!("{join:?}"), "RemoteJoin { finished: false }");
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut runner).poll(&mut cx).is_ready());
+    assert_eq!(format!("{join:?}"), "RemoteJoin { finished: true }");
+    assert_eq!(probe.output_drops.load(Ordering::SeqCst), 0);
+    let Poll::Ready(Some(output)) = join.poll_join(&mut cx) else {
+        panic!("formatting consumed the output");
+    };
+    drop(output);
+    assert_eq!(probe.output_drops.load(Ordering::SeqCst), 1);
+}
+
+/// STATEMENT: Spawner diagnostics identify the owner without inspecting or running queued jobs.
+///
+/// HOW:
+/// - Start a spawner, enqueue a job and format a spawner clone on another thread.
+/// - Check the owner-only representation and verify the job remains unfinished.
+#[cfg(any(feature = "tokio", feature = "compio"))]
+#[ntex::test]
+async fn debug_spawner() {
+    let spawner = Spawner::start();
+    let job = Job::new(async { 7usize }, true);
+    let join = RemoteJoin::new(job.clone());
+    spawner.submit(job);
+    let expected = format!(
+        "Spawner {{ owner: {:?}, .. }}",
+        crate::rt::current_thread_id()
+    );
+    let remote = spawner.clone();
+    assert_eq!(
+        std::thread::spawn(move || format!("{remote:?}"))
+            .join()
+            .unwrap(),
+        expected
+    );
+    assert!(!join.is_finished());
+}
+
 /// STATEMENT: Remote completion drops the pinned future before waking the joiner, even if drop panics.
 ///
 /// HOW:

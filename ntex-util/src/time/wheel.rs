@@ -892,6 +892,28 @@ mod tests {
         })
     }
 
+    /// STATEMENT: Callback timer diagnostics expose the handle without borrowing the wheel or invoking callbacks.
+    ///
+    /// HOW:
+    /// - Format an armed timer while the wheel is borrowed, then cancel and format it again.
+    /// - Check the same handle is reported and the captured callback has not run.
+    #[test]
+    fn debug_callback_timer() {
+        let timer = timer_state();
+        let calls = Rc::new(Cell::new(0));
+        let captured = calls.clone();
+        let callback = CallbackTimer::new(Millis(10_000), move || {
+            captured.set(captured.get() + 1);
+        });
+        let expected = format!("CallbackTimer {{ handle: {}, .. }}", callback.hnd);
+        timer.with_wheel(|_| assert_eq!(format!("{callback:?}"), expected));
+        assert!(!callback.is_elapsed());
+        callback.cancel();
+        assert_eq!(format!("{callback:?}"), expected);
+        assert!(callback.is_elapsed());
+        assert_eq!(calls.get(), 0);
+    }
+
     fn timer_driver(timer: &Rc<Timer>) -> TimerDriver {
         TimerDriver {
             timer: timer.clone(),

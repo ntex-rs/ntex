@@ -2492,6 +2492,34 @@ fn debug_formats() {
     assert!(format!("{reason:?}").starts_with("Reason::Decoder("));
 }
 
+/// STATEMENT: Call diagnostics delegate to the service future without polling it or releasing its guard.
+///
+/// HOW:
+/// - Create an unpolled dispatch call and compare its output with the wrapped future.
+/// - Verify formatting leaves the call in flight and dropping it releases the count.
+#[ntex::test]
+async fn debug_call() {
+    let (_client, server) = IoTest::create();
+    let (dispatcher, _) = Dispatcher::debug(
+        Io::from(server),
+        BCodec(1),
+        ntex_service::fn_service(
+            async |_: DispatchItem<BCodec>| -> Result<Option<Bytes>, ()> {
+                panic!("formatting must not poll the service");
+            },
+        ),
+    );
+    let call = dispatcher
+        .inner
+        .shared
+        .call(DispatchItem::Item(Bytes::from_static(b"x")));
+    assert_eq!(format!("{call:?}"), "PipelineCall");
+    assert_eq!(format!("{call:?}"), format!("{:?}", call.fut));
+    assert_eq!(dispatcher.inner.shared.inflight.get(), 1);
+    drop(call);
+    assert_eq!(dispatcher.inner.shared.inflight.get(), 0);
+}
+
 /// STATEMENT: A write failure under backpressure is delivered as an I/O stop event.
 ///
 /// HOW:

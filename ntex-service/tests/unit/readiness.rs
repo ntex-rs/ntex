@@ -36,6 +36,57 @@ fn new_scope() -> ReadyScope {
     })
 }
 
+/// STATEMENT: Readiness diagnostics identify handles without invoking callbacks or borrowing scopes.
+///
+/// HOW:
+/// - Format a captured callback and a bound link/endpoint while scope storage is mutably borrowed.
+/// - Check the opaque callback label, store identity and scope ID, and verify no callback ran.
+#[test]
+fn debug_handles_with_borrowed_scopes() {
+    let calls = Rc::new(Cell::new(0));
+    let captured = calls.clone();
+    let callback = ReadyCallback::new(move |_| captured.set(captured.get() + 1));
+    let waiters = crate::ctx::WaitersRef::new();
+    let link = waiters.scope().readiness_link();
+    let endpoint = waiters.scope().endpoint();
+    let _slots = endpoint.store.scopes.slots.borrow_mut();
+
+    assert_eq!(format!("{callback:?}"), "ReadyCallback { .. }");
+    let store = Rc::as_ptr(&endpoint.store);
+    assert_eq!(
+        format!("{link:?}"),
+        format!("ReadyLink {{ store: {store:p} }}")
+    );
+    assert_eq!(
+        format!("{endpoint:?}"),
+        format!("Endpoint {{ store: {store:p}, scope: 0 }}")
+    );
+    assert_eq!(calls.get(), 0);
+}
+
+/// STATEMENT: Checker diagnostics expose only owner metadata and can be formatted off-thread.
+///
+/// HOW:
+/// - Retain the checker on its owner and format a clone on another thread with scope storage borrowed.
+/// - Compare the output with the owner ID and release the final handle on the owner thread.
+#[test]
+fn debug_checker_on_foreign_thread() {
+    let waiters = crate::ctx::WaitersRef::new();
+    let checker = Arc::new(CheckerWake {
+        owner: thread::current().id(),
+        closed: Cell::new(false),
+        endpoint: mem::ManuallyDrop::new(waiters.scope().endpoint()),
+    });
+    let expected = format!("CheckerWake {{ owner: {:?}, .. }}", checker.owner);
+    let _slots = checker.endpoint.store.scopes.slots.borrow_mut();
+    let remote = checker.clone();
+    assert_eq!(
+        thread::spawn(move || format!("{remote:?}")).join().unwrap(),
+        expected
+    );
+    assert_eq!(format!("{checker:?}"), expected);
+}
+
 /// STATEMENT: Root scope zero and monotonic child IDs survive waiter moves and retire promptly.
 ///
 /// HOW:

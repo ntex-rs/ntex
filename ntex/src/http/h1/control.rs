@@ -635,6 +635,7 @@ mod tests {
     ///
     /// HOW:
     /// - Obtain a reference, take and drop the transport, then check the reference tag and rejected subsequent accesses.
+    /// - Check diagnostics retain the I/O state and codec connection ID after the transport has been taken.
     #[crate::rt_test]
     async fn request_io_access_is_one_shot() {
         let (_, server) = IoTest::create();
@@ -648,8 +649,14 @@ mod tests {
         };
 
         let ioref = access.get().unwrap();
+        let debug = format!("{access:?}");
+        assert!(debug.starts_with("RequestIoAccess { io: IoRef { state: "));
+        assert!(debug.contains("codec: h1::Codec { con_id: 1,"));
         let (io, _) = access.take().unwrap();
         drop(io);
+        let debug = format!("{access:?}");
+        assert!(debug.starts_with("RequestIoAccess { io: IoRef { state: "));
+        assert!(debug.contains("codec: h1::Codec { con_id: 1,"));
         // `get()` result does not borrow the taken io
         assert_eq!(ioref.tag(), "TEST");
         assert!(access.get().is_none());

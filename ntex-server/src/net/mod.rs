@@ -80,6 +80,47 @@ pub(super) fn num_connections() -> usize {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Network server diagnostics describe listener configuration and worker services.
+    ///
+    /// HOW:
+    /// - Configure one named listener and check its token, backlog and socket name in diagnostics.
+    /// - Build the stream server and worker service, checking the factory count and token routing.
+    #[ntex::test]
+    async fn debug_network_services() {
+        use crate::ServerConfiguration;
+        use ntex_service::cfg::SharedCfg;
+
+        let config = ServiceConfig::<NoConfig>::new(Token(7), 64);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        config.listen("debug-listener", listener);
+        config.on_worker_start(async |runtime| {
+            runtime.service(
+                "debug-listener",
+                SharedCfg::default(),
+                ntex_service::fn_service(async |_: ntex_io::Io| Ok::<_, ()>(())),
+            );
+            Ok(())
+        });
+        let debug = format!("{config:?}");
+        assert!(debug.contains("ServiceConfigInner { token: Token(8), backlog: 64, sockets: ["));
+        assert!(debug.contains("name: \"debug-listener\""));
+        assert!(debug.contains("Token(7)"));
+
+        let (_, _sockets, factory) = config.into_factory();
+        let accept = AcceptLoop::new();
+        let server = StreamServer::new(
+            accept.notify(),
+            std::sync::Arc::new(NoConfig),
+            vec![factory],
+        );
+        assert_eq!(format!("{server:?}"), "StreamServer { services: 1 }");
+        let service = server.create().await.unwrap();
+        let debug = format!("{service:?}");
+        assert!(debug.starts_with("StreamService { tokens: {Token(7): (0, "));
+        assert!(debug.contains("conns: Counter("));
+        assert!(debug.contains("count: Cell { value: 0 }"));
+    }
+
     #[test]
     fn token_next() {
         let mut token = Token(0);
