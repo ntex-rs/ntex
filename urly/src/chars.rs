@@ -86,10 +86,15 @@ pub(crate) fn pct_at(bytes: &[u8], i: usize) -> Option<u8> {
     Some((hi << 4) | lo)
 }
 
+#[inline]
 pub(crate) fn push_pct(out: &mut String, b: u8) {
-    out.push('%');
-    out.push(HEX_UPPER[usize::from(b >> 4)] as char);
-    out.push(HEX_UPPER[usize::from(b & 15)] as char);
+    let encoded = [
+        b'%',
+        HEX_UPPER[usize::from(b >> 4)],
+        HEX_UPPER[usize::from(b & 15)],
+    ];
+    // SAFETY: '%' and the hexadecimal digits are ASCII.
+    out.push_str(unsafe { std::str::from_utf8_unchecked(&encoded) });
 }
 
 pub(crate) fn char_at(s: &str, i: usize) -> char {

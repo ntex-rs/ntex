@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.1] - 2026-11-03
+
+* Improve quoting performance
+
 ## [1.2.0] - 2026-10-31
 
 * Add `Url::parse_target()` and `Url::from_target_parts()` to preserve unvalidated

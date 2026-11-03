@@ -102,12 +102,12 @@ impl Component {
 
 /// Percent-encodes a literal value.
 pub fn quote(src: &str, component: Component) -> Cow<'_, str> {
-    quote_with(src, component, false)
+    quote_with::<false>(src, component)
 }
 
 /// Normalizes the percent-encoding of an already-encoded value.
 pub fn requote(src: &str, component: Component) -> Cow<'_, str> {
-    quote_with(src, component, true)
+    quote_with::<true>(src, component)
 }
 
 /// Decodes a percent-encoded value.
@@ -117,14 +117,14 @@ pub fn requote(src: &str, component: Component) -> Cow<'_, str> {
 /// the result can still be split into pairs.
 pub fn unquote(src: &str, component: Component) -> Cow<'_, str> {
     match component {
-        Component::Query => unquote_with(src, true, &QS),
-        Component::QueryPart => unquote_with(src, true, &NONE),
-        _ => unquote_with(src, false, &NONE),
+        Component::Query => unquote_with::<true>(src, &QS),
+        Component::QueryPart => unquote_with::<true>(src, &NONE),
+        _ => unquote_with::<false>(src, &NONE),
     }
 }
 
-fn quote_with(src: &str, component: Component, requote: bool) -> Cow<'_, str> {
-    let q = component.quoter(requote);
+fn quote_with<const REQUOTE: bool>(src: &str, component: Component) -> Cow<'_, str> {
+    let q = component.quoter(REQUOTE);
     let bytes = src.as_bytes();
     let is_safe = |b: u8| q.safe.contains(b);
 
@@ -136,7 +136,7 @@ fn quote_with(src: &str, component: Component, requote: bool) -> Cow<'_, str> {
             i += 1;
             continue;
         }
-        if requote
+        if REQUOTE
             && let Some(v) = pct_at(bytes, i)
             && !bytes[i + 1].is_ascii_lowercase()
             && !bytes[i + 2].is_ascii_lowercase()
@@ -153,14 +153,42 @@ fn quote_with(src: &str, component: Component, requote: bool) -> Cow<'_, str> {
 
     let mut out = String::with_capacity(bytes.len() + 16);
     out.push_str(&src[..i]);
+    if bytes.len() - i < 32 {
+        quote_into::<REQUOTE, false>(&mut out, src, i, q);
+    } else {
+        quote_into::<REQUOTE, true>(&mut out, src, i, q);
+    }
+    Cow::Owned(out)
+}
+
+#[inline(always)]
+fn quote_into<const REQUOTE: bool, const BULK: bool>(
+    out: &mut String,
+    src: &str,
+    mut i: usize,
+    q: &Quoter,
+) {
+    let bytes = src.as_bytes();
     while i < bytes.len() {
         let b = bytes[i];
-        if is_safe(b) {
+        if q.safe.contains(b) {
+            if BULK {
+                let mut end = i + 1;
+                while end < bytes.len() && q.safe.contains(bytes[end]) {
+                    end += 1;
+                }
+                if end - i >= 8 {
+                    out.push_str(&src[i..end]);
+                    i = end;
+                    continue;
+                }
+                return quote_into::<REQUOTE, false>(out, src, i, q);
+            }
             out.push(b as char);
             i += 1;
-        } else if requote && let Some(v) = pct_at(bytes, i) {
+        } else if REQUOTE && let Some(v) = pct_at(bytes, i) {
             if q.protected.contains(v) || !q.safe.contains(v) {
-                push_pct(&mut out, v);
+                push_pct(out, v);
             } else {
                 out.push(v as char);
             }
@@ -169,19 +197,18 @@ fn quote_with(src: &str, component: Component, requote: bool) -> Cow<'_, str> {
             out.push('+');
             i += 1;
         } else {
-            push_pct(&mut out, b);
+            push_pct(out, b);
             i += 1;
         }
     }
-    Cow::Owned(out)
 }
 
 /// Decodes `src`, keeping escapes of `ignore` characters encoded.
-pub(crate) fn unquote_with<'a>(src: &'a str, plus: bool, ignore: &Set) -> Cow<'a, str> {
+pub(crate) fn unquote_with<'a, const PLUS: bool>(src: &'a str, ignore: &Set) -> Cow<'a, str> {
     let bytes = src.as_bytes();
     let Some(start) = bytes
         .iter()
-        .position(|b| *b == b'%' || (plus && *b == b'+'))
+        .position(|b| *b == b'%' || (PLUS && *b == b'+'))
     else {
         return Cow::Borrowed(src);
     };
@@ -189,7 +216,33 @@ pub(crate) fn unquote_with<'a>(src: &'a str, plus: bool, ignore: &Set) -> Cow<'a
     // fast path, decode everything and validate once
     let mut buf = Vec::with_capacity(bytes.len());
     buf.extend_from_slice(&bytes[..start]);
-    let mut i = start;
+    unquote_into::<PLUS, true>(&mut buf, bytes, start, ignore);
+    if simdutf8::basic::from_utf8(&buf[start..]).is_ok() {
+        // SAFETY: the unchanged prefix is valid UTF-8 ending at an ASCII escape
+        // boundary, and the decoded suffix is validated above.
+        return Cow::Owned(unsafe { String::from_utf8_unchecked(buf) });
+    }
+    let mut out = String::with_capacity(bytes.len());
+    out.push_str(&src[..start]);
+    // Literal UTF-8 cannot complete an escaped partial sequence: it never starts
+    // with a continuation byte. Repairing the decoded buffer preserves run boundaries.
+    for chunk in buf[start..].utf8_chunks() {
+        out.push_str(chunk.valid());
+        for &b in chunk.invalid() {
+            push_pct(&mut out, b);
+        }
+    }
+    Cow::Owned(out)
+}
+
+// Specialize short-run tails so dense escapes do not pay a per-byte bulk-copy branch.
+#[inline(always)]
+fn unquote_into<const PLUS: bool, const BULK: bool>(
+    buf: &mut Vec<u8>,
+    bytes: &[u8],
+    mut i: usize,
+    ignore: &Set,
+) {
     while i < bytes.len() {
         let b = bytes[i];
         if let Some(v) = pct_at(bytes, i) {
@@ -204,93 +257,205 @@ pub(crate) fn unquote_with<'a>(src: &'a str, plus: bool, ignore: &Set) -> Cow<'a
             }
             i += 3;
         } else {
-            buf.push(if plus && b == b'+' { b' ' } else { b });
-            i += 1;
-        }
-    }
-    if simdutf8::basic::from_utf8(&buf).is_ok() {
-        // SAFETY: validated above
-        return Cow::Owned(unsafe { String::from_utf8_unchecked(buf) });
-    }
-    unquote_invalid(src, plus, ignore, start)
-}
-
-/// Decodes `src`, re-encoding escapes that don't form valid UTF-8.
-fn unquote_invalid<'a>(src: &'a str, plus: bool, ignore: &Set, start: usize) -> Cow<'a, str> {
-    let bytes = src.as_bytes();
-    let mut out = String::with_capacity(bytes.len());
-    out.push_str(&src[..start]);
-    let mut pending = Vec::new();
-    let mut i = start;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(v) = pct_at(bytes, i) {
-            if ignore.contains(v) {
-                flush(&mut out, &mut pending);
-                push_pct(&mut out, v);
-            } else {
-                pending.push(v);
-            }
-            i += 3;
-            continue;
-        }
-        flush(&mut out, &mut pending);
-        if plus && b == b'+' {
-            out.push(' ');
-            i += 1;
-        } else {
-            // copy the whole literal char
-            let len = utf8_len(b);
-            out.push_str(&src[i..i + len]);
-            i += len;
-        }
-    }
-    flush(&mut out, &mut pending);
-    Cow::Owned(out)
-}
-
-const fn utf8_len(b: u8) -> usize {
-    match b {
-        0..0x80 => 1,
-        0xc0..0xe0 => 2,
-        0xe0..0xf0 => 3,
-        _ => 4,
-    }
-}
-
-/// Appends decoded bytes; sequences that are not valid UTF-8 are re-encoded.
-fn flush(out: &mut String, pending: &mut Vec<u8>) {
-    let mut rest = &pending[..];
-    while !rest.is_empty() {
-        match simdutf8::compat::from_utf8(rest) {
-            Ok(s) => {
-                out.push_str(s);
-                break;
-            }
-            Err(e) => {
-                let valid = e.valid_up_to();
-                // SAFETY: `rest[..valid]` is valid UTF-8
-                out.push_str(unsafe { std::str::from_utf8_unchecked(&rest[..valid]) });
-                let invalid = e.error_len().unwrap_or(rest.len() - valid);
-                for b in &rest[valid..valid + invalid] {
-                    push_pct(out, *b);
+            if BULK && b != b'%' && !(PLUS && b == b'+') {
+                let mut end = i + 1;
+                while end < bytes.len() && bytes[end] != b'%' && !(PLUS && bytes[end] == b'+') {
+                    end += 1;
                 }
-                rest = &rest[valid + invalid..];
+                if end - i >= 8 {
+                    buf.extend_from_slice(&bytes[i..end]);
+                    i = end;
+                    continue;
+                }
+                return unquote_into::<PLUS, false>(buf, bytes, i, ignore);
             }
+            buf.push(if PLUS && b == b'+' { b' ' } else { b });
+            i += 1;
         }
     }
-    pending.clear();
 }
 
 /// Decodes a path, keeping `%2F` and `%25` encoded.
 pub(crate) fn unquote_path_safe(src: &str) -> Cow<'_, str> {
-    unquote_with(src, false, &PATH_SAFE)
+    unquote_with::<false>(src, &PATH_SAFE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// STATEMENT: Specialized quote modes preserve component rules across short and long safe runs.
+    ///
+    /// HOW:
+    /// - Surround Unicode, spaces, delimiters and percent escapes with varying ASCII spans.
+    /// - Check literal and normalized output, and borrowing for unchanged canonical inputs.
+    #[test]
+    fn quoting_modes_and_spans() {
+        for len in [0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 127] {
+            let prefix = "a".repeat(len);
+            let suffix = "z".repeat(len);
+            for (component, input, quoted, requoted) in [
+                (
+                    Component::Path,
+                    "a b/\u{fc}",
+                    "a%20b/%C3%BC",
+                    "a%20b/%C3%BC",
+                ),
+                (
+                    Component::Path,
+                    "%7e%41%2f%2b",
+                    "%257e%2541%252f%252b",
+                    "~A%2F%2B",
+                ),
+                (Component::Path, "%zz%4", "%25zz%254", "%25zz%254"),
+                (Component::Query, "a+b=c d", "a%2Bb=c+d", "a+b=c+d"),
+                (
+                    Component::QueryPart,
+                    "a+b=c&d;e",
+                    "a%2Bb%3Dc%26d%3Be",
+                    "a%2Bb%3Dc%26d%3Be",
+                ),
+                (Component::UserInfo, "u:p@x", "u%3Ap%40x", "u%3Ap%40x"),
+                (
+                    Component::Fragment,
+                    "x#\u{1f642}",
+                    "x%23%F0%9F%99%82",
+                    "x%23%F0%9F%99%82",
+                ),
+                (Component::Opaque, "=?#\0", "%3D%3F%23%00", "%3D%3F%23%00"),
+            ] {
+                let src = format!("{prefix}{input}{suffix}");
+                assert_eq!(quote(&src, component), format!("{prefix}{quoted}{suffix}"));
+                assert_eq!(
+                    requote(&src, component),
+                    format!("{prefix}{requoted}{suffix}")
+                );
+            }
+            let src = format!("{prefix}%2F%20{suffix}");
+            assert!(matches!(requote(&src, Component::Path), Cow::Borrowed(_)));
+            let src = format!("{prefix}-{suffix}");
+            assert!(matches!(quote(&src, Component::Opaque), Cow::Borrowed(_)));
+            let src = format!(" {prefix}\u{fc}{suffix} ");
+            assert_eq!(
+                quote(&src, Component::Path),
+                format!("%20{prefix}%C3%BC{suffix}%20")
+            );
+        }
+    }
+
+    /// STATEMENT: Specialized decoding handles every escaped byte without changing literal UTF-8.
+    ///
+    /// HOW:
+    /// - Surround each lowercase byte escape with literal Unicode and a literal plus.
+    /// - Check path, query and query-part plus handling and protected-escape normalization.
+    /// - Check the safe-path decoder preserves slash and percent escapes.
+    #[test]
+    fn unquote_bytes_and_modes() {
+        for byte in 0..=255u8 {
+            let src = format!("\u{e9}+%{byte:02x}\u{1f642}");
+            let encoded = format!("%{byte:02X}");
+            let decoded = if byte.is_ascii() {
+                char::from(byte).to_string()
+            } else {
+                encoded.clone()
+            };
+            for component in [Component::Path, Component::Query, Component::QueryPart] {
+                let plus = if component == Component::Path { "+" } else { " " };
+                let value = if component == Component::Query && b"&=+;".contains(&byte) {
+                    &encoded
+                } else {
+                    &decoded
+                };
+                assert_eq!(
+                    unquote(&src, component),
+                    format!("\u{e9}{plus}{value}\u{1f642}")
+                );
+            }
+            let value = if b"/%".contains(&byte) { &encoded } else { &decoded };
+            assert_eq!(unquote_path_safe(&src), format!("\u{e9}+{value}\u{1f642}"));
+        }
+    }
+
+    /// STATEMENT: Repairing decoded bytes preserves escaped-run boundaries and literal percent text.
+    ///
+    /// HOW:
+    /// - Mix valid escaped Unicode, invalid/truncated UTF-8, raw Unicode and malformed escapes.
+    /// - Check invalid bytes are re-encoded once, without reinterpreting decoded percent signs.
+    /// - Exercise long valid prefixes and ignored query/path escapes alongside invalid bytes.
+    #[test]
+    fn unquote_invalid_runs() {
+        for len in [0, 1, 15, 16, 63, 64, 127] {
+            let prefix = "a".repeat(len);
+            for (input, expected) in [
+                ("%ff%C3%BCx%C3", "%FF\u{fc}x%C3"),
+                ("%E2%28%A1", "%E2(%A1"),
+                ("%C0%AF", "%C0%AF"),
+                ("%ED%A0%80", "%ED%A0%80"),
+                ("%F4%90%80%80", "%F4%90%80%80"),
+                ("%F0%9F%92", "%F0%9F%92"),
+                ("%E2%82%AC%E2%82", "\u{20ac}%E2%82"),
+                ("%e2\u{20ac}%82%ac", "%E2\u{20ac}%82%AC"),
+                ("%ff%25ff", "%FF%ff"),
+                ("\u{e9}%ff%25ff", "\u{e9}%FF%ff"),
+                ("%ff%25C3%25BC", "%FF%C3%BC"),
+                ("%ff%zz%4", "%FF%zz%4"),
+                (
+                    "%ff\u{e9}\u{20ac}\u{1f600}%20",
+                    "%FF\u{e9}\u{20ac}\u{1f600} ",
+                ),
+            ] {
+                let src = format!("{prefix}{input}");
+                assert_eq!(
+                    unquote(&src, Component::Path),
+                    format!("{prefix}{expected}")
+                );
+            }
+            let src = format!("{prefix}%ff+%26%3d%2b%3b");
+            assert_eq!(
+                unquote(&src, Component::Query),
+                format!("{prefix}%FF %26%3D%2B%3B")
+            );
+            assert_eq!(
+                unquote(&src, Component::QueryPart),
+                format!("{prefix}%FF &=+;")
+            );
+            let src = format!("{prefix}%ff%2f%25%C3%BC");
+            assert_eq!(unquote_path_safe(&src), format!("{prefix}%FF%2F%25\u{fc}"));
+        }
+    }
+
+    /// STATEMENT: Scalar span copying preserves malformed escapes and borrows unchanged inputs.
+    ///
+    /// HOW:
+    /// - Separate escapes, plus signs and malformed percent text with safe runs of varying lengths.
+    /// - Check path/query decoding and borrowing when no transformation is needed.
+    #[test]
+    fn unquote_spans() {
+        for len in [0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 127] {
+            let span = "x".repeat(len);
+            let src = format!("%41{span}+{span}%20{span}%zz{span}%");
+            assert_eq!(
+                unquote(&src, Component::Path),
+                format!("A{span}+{span} {span}%zz{span}%")
+            );
+            assert_eq!(
+                unquote(&src, Component::QueryPart),
+                format!("A{span} {span} {span}%zz{span}%")
+            );
+            let src = format!("\u{fc}{span}");
+            assert!(matches!(unquote(&src, Component::Path), Cow::Borrowed(_)));
+            assert!(matches!(
+                unquote(&src, Component::QueryPart),
+                Cow::Borrowed(_)
+            ));
+        }
+    }
+
+    /// STATEMENT: Literal quoting uses the safe set and space rules of each component.
+    ///
+    /// HOW:
+    /// - Check representative delimiters, Unicode and percent signs in every component.
+    /// - Confirm already-safe opaque values are borrowed.
     #[test]
     fn quote_rules() {
         assert_eq!(quote("", Component::Path), "");
@@ -313,6 +478,10 @@ mod tests {
         ));
     }
 
+    /// STATEMENT: Requoting normalizes escapes without decoding protected component delimiters.
+    ///
+    /// HOW:
+    /// - Check canonical borrowing, lowercase escapes, malformed escapes and query spaces.
     #[test]
     fn requote_rules() {
         assert!(matches!(
@@ -327,6 +496,11 @@ mod tests {
         assert_eq!(requote("%C3%BC", Component::Fragment), "%C3%BC");
     }
 
+    /// STATEMENT: Unquoting preserves invalid UTF-8 and component-specific protected escapes.
+    ///
+    /// HOW:
+    /// - Decode Unicode and plus signs, checking path, query and safe-path results.
+    /// - Confirm unchanged text is borrowed and malformed escapes remain literal.
     #[test]
     fn unquote_rules() {
         assert!(matches!(unquote("abc", Component::Path), Cow::Borrowed(_)));
