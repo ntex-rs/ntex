@@ -781,6 +781,197 @@ Only the first category is directly proportional to pending work. The other
 two are performance tradeoffs and can make resident memory stay high after a
 traffic spike without indicating an ownership leak.
 
+## Tracking buffer memory
+
+Shared buffers make one question hard to answer: who is holding this memory?
+A large buffer can stay alive because of a single frame sitting in a cache,
+long after the code that allocated it has moved on. The allocator can tell
+you the memory is in use, but not why.
+
+The `tracker` feature answers that question. Any heap allocation can be
+charged to a [`BytesTracker`], and the charge follows the allocation, not a
+particular handle. When the last handle is dropped, the charge ends. You
+decide what a tracker stands for: a cache, a tenant, a subsystem, or a
+single connection. The I/O layer is one user of this mechanism. It can charge
+connection read buffers to trackers, as described at the
+[end of this section](#example-read-buffers-in-the-io-layer).
+
+The feature is off by default. Enabling it on `ntex` also turns it on in the
+I/O and network layers, and re-exports `BytesTracker` and
+[`BytesTrackerSnapshot`] in `ntex::util`:
+
+```toml
+ntex = { version = "4", features = ["tracker"] }
+```
+
+If you use `ntex-bytes` on its own, enable `ntex-bytes/tracker` instead.
+
+The feature has a small cost even for buffers that are never charged. The
+header in front of every heap buffer grows from 16 to 32 bytes (20 bytes on
+32-bit targets) to make room for the tracker pointer. Cloning, splitting and
+freezing do no tracker work. Only allocating, growing, and releasing the
+last handle of a charged buffer touch the tracker's atomic counters.
+
+### How charges work
+
+A tracker is a set of atomic counters shared by all of its handles.
+`snapshot()` returns two numbers:
+
+- `live_bytes`: the total size of the charged allocations, header included.
+  This is the allocation size, not the amount of data in it, so a `Size4`
+  buffer counts as 4096 bytes whether it is empty or full.
+- `live_allocations`: how many allocations are charged.
+
+Charges follow the allocation, in line with the
+[handle and allocation](#the-mental-model) distinction:
+
+- An allocation stays charged while any `BytesMut` or `Bytes` handle refers
+  to it. A frame split off a buffer keeps the whole allocation charged, just
+  as it keeps it alive.
+- A buffer that grows into a new allocation charges the new one to the same
+  tracker.
+- The charge ends when the last handle is dropped, on whichever thread drops
+  it. The page then goes back to the cache uncharged, and is charged again
+  only by its next user.
+- Copies are not charged: a cloned `BytesMut`, small data stored inline in a
+  `Bytes` handle, the result of `trimdown`, or data converted into other
+  types.
+
+```rust
+use ntex_bytes::{BytePageSize, BytesMut, BytesTracker};
+
+let tracker = BytesTracker::new();
+
+let mut buf = BytesMut::with_page_size_in(BytePageSize::Size4, &tracker);
+buf.extend_from_slice(&[b'x'; 1000]);
+let frame = buf.split_to(600); // shares the allocation
+let tag = frame.slice(..8); // short enough to be copied inline
+drop(buf);
+
+// `frame` alone keeps the whole page charged
+let snap = tracker.snapshot();
+assert_eq!(snap.live_allocations, 1);
+assert_eq!(snap.live_bytes, 4096);
+
+// `tag` is a copy, so dropping `frame` ends the charge
+drop(frame);
+assert_eq!(tracker.snapshot().live_bytes, 0);
+assert_eq!(&tag[..], b"xxxxxxxx");
+```
+
+Compared with the categories in
+[What memory usage means in practice](#what-memory-usage-means-in-practice),
+a tracker counts live data and retained allocations, never cached ones. That
+makes it a good leak detector: if tracked memory drops after a traffic
+spike but resident memory stays high, the difference is cache, not a leak.
+
+### Building your own tracker
+
+Create a tracker for any part of the application whose memory you want to
+see, such as a response cache, a per-tenant queue, or a decompression stage.
+There are two ways to charge a buffer:
+
+- [`BytesMut::with_page_size_in`] takes a new buffer from the page cache and
+  charges it. Like `with_page_size`, `BytePageSize::Unset` means `Size64`.
+- [`BytesMut::set_tracker`] charges an existing buffer. If the buffer is
+  already charged to another tracker, the charge moves, even while `Bytes`
+  frames split from it are still alive. Setting the same tracker again does
+  nothing.
+
+[`BytesMut::tracker`] tells you which tracker a buffer is charged to. Only a
+`BytesMut` can change the charge, so do it before you freeze the buffer and
+hand out `Bytes`.
+
+Here is a cache that accounts for everything it stores:
+
+```rust
+use std::collections::HashMap;
+use ntex_bytes::{Bytes, BytesMut, BytesTracker, BytesTrackerSnapshot};
+
+#[derive(Default)]
+struct BodyCache {
+    items: HashMap<String, Bytes>,
+    tracker: BytesTracker,
+}
+
+impl BodyCache {
+    fn insert(&mut self, key: String, mut body: BytesMut) {
+        // moves the charge from any previous tracker to the cache
+        body.set_tracker(&self.tracker);
+        self.items.insert(key, body.freeze());
+    }
+
+    fn usage(&self) -> BytesTrackerSnapshot {
+        self.tracker.snapshot()
+    }
+}
+```
+
+The cache is charged for the whole allocation, spare capacity included,
+because that is what it keeps alive. If entries are small slices of large
+buffers, the numbers will show it. That is your cue to `trimdown` before
+storing.
+
+A few properties make trackers easy to plug in:
+
+- Clones share the same counters, and `BytesTracker` is `Send` and `Sync`.
+  A metrics task on any thread can hold a clone and call `snapshot()`.
+  `ptr_eq` tells whether two handles refer to the same tracker.
+- A tracker lives while any handle or charged allocation exists. Dropping
+  the cache's handle does not affect buffers that are still alive elsewhere.
+- Trackers report usage; they do not enforce limits. To enforce a budget,
+  check `snapshot()` before accepting more data.
+- The two counters are read one after the other, so a snapshot taken while
+  buffers are being allocated or released is only approximately consistent.
+
+### Example: read buffers in the I/O layer
+
+`ntex-io` builds on the same API to account for connection input. Instead
+of charging buffers yourself, you choose a tracker policy per [`IoConfig`]
+with [`IoConfig::set_buf_tracker`], and every read buffer a connection
+allocates is charged according to it:
+
+| [`BufTracker`]    | Behavior |
+|-------------------|----------|
+| `Disabled`        | Read buffers are not charged. This is the default. |
+| `PerConnection`   | Each connection gets its own tracker, created on first use. |
+| `Shared(tracker)` | All connections of the configuration, on every worker, charge `tracker`. |
+
+```rust
+use ntex::{SharedCfg, io::{BufTracker, IoConfig}, util::BytesTracker};
+
+let api_input = BytesTracker::new();
+let cfg = SharedCfg::new("API").add(
+    IoConfig::new().set_buf_tracker(BufTracker::Shared(api_input.clone())),
+);
+```
+
+Keep the clone and read `api_input.snapshot()` from a metrics task. Because
+frames split off a read buffer keep it charged, the number includes every
+request body or message the application still holds, even after its
+connection has closed. That is input the I/O metrics no longer see. Only read
+buffers are charged; write buffers are not.
+
+With `PerConnection`, [`IoRef::buf_tracker`] returns the connection's tracker
+(`IoContext::buf_tracker` does the same inside filters). You can use it to
+close a client that holds too much input. The reference must not be used
+after `Io::set_config`; clone the tracker if you need it for longer. A clone
+keeps reporting buffers that outlive the connection, but it does not keep the
+connection alive.
+
+The connection's tracker is an ordinary `BytesTracker`, so the two approaches
+combine. To attribute your own buffers to a connection, such as a body
+assembled from many frames or a decompressed payload, pass the tracker from
+`io.buf_tracker()` to `with_page_size_in`. That memory then shows up in the
+same numbers as the connection's read buffers.
+
+A `Shared` tracker is a single cache line updated by every worker thread, so
+it becomes contended under load. Prefer one tracker per listener or service
+over one for the whole server. The
+[server chapter](./5-server.md#io-buffer-attribution) covers the rest: what
+TLS and io-uring buffers count toward, how `Io::set_config` moves charges,
+and how to read the numbers next to the I/O metrics.
+
 ## Performance guidelines
 
 The fastest choice depends on how long the data lives, not just how large
@@ -806,6 +997,7 @@ when deciding whether to share, copy or cache.
 [`ntex::util`]: https://docs.ntex.rs/api/ntex/util/index.html
 [`Buf`]: https://docs.ntex.rs/api/ntex_bytes/buf/trait.Buf.html
 [`BufMut`]: https://docs.ntex.rs/api/ntex_bytes/buf/trait.BufMut.html
+[`BufTracker`]: https://docs.ntex.rs/api/ntex/io/enum.BufTracker.html
 [`BytePage`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytePage.html
 [`BytePageSize`]: https://docs.ntex.rs/api/ntex_bytes/enum.BytePageSize.html
 [`BytePageSize::for_capacity`]: https://docs.ntex.rs/api/ntex_bytes/enum.BytePageSize.html#method.for_capacity
@@ -847,12 +1039,19 @@ when deciding whether to share, copy or cache.
 [`BytesMut::reserve`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.reserve
 [`BytesMut::reserve_exact`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.reserve_exact
 [`BytesMut::reserve_more`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.reserve_more
+[`BytesMut::set_tracker`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.set_tracker
 [`BytesMut::split_to`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.split_to
 [`BytesMut::split_to_checked`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.split_to_checked
 [`BytesMut::take`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.take
+[`BytesMut::tracker`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.tracker
 [`BytesMut::with_capacity`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.with_capacity
 [`BytesMut::with_page_size`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.with_page_size
+[`BytesMut::with_page_size_in`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesMut.html#method.with_page_size_in
+[`BytesTracker`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesTracker.html
+[`BytesTrackerSnapshot`]: https://docs.ntex.rs/api/ntex_bytes/struct.BytesTrackerSnapshot.html
 [`IoConfig`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html
+[`IoConfig::set_buf_tracker`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html#method.set_buf_tracker
 [`IoConfig::write_size`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html#method.write_size
+[`IoRef::buf_tracker`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.buf_tracker
 [`set_page_cache_size`]: https://docs.ntex.rs/api/ntex_bytes/fn.set_page_cache_size.html
 [`StorageExt`]: https://docs.ntex.rs/api/ntex_bytes/trait.StorageExt.html
