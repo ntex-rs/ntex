@@ -1,6 +1,6 @@
 use std::{fmt, marker};
 
-use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::{BindCtx, Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::{ServiceCaller, ServiceChain, ServiceChainFactory};
 
 /// Applies an asynchronous middleware function to a service.
@@ -230,8 +230,15 @@ where
         (self.f)(req, &ctx).await
     }
 
-    crate::forward_bind!(St, self.svc);
-    crate::forward_shutdown!(St, self.svc);
+    #[inline]
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, _>(&self.svc);
+    }
+
+    #[inline]
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.shutdown(&self.svc).await;
+    }
 }
 
 /// Service factory produced by [`apply_fn_factory`].

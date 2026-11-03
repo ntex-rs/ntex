@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{Ctx, Service, ServiceFactory};
+use super::{BindCtx, Ctx, Service, ServiceFactory};
 
 /// Transforms successful service responses with a synchronous function.
 ///
@@ -91,7 +91,10 @@ where
     type Res = Res;
     type Error = S::Error;
 
-    crate::forward_bind!(St, svc);
+    #[inline]
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, _>(&self.svc);
+    }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, S::Error> {

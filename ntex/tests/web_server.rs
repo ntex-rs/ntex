@@ -1331,7 +1331,7 @@ async fn web_no_ws_with_response_payload() {
 /// - Assert the resource filter and state-aware handler see `10`, then require a successful GET response.
 #[ntex::test]
 async fn test_request_state() {
-    use ntex::{Ctx, Middleware, Service, web::WebRequest, web::WebResponse};
+    use ntex::{BindCtx, Ctx, Middleware, Service, web::WebRequest, web::WebResponse};
     use std::convert::Infallible;
 
     struct UsizeMw;
@@ -1352,7 +1352,10 @@ async fn test_request_state() {
         type Res = WebResponse;
         type Error = S::Error;
 
-        ntex::forward_bind!(St, 0);
+        #[inline]
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.bind::<_, St, _>(&self.0);
+        }
 
         async fn call(
             &self,

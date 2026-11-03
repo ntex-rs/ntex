@@ -2,7 +2,6 @@ use std::{fmt, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::apply::{Apply, ApplyCtx, ApplyFactory};
-use crate::ctx::Ctx;
 use crate::fn_ready::FnReadiness;
 use crate::fn_shutdown::FnShutdown;
 use crate::map::{Map, MapFactory};
@@ -11,6 +10,7 @@ use crate::map_init_err::MapInitErr;
 use crate::middleware::{ApplyMiddleware, Middleware};
 use crate::pipeline::Pipeline;
 use crate::then::{Then, ThenFactory};
+use crate::{BindCtx, ctx::Ctx};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Starts a [`ServiceChain`] with one service.
@@ -304,7 +304,10 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req>
     type Res = S::Res;
     type Error = S::Error;
 
-    crate::forward_bind!(St, service);
+    #[inline]
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, _>(&self.service);
+    }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {

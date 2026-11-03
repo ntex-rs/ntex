@@ -348,7 +348,10 @@ mod tests {
         type Res = usize;
         type Error = TestErr;
 
-        ntex_service::forward_bind!((), 0);
+        #[inline]
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.bind::<_, (), _>(&self.0);
+        }
 
         // `ready` is not forwarded, so calls reuse this scope's cached readiness
         async fn call(&self, req: usize, ctx: Ctx<'_, Self>) -> Result<usize, TestErr> {

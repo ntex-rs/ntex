@@ -185,9 +185,7 @@ where
     type Res = Response;
     type Error = F::Error;
 
-    crate::forward_bind!(St, service);
-    crate::forward_ready!(St, service);
-    crate::forward_shutdown!(St, service);
+    crate::forward!(St, service);
 
     async fn call(&self, req: Request, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, F::Error> {
         let config: Cfg<WebAppConfig> = if let Some(cfg) = &self.config {
@@ -463,8 +461,15 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for CachedService<S> {
         ctx.call(&self.service, req).await
     }
 
-    crate::forward_ready!(St, self.service);
-    crate::forward_shutdown!(St, self.service);
+    #[inline]
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
+        ctx.ready(&self.service).await
+    }
+
+    #[inline]
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.shutdown(&self.service).await;
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{Ctx, Service, ServiceFactory};
+use super::{BindCtx, Ctx, Service, ServiceFactory};
 
 /// Transforms call and readiness errors with a synchronous function.
 ///
@@ -97,7 +97,10 @@ where
     type Res = S::Res;
     type Error = E;
 
-    crate::forward_bind!(St, svc);
+    #[inline]
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind::<_, St, _>(&self.svc);
+    }
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, E> {

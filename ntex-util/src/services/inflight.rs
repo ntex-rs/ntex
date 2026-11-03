@@ -92,7 +92,10 @@ where
         ctx.call(&self.service, req).await
     }
 
-    ntex_service::forward_shutdown!(St, service);
+    #[inline]
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.shutdown(&self.service).await;
+    }
 }
 
 #[cfg(test)]
@@ -339,7 +342,10 @@ mod tests {
         type Res = ();
         type Error = ();
 
-        ntex_service::forward_bind!((), 0);
+        #[inline]
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.bind::<_, (), _>(&self.0);
+        }
 
         // `ready` is not forwarded, so calls reuse this scope's cached readiness
         async fn call(&self, req: (), ctx: Ctx<'_, Self>) -> Result<(), ()> {

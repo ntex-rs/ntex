@@ -101,9 +101,7 @@ where
         self.connect(io, &host, ctx.st()).await
     }
 
-    ntex_service::forward_bind!(SharedCfg, svc);
-    ntex_service::forward_ready!(SharedCfg, svc);
-    ntex_service::forward_shutdown!(SharedCfg, svc);
+    ntex_service::forward!(SharedCfg, svc);
 }
 
 #[cfg(test)]
