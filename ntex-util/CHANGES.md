@@ -1,6 +1,6 @@
 # Changes
 
-## [4.6.1] - 2026-11-04
+## [4.7.0] - 2026-11-04
 
 * `Timeout` and `Retry` use cache-aware `Ctx::call` instead of removed `Ctx::call_nowait`
 

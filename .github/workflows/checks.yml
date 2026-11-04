@@ -90,6 +90,8 @@ jobs:
           toolchain: stable
       - run:
           cargo test -p ntex-service --test compile_fail -- --ignored
+      - run:
+          cargo test -p ntex --features tokio --test compile_fail -- --ignored
 
   fmt:
     name: Rustfmt

@@ -48,6 +48,12 @@ jobs:
           mdbook build target/guide-src -d "$PWD/_site"
           rm -f _site/book.toml
           cp docs/llms.txt _site/llms.txt
+          grep -oE '\]\([^)]+\.md\)' target/guide-src/SUMMARY.md \
+            | sed -E 's/^\]\((.*)\)$/\1/' \
+            | while read -r page; do
+                cat "target/guide-src/$page"
+                printf '\n\n'
+              done > _site/llms-full.txt
 
       - name: Add API docs
         run: |

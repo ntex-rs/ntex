@@ -6,11 +6,25 @@ Rules for generated code:
 
 - A service implements `call(&self, req, ctx: Ctx<'_, Self, St>)`. Call child services with `ctx.call(&self.child, req)`, never `self.child.call(...)` directly.
 - A service that wraps child services must forward `bind`, `ready`, and `shutdown` to every child. Use `ntex::forward!(St, field1, field2)`; add `map_err = f` when `Self::Error` differs from the children's error. `St` is the state type parameter of the impl.
-- Prefer `ntex::service::fn_layer(async |req, ctx| ...)` for middleware that only runs code before or after the inner service. Use a `Middleware` struct plus a service with `forward!` when the middleware needs its own state or readiness.
-- In web closures annotate the request type (`WebRequest<()>`), the inner response (`WebResponse`), and the error (`Ok::<_, web::WebError>(res)`); inference cannot see through `App::middleware`.
+- For web middleware that only runs code before or after the inner service, use `ntex::web::middleware::from_fn(async |req, next| ...)` and call `next.call(req).await?`. No annotations are needed, except `next: Next<'_, _, MyState>` when the closure reads `next.st()`. Return `Err(web::WebError::from_err(err))` to reject a request.
+- For non-web services use `ntex::service::fn_layer(async |req: Req, ctx| ...)` with explicit request, response, and error types.
+- Type-inference rules for service closures: always name the error type in `fn_service`, `fn_factory`, and `fn_layer` results (`Ok::<_, MyError>(..)`); annotate the argument of closures passed to `and_then`/`then` (`.and_then(async |res: Res| ...)`), or wrap them in `fn_service`. Closures for `map`, `map_err`, `map_init_err`, and `apply_fn` need no annotations.
+- Type-inference rules for web code: inside `HttpServer::new` or `test::init_service` write `App::new()`; elsewhere write `App::default()` (state `()`) or `App::<AppState<T>>::new()`. Prefer `async fn` handlers; closure handlers must annotate every argument (`async |path: web::types::Path<String>| ...`) and name the error type of `Ok(..)` results, also in `filter` closures. `?` does not convert into `WebError`; return a concrete error type that implements `WebResponseError`, or use `.map_err(web::WebError::from_err)?`. Modular config functions take `cfg: &mut web::ServiceConfig` (state `()`) or `&mut web::ServiceConfig<St>`.
+- Use a `Middleware` struct plus a service with `forward!` when the middleware needs its own configuration, readiness, or a named service type.
 - Write `ctx.bind(&self.child)` without a turbofish.
 - Implement `bind`, `ready`, and `shutdown` by hand only when the service has extra readiness sources, such as a shared `Pipeline` (`pipeline.bind_to(&ctx)`) or a `ReadyNotifier` (`ctx.subscribe(&notifier)`).
 - Async entry points use `#[ntex::main]`; async tests use `#[ntex::test]`.
+
+## Server and client rules
+
+- For HTTP applications, start with `web::HttpServer` and `web::App`. For custom TCP protocols or lower-level HTTP services, use `ntex::server::build()`; the standalone crate exposes the same builder as `ntex_server::net::build()`.
+- Build servers inside an active ntex runtime. `server::build().bind(name, addr, SharedCfg::default(), async |state| service)` takes four arguments; `web::HttpServer::new(async |state| app).bind(addr, SharedCfg::default())` takes two. Factories are asynchronous even when construction does no asynchronous work. Call `.run().await` to wait for shutdown, not to check worker health.
+- Factories run per worker and may run again after a restart. Construct `Rc`/`Cell`/`RefCell` state inside `build_with_config(async || Ok(state))`, not outside a factory that must be `Send`. Use `Arc` plus appropriate synchronization when data must be shared across workers. `SharedCfg` configures I/O and protocols; it is not application state.
+- `HttpService::new(async |req| Ok(..))` needs an explicit error type (`Ok::<_, std::io::Error>(..)`). A named `async fn` with a concrete return type avoids this annotation. Finish response builders with `.build()`, not `.finish()`.
+- For simple sequential protocols use `Io::recv(&codec)` and `Io::send(item, &codec)`. `BytesCodec` yields available byte chunks, not application-message boundaries. Use a framing codec for message protocols.
+- `Dispatcher::new(io, codec, pipeline)` requires a `Pipeline` whose service accepts `DispatchItem<Codec>` and returns `Result<Option<EncodedItem>, E>`. Match `Item` separately from `Control`/`Stop` notifications; `Ok(None)` emits no response.
+- `server::test_server` takes `async || service` (no state argument). `http::test::server` and `web::test::server` take `async |_| service_or_app`. Use the test server's address, not a fixed port.
+- Client send/body errors do not automatically convert into `std::io::Error`. Use a concrete application error or `Result<_, Box<dyn std::error::Error>>` to preserve them with `?`. If only a message is needed, explicitly use `.map_err(|err| std::io::Error::other(err.to_string()))?`; this loses the original error and diagnostic context. Do not require `Send + Sync` on the boxed error: client errors can be worker-local.
 
 ## Templates
 
@@ -43,23 +57,27 @@ async fn main() -> std::io::Result<()> {
 }
 ```
 
-Closure middleware (preferred):
+Closure web middleware (preferred):
 
 ```rust
 use ntex::http::header::{HeaderName, HeaderValue};
-use ntex::service::fn_layer;
-use ntex::web::{self, App, WebRequest, WebResponse};
+use ntex::web::{self, App, HttpResponse, middleware::from_fn};
 
-let app = App::new()
-    .middleware(fn_layer(async |req: WebRequest<()>, ctx| {
-        let mut res: WebResponse = ctx.call(req).await?;
-        res.headers_mut().insert(
-            HeaderName::from_static("x-application"),
-            HeaderValue::from_static("example"),
-        );
-        Ok::<_, web::WebError>(res)
-    }))
-    .route("/", web::get().to(async || "Hello"));
+web::HttpServer::new(async |_| {
+    App::new()
+        .middleware(from_fn(async |req, next| {
+            if !req.headers().contains_key("authorization") {
+                return Ok(req.into_response(HttpResponse::Unauthorized().build()));
+            }
+            let mut res = next.call(req).await?;
+            res.headers_mut().insert(
+                HeaderName::from_static("x-application"),
+                HeaderValue::from_static("example"),
+            );
+            Ok(res)
+        }))
+        .route("/", web::get().to(async || "Hello"))
+});
 ```
 
 Struct middleware with forwarding:
@@ -184,6 +202,141 @@ where
 }
 ```
 
+TCP byte-echo server:
+
+```rust
+use ntex::{SharedCfg, codec::BytesCodec, io::Io, service::fn_service};
+
+async fn echo(io: Io) -> std::io::Result<()> {
+    while let Some(msg) = io.recv(&BytesCodec).await? {
+        io.send(msg, &BytesCodec).await?;
+    }
+    Ok(())
+}
+
+#[ntex::main]
+async fn main() -> std::io::Result<()> {
+    ntex::server::build()
+        .bind("echo", "127.0.0.1:8080", SharedCfg::default(), async |_| fn_service(echo))?
+        .run()
+        .await
+}
+```
+
+Dispatcher-based byte-echo server (control and stop notifications need no response here):
+
+```rust
+use ntex::codec::BytesCodec;
+use ntex::io::{DispatchItem, Dispatcher, Io};
+use ntex::service::{Pipeline, fn_service};
+
+async fn serve(io: Io) -> std::io::Result<()> {
+    let handler = fn_service(async |item: DispatchItem<BytesCodec>| match item {
+        DispatchItem::Item(frame) => Ok::<_, std::io::Error>(Some(frame)),
+        _ => Ok(None),
+    });
+    Dispatcher::new(io, BytesCodec, Pipeline::new((), handler)).await
+}
+
+#[ntex::main]
+async fn main() -> std::io::Result<()> {
+    ntex::server::build()
+        .bind("echo", "127.0.0.1:8080", ntex::SharedCfg::default(), async |_| fn_service(serve))?
+        .run()
+        .await
+}
+```
+
+Low-level HTTP server without `web::App`:
+
+```rust
+use ntex::SharedCfg;
+use ntex::http::{HttpService, Request, Response};
+
+async fn handle(req: Request) -> Result<Response, std::io::Error> {
+    Ok(Response::Ok().body(format!("path: {}", req.path())))
+}
+
+#[ntex::main]
+async fn main() -> std::io::Result<()> {
+    ntex::server::build()
+        .bind("http", "127.0.0.1:8080", SharedCfg::default(), async |_| HttpService::new(handle))?
+        .run()
+        .await
+}
+```
+
+Network test with `test_server` and `Client`:
+
+```rust
+use ntex::client::Client;
+use ntex::http::{HttpService, Response};
+
+/// STATEMENT: A test server serves an HTTP response to `Client`.
+///
+/// HOW:
+/// - Start a server on an available port with a zero-argument async factory.
+/// - Send `GET /`, then check the status and body using `?` for client errors.
+#[ntex::test]
+async fn http_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+    let srv = ntex::server::test_server(async || {
+        HttpService::new(async |_| Ok::<_, std::io::Error>(Response::Ok().body("hello")))
+    });
+    let url = format!("http://{}/", srv.addr());
+    let res = Client::new().get(url.as_str()).send().await?;
+    assert!(res.status().is_success());
+    assert_eq!(res.body().await?, "hello");
+    Ok(())
+}
+```
+
+Worker-local state (counts accepted connections, then closes them):
+
+```rust
+use std::{cell::Cell, rc::Rc};
+
+use ntex::{SharedCfg, io::Io};
+
+#[derive(Clone, Default)]
+struct Connections(Rc<Cell<usize>>);
+
+async fn handle(st: &Connections, _io: Io) -> std::io::Result<()> {
+    st.0.set(st.0.get() + 1);
+    Ok(())
+}
+
+#[ntex::main]
+async fn main() -> std::io::Result<()> {
+    ntex::server::build_with_config(async || Ok(Connections::default()))
+        .bind("svc", "127.0.0.1:8080", SharedCfg::default(), async |_| ntex::service(handle))?
+        .run()
+        .await
+}
+```
+
+## Coming from actix-web
+
+| actix-web | ntex |
+|---|---|
+| `#[actix_web::main]`, `#[actix_web::test]` | `#[ntex::main]`, `#[ntex::test]` |
+| `HttpServer::new(\|\| App::new())` | `web::HttpServer::new(async \|_\| App::new())` or `web::server(..)` |
+| `.bind(("127.0.0.1", 8080))?` | `.bind("127.0.0.1:8080", SharedCfg::default())?` |
+| `.wrap(m)` | `.middleware(m)` on `App`, `Scope`, `Resource` |
+| `middleware::from_fn`, `wrap_fn` | `web::middleware::from_fn(async \|req, next\| next.call(req).await)` |
+| `middleware::{Logger, DefaultHeaders, Compress}` | same names in `web::middleware` (`Compress` needs feature `compress`) |
+| `web::Data<T>` + `.app_data(..)` | `web::AppState<T>` from `web::server_with_config(async \|\| Ok(AppState::new(v)), ..)`, read by handlers registered with `.to_with_state(h)` where `async fn h(st: &AppState<T>, (): (), ..)` |
+| `web::Json/Path/Query/Form/Payload` | `web::types::Json/Path/Query/Form/Payload` |
+| `Bytes`, `Either` | `ntex::util::Bytes`, `ntex::util::Either` |
+| `ResponseError` | `web::WebResponseError<St, web::DefaultError>` with `fn error_response(&self, st: &St) -> HttpResponse`; type must impl `std::error::Error` |
+| `actix_web::Error` | `web::WebError`; `?` does not convert, use `.map_err(web::WebError::from_err)?` |
+| `HttpResponse::Ok().finish()` | `HttpResponse::Ok().build()`; `.json(&value)` takes a reference |
+| `ServiceRequest`, `ServiceResponse` | `web::WebRequest`, `web::WebResponse` |
+| `#[get("/")]` | `#[web::get("/")]` |
+| `actix_web::rt::spawn` | `ntex::rt::spawn` |
+| `actix_web::test::*` | `ntex::web::test::{init_service, call_service, read_body, TestRequest}` |
+
+`scope`, `resource`, `route`, `service`, `to`, `configure`, `ServiceConfig` and `default_service` keep their actix-web names.
+
 ## Guide
 
 - [Service Model](https://docs.ntex.rs/1-service.html): the `Service` trait, factories, and function services
@@ -205,9 +358,11 @@ where
 
 - [ntex](https://docs.ntex.rs/api/ntex/index.html)
 - [ntex_service](https://docs.ntex.rs/api/ntex_service/index.html): `Service`, `Middleware`, `Pipeline`, `forward!`, `fn_layer`
-- [ntex::web](https://docs.ntex.rs/api/ntex/web/index.html)
+- [ntex::web](https://docs.ntex.rs/api/ntex/web/index.html): `App`, `HttpServer`, `middleware::from_fn`
+- [ntex_server::net](https://docs.ntex.rs/api/ntex_server/net/index.html): `build`, `build_with_config`, `ServerBuilder`, `test_server`
 
 ## Optional
 
+- [Full guide](https://docs.ntex.rs/llms-full.txt): every guide chapter in one file
 - [Examples](https://github.com/ntex-rs/examples)
 - [Source](https://github.com/ntex-rs/ntex)

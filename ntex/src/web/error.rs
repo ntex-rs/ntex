@@ -15,6 +15,13 @@ pub use crate::web::error_default::DefaultError;
 use super::HttpResponse;
 
 /// Error that can be rendered to a `Response`
+#[doc(alias = "ResponseError")]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be converted into a web error response",
+    label = "does not implement `WebResponseError`",
+    note = "implement `WebResponseError<St, St::Error>` for `{Self}`, where `St` is the application state; the default `error_response()` returns 500",
+    note = "or wrap the error with a helper such as `web::error::ErrorBadRequest(err)`"
+)]
 pub trait WebResponseError<St, Err>: Error + 'static {
     /// Generate response for error
     ///

@@ -97,6 +97,7 @@ ntex = { version = "4", features = ["tokio"] }
 - [Framework guide](https://docs.ntex.rs/index.html)
 - [Web framework documentation](https://ntex.rs)
 - [API documentation](https://docs.ntex.rs/api/ntex/index.html)
+- [LLM guide](https://docs.ntex.rs/llms.txt) ([full text](https://docs.ntex.rs/llms-full.txt))
 - [Examples](https://github.com/ntex-rs/examples)
 - [Release changes](https://github.com/ntex-rs/ntex/blob/main/ntex/CHANGES.md)
 - [Migrating from ntex 3 to ntex 4](https://docs.ntex.rs/migration_3to4.html)

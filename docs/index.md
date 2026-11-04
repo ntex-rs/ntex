@@ -24,6 +24,11 @@ build web applications.
 - [API documentation for the `main` branch](https://docs.ntex.rs/api/)
 - [API documentation for released versions on docs.rs](https://docs.rs/ntex/)
 
+## LLM documentation
+
+- [llms.txt](https://docs.ntex.rs/llms.txt): rules and templates for generated code
+- [llms-full.txt](https://docs.ntex.rs/llms-full.txt): this guide as a single text file
+
 ## Migration
 
 - [Migrating from ntex 3 to ntex 4](../ntex/migration_3to4.md)

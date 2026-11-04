@@ -11,6 +11,10 @@
 //! - [`service`](mod@service) for composing services and middleware
 //! - [`ws`] for WebSocket protocol support (enabled by the `ws` feature)
 //!
+//! The [framework guide](https://docs.ntex.rs/) explains these pieces in depth.
+//! Rules and templates for LLM-generated code are in
+//! [`llms.txt`](https://docs.ntex.rs/llms.txt).
+//!
 //! ## Runtime selection
 //!
 //! ntex uses its native Neon runtime by default. Enable `tokio` or `compio` to

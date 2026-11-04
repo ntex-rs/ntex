@@ -49,6 +49,12 @@ use super::{HttpRequest, State};
 ///
 /// let app = web::App::default().route("/", web::get().to(hello));
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be returned from a web handler",
+    label = "not a `Responder`",
+    note = "return `HttpResponse`, `String`, `&'static str`, `Json<T>`, or another `Responder`",
+    note = "`Result<T, E>` is a `Responder` when `T: Responder` and `E` implements `WebResponseError<St, St::Error>`"
+)]
 pub trait Responder<St: State = ()> {
     /// Builds an HTTP response from this value.
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response;

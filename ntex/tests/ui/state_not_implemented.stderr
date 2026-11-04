@@ -1,0 +1,42 @@
+error[E0277]: `Config` is not a web application state
+ --> tests/ui/state_not_implemented.rs:7:13
+  |
+7 |     let _ = web::App::<Config>::new();
+  |             ^^^^^^^^^^^^^^^^^^ does not implement `web::State`
+  |
+help: the trait `ntex::web::State` is not implemented for `Config`
+ --> tests/ui/state_not_implemented.rs:4:1
+  |
+4 | struct Config;
+  | ^^^^^^^^^^^^^
+  = note: implement `web::State` for `Config` with `type Error = web::DefaultError;`, or wrap it in `web::AppState<Config>`
+help: the following other types implement trait `ntex::web::State`
+ --> src/web/state.rs
+  |
+  | impl State for () {
+  | ^^^^^^^^^^^^^^^^^ `()`
+...
+  | impl<T: 'static> State for AppState<T> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `AppState<T>`
+note: required by a bound in `ntex::web::App`
+ --> src/web/app.rs
+  |
+  | pub struct App<St: State, In = (), Out = In, M = Identity, F = Filter<St, In>> {
+  |                    ^^^^^ required by this bound in `App`
+
+error[E0599]: the associated function or constant `new` exists for struct `ntex::web::App<Config>`, but its trait bounds were not satisfied
+ --> tests/ui/state_not_implemented.rs:7:33
+  |
+4 | struct Config;
+  | ------------- doesn't satisfy `Config: ntex::web::State`
+...
+7 |     let _ = web::App::<Config>::new();
+  |                                 ^^^ associated function or constant cannot be called on `ntex::web::App<Config>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `Config: ntex::web::State`
+note: the trait `ntex::web::State` must be implemented
+ --> src/web/state.rs
+  |
+  | pub trait State: 'static {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^

@@ -170,9 +170,14 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
 /// Part of application configuration could be offloaded
 /// to set of external methods. This could help with
 /// modularization of big application configuration.
+///
+/// `St` is the application state and defaults to `()`. Use
+/// `ServiceConfig<AppState<T>>` for a stateful application, or a generic
+/// `fn config<St: web::State>(cfg: &mut ServiceConfig<St>)` for a module that
+/// works with any state.
 #[derive(derive_more::Debug)]
 #[debug("ServiceConfig")]
-pub struct ServiceConfig<St, In = ()> {
+pub struct ServiceConfig<St = (), In = ()> {
     pub(super) services: Vec<Box<dyn AppServiceFactory<St, In>>>,
     pub(super) external: Vec<ResourceDef>,
 }

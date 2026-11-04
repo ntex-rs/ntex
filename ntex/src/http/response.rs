@@ -674,6 +674,7 @@ impl ResponseBuilder {
     /// # Panics
     ///
     /// Panics if the builder has already produced or transferred a response.
+    #[doc(alias = "finish")]
     pub fn build(&mut self) -> Response {
         self.body(Body::Empty)
     }

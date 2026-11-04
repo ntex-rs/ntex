@@ -256,6 +256,48 @@ impl ItemFn {
             .any(|q| matches!(q, Qualifier::Async(_)))
     }
 
+    /// Number of function parameters, or `None` when conditional attributes
+    /// leave the effective arity to the compiler.
+    pub(crate) fn param_count(&self) -> Option<usize> {
+        let mut count = 0;
+        let mut pending = false;
+        let mut depth = 0usize;
+        let mut arrow = false;
+        let mut pound = false;
+        for tt in flatten(self.0.params.0.stream()) {
+            if pound
+                && let TokenTree::Group(group) = &tt
+                && group.delimiter() == Delimiter::Bracket
+                && matches!(
+                    group.stream().into_iter().next(),
+                    Some(TokenTree::Ident(id)) if id == "cfg" || id == "cfg_attr"
+                )
+            {
+                return None;
+            }
+            pound = matches!(&tt, TokenTree::Punct(p) if p.as_char() == '#');
+            if let TokenTree::Punct(p) = &tt {
+                match p.as_char() {
+                    ',' if depth == 0 => {
+                        count += usize::from(pending);
+                        pending = false;
+                        arrow = false;
+                        continue;
+                    }
+                    '<' => depth += 1,
+                    // skip `->` in `Fn() -> T` types
+                    '>' if !arrow => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                arrow = p.as_char() == '-' && p.spacing() == Spacing::Joint;
+            } else {
+                arrow = false;
+            }
+            pending = true;
+        }
+        Some(count + usize::from(pending))
+    }
+
     /// Error spanned on the `fn` keyword
     pub(crate) fn fn_error(&self, msg: impl Into<String>) -> Error {
         Error::new_spanned(&self.0.fn_kw, msg)
@@ -416,6 +458,14 @@ mod tests {
         ItemFn::parse(s.parse().unwrap()).ok().unwrap()
     }
 
+    /// STATEMENT: Function parsing preserves signature components and rejects
+    /// inputs that are not a single function definition.
+    ///
+    /// HOW:
+    /// - Parse functions with attributes, qualifiers, generics and return types.
+    /// - Check their names, parameter counts, visibility, bodies and signatures
+    ///   with `async` removed.
+    /// - Assert the diagnostics for non-functions, declarations and multiple items.
     #[test]
     fn item_fn() {
         let f = item(
@@ -439,8 +489,10 @@ mod tests {
             "Result < () , Box < dyn Error >>"
         );
         assert_eq!(f.body().to_string(), "{ body }");
+        assert_eq!(f.param_count(), Some(1));
 
         let f = item("fn bar() {}");
+        assert_eq!(f.param_count(), Some(0));
         assert!(!f.is_async());
         assert!(f.vis().is_empty());
         assert!(f.output().is_empty());
@@ -462,6 +514,37 @@ mod tests {
         assert_eq!(err("async struct S;"), "expected `fn`");
         assert_eq!(err("fn f() {} fn g() {}"), "invalid `fn` item");
         assert_eq!(err("fn f();"), "invalid `fn` item");
+    }
+
+    /// STATEMENT: Parameter counting ignores nested commas and defers conditional
+    /// parameters to the compiler.
+    ///
+    /// HOW:
+    /// - Parse signatures with nested generic types, `Fn() -> T` types,
+    ///   tuple patterns, a trailing comma and parameter attributes.
+    /// - Check the counted parameters and assert that `cfg` and `cfg_attr`
+    ///   parameters produce no fixed count.
+    #[test]
+    fn param_count() {
+        let count = |s: &str| item(s).param_count();
+        assert_eq!(count("fn f() {}"), Some(0));
+        assert_eq!(count("fn f(a: A,) {}"), Some(1));
+        assert_eq!(count("fn f(a: Query<HashMap<K, V>>, b: B) {}"), Some(2));
+        assert_eq!(
+            count("fn f(f: Box<dyn Fn(u8, u8) -> Vec<u8>>, x: X) {}"),
+            Some(2)
+        );
+        assert_eq!(count("fn f(f: impl Fn() -> u8, x: X) {}"), Some(2));
+        assert_eq!(
+            count("fn f((a, b): (A, B), Path(p): Path<(u8, u8)>, c: C) {}"),
+            Some(3)
+        );
+        assert_eq!(count("fn f(#[allow(unused)] a: A) {}"), Some(1));
+        assert_eq!(count("fn f(#[cfg(any())] a: A) {}"), None);
+        assert_eq!(
+            count("fn f(a: A, #[cfg_attr(all(), cfg(any()))] b: B) {}"),
+            None
+        );
     }
 
     #[test]

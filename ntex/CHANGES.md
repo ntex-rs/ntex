@@ -1,6 +1,14 @@
 # Changes
 
-## [4.5.1] - 2026-11-04
+## [4.6.0] - 2026-11-04
+
+* web: Add compiler diagnostics for invalid handlers, extractors, error types,
+  and application state
+
+* web: Add `middleware::from_fn()` for closure middleware with inferred types,
+  `async |req, next| next.call(req).await`
+
+* web: Default `ServiceConfig` state to `()`, `fn config(cfg: &mut web::ServiceConfig)`
 
 * Hide `forward_bind!`, `forward_ready!`, and `forward_shutdown!` re-exports from
   docs, use `forward!`
