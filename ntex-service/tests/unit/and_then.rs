@@ -44,6 +44,19 @@ impl Service<(), &'static str> for Srv2 {
     }
 }
 
+/// STATEMENT: `ServiceChain::and_then` infers the next closure's error type
+/// without requiring a pipeline or a service call.
+///
+/// HOW:
+/// - Start a chain with `Srv1`, whose error type is `()`.
+/// - Append an async closure returning `Ok` without an error annotation.
+/// - Discard the chain without any subsequent operations that constrain its types.
+#[test]
+fn test_chain_infers_error() {
+    let _ = service(Srv1(Rc::default(), Rc::default()))
+        .and_then(async |value: &'static str| Ok(value.len()));
+}
+
 /// STATEMENT: An and-then chain forwards readiness and shutdown to both services.
 ///
 /// HOW:

@@ -1,0 +1,29 @@
+error[E0271]: type mismatch resolving `<FnService<{async closure@chain_error_mismatch.rs:10:30}, u32, u32, &str> as Service<(), u32>>::Error == ()`
+  --> tests/ui/chain_error_mismatch.rs:10:10
+   |
+10 |         .and_then(fn_service(async |value: u32| Ok::<_, &'static str>(value)));
+   |          ^^^^^^^^ expected `()`, found `&str`
+   |
+note: required by a bound in `ServiceChain::<S, St, Req>::and_then`
+  --> src/chain.rs
+   |
+   |     pub fn and_then<Next, F>(self, service: F) -> ServiceChain<AndThen<S, Next>, St, Req>
+   |            -------- required by a bound in this associated function
+...
+   |         Next: Service<St, S::Res, Error = S::Error>,
+   |                                   ^^^^^^^^^^^^^^^^ required by this bound in `ServiceChain::<S, St, Req>::and_then`
+
+error[E0271]: type mismatch resolving `<FnService<{async closure@chain_error_mismatch.rs:13:20}, Result<u32, ()>, u32, &str> as Service<(), Result<u32, ()>>>::Error == ()`
+  --> tests/ui/chain_error_mismatch.rs:12:84
+   |
+12 |     let _ = service::<_, (), _>(fn_service(async |value: u32| Ok::<_, ()>(value))).then(
+   |                                                                                    ^^^^ expected `()`, found `&str`
+   |
+note: required by a bound in `ServiceChain::<S, St, Req>::then`
+  --> src/chain.rs
+   |
+   |     pub fn then<Next, F>(self, service: F) -> ServiceChain<Then<S, Next>, St, Req>
+   |            ---- required by a bound in this associated function
+...
+   |         Next: Service<St, Result<S::Res, S::Error>, Error = S::Error>,
+   |                                                     ^^^^^^^^^^^^^^^^ required by this bound in `ServiceChain::<S, St, Req>::then`

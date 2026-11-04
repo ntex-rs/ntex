@@ -345,11 +345,12 @@ fn normalize(text: &str) -> String {
 /// - Assert at least one block exists and each block is contained in this file.
 #[test]
 fn templates_match_llms_txt() {
-    let docs = include_str!("../../docs/llms.txt");
+    // checkouts may use CRLF line endings (e.g. git `core.autocrlf` on Windows)
+    let docs = include_str!("../../docs/llms.txt").replace("\r\n", "\n");
     let source = normalize(include_str!("llms_templates.rs"));
 
     let mut blocks = 0;
-    let mut rest = docs;
+    let mut rest = docs.as_str();
     while let Some(start) = rest.find("```rust\n") {
         let body = &rest[start + "```rust\n".len()..];
         let end = body.find("\n```").expect("unterminated ```rust block");
