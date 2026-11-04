@@ -25,6 +25,11 @@ Rules for generated code:
 - `Dispatcher::new(io, codec, pipeline)` requires a `Pipeline` whose service accepts `DispatchItem<Codec>` and returns `Result<Option<EncodedItem>, E>`. Match `Item` separately from `Control`/`Stop` notifications; `Ok(None)` emits no response.
 - Service factories for `server::test_server`, `http::test::server`, and `web::test::server` take `async |_| service_or_app`, with `&()` as the argument. `server::TestServerBuilder::with(cfg, factory)` passes `&Cfg::State` to the service factory. State-initialization closures remain zero-argument: `async || Ok(state)`. Use the test server's address, not a fixed port.
 - Client send/body errors do not automatically convert into `std::io::Error`. Use a concrete application error or `Result<_, Box<dyn std::error::Error>>` to preserve them with `?`. If only a message is needed, explicitly use `.map_err(|err| std::io::Error::other(err.to_string()))?`; this loses the original error and diagnostic context. Do not require `Send + Sync` on the boxed error: client errors can be worker-local.
+- TLS belongs in connection setup, not protocol logic. Compose acceptors/connectors with services over `Io`; use generic filters, `seal()`, or `boxed()` to keep protocol code independent of TLS backends.
+- HTTP clients use `openssl`, `rustls`, or `secure_connector` for HTTPS; `ClientBuilder::connector` configures unsecured connections. Supply verifying TLS configurations explicitly: the built-in OpenSSL HTTP-client default currently disables certificate verification.
+- `WsClient` needs an explicit TLS connector even for `wss://`: use `openssl`, `rustls`, or `connector`, and offer HTTP/1.1 rather than h2. Server-side WebSocket handlers work unchanged behind an HTTPS listener.
+- Read peer certificates with `PeerCertDer` / `PeerCertChainDer`, then parse with `x509::PeerCerts`. Certificate presence or parsing is not trust verification or authorization. Schannel's `request_client_cert(true)` neither requires a certificate nor validates its trust; reject missing/untrusted identities before protected handling.
+- See the [TLS guide](https://docs.ntex.rs/10-tls.html) and [runnable TLS examples](https://github.com/ntex-rs/examples/tree/main/tls) for backend, component, identity, and mutual-authentication configuration.
 
 ## Templates
 
@@ -353,6 +358,7 @@ async fn main() -> std::io::Result<()> {
 - [Error Handling](https://docs.ntex.rs/8.5-web-app.html)
 - [WebSocket Support](https://docs.ntex.rs/8.6-web-app.html)
 - [Byte Buffers](https://docs.ntex.rs/9-bytes.html)
+- [Securing Connections with TLS](https://docs.ntex.rs/10-tls.html): backend and component configuration, identities, peer certificates, and mutual authentication
 
 ## API
 
@@ -360,6 +366,7 @@ async fn main() -> std::io::Result<()> {
 - [ntex_service](https://docs.ntex.rs/api/ntex_service/index.html): `Service`, `Middleware`, `Pipeline`, `forward!`, `fn_layer`
 - [ntex::web](https://docs.ntex.rs/api/ntex/web/index.html): `App`, `HttpServer`, `middleware::from_fn`
 - [ntex_server::net](https://docs.ntex.rs/api/ntex_server/net/index.html): `build`, `build_with_config`, `ServerBuilder`, `test_server`
+- [ntex::tls](https://docs.ntex.rs/api/ntex/tls/index.html): acceptors, connectors, `TlsConfig`, and portable `x509` identities and trust
 
 ## Optional
 

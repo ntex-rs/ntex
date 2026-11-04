@@ -12,6 +12,11 @@ The server does not know whether a connection speaks HTTP, MQTT, or a custom
 protocol. It manages sockets and workers; the service created for each worker
 decides how to handle the resulting `Io`.
 
+For encrypted connections, compose a TLS acceptor before the protocol service.
+The listener and protocol implementation do not need backend-specific TLS
+logic. See [Securing Connections with TLS](10-tls.md) for backend configuration,
+HTTPS helpers, and connection-level client-certificate authentication.
+
 ## Starting a server
 
 Create a server inside an active ntex `System`, register at least one listener,
