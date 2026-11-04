@@ -51,7 +51,7 @@ where
     type Error = S::Error;
 
     fn bind(&self, ctx: crate::BindCtx<'_>) {
-        ctx.bind::<_, St, Req>(&self.s);
+        ctx.bind(&self.s);
     }
 
     #[inline]

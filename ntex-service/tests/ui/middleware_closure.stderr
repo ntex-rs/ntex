@@ -1,0 +1,26 @@
+error[E0277]: `{async closure@$DIR/tests/ui/middleware_closure.rs:5:9: 5:25}` is not a `Middleware<FnService<{async closure@$DIR/tests/ui/middleware_closure.rs:6:20: 6:36}, u32, u32, ()>, _>`
+ --> tests/ui/middleware_closure.rs:5:9
+  |
+4 |     let _ = apply(
+  |             ----- required by a bound introduced by this call
+5 |         async |req: u32| req,
+  |         ^^^^^^^^^^^^^^^^^^^^ expected middleware that wraps `FnService<{async closure@$DIR/tests/ui/middleware_closure.rs:6:20: 6:36}, u32, u32, ()>` with `_` state
+  |
+  = help: the trait `Middleware<FnService<{async closure@$DIR/tests/ui/middleware_closure.rs:6:20: 6:36}, u32, u32, ()>, _>` is not implemented for `{async closure@$DIR/tests/ui/middleware_closure.rs:5:9: 5:25}`
+  = note: implement it generically over the wrapped service: `impl<S, St> Middleware<S, St> for T`
+  = note: add only the bounds `create` needs; `Service<St, Req>` bounds belong on the wrapper's `Service` impl
+  = note: use `fn_layer(async |req, ctx| ctx.call(req).await)` for middleware written as an async function
+  = help: the following other types implement trait `Middleware<S, St>`:
+            FnMiddleware<F, S, St, Req, In, Out, Err>
+            Identity
+            Rc<M>
+            ReadyBindingMiddleware
+            Stack<Inner, Outer>
+note: required by a bound in `apply`
+ --> src/middleware.rs
+  |
+  | pub fn apply<Sf, St, Req, M>(
+  |        ----- required by a bound in this function
+...
+  |     M: Middleware<Sf::Service, St>,
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `apply`

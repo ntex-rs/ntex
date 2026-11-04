@@ -1,0 +1,7 @@
+error: forward!: expected a state type and at least one service field, e.g. `forward!(St, service)`
+  --> tests/ui/forward_missing_state.rs:11:5
+   |
+11 |     ntex_service::forward!(service);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `ntex_service::forward` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -92,7 +92,7 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for OneRequestService<S> {
 
     fn bind(&self, ctx: BindCtx<'_>) {
         ctx.subscribe(&self.changed);
-        ctx.bind::<_, St, Req>(&self.service);
+        ctx.bind(&self.service);
     }
 
     #[inline]

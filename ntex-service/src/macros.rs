@@ -89,6 +89,21 @@ macro_rules! forward {
             $crate::forward!(@shutdown ctx, self; $($field)+).await
         }
     };
+    (@go $st:ty; []; map_err $($rest:tt)*) => {
+        ::core::compile_error!(
+            "forward!: list at least one service field before `map_err`, e.g. `forward!(St, service, map_err = f)`"
+        );
+    };
+    (@go $st:ty; [$($field:tt)*]; self . $($rest:tt)*) => {
+        ::core::compile_error!(
+            "forward!: write field names without `self.`, e.g. `forward!(St, service)`"
+        );
+    };
+    (@go $st:ty; [$($field:tt)*]; $next:tt . $($rest:tt)*) => {
+        ::core::compile_error!(
+            "forward!: nested field paths are not supported, implement `bind`, `ready`, and `shutdown` manually"
+        );
+    };
     (@go $st:ty; [$($field:tt)+]; ) => {
         $crate::forward!(@go $st; [$($field)+]; map_err = ::core::convert::Into::into);
     };
@@ -113,6 +128,11 @@ macro_rules! forward {
             $ctx.shutdown(&$this.$field),
             $crate::forward!(@shutdown $ctx, $this; $($rest)+),
         )
+    };
+    ($one:tt $(,)?) => {
+        ::core::compile_error!(
+            "forward!: expected a state type and at least one service field, e.g. `forward!(St, service)`"
+        );
     };
     ($st:ty, $($rest:tt)+) => {
         $crate::forward!(@go $st; []; $($rest)+);

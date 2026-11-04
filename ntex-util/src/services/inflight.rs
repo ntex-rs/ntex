@@ -66,7 +66,7 @@ where
 
     fn bind(&self, ctx: BindCtx<'_>) {
         self.count.bind(&ctx);
-        ctx.bind::<_, St, Req>(&self.service);
+        ctx.bind(&self.service);
     }
 
     #[inline]
@@ -344,7 +344,7 @@ mod tests {
 
         #[inline]
         fn bind(&self, ctx: BindCtx<'_>) {
-            ctx.bind::<_, (), _>(&self.0);
+            ctx.bind(&self.0);
         }
 
         // `ready` is not forwarded, so calls reuse this scope's cached readiness

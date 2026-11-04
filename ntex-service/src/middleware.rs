@@ -69,6 +69,14 @@ where
 /// [`Rc`] middleware shares one middleware value across its clones, and
 /// [`Stack`] composes multiple wrappers.
 ///
+/// # Choosing an approach
+///
+/// - Use [`fn_layer`] for logic that runs before or after the inner call.
+///   Binding, readiness, and shutdown are forwarded automatically.
+/// - Implement this trait with a wrapper [`Service`] when the wrapper owns
+///   its own readiness source, keeps per-service state, or needs a named type.
+///   Forward lifecycle methods with [`crate::forward!`].
+///
 /// # Lifecycle forwarding
 ///
 /// Middleware must arrange the resulting service's lifecycle behavior.
@@ -145,7 +153,7 @@ where
     label = "expected middleware that wraps `{S}` with `{St}` state",
     note = "implement it generically over the wrapped service: `impl<S, St> Middleware<S, St> for T`",
     note = "add only the bounds `create` needs; `Service<St, Req>` bounds belong on the wrapper's `Service` impl",
-    note = "use `apply_fn` for middleware written as an async function"
+    note = "use `fn_layer(async |req, ctx| ctx.call(req).await)` for middleware written as an async function"
 )]
 pub trait Middleware<S, St> {
     /// Wrapper returned by [`Self::create`].
@@ -325,17 +333,40 @@ where
     }
 }
 
-#[doc(hidden)]
 /// Creates middleware from an asynchronous function.
 ///
-/// The function receives an input request and an [`ApplyCtx`] that can call the
-/// wrapped service or access pipeline state. Each [`Middleware::create`] call
-/// clones the function into an [`Apply`] wrapper; it does not invoke it.
+/// This is the simplest way to write middleware. The function receives an
+/// input request and an [`ApplyCtx`] that can call the wrapped service with
+/// [`ApplyCtx::call`] or access pipeline state with [`ApplyCtx::st`]. Binding,
+/// readiness, and shutdown of the wrapped service are forwarded automatically.
 ///
-/// Request, response, and error types may change, while the state type stays
-/// the same. The middleware implementation requires `Err: From<S::Error>` to
-/// convert inner readiness errors. See [`crate::apply_fn`] for lifecycle and
-/// call-time readiness semantics.
+/// Each [`Middleware::create`] call clones the function into an [`Apply`]
+/// wrapper; it does not invoke it. Request, response, and error types may
+/// change, while the state type stays the same. The middleware implementation
+/// requires `Err: From<S::Error>` to convert inner readiness errors. See
+/// [`crate::apply_fn`] for lifecycle and call-time readiness semantics.
+///
+/// Annotate the request type, and the response or error type when the
+/// closure does not otherwise constrain them.
+///
+/// # Example
+///
+/// ```
+/// use ntex_service::{Middleware, Service, fn_layer, fn_service};
+///
+/// # async fn example() -> Result<(), ()> {
+/// let log = fn_layer(async |req: u32, ctx| {
+///     println!("request: {req}");
+///     let res: u32 = ctx.call(req).await?;
+///     println!("response: {res}");
+///     Ok::<_, ()>(res)
+/// });
+/// let service = log.create(&(), fn_service(async |req: u32| Ok::<_, ()>(req + 1)));
+///
+/// assert_eq!(service.pipeline(()).call(1).await?, 2);
+/// # Ok(())
+/// # }
+/// ```
 pub fn fn_layer<F, S, St, Req, In, Out, Err>(f: F) -> FnMiddleware<F, S, St, Req, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, S, St, Req>) -> Result<Out, Err> + Clone,

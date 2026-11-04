@@ -452,7 +452,7 @@ impl Service<(), ()> for Limited {
 
     fn bind(&self, ctx: BindCtx<'_>) {
         ctx.subscribe(&self.changed);
-        ctx.bind::<_, (), ()>(&self.inner);
+        ctx.bind(&self.inner);
     }
 
     async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), ()> {

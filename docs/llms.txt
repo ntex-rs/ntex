@@ -1,0 +1,213 @@
+# ntex
+
+> ntex is a Rust framework for composable network services: HTTP/1, HTTP/2, WebSocket, web applications, and custom protocols. Everything is a `Service<St, Req>` with a pipeline state type `St`, executed by a `Pipeline` that coordinates readiness, calls, and shutdown.
+
+Rules for generated code:
+
+- A service implements `call(&self, req, ctx: Ctx<'_, Self, St>)`. Call child services with `ctx.call(&self.child, req)`, never `self.child.call(...)` directly.
+- A service that wraps child services must forward `bind`, `ready`, and `shutdown` to every child. Use `ntex::forward!(St, field1, field2)`; add `map_err = f` when `Self::Error` differs from the children's error. `St` is the state type parameter of the impl.
+- Prefer `ntex::service::fn_layer(async |req, ctx| ...)` for middleware that only runs code before or after the inner service. Use a `Middleware` struct plus a service with `forward!` when the middleware needs its own state or readiness.
+- In web closures annotate the request type (`WebRequest<()>`), the inner response (`WebResponse`), and the error (`Ok::<_, web::WebError>(res)`); inference cannot see through `App::middleware`.
+- Write `ctx.bind(&self.child)` without a turbofish.
+- Implement `bind`, `ready`, and `shutdown` by hand only when the service has extra readiness sources, such as a shared `Pipeline` (`pipeline.bind_to(&ctx)`) or a `ReadyNotifier` (`ctx.subscribe(&notifier)`).
+- Async entry points use `#[ntex::main]`; async tests use `#[ntex::test]`.
+
+## Templates
+
+Function service executed by a pipeline:
+
+```rust
+use ntex::service::{Pipeline, fn_service};
+
+let service = fn_service(async |req: u32| Ok::<_, std::io::Error>(req + 1));
+let pipeline = Pipeline::new((), service);
+assert_eq!(pipeline.call(1).await?, 2);
+```
+
+Minimal web server:
+
+```rust
+use ntex::{SharedCfg, web};
+
+#[web::get("/")]
+async fn index() -> &'static str {
+    "Hello world!"
+}
+
+#[ntex::main]
+async fn main() -> std::io::Result<()> {
+    web::HttpServer::new(async |_| web::App::new().service(index))
+        .bind("127.0.0.1:8080", SharedCfg::new("hello-world"))?
+        .run()
+        .await
+}
+```
+
+Closure middleware (preferred):
+
+```rust
+use ntex::http::header::{HeaderName, HeaderValue};
+use ntex::service::fn_layer;
+use ntex::web::{self, App, WebRequest, WebResponse};
+
+let app = App::new()
+    .middleware(fn_layer(async |req: WebRequest<()>, ctx| {
+        let mut res: WebResponse = ctx.call(req).await?;
+        res.headers_mut().insert(
+            HeaderName::from_static("x-application"),
+            HeaderValue::from_static("example"),
+        );
+        Ok::<_, web::WebError>(res)
+    }))
+    .route("/", web::get().to(async || "Hello"));
+```
+
+Struct middleware with forwarding:
+
+```rust
+use std::time::Instant;
+
+use ntex::web::{WebRequest, WebResponse};
+use ntex::{Ctx, Middleware, Service};
+
+pub struct Timing;
+
+pub struct TimingService<S> {
+    service: S,
+}
+
+impl<S, St> Middleware<S, St> for Timing {
+    type Service = TimingService<S>;
+
+    fn create(&self, _: &St, service: S) -> Self::Service {
+        TimingService { service }
+    }
+}
+
+impl<S, St, ReqSt> Service<St, WebRequest<ReqSt>> for TimingService<S>
+where
+    S: Service<St, WebRequest<ReqSt>, Res = WebResponse>,
+{
+    type Res = WebResponse;
+    type Error = S::Error;
+
+    ntex::forward!(St, service);
+
+    async fn call(
+        &self,
+        req: WebRequest<ReqSt>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<WebResponse, S::Error> {
+        let start = Instant::now();
+        let res = ctx.call(&self.service, req).await;
+        log::info!("request took {:?}", start.elapsed());
+        res
+    }
+}
+```
+
+Several children with error conversion:
+
+```rust
+use ntex::{Ctx, Service};
+
+pub enum AuthError<E> {
+    Denied,
+    Service(E),
+}
+
+pub struct Authorized<A, S> {
+    check: A,
+    service: S,
+}
+
+impl<A, S, St, Req> Service<St, Req> for Authorized<A, S>
+where
+    A: Service<St, Req, Res = (Req, bool), Error = S::Error>,
+    S: Service<St, Req>,
+{
+    type Res = S::Res;
+    type Error = AuthError<S::Error>;
+
+    ntex::forward!(St, check, service, map_err = AuthError::Service);
+
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, Self::Error> {
+        let (req, allowed) = ctx.call(&self.check, req).await.map_err(AuthError::Service)?;
+        if !allowed {
+            return Err(AuthError::Denied);
+        }
+        ctx.call(&self.service, req).await.map_err(AuthError::Service)
+    }
+}
+```
+
+Explicit forwarding with a shared pipeline child:
+
+```rust
+use ntex::service::{BindCtx, Ctx, Pipeline, Service};
+
+pub struct Cached<S, E> {
+    service: S,
+    // shared with other services, owned and shut down elsewhere
+    cache: Pipeline<String, Option<String>, E>,
+}
+
+impl<S, St, E> Service<St, String> for Cached<S, E>
+where
+    S: Service<St, String, Res = String, Error = E>,
+    E: 'static,
+{
+    type Res = String;
+    type Error = E;
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind(&self.service);
+        self.cache.bind_to(&ctx);
+    }
+
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), E> {
+        self.cache.ready().await?;
+        ctx.ready(&self.service).await
+    }
+
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        // the shared cache pipeline is shut down by its owner
+        ctx.shutdown(&self.service).await;
+    }
+
+    async fn call(&self, req: String, ctx: Ctx<'_, Self, St>) -> Result<String, E> {
+        if let Some(res) = self.cache.call(req.clone()).await? {
+            return Ok(res);
+        }
+        ctx.call(&self.service, req).await
+    }
+}
+```
+
+## Guide
+
+- [Service Model](https://docs.ntex.rs/1-service.html): the `Service` trait, factories, and function services
+- [Service Pipelines](https://docs.ntex.rs/2-pipeline.html): readiness, binding, forwarding, and shutdown
+- [Service State](https://docs.ntex.rs/3-state.html)
+- [Runtime](https://docs.ntex.rs/4-runtime.html)
+- [Server](https://docs.ntex.rs/5-server.html)
+- [Worker and Request State](https://docs.ntex.rs/6-server-app.html)
+- [I/O Abstraction Layer](https://docs.ntex.rs/7-io.html)
+- [Applications and Routing](https://docs.ntex.rs/8.1-web-app.html)
+- [Application State](https://docs.ntex.rs/8.2-web-app.html)
+- [Filters and Middleware](https://docs.ntex.rs/8.3-web-app.html)
+- [Extractors and Responders](https://docs.ntex.rs/8.4-web-app.html)
+- [Error Handling](https://docs.ntex.rs/8.5-web-app.html)
+- [WebSocket Support](https://docs.ntex.rs/8.6-web-app.html)
+- [Byte Buffers](https://docs.ntex.rs/9-bytes.html)
+
+## API
+
+- [ntex](https://docs.ntex.rs/api/ntex/index.html)
+- [ntex_service](https://docs.ntex.rs/api/ntex_service/index.html): `Service`, `Middleware`, `Pipeline`, `forward!`, `fn_layer`
+- [ntex::web](https://docs.ntex.rs/api/ntex/web/index.html)
+
+## Optional
+
+- [Examples](https://github.com/ntex-rs/examples)
+- [Source](https://github.com/ntex-rs/ntex)

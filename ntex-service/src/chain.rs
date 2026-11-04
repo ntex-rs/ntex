@@ -306,7 +306,7 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req>
 
     #[inline]
     fn bind(&self, ctx: BindCtx<'_>) {
-        ctx.bind::<_, St, _>(&self.service);
+        ctx.bind(&self.service);
     }
 
     #[inline]

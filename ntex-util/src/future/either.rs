@@ -149,8 +149,8 @@ where
 
     fn bind(&self, ctx: BindCtx<'_>) {
         match self {
-            Either::Left(svc) => ctx.bind::<_, St, Req>(svc),
-            Either::Right(svc) => ctx.bind::<_, St, Req>(svc),
+            Either::Left(svc) => ctx.bind(svc),
+            Either::Right(svc) => ctx.bind(svc),
         }
     }
 

@@ -1,0 +1,20 @@
+error[E0277]: `Echo` cannot be converted into a `Service<(), _>`
+  --> tests/ui/service_wrong_state.rs:15:31
+   |
+15 |     let _ = Pipeline::new((), Echo);
+   |             -------------     ^^^^ expected a service or an async function for `_` requests
+   |             |
+   |             required by a bound introduced by this call
+   |
+help: the trait `IntoService<_, (), _>` is not implemented for `Echo`
+  --> tests/ui/service_wrong_state.rs:3:1
+   |
+ 3 | struct Echo;
+   | ^^^^^^^^^^^
+   = note: accepted values: a `Service<(), _>`, `async |req: _| -> Result<Res, Err>`, or `async |st: &(), req: _| -> Result<Res, Err>`
+   = note: async functions must return `Result`
+note: required by a bound in `Pipeline::<Req, Res, Err>::new`
+  --> src/pipeline.rs
+   |
+   |     pub fn new<S, St>(st: St, service: impl IntoService<S, St, Req>) -> Self
+   |                                             ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Pipeline::<Req, Res, Err>::new`

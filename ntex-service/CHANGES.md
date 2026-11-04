@@ -14,10 +14,13 @@
 * Make missing-bind and cross-pipeline panic messages describe the fix
 
 * Add `forward!` macro that forwards `bind`, `ready`, and `shutdown` to one or
-  several service fields
+  several service fields. Common misuse, such as a missing state type or
+  `self.field`, reports a compile error describing the fix
 
 * Add `#[diagnostic::on_unimplemented]` hints to `Service`, `ServiceFactory`,
   `IntoService`, `IntoServiceFactory`, `Middleware`, and `RequestState`
+
+* Document `fn_layer()` as the recommended way to write middleware
 
 ## [5.6.0] - 2026-11-03
 

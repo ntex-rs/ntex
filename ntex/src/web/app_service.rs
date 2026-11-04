@@ -274,12 +274,12 @@ where
 
     fn bind(&self, ctx: BindCtx<'_>) {
         ctx.subscribe(&self.readiness.changed);
-        ctx.bind::<_, St, WebRequest<In>>(&self.filter);
+        ctx.bind(&self.filter);
         for service in self.cache.borrow().values() {
-            ctx.bind::<_, St, WebRequest<Out>>(service);
+            ctx.bind(service);
         }
         if let Some(service) = &*self.cache_default.borrow() {
-            ctx.bind::<_, St, WebRequest<Out>>(service);
+            ctx.bind(service);
         }
     }
 
@@ -563,7 +563,7 @@ mod tests {
         type Error = WebError;
 
         fn bind(&self, ctx: BindCtx<'_>) {
-            ctx.bind::<_, (), WebRequest<()>>(&self.0);
+            ctx.bind(&self.0);
         }
 
         async fn call(

@@ -1354,7 +1354,7 @@ async fn test_request_state() {
 
         #[inline]
         fn bind(&self, ctx: BindCtx<'_>) {
-            ctx.bind::<_, St, _>(&self.0);
+            ctx.bind(&self.0);
         }
 
         async fn call(
