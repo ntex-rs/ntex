@@ -1,4 +1,5 @@
-/// STATEMENT: Common `forward!`, `Service`, and `Middleware` mistakes produce the documented diagnostics.
+/// STATEMENT: Common `forward!`, `Service`, `ServiceChain`, and `Middleware`
+/// mistakes produce the documented diagnostics.
 ///
 /// HOW:
 /// - Compile each case in `tests/ui` with `trybuild`.

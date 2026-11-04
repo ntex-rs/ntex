@@ -137,14 +137,14 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
     /// the current service returns an error, the next service is not called.
     /// Otherwise, the next service's result becomes the chain's result.
     ///
-    /// Both services must use the same state and error types for the resulting
-    /// chain to implement [`Service`]. Binding, readiness, and shutdown cover
-    /// both children. See [`AndThen`] for readiness behavior between calls.
+    /// Both services must use the same state and error types. Binding,
+    /// readiness, and shutdown cover both children. See [`AndThen`] for
+    /// readiness behavior between calls.
     pub fn and_then<Next, F>(self, service: F) -> ServiceChain<AndThen<S, Next>, St, Req>
     where
         Self: Sized,
         F: IntoService<Next, St, S::Res>,
-        Next: Service<St, S::Res>,
+        Next: Service<St, S::Res, Error = S::Error>,
     {
         ServiceChain {
             service: AndThen::new(self.service, service.into_service()),
@@ -157,17 +157,16 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
     /// The next service receives the current service's complete `Result`, so it
     /// can handle either a response or an error.
     ///
-    /// Both services must use the same state and error types for the resulting
-    /// chain to implement [`Service`]. The next service determines the final
-    /// response or error. Errors from the chain's readiness check are returned
-    /// directly, not passed to the next service as a request.
+    /// Both services must use the same state and error types. The next service
+    /// determines the final response or error. Errors from the chain's readiness
+    /// check are returned directly, not passed to the next service as a request.
     ///
     /// See [`Then`] for an error-recovery example and lifecycle behavior.
     pub fn then<Next, F>(self, service: F) -> ServiceChain<Then<S, Next>, St, Req>
     where
         Self: Sized,
         F: IntoService<Next, St, Result<S::Res, S::Error>>,
-        Next: Service<St, Result<S::Res, S::Error>>,
+        Next: Service<St, Result<S::Res, S::Error>, Error = S::Error>,
     {
         ServiceChain {
             service: Then::new(self.service, service.into_service()),

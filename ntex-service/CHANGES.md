@@ -2,6 +2,11 @@
 
 ## [5.7.0] - 2026-11-04
 
+* Require matching error types when constructing `ServiceChain::and_then` and
+  `ServiceChain::then`, rejecting incompatible chains at composition and
+  inferring the error type of unannotated `Ok` results. Generic wrappers must
+  carry the corresponding `Error` equality bounds
+
 * Remove deprecated `ServiceBinding` and `ServiceBindingMiddleware` aliases,
   use `ReadyBinding` and `ReadyBindingMiddleware`
 
