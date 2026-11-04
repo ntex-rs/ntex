@@ -1268,15 +1268,21 @@ backpressure, keep-alive, and shutdown timing in detail.
 ## Test servers
 
 `test_server()` starts one worker on a separate thread, binds an available
-local port, and disables signal handling:
+local port, and disables signal handling. Its service factory receives `&()`,
+just like the factories passed to `http::test::server` and `web::test::server`:
 
 ```rust
 use ntex::http::{HttpService, Response};
 use ntex::{client::Client, server};
 
+/// STATEMENT: A test server serves a successful HTTP response.
+///
+/// HOW:
+/// - Start an HTTP service with a factory accepting unit state.
+/// - Send a request to its assigned port and check the response status.
 #[ntex::test]
 async fn test_server_response() {
-    let server = server::test_server(async || {
+    let server = server::test_server(async |_| {
         HttpService::new(async |_| {
             Ok::<_, std::io::Error>(
                 Response::Ok().body("Hello world!"),
@@ -1300,6 +1306,9 @@ test server's client configuration. `server()` returns the underlying server
 controller.
 
 `TestServerBuilder` can set separate server and client `SharedCfg` values.
+Use `TestServerBuilder::with(cfg, async |state| service)` when service
+construction needs application state. The service factory receives
+`&Cfg::State`; the state-initialization closure remains `async || Ok(state)`.
 `build_test_server()` exposes the full `ServerBuilder` for custom listeners;
 when using it, set the address on the returned `TestServer` before calling
 `connect()`.

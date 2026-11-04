@@ -14,7 +14,8 @@ use super::{NoConfig, Server, ServerAppConfig, ServerBuilder};
 /// Builder for a single-worker test server.
 ///
 /// The server listens on an ephemeral `127.0.0.1` port and runs in a separate
-/// thread with its own runtime.
+/// thread with its own runtime. The service factory receives a reference to
+/// the worker state, or `&()` when no application configuration is supplied.
 pub struct TestServerBuilder<Cfg, F, Sf, I> {
     id: Uuid,
     cfg: Cfg,
@@ -36,12 +37,14 @@ impl<Cfg, F, Sf, I> fmt::Debug for TestServerBuilder<Cfg, F, Sf, I> {
 
 impl<F, S, I> TestServerBuilder<NoConfig, F, S, I>
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoService<S, (), Io> + 'static,
     S: Service<(), Io> + 'static,
 {
     #[must_use]
     /// Creates a test server builder for the specified service factory.
+    ///
+    /// The factory receives `&()`: use `async |_| service`.
     pub fn new(factory: F) -> Self {
         Self {
             factory,
@@ -56,13 +59,16 @@ where
 
 impl<Cfg, F, S, I> TestServerBuilder<Cfg, F, S, I>
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
     I: IntoService<S, Cfg::State, Io> + 'static,
     S: Service<Cfg::State, Io> + 'static,
     Cfg: ServerAppConfig + 'static,
 {
     #[must_use]
     /// Creates a test server builder with application configuration.
+    ///
+    /// `cfg` creates the worker state; `factory` receives a reference to that
+    /// state when constructing the service.
     pub fn with(cfg: Cfg, factory: F) -> Self {
         Self {
             cfg,
@@ -106,7 +112,7 @@ where
 
             sys.run(move || {
                 let server = ServerBuilder::new(cfg)
-                    .listen("test", tcp, config, async move |_| factory().await)?
+                    .listen("test", tcp, config, factory)?
                     .workers(1)
                     .disable_signals()
                     .run();
@@ -139,6 +145,9 @@ where
 /// [`TestServer`] is a simple server that makes it easier to write
 /// integration tests for ntex applications.
 ///
+/// The factory receives `&()`: use `async |_| service`. For application state,
+/// use [`TestServerBuilder::with`].
+///
 /// # Examples
 ///
 /// ```rust
@@ -149,10 +158,15 @@ where
 ///     Ok(HttpResponse::Ok().into())
 /// }
 ///
+/// /// STATEMENT: A test server serves a successful HTTP response.
+/// ///
+/// /// HOW:
+/// /// - Start an HTTP service with a factory accepting unit state.
+/// /// - Send a request to its assigned port and check the response status.
 /// #[ntex::test]
 /// async fn test_example() {
 ///     let srv = server::test_server(
-///         async || http::HttpService::new(
+///         async |_| http::HttpService::new(
 ///             App::new().service(
 ///                 web::resource("/").to(my_handler))
 ///         )
@@ -165,7 +179,7 @@ where
 /// ```
 pub fn test_server<F, S>(factory: F) -> TestServer
 where
-    F: AsyncFn() -> S + Send + Clone + 'static,
+    F: AsyncFn(&()) -> S + Send + Clone + 'static,
     S: Service<(), Io> + 'static,
 {
     TestServerBuilder::new(factory).start()

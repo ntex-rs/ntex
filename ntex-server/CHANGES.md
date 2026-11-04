@@ -1,5 +1,11 @@
 # Changes
 
+## [4.4.0] - 2026-11-04
+
+* Change `test_server` and `TestServerBuilder` service factories to receive
+  worker state, matching production server factories. Replace `async || service`
+  with `async |_| service`; state-initialization closures remain zero-argument.
+
 ## [4.3.0] - 2026-10-21
 
 * Move items queued at a failed, unavailable or blocked worker to other workers,

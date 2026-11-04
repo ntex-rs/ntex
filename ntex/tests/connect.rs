@@ -119,7 +119,7 @@ async fn test_openssl_read_before_error() {
     use ntex::server::openssl;
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
                 .await
@@ -161,7 +161,7 @@ async fn test_openssl_shutdown_sends_close_notify() {
     use ntex::server::openssl;
     use tls_openssl::ssl::{ShutdownState, SslConnector, SslMethod, SslVerifyMode};
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             let item = io.recv(&BytesCodec).await.unwrap().unwrap();
             io.send(item, &BytesCodec).await.unwrap();
@@ -218,7 +218,7 @@ async fn test_openssl_shutdown_completes_on_peer_close_notify() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let srv = test_server(move || {
+    let srv = test_server(move |_: &()| {
         let tx = tx.clone();
         async move {
             service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(move |io: Io<_>| {
@@ -278,7 +278,7 @@ async fn test_openssl_accept_zero_handshake_timeout() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     // zero disables the handshake timeout
-    let srv = TestServerBuilder::new(async || {
+    let srv = TestServerBuilder::new(async |_| {
         service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             let item = io.recv(&BytesCodec).await.unwrap().unwrap();
             io.send(item, &BytesCodec).await.unwrap();
@@ -329,7 +329,7 @@ async fn test_openssl_accept_handshake_then_eof() {
     }
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let srv = test_server(move || {
+    let srv = test_server(move |_: &()| {
         let tx = tx.clone();
         async move {
             let tx2 = tx.clone();
@@ -379,7 +379,7 @@ async fn test_rustls_accept_zero_handshake_timeout() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     // zero disables the handshake timeout
-    let srv = TestServerBuilder::new(async || {
+    let srv = TestServerBuilder::new(async |_| {
         service(rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())).and_then(
             async move |io: Io<_>| {
                 let item = io.recv(&BytesCodec).await.unwrap().unwrap();
@@ -420,7 +420,7 @@ async fn test_rustls_accept_handshake_then_eof() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let srv = test_server(move || {
+    let srv = test_server(move |_: &()| {
         let tx = tx.clone();
         async move {
             let tx2 = tx.clone();
@@ -466,7 +466,7 @@ async fn test_schannel_string() {
     use ntex_tls::schannel::{ClientConfig, PeerCert, TlsConnector};
     use tls_openssl::x509::X509;
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             let item = io.recv(&BytesCodec).await.unwrap().unwrap();
             io.send(item, &BytesCodec).await.unwrap();
@@ -513,7 +513,7 @@ async fn test_rustls_string() {
     use ntex::{Service, io::types::HttpProtocol, server::rustls};
     use ntex_tls::rustls::{PeerCert, PeerCertChain, TlsConnector};
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
             .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
@@ -579,7 +579,7 @@ async fn test_rustls_peer_close_notify_closes_io() {
     use ntex::{Service, server::rustls};
     use tls_rustls::pki_types::ServerName;
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
             .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
@@ -659,7 +659,7 @@ async fn test_rustls_shutdown_sends_close_notify() {
 
     use ntex::{Service, server::rustls};
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
             .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
@@ -718,7 +718,7 @@ async fn test_rustls_shutdown_waits_for_peer_close_notify() {
     use ntex::{Service, server::rustls};
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let srv = test_server(move || {
+    let srv = test_server(move |_: &()| {
         let tx = tx.clone();
         async move {
             rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).and_then(move |io: Io<_>| {
@@ -777,7 +777,7 @@ async fn test_rustls_keyupdate_response_flushed() {
     use ntex::{Service, server::rustls};
     use tls_rustls::pki_types::ServerName;
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
             .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
@@ -858,7 +858,7 @@ async fn test_rustls_keyupdate_response_flushed() {
 /// - Connect using `127.0.0.1` without a port and assert an error.
 #[ntex::test]
 async fn test_static_str() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         service(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
@@ -887,7 +887,7 @@ async fn test_static_str() {
 /// - Assert the connected I/O reports the server's address through `PeerAddr`.
 #[ntex::test]
 async fn test_create() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         service(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
@@ -909,7 +909,7 @@ async fn test_create() {
 /// - Connect through `Connector` and assert `PeerAddr` matches the server address.
 #[ntex::test]
 async fn test_uri() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         service(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
@@ -936,7 +936,7 @@ async fn test_uri() {
 async fn test_rustls_uri() {
     use ntex::{Service, server::rustls};
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
             .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
@@ -965,7 +965,7 @@ async fn test_rustls_uri() {
 /// - Supply an unavailable address followed by the server address and require success; also verify `connect_with` using explicit configuration.
 #[ntex::test]
 async fn basic_connect_service() {
-    let server = ntex::server::test_server(async || service(async |_| Ok::<_, ()>(())));
+    let server = ntex::server::test_server(async |_| service(async |_| Ok::<_, ()>(())));
 
     let cfg = ntex::SharedCfg::new("T")
         .add(ntex::io::IoConfig::new().set_connect_timeout(time::Millis(5000)))

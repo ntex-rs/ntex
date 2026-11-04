@@ -33,7 +33,7 @@ fn read_to_end(sock: &mut net::TcpStream) -> (usize, Outcome) {
 /// from a complete response.
 #[ntex::test]
 async fn force_close_resets_connection() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         fn_service(|io: Io<_>| async move {
             let _ = io.recv(&BytesCodec).await;
             io.encode(Bytes::from(vec![b'y'; PAYLOAD]), &BytesCodec)
@@ -64,7 +64,7 @@ async fn force_close_resets_connection() {
 /// A graceful shutdown must still deliver everything and close cleanly.
 #[ntex::test]
 async fn graceful_shutdown_closes_cleanly() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         fn_service(|io: Io<_>| async move {
             let _ = io.recv(&BytesCodec).await;
             io.encode(Bytes::from(vec![b'y'; PAYLOAD]), &BytesCodec)
@@ -89,7 +89,7 @@ async fn graceful_shutdown_closes_cleanly() {
 /// encoded, so the peer must not see that as a complete, empty response.
 #[ntex::test]
 async fn drop_resets_connection() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         fn_service(|io: Io<_>| async move {
             let _ = io.recv(&BytesCodec).await;
             io.encode(Bytes::from_static(b"pong"), &BytesCodec).unwrap();
@@ -116,7 +116,7 @@ async fn drop_resets_connection() {
 #[ntex::test]
 async fn shutdown_times_out_on_stalled_peer() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let srv = test_server(move || {
+    let srv = test_server(move |_: &()| {
         let tx = tx.clone();
         async move {
             fn_service(move |io: Io<_>| {
@@ -152,7 +152,7 @@ async fn shutdown_times_out_on_stalled_peer() {
 #[ntex::test]
 async fn shutdown_after_peer_close_succeeds() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let tx = tx.clone();
         fn_service(move |io: Io<_>| {
             let tx = tx.clone();

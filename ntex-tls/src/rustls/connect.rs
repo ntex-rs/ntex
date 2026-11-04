@@ -127,7 +127,7 @@ mod tests {
     /// - Check immediate readiness, then assert a call to a transport-dropping local service fails.
     #[ntex::test]
     async fn test_rustls_connect() {
-        let server = ntex::server::test_server(async || {
+        let server = ntex::server::test_server(async |()| {
             ntex::service::fn_service(async |_| Ok::<_, ()>(()))
         });
 

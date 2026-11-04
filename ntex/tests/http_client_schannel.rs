@@ -223,7 +223,7 @@ async fn test_large_write_encrypted_in_one_pass() {
 
     const SIZE: usize = 16 * 1024 * 1024;
 
-    let srv = server::test_server(async || {
+    let srv = server::test_server(async |_| {
         service(ntex::server::openssl::SslAcceptor::new(ssl_acceptor())).and_then(
             async move |io: Io<_>| {
                 // let the client's socket send buffer fill up
