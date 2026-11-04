@@ -31,6 +31,14 @@ Rules for generated code:
 - Read peer certificates with `PeerCertDer` / `PeerCertChainDer`, then parse with `x509::PeerCerts`. Certificate presence or parsing is not trust verification or authorization. Schannel's `request_client_cert(true)` neither requires a certificate nor validates its trust; reject missing/untrusted identities before protected handling.
 - See the [TLS guide](https://docs.ntex.rs/10-tls.html) and [runnable TLS examples](https://github.com/ntex-rs/examples/tree/main/tls) for backend, component, identity, and mutual-authentication configuration.
 
+## Testing rules
+
+- Test the application the server runs. Register routes in `fn config(cfg: &mut web::ServiceConfig)` (or `&mut web::ServiceConfig<St>`), call `App::new().configure(config)` in both `main` and the tests, and keep tests in `#[cfg(test)] mod tests` at the bottom of the file.
+- Prefer in-process tests: `web::test::init_service(App::new()...)` with `TestRequest` and `call_service` opens no socket. Use `init_service_st(state.clone(), App::<St>::new()...)` for stateful apps and keep a clone of shared handles to inspect state.
+- Use a real server (`web::test::server`, `http::test::server`, `server::test_server`) only for WebSocket, streaming, client, TLS, or connection behavior; it binds an available port. Never use fixed ports, external services, or sleeps for synchronization.
+- Test a `Service` directly with `Pipeline::new(state, service).call(req).await`. Test codecs and `Io` protocols in memory with `ntex::io::testing::IoTest`.
+- Assert the status and the body; for failures, assert the status code a client sees. Use `read_body` for bytes and `read_response_json` for JSON.
+
 ## Templates
 
 Function service executed by a pipeline:
@@ -277,11 +285,6 @@ Network test with `test_server` and `Client`:
 use ntex::client::Client;
 use ntex::http::{HttpService, Response};
 
-/// STATEMENT: A test server serves an HTTP response to `Client`.
-///
-/// HOW:
-/// - Start a server on an available port with an async factory accepting unit state.
-/// - Send `GET /`, then check the status and body using `?` for client errors.
 #[ntex::test]
 async fn http_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
     let srv = ntex::server::test_server(async |_| {
@@ -292,6 +295,127 @@ async fn http_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
     assert!(res.status().is_success());
     assert_eq!(res.body().await?, "hello");
     Ok(())
+}
+```
+
+In-process route test that uses the application's config:
+
+```rust
+use ntex::http::StatusCode;
+use ntex::web::{self, App, HttpResponse, test};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct User {
+    name: String,
+}
+
+async fn create(user: web::types::Json<User>) -> HttpResponse {
+    HttpResponse::Created().json(&user.into_inner())
+}
+
+pub fn config(cfg: &mut web::ServiceConfig) {
+    cfg.route("/users", web::post().to(create));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[ntex::test]
+    async fn create_user() {
+        let app = test::init_service(App::new().configure(config)).await;
+
+        let user = User { name: "alice".into() };
+        let req = test::TestRequest::post().uri("/users").json(&user).to_request();
+        let res = test::call_service(&app, req).await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let body: User = serde_json::from_slice(&test::read_body(res).await).unwrap();
+        assert_eq!(body, user);
+
+        let req = test::TestRequest::post().uri("/users").header("content-type", "application/json").payload("{").to_request();
+        let res = test::call_service(&app, req).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+}
+```
+
+Stateful route test (keep a clone of the shared handle to inspect state):
+
+```rust
+use std::{cell::Cell, rc::Rc};
+
+use ntex::web::{self, App, AppState, test};
+
+type Hits = AppState<Rc<Cell<usize>>>;
+
+async fn hit(hits: &Hits, (): ()) -> String {
+    hits.set(hits.get() + 1);
+    hits.get().to_string()
+}
+
+pub fn config(cfg: &mut web::ServiceConfig<Hits>) {
+    cfg.route("/hit", web::post().to_with_state(hit));
+}
+
+#[ntex::test]
+async fn counts_hits() {
+    let hits = Hits::default();
+    let app = test::init_service_st(hits.clone(), App::<Hits>::new().configure(config)).await;
+
+    for expected in ["1", "2"] {
+        let req = test::TestRequest::post().uri("/hit").to_request();
+        let res = test::call_service(&app, req).await;
+        assert!(res.status().is_success());
+        assert_eq!(test::read_body(res).await, expected);
+    }
+    assert_eq!(hits.get(), 2);
+}
+```
+
+WebSocket test against a real test server:
+
+```rust
+use ntex::util::Bytes;
+use ntex::web::{self, App, HttpRequest, test, ws};
+
+async fn echo(frame: ws::Frame) -> Result<Option<ws::Message>, std::io::Error> {
+    Ok(match frame {
+        ws::Frame::Text(text) => Some(ws::Message::Text(String::from_utf8_lossy(&text).as_ref().into())),
+        ws::Frame::Ping(msg) => Some(ws::Message::Pong(msg)),
+        ws::Frame::Close(reason) => Some(ws::Message::Close(reason)),
+        _ => None,
+    })
+}
+
+async fn socket(req: HttpRequest) {
+    let _ = ws::start(&req, None, echo).await;
+}
+
+#[ntex::test]
+async fn ws_echo() -> Result<(), Box<dyn std::error::Error>> {
+    let srv = test::server(async |_| App::new().route("/ws", web::get().to(socket)));
+    let (io, codec, _) = srv.ws_at("/ws").await?.into_inner();
+
+    io.send(ws::Message::Text("hello".into()), &codec).await?;
+    assert_eq!(io.recv(&codec).await?, Some(ws::Frame::Text(Bytes::from_static(b"hello"))));
+    Ok(())
+}
+```
+
+Protocol test without sockets, for `echo` from the TCP byte-echo template:
+
+```rust
+use ntex::io::testing::IoTest;
+
+#[ntex::test]
+async fn echo_in_memory() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let _task = ntex::rt::spawn(echo(Io::from(server)));
+
+    client.write(b"ping");
+    assert_eq!(client.read().await.unwrap(), b"ping"[..]);
 }
 ```
 

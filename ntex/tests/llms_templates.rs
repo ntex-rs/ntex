@@ -211,6 +211,23 @@ mod tcp_server {
         assert_eq!(io.recv(&BytesCodec).await?.unwrap(), "x");
         Ok(())
     }
+
+    use ntex::io::testing::IoTest;
+
+    /// STATEMENT: The in-memory protocol template echoes bytes through `echo` without sockets.
+    ///
+    /// HOW:
+    /// - Create an `IoTest` pair and run `echo` on the server side.
+    /// - Write `ping` from the client side and assert the same bytes are read back.
+    #[ntex::test]
+    async fn echo_in_memory() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let _task = ntex::rt::spawn(echo(Io::from(server)));
+
+        client.write(b"ping");
+        assert_eq!(client.read().await.unwrap(), b"ping"[..]);
+    }
 }
 
 #[rustfmt::skip]
@@ -310,6 +327,126 @@ mod http_client {
 }
 
 #[rustfmt::skip]
+mod route_test {
+    use ntex::http::StatusCode;
+    use ntex::web::{self, App, HttpResponse, test};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct User {
+        name: String,
+    }
+
+    async fn create(user: web::types::Json<User>) -> HttpResponse {
+        HttpResponse::Created().json(&user.into_inner())
+    }
+
+    pub fn config(cfg: &mut web::ServiceConfig) {
+        cfg.route("/users", web::post().to(create));
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// STATEMENT: The route-test template exercises the shared `config` in process.
+        ///
+        /// HOW:
+        /// - Build the app with `init_service(App::new().configure(config))`.
+        /// - Post a JSON user and assert `201 Created` with the same user in the body.
+        /// - Post an invalid JSON body and assert `400 Bad Request`.
+        #[ntex::test]
+        async fn create_user() {
+            let app = test::init_service(App::new().configure(config)).await;
+
+            let user = User { name: "alice".into() };
+            let req = test::TestRequest::post().uri("/users").json(&user).to_request();
+            let res = test::call_service(&app, req).await;
+            assert_eq!(res.status(), StatusCode::CREATED);
+            let body: User = serde_json::from_slice(&test::read_body(res).await).unwrap();
+            assert_eq!(body, user);
+
+            let req = test::TestRequest::post().uri("/users").header("content-type", "application/json").payload("{").to_request();
+            let res = test::call_service(&app, req).await;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+}
+
+#[rustfmt::skip]
+mod stateful_route_test {
+    use std::{cell::Cell, rc::Rc};
+
+    use ntex::web::{self, App, AppState, test};
+
+    type Hits = AppState<Rc<Cell<usize>>>;
+
+    async fn hit(hits: &Hits, (): ()) -> String {
+        hits.set(hits.get() + 1);
+        hits.get().to_string()
+    }
+
+    pub fn config(cfg: &mut web::ServiceConfig<Hits>) {
+        cfg.route("/hit", web::post().to_with_state(hit));
+    }
+
+    /// STATEMENT: The stateful route-test template observes handler changes through a
+    /// cloned state handle.
+    ///
+    /// HOW:
+    /// - Build the app with `init_service_st` and a clone of the `Rc` counter.
+    /// - Post twice and assert success with bodies `1` and `2`.
+    /// - Assert the test's own handle reads `2`.
+    #[ntex::test]
+    async fn counts_hits() {
+        let hits = Hits::default();
+        let app = test::init_service_st(hits.clone(), App::<Hits>::new().configure(config)).await;
+
+        for expected in ["1", "2"] {
+            let req = test::TestRequest::post().uri("/hit").to_request();
+            let res = test::call_service(&app, req).await;
+            assert!(res.status().is_success());
+            assert_eq!(test::read_body(res).await, expected);
+        }
+        assert_eq!(hits.get(), 2);
+    }
+}
+
+#[rustfmt::skip]
+mod websocket_test {
+    use ntex::util::Bytes;
+    use ntex::web::{self, App, HttpRequest, test, ws};
+
+    async fn echo(frame: ws::Frame) -> Result<Option<ws::Message>, std::io::Error> {
+        Ok(match frame {
+            ws::Frame::Text(text) => Some(ws::Message::Text(String::from_utf8_lossy(&text).as_ref().into())),
+            ws::Frame::Ping(msg) => Some(ws::Message::Pong(msg)),
+            ws::Frame::Close(reason) => Some(ws::Message::Close(reason)),
+            _ => None,
+        })
+    }
+
+    async fn socket(req: HttpRequest) {
+        let _ = ws::start(&req, None, echo).await;
+    }
+
+    /// STATEMENT: The WebSocket test template echoes a text frame over a real connection.
+    ///
+    /// HOW:
+    /// - Start the app with `web::test::server` and connect with `ws_at("/ws")`.
+    /// - Send a `hello` text message and assert the same text frame is received.
+    #[ntex::test]
+    async fn ws_echo() -> Result<(), Box<dyn std::error::Error>> {
+        let srv = test::server(async |_| App::new().route("/ws", web::get().to(socket)));
+        let (io, codec, _) = srv.ws_at("/ws").await?.into_inner();
+
+        io.send(ws::Message::Text("hello".into()), &codec).await?;
+        assert_eq!(io.recv(&codec).await?, Some(ws::Frame::Text(Bytes::from_static(b"hello"))));
+        Ok(())
+    }
+}
+
+#[rustfmt::skip]
 mod worker_state {
     use std::{cell::Cell, rc::Rc};
 
@@ -341,13 +478,18 @@ fn normalize(text: &str) -> String {
 ///
 /// HOW:
 /// - Extract each ```rust block from `docs/llms.txt`.
-/// - Strip indentation from both the block and this file.
+/// - Strip indentation from both, and drop `///` test rustdoc from this file.
 /// - Assert at least one block exists and each block is contained in this file.
 #[test]
 fn templates_match_llms_txt() {
     // checkouts may use CRLF line endings (e.g. git `core.autocrlf` on Windows)
     let docs = include_str!("../../docs/llms.txt").replace("\r\n", "\n");
-    let source = normalize(include_str!("llms_templates.rs"));
+    // test rustdoc (STATEMENT/HOW) is required here but omitted from the templates
+    let source = normalize(include_str!("llms_templates.rs"))
+        .lines()
+        .filter(|line| !line.starts_with("///"))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let mut blocks = 0;
     let mut rest = docs.as_str();
