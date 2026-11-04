@@ -352,6 +352,10 @@ TLS filter decrypts and encrypts the resulting byte stream. The MQTT service
 still reads and writes MQTT bytes and does not need to know which transport
 filters are installed below it.
 
+The [TLS chapter](10-tls.md) applies this model to HTTP clients,
+WebSocket clients, and servers, including backend configuration and peer
+certificate authentication.
+
 Filters may maintain protocol state, expose typed metadata through `query()`,
 emit output while processing input, and participate in graceful shutdown. For
 example, a TLS filter can expose the negotiated protocol or peer certificate,

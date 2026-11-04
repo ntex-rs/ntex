@@ -17,6 +17,7 @@
   - [Error Handling](8.5-web-app.md)
   - [WebSocket Support](8.6-web-app.md)
 - [Byte Buffers](9-bytes.md)
+- [Securing Connections with TLS](10-tls.md)
 
 # Migration
 
