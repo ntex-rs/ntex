@@ -205,7 +205,7 @@ mod tcp_server {
     async fn echo_server() -> std::io::Result<()> {
         use ntex::util::Bytes;
 
-        let srv = ntex::server::test_server(async || fn_service(echo));
+        let srv = ntex::server::test_server(async |_| fn_service(echo));
         let io = srv.connect().await?;
         io.send(Bytes::from_static(b"x"), &BytesCodec).await?;
         assert_eq!(io.recv(&BytesCodec).await?.unwrap(), "x");
@@ -243,7 +243,7 @@ mod dispatcher_server {
     /// - Send one byte with `BytesCodec` and assert the response contains the same byte.
     #[ntex::test]
     async fn dispatcher_echo() -> std::io::Result<()> {
-        let srv = ntex::server::test_server(async || fn_service(serve));
+        let srv = ntex::server::test_server(async |_| fn_service(serve));
         let io = srv.connect().await?;
         io.send(ntex::util::Bytes::from_static(b"x"), &BytesCodec).await?;
         assert_eq!(io.recv(&BytesCodec).await?.unwrap(), "x");
@@ -294,11 +294,11 @@ mod http_client {
     /// STATEMENT: A test server serves an HTTP response to `Client`.
     ///
     /// HOW:
-    /// - Start a server on an available port with a zero-argument async factory.
+    /// - Start a server on an available port with an async factory accepting unit state.
     /// - Send `GET /`, then check the status and body using `?` for client errors.
     #[ntex::test]
     async fn http_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
-        let srv = ntex::server::test_server(async || {
+        let srv = ntex::server::test_server(async |_| {
             HttpService::new(async |_| Ok::<_, std::io::Error>(Response::Ok().body("hello")))
         });
         let url = format!("http://{}/", srv.addr());

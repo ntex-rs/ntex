@@ -64,7 +64,7 @@ fn local_listener() -> (net::TcpListener, net::SocketAddr) {
 
 #[ntex::test]
 async fn test_server_echo() {
-    let srv = test_server(async || fn_service(echo));
+    let srv = test_server(async |_| fn_service(echo));
     assert!(format!("{srv:?}").contains("TestServer"));
     assert_eq!(srv.config().tag(), "TEST-CLIENT");
 
@@ -261,7 +261,7 @@ async fn test_worker_io_metrics() {
 #[ntex::test]
 async fn test_server_builder() {
     let (tx, rx) = mpsc::channel();
-    let builder = TestServerBuilder::new(async move || {
+    let builder = TestServerBuilder::new(async move |_| {
         let tx = tx.clone();
         fn_service(async move |io: Io| {
             let _ = tx.send(io.cfg().tag().to_string());
@@ -288,7 +288,7 @@ async fn test_server_with_state() {
     let num2 = num.clone();
     let srv = TestServerBuilder::with(
         async move || Ok(St(num2.clone())),
-        async || {
+        async |_| {
             async |st: &St, io: Io| {
                 st.0.fetch_add(1, Relaxed);
                 echo(io).await
@@ -300,6 +300,48 @@ async fn test_server_with_state() {
     let io = srv.connect().await.unwrap();
     check_echo(&io).await;
     assert_eq!(num.load(Relaxed), 1);
+}
+
+/// STATEMENT: A test-server factory can use non-`Send` worker state across an
+/// await and share an owned handle with the resulting service.
+///
+/// HOW:
+/// - Initialize `Rc<Cell<u8>>` state to `40` with a zero-argument state factory.
+/// - Await in the service factory, increment the state, and clone its handle.
+/// - Assert that each call receives the same state and returns its incremented
+///   value, `42` then `43`, over two connections.
+#[ntex::test]
+async fn test_server_factory_worker_state() {
+    use std::{cell::Cell, rc::Rc};
+
+    let srv = TestServerBuilder::with(
+        async || Ok(Rc::new(Cell::new(40u8))),
+        async |st| {
+            sleep(Millis(1)).await;
+            st.set(st.get() + 1);
+            let initialized = st.clone();
+            async move |st: &Rc<Cell<u8>>, io: Io| {
+                assert!(Rc::ptr_eq(st, &initialized));
+                st.set(st.get() + 1);
+                io.send(Bytes::from(vec![st.get()]), &BytesCodec)
+                    .await
+                    .unwrap();
+                echo(io).await
+            }
+        },
+    )
+    .start();
+
+    for expected in [42, 43] {
+        let io = srv.connect().await.unwrap();
+        let response = ntex::time::timeout(Millis(5000), io.recv(&BytesCodec))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.as_ref(), &[expected]);
+        io.close();
+    }
 }
 
 #[ntex::test]
@@ -605,7 +647,7 @@ async fn test_ready_failure() {
     let shutdown = Arc::new(AtomicUsize::new(0));
     let (c, r, s) = (created.clone(), ready.clone(), shutdown.clone());
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         c.fetch_add(1, Relaxed);
         ReadySrv {
             ready: r.clone(),
@@ -712,7 +754,7 @@ fn test_bind_addr() {
 /// A client can talk to a server with a raw socket.
 #[ntex::test]
 async fn test_raw_tcp() {
-    let srv = test_server(async || fn_service(echo));
+    let srv = test_server(async |_| fn_service(echo));
     let mut conn = net::TcpStream::connect(srv.addr()).unwrap();
     conn.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     conn.write_all(b"test").unwrap();

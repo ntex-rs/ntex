@@ -118,7 +118,7 @@ mod tests {
     /// - Connect to a local service that drops the transport and assert the call fails.
     #[ntex::test]
     async fn test_openssl_connect() {
-        let server = ntex::server::test_server(async || {
+        let server = ntex::server::test_server(async |()| {
             ntex::service::fn_service(async |_| Ok::<_, ()>(()))
         });
 

@@ -57,7 +57,7 @@ impl FilterLayer for BurstWriteFilter {
 /// - Read and verify the entire burst followed by the echoed `ping`; this guards the neon backend's former reentrant `Option::unwrap()` panic.
 #[ntex::test]
 async fn test_filter_large_write_during_read_processing() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         fn_service(async move |io: Io| {
             let io = io.add_filter(BurstWriteFilter::default());
             // notify the client that the filter is installed

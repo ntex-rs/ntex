@@ -122,7 +122,7 @@ mod tests {
     /// - Call a local service that drops the transport and check the connector returns an error.
     #[ntex::test]
     async fn test_schannel_connect() {
-        let server = ntex::server::test_server(async || {
+        let server = ntex::server::test_server(async |()| {
             ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 

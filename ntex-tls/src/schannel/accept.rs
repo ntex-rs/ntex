@@ -718,7 +718,7 @@ mod tests {
     #[ntex::test]
     async fn test_acceptor_rustls_client() {
         let config = ServerConfig::new(identity()).unwrap();
-        let srv = ntex::server::test_server(async move || {
+        let srv = ntex::server::test_server(async move |()| {
             ntex::service(TlsAcceptor::new(config.clone())).and_then(async |io: SchannelIo| {
                 let proto = io.query::<HttpProtocol>().as_ref().copied();
                 let name = io.query::<Servername>().as_ref().map(|s| s.0.clone());

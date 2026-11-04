@@ -357,7 +357,7 @@ async fn idle_disconnect_uring() {
     let (tx, rx) = ::oneshot::channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
-    let server = ntex::server::test_server(async move || {
+    let server = ntex::server::test_server(async move |_| {
         let tx = tx.clone();
         ntex::fn_service(move |io: Io<_>| {
             tx.lock().unwrap().take().unwrap().send(()).unwrap();

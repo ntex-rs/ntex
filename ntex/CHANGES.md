@@ -2,6 +2,10 @@
 
 ## [4.6.0] - 2026-11-04
 
+* server: Test-server service factories now receive worker state. Replace
+  `async || service` with `async |_| service`; state-initialization closures
+  remain zero-argument.
+
 * web: Add compiler diagnostics for invalid handlers, extractors, error types,
   and application state
 
