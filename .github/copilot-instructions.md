@@ -82,8 +82,9 @@ parent. A missing `shutdown` skips the child's graceful shutdown.
   Comment intentional skips.
 - Call child services through `Ctx::call` so readiness and binding are
   preserved.
-- Prefer `fn_layer` for middleware that only runs code before or after the
-  inner service; it forwards readiness and shutdown itself.
+- Prefer `web::middleware::from_fn` for web middleware and `fn_layer` for
+  other services when the middleware only runs code before or after the inner
+  service; both forward binding, readiness, and shutdown themselves.
 
 ## Changelog
 

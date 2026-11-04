@@ -28,6 +28,11 @@ use super::error::DefaultError;
 ///     type Error = web::DefaultError;
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a web application state",
+    label = "does not implement `web::State`",
+    note = "implement `web::State` for `{Self}` with `type Error = web::DefaultError;`, or wrap it in `web::AppState<{Self}>`"
+)]
 pub trait State: 'static {
     /// Error domain used by the application.
     type Error;
@@ -55,6 +60,7 @@ impl State for () {
 /// assert_eq!(state.service_name, "users");
 /// ```
 #[derive(Clone, Default)]
+#[doc(alias = "Data")]
 pub struct AppState<T> {
     state: T,
 }

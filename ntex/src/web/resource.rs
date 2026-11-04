@@ -236,6 +236,7 @@ where
     /// );
     /// ```
     #[must_use]
+    #[doc(alias = "wrap")]
     pub fn middleware<U>(self, mw: U) -> Resource<St, In, Out, WebStack<St, U, M>, F> {
         Resource {
             middleware: WebStack::new(mw, self.middleware),

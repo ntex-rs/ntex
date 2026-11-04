@@ -1,5 +1,11 @@
 # Changes
 
+## [4.3.0] - 2026-11-xx
+
+* Report the failing argument or return type for invalid route handlers
+
+* Preserve route handlers with `cfg` and `cfg_attr` parameters
+
 ## [4.2.0] - 2026-10-10
 
 * Replace `syn` with `unsynn`

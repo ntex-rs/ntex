@@ -9,6 +9,13 @@ use crate::util::BoxFuture;
 /// the application state `&St` and the request state `U`, followed by up to 16
 /// extractors. `T` is the tuple of extractor types. Register such handlers with
 /// [`Route::to_with_state()`](crate::web::Route::to_with_state).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a valid state-aware web handler",
+    label = "not a `to_with_state()` handler",
+    note = "a state-aware handler is an `async fn` or async closure whose first two arguments are `&St` and the request state, followed by up to 16 extractors",
+    note = "the return type must implement `Responder`; for `Result<T, E>`, `E` must implement `WebResponseError`",
+    note = "use `to()` for handlers that take only extractors"
+)]
 pub trait HandlerSt<St, U, T>: 'static
 where
     St: State,
@@ -40,6 +47,13 @@ where
 /// extractors. `T` is the tuple of extractor types. Register such handlers with
 /// [`Route::to()`](crate::web::Route::to). Use [`HandlerSt`] when the handler
 /// needs the application or request state.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a valid web handler",
+    label = "not a web handler",
+    note = "a handler is an `async fn` or async closure taking up to 16 extractors that implement `FromRequest`",
+    note = "the return type must implement `Responder`; for `Result<T, E>`, `E` must implement `WebResponseError`",
+    note = "use `to_with_state()` for handlers whose first arguments are `&St` and the request state"
+)]
 pub trait Handler<St, T>: 'static
 where
     St: State,

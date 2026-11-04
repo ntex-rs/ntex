@@ -1,0 +1,29 @@
+error[E0277]: `NotExtractor` cannot be used as a handler argument
+ --> tests/ui/macro_non_extractor_arg.rs:5:1
+  |
+5 | #[web::get("/")]
+  | ^^^^^^^^^^^^^^^^ not a request extractor
+  |
+help: the trait `FromRequest<()>` is not implemented for `NotExtractor`
+ --> tests/ui/macro_non_extractor_arg.rs:3:1
+  |
+3 | struct NotExtractor;
+  | ^^^^^^^^^^^^^^^^^^^
+  = note: handler arguments must implement `FromRequest`, for example `HttpRequest`, `web::types::Path<T>`, `Query<T>`, `Json<T>`, `Form<T>`, or `Payload`
+  = note: implement `FromRequest<St>` for `NotExtractor` to extract it from the request
+  = help: the following other types implement trait `FromRequest<St>`:
+            ()
+            (T,)
+            (T0, T1)
+            (T0, T1, T2)
+            (T0, T1, T2, T3)
+            (T0, T1, T2, T3, T4)
+            (T0, T1, T2, T3, T4, T5)
+            (T0, T1, T2, T3, T4, T5, T6)
+          and $N others
+note: required by a bound in `__check_handler`
+ --> tests/ui/macro_non_extractor_arg.rs:5:1
+  |
+5 | #[web::get("/")]
+  | ^^^^^^^^^^^^^^^^ required by this bound in `__check_handler`
+  = note: this error originates in the attribute macro `web::get` (in Nightly builds, run with -Z macro-backtrace for more info)

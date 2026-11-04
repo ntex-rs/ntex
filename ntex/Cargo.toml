@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "4.5.1"
+version = "4.6.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -121,6 +121,7 @@ zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand = { workspace = true }
+trybuild = { workspace = true }
 time = { workspace = true }
 oneshot = { workspace = true }
 futures-util = { workspace = true }

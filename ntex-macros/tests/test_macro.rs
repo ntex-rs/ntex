@@ -109,6 +109,78 @@ async fn test_params() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
+/// STATEMENT: Route macros infer handler arity after `cfg` and `cfg_attr` remove
+/// parameters, while retaining enabled extractors.
+///
+/// HOW:
+/// - Register a handler whose only parameter is disabled and one mixing enabled
+///   extractors with disabled, undefined parameter types.
+/// - Include active, inactive and nested `cfg_attr` conditions.
+/// - Send requests and assert the zero-argument response and extracted path values.
+#[ntex::test]
+async fn test_conditional_params() {
+    #[web_get("/zero")]
+    async fn zero(#[cfg(any())] _: Undefined) -> &'static str {
+        "zero"
+    }
+
+    #[web_get("/mixed/{value}")]
+    async fn mixed(
+        #[cfg(test)] value: Path<String>,
+        #[cfg(any())] _: Undefined,
+        #[cfg_attr(test, cfg(any()))] _: Undefined,
+        #[cfg_attr(test, cfg_attr(test, cfg(any())))] _: Undefined,
+        #[cfg_attr(not(test), cfg(any()))] req: ntex::web::HttpRequest,
+    ) -> String {
+        format!("{}:{}", value.into_inner(), req.path())
+    }
+
+    let app = test::init_service(App::new().service(zero).service(mixed)).await;
+    for (uri, expected) in [("/zero", "zero"), ("/mixed/value", "value:/mixed/value")] {
+        let req = test::TestRequest::with_uri(uri).to_request();
+        let res = test::call_service(&app, req).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(test::read_body(res).await, expected);
+    }
+}
+
+/// STATEMENT: Disabled parameters do not count toward the route handler argument limit.
+///
+/// HOW:
+/// - Register a handler with sixteen disabled parameters and one enabled `Path` extractor.
+/// - Send a request and assert that the enabled extractor supplies the response body.
+#[ntex::test]
+async fn test_conditional_params_argument_limit() {
+    #[web_get("/limit/{value}")]
+    async fn handler(
+        #[cfg(any())] _p1: Undefined,
+        #[cfg(any())] _p2: Undefined,
+        #[cfg(any())] _p3: Undefined,
+        #[cfg(any())] _p4: Undefined,
+        #[cfg(any())] _p5: Undefined,
+        #[cfg(any())] _p6: Undefined,
+        #[cfg(any())] _p7: Undefined,
+        #[cfg(any())] _p8: Undefined,
+        #[cfg(any())] _p9: Undefined,
+        #[cfg(any())] _p10: Undefined,
+        #[cfg(any())] _p11: Undefined,
+        #[cfg(any())] _p12: Undefined,
+        #[cfg(any())] _p13: Undefined,
+        #[cfg(any())] _p14: Undefined,
+        #[cfg(any())] _p15: Undefined,
+        #[cfg(any())] _p16: Undefined,
+        value: Path<String>,
+    ) -> String {
+        value.into_inner()
+    }
+
+    let app = test::init_service(App::new().service(handler)).await;
+    let req = test::TestRequest::with_uri("/limit/ok").to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(test::read_body(res).await, "ok");
+}
+
 #[ntex::test]
 async fn test_body() {
     let srv = test::server(async |_| {

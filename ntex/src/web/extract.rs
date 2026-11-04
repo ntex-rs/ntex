@@ -51,6 +51,12 @@ use crate::http::Payload;
 ///
 /// let app = web::App::default().route("/", web::get().to(hello));
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be used as a handler argument",
+    label = "not a request extractor",
+    note = "handler arguments must implement `FromRequest`, for example `HttpRequest`, `web::types::Path<T>`, `Query<T>`, `Json<T>`, `Form<T>`, or `Payload`",
+    note = "implement `FromRequest<St>` for `{Self}` to extract it from the request"
+)]
 pub trait FromRequest<St>: Sized {
     /// The error returned when extraction fails.
     ///

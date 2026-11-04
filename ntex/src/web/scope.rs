@@ -401,6 +401,7 @@ where
     /// );
     /// ```
     #[must_use]
+    #[doc(alias = "wrap")]
     pub fn middleware<U>(self, mw: U) -> Scope<St, In, Out, WebStack<St, U, M>, F> {
         Scope {
             middleware: WebStack::new(mw, self.middleware),

@@ -103,11 +103,15 @@ fn missing_path(method: MethodType) -> Error {
     )
 }
 
+/// Maximum number of web handler arguments
+const MAX_HANDLER_ARGS: usize = 16;
+
 pub(crate) struct Route {
     name: Ident,
     args: Args,
     ast: TokenStream2,
     method: MethodType,
+    params: Option<usize>,
 }
 
 impl std::fmt::Debug for Route {
@@ -126,7 +130,14 @@ impl Route {
             return Err(missing_path(method));
         }
         let ast = TokenStream2::from(input);
-        let name = ItemFn::parse(ast.clone())?.ident().clone();
+        let item = ItemFn::parse(ast.clone())?;
+        let params = item.param_count();
+        if params.is_some_and(|count| count > MAX_HANDLER_ARGS) {
+            return Err(item.fn_error(format!(
+                "web handlers accept at most {MAX_HANDLER_ARGS} arguments"
+            )));
+        }
+        let name = item.ident().clone();
         let args = Args::parse(args.into())?;
 
         Ok(Self {
@@ -134,6 +145,7 @@ impl Route {
             args,
             ast,
             method,
+            params,
         })
     }
 
@@ -145,6 +157,30 @@ impl Route {
         let extra_guards = &self.args.guards;
         let state = &self.args.state;
         let method = &self.method;
+        let (check, handler) = if let Some(params) = self.params {
+            // Check each argument and the return type separately so errors
+            // name the failing bound instead of `Handler`.
+            let args: Vec<_> = (0..params)
+                .map(|i| Ident::new(&format!("__A{i}"), Span::call_site()))
+                .collect();
+            let check = quote! {
+                fn __check_handler<__Fn, __Res, #(#args),*>(
+                    f: __Fn,
+                ) -> impl ntex::web::Handler<#state, (#(#args,)*), Output = __Res>
+                where
+                    __Fn: ::core::ops::AsyncFn(#(#args),*) -> __Res + 'static,
+                    __Res: ntex::web::Responder<#state> + 'static,
+                    #(#args: ntex::web::FromRequest<#state>,)*
+                {
+                    f
+                }
+            };
+            (check, quote!(__check_handler(#name)))
+        } else {
+            // Parameter conditions expand after this macro; let `Handler`
+            // infer the remaining arguments.
+            (TokenStream2::new(), quote!(#name))
+        };
 
         let stream = quote! {
             #[allow(non_camel_case_types)]
@@ -153,12 +189,13 @@ impl Route {
             impl<St: 'static> ntex::web::dev::WebServiceFactory<#state, St> for #name {
                 fn register(self, __config: &mut ntex::web::dev::WebServiceConfig<#state, St>) {
                     #ast
+                    #check
 
                     let __resource = ntex::web::Resource::<_, St>::new(#path)
                         .name(#resource_name)
                         #(.guard(ntex::web::guard::fn_guard(#extra_guards)))*
                         .guard(ntex::web::guard::#method())
-                        .to(#name);
+                        .to(#handler);
 
                     ntex::web::dev::WebServiceFactory::<_, St>::register(__resource, __config)
                 }
@@ -196,6 +233,7 @@ mod tests {
                 }
             ),
             method: MethodType::Get,
+            params: Some(0),
         };
         assert_eq!(format!("{route:?}"), format!("Route({:?})", route.name));
     }

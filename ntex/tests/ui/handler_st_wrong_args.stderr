@@ -1,0 +1,20 @@
+error[E0277]: `fn(u32) -> impl Future<Output = &'static str> {index}` is not a valid state-aware web handler
+ --> tests/ui/handler_st_wrong_args.rs:8:69
+  |
+8 |     let _ = web::App::default().route("/", web::get().to_with_state(index));
+  |                                                       ------------- ^^^^^ not a `to_with_state()` handler
+  |                                                       |
+  |                                                       required by a bound introduced by this call
+  |
+  = help: the trait `HandlerSt<_, _, _>` is not implemented for fn item `fn(u32) -> impl Future<Output = &'static str> {index}`
+  = note: a state-aware handler is an `async fn` or async closure whose first two arguments are `&St` and the request state, followed by up to 16 extractors
+  = note: the return type must implement `Responder`; for `Result<T, E>`, `E` must implement `WebResponseError`
+  = note: use `to()` for handlers that take only extractors
+note: required by a bound in `Route::<St, In>::to_with_state`
+ --> src/web/route.rs
+  |
+  |     pub fn to_with_state<H, Args>(mut self, handler: H) -> Self
+  |            ------------- required by a bound in this associated function
+  |     where
+  |         H: HandlerSt<St, In, Args> + 'static,
+  |            ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Route::<St, In>::to_with_state`
