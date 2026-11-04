@@ -373,7 +373,7 @@ where
     type Error = S::Error;
 
     fn bind(&self, ctx: BindCtx<'_>) {
-        ctx.bind::<_, St, Req>(&**self);
+        ctx.bind(&**self);
     }
 
     #[inline]
@@ -400,7 +400,7 @@ where
     type Error = S::Error;
 
     fn bind(&self, ctx: BindCtx<'_>) {
-        ctx.bind::<_, St, Req>(&**self);
+        ctx.bind(&**self);
     }
 
     #[inline]
@@ -427,7 +427,7 @@ where
     type Error = S::Error;
 
     fn bind(&self, ctx: BindCtx<'_>) {
-        ctx.bind::<_, St, Req>(&**self);
+        ctx.bind(&**self);
     }
 
     #[inline]

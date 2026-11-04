@@ -1,0 +1,7 @@
+error: forward!: nested field paths are not supported, implement `bind`, `ready`, and `shutdown` manually
+  --> tests/ui/forward_nested_path.rs:11:5
+   |
+11 |     ntex_service::forward!((), inner.service);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `$crate::forward` which comes from the expansion of the macro `ntex_service::forward` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -29,3 +29,4 @@ foldhash = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true }
+trybuild = { workspace = true }

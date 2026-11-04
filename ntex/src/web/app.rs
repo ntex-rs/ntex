@@ -897,6 +897,35 @@ mod tests {
         );
     }
 
+    /// STATEMENT: An async closure installed with `fn_layer` works as application middleware.
+    ///
+    /// HOW:
+    /// - Install `fn_layer` with the annotations shown in the web guide; it adds a header
+    ///   to the inner response.
+    /// - Call the route and assert OK and the header set by the closure.
+    #[crate::rt_test]
+    async fn test_fn_layer_wrap() {
+        let srv = init_service(
+            App::new()
+                .middleware(crate::service::fn_layer(
+                    async |req: WebRequest<()>, ctx| {
+                        let mut res: WebResponse = ctx.call(req).await?;
+                        res.headers_mut()
+                            .insert(header::CONTENT_TYPE, HeaderValue::from_static("0002"));
+                        Ok::<_, WebError>(res)
+                    },
+                ))
+                .route("/test", web::get().to(async || HttpResponse::Ok())),
+        )
+        .await;
+        let resp = call_service(&srv, TestRequest::with_uri("/test").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            HeaderValue::from_static("0002")
+        );
+    }
+
     /// STATEMENT: Case-insensitive routing accepts paths differing only in letter case.
     ///
     /// HOW:

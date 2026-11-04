@@ -66,8 +66,8 @@ where
 
     #[inline]
     fn bind(&self, ctx: BindCtx<'_>) {
-        ctx.bind::<_, St, Req>(&self.svc1);
-        ctx.bind::<_, St, A::Res>(&self.svc2);
+        ctx.bind(&self.svc1);
+        ctx.bind(&self.svc2);
     }
 
     #[inline]

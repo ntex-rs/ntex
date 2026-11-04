@@ -66,7 +66,7 @@ where
 
     #[inline]
     fn bind(&self, ctx: BindCtx<'_>) {
-        ctx.bind::<_, St, _>(&self.service);
+        ctx.bind(&self.service);
     }
 
     #[inline]

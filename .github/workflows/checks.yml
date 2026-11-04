@@ -80,6 +80,17 @@ jobs:
       - run:
           cargo clippy -p ntex-bytes --tests --features tracker
 
+  compile-fail:
+    name: Compile-fail diagnostics
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - run:
+          cargo test -p ntex-service --test compile_fail -- --ignored
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest

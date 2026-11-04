@@ -47,6 +47,7 @@ jobs:
           sed -i 's|](../ntex/migration_3to4.md)|](./migration_3to4.md)|' target/guide-src/index.md
           mdbook build target/guide-src -d "$PWD/_site"
           rm -f _site/book.toml
+          cp docs/llms.txt _site/llms.txt
 
       - name: Add API docs
         run: |

@@ -1,0 +1,7 @@
+error: forward!: list at least one service field before `map_err`, e.g. `forward!(St, service, map_err = f)`
+  --> tests/ui/forward_map_err_without_fields.rs:11:5
+   |
+11 |     ntex_service::forward!((), map_err = Into::into);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `$crate::forward` which comes from the expansion of the macro `ntex_service::forward` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -93,7 +93,7 @@ where
 
     #[inline]
     fn bind(&self, ctx: BindCtx<'_>) {
-        ctx.bind::<_, St, _>(&self.svc);
+        ctx.bind(&self.svc);
     }
 
     #[inline]

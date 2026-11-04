@@ -1,0 +1,7 @@
+error: forward!: write field names without `self.`, e.g. `forward!(St, service)`
+  --> tests/ui/forward_self_field.rs:11:5
+   |
+11 |     ntex_service::forward!((), self.service);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `$crate::forward` which comes from the expansion of the macro `ntex_service::forward` (in Nightly builds, run with -Z macro-backtrace for more info)
