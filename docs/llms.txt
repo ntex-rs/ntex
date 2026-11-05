@@ -483,6 +483,7 @@ async fn main() -> std::io::Result<()> {
 - [WebSocket Support](https://docs.ntex.rs/8.6-web-app.html)
 - [Byte Buffers](https://docs.ntex.rs/9-bytes.html)
 - [Securing Connections with TLS](https://docs.ntex.rs/10-tls.html): backend and component configuration, identities, peer certificates, and mutual authentication
+- [Timers and Time Utilities](https://docs.ntex.rs/12-time.html): timer wheel design and precision, `Millis` and `Seconds`, `sleep`, `deadline`, `timeout`, `interval`, and callback timers
 
 ## API
 

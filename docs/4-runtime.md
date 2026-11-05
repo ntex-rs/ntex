@@ -320,6 +320,8 @@ ntex timers are intended for scheduling and timeouts, not high-resolution
 measurement. Their granularity is roughly 16 milliseconds. A zero-duration
 `sleep` or `timeout` still waits for at least one timer tick.
 `timeout_checked` is the variant that treats a zero timeout as disabled.
+See [Timers and Time Utilities](12-time.md) for the timer design and the
+full API.
 
 ## System lifecycle
 
