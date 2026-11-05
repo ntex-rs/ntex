@@ -21,6 +21,7 @@ build web applications.
   - [Building gRPC Services and Clients](11-grpc.md)
 - [Securing Connections with TLS](./10-tls.md)
 - [Byte Buffers](./9-bytes.md)
+- [Timers and Time Utilities](./12-time.md)
 
 ## API reference
 
