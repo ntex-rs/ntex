@@ -18,6 +18,7 @@
   - [WebSocket Support](8.6-web-app.md)
 - [Integrations]()
   - [HTTP Client](13-client.md)
+  - [HTTP/2 Client and Server](14-h2.md)
   - [Building gRPC Services and Clients](11-grpc.md)
 - [Securing Connections with TLS](10-tls.md)
 - [Byte Buffers](9-bytes.md)
