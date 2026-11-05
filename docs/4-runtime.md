@@ -1,35 +1,34 @@
 # Runtime
 
-ntex uses a single-threaded execution model on each runtime thread. Tasks stay
-on the thread where they were started, so services and futures can use `Rc`,
-`Cell`, `RefCell`, and other types that are not `Send` or `Sync`.
+Each ntex runtime thread runs its own single-threaded event loop. A task stays
+on the thread where it was started, so services and futures can freely use
+`Rc`, `Cell`, `RefCell`, and other types that are not `Send` or `Sync`.
 
-That does not limit an application to one CPU core. A server normally starts
+This does not limit an application to one CPU core. A server normally starts
 several worker threads, each with its own single-threaded runtime. State shared
-between workers must still use thread-safe types such as `Arc`, atomics, or
-locks.
+between workers still needs thread-safe types such as `Arc`, atomics, or locks.
 
 Most applications only need `#[ntex::main]`, `#[ntex::test]`, and
-`ntex::rt::spawn`. The lower-level `System` and `Arbiter` APIs are useful for
+`ntex::rt::spawn`. The lower-level `System` and `Arbiter` APIs are there for
 explicit startup, shutdown, and cross-thread coordination.
 
 ## Choosing a runtime backend
 
-[`DefaultRuntime`] selects the async runtime and matching ntex network reactor
-together. Cargo features choose the backend:
+[`DefaultRuntime`] picks the async runtime and the matching ntex network
+reactor together. Cargo features decide which backend it uses:
 
-* `tokio` uses Tokio. When a Tokio runtime handle is entered on the current
-  thread, the adapter uses it; otherwise it creates a current-thread Tokio
-  runtime. ntex tasks run in a Tokio `LocalSet`.
-* `compio` creates a Compio runtime on each runtime thread. Compio selects the
-  I/O driver for the host platform and configuration.
-* without either feature, ntex uses its native runtime. On Linux it tries
-  io_uring and falls back to polling; other Unix platforms use polling, and
-  Windows uses IOCP.
+* `tokio` uses Tokio. If a Tokio runtime handle is already entered on the
+  current thread, ntex uses it; otherwise it creates a current-thread Tokio
+  runtime. ntex tasks run inside a Tokio `LocalSet`.
+* `compio` creates a Compio runtime on each runtime thread. Compio chooses the
+  I/O driver for the platform and configuration.
+* With neither feature, ntex uses its [native runtime](#native-runtime). On
+  Linux it tries io_uring and falls back to polling; other Unix platforms use
+  polling, and Windows uses IOCP.
 
-If both `tokio` and `compio` are enabled, Tokio takes precedence. With the
-native backend, `neon-polling` forces polling on Unix and `neon-uring` requires
-io_uring on Linux. Do not enable both explicit native reactor features.
+If both `tokio` and `compio` are enabled, Tokio wins. With the native backend,
+`neon-polling` forces polling on Unix and `neon-uring` requires io_uring on
+Linux. Do not enable both.
 
 For example:
 
@@ -38,13 +37,13 @@ For example:
 ntex = { version = "4", features = ["tokio"] }
 ```
 
-The Tokio and Compio backends are convenient when an application also uses
-libraries from those ecosystems. The native backend avoids an additional
-general-purpose runtime and lets ntex choose its platform reactor directly.
+Tokio and Compio are convenient when an application also uses libraries from
+those ecosystems. The native backend avoids running a second general-purpose
+runtime and lets ntex use the platform reactor directly.
 
 `SystemRunner::block_on` blocks the current thread. Do not call it from inside
-an async Tokio task to try to nest one runtime inside another. Usually the
-cleanest boundary is to let `#[ntex::main]` own the process entry point.
+an async Tokio task in an attempt to nest one runtime inside another. The
+cleanest setup is usually to let `#[ntex::main]` own the process entry point.
 
 [`DefaultRuntime`]: https://docs.ntex.rs/api/ntex/rt/struct.DefaultRuntime.html
 
@@ -64,33 +63,27 @@ async fn main() {
 }
 ```
 
-The future and its result do not need to implement `Send`, but the future must
-be `'static`. Use `async move` when it captures owned values. `spawn()` panics
-when called outside an active ntex runtime.
+Neither the future nor its result needs to be `Send`, but the future must be
+`'static`, so use `async move` when it captures owned values. `spawn()` panics
+if it is called outside a running ntex runtime.
 
 The returned [`JoinHandle`] can be awaited, canceled with `cancel()`, detached
-with `detach()`, or queried with `is_finished()`. It is **neither `Send` nor
-`Sync`**, even when the result is `Send`, and must stay on its owner thread.
-A task panic or cancellation is reported as `JoinError`, not as the task's
-normal output.
+with `detach()`, or checked with `is_finished()`. It is **neither `Send` nor
+`Sync`**, even when the result is `Send`, and must stay on the thread that
+created it. If the task panics or is canceled, awaiting the handle returns a
+`JoinError` instead of the task's output.
 
-Dropping a local join handle detaches the task; it does not cancel it. Keep and
-await the handle when the result matters. A detached task is not guaranteed to
-finish before its arbiter or the whole system shuts down.
+Dropping a `JoinHandle` detaches the task; it does not cancel it. Keep the
+handle and await it when you need the result. A detached task is not
+guaranteed to finish before its arbiter or the whole system shuts down.
 
-To submit work to another runtime thread, obtain an arbiter's handle and call
-`spawn()` on it. **`Handle::spawn()` returns a separate `RemoteJoinHandle<T>`**,
-while local `spawn()` returns `JoinHandle<T>`. Both the submitted future and
-output must be `Send + 'static`. Called on the
-runtime's own thread, it spawns a local task directly. From other threads the
-future, and later its output, share one allocation that is passed to the
-runtime thread. The future is polled and dropped there. The handle stays on the
-calling thread: it is neither `Send` nor `Sync`. These contracts apply to
-native, Tokio, and Compio.
+### Spawning on another thread
 
-The local handle does not carry the remote-join variant; native local handles
-are pointer-sized. `RemoteJoinHandle` retains both paths so same-thread
-submissions still avoid a shared remote-job allocation.
+To run work on another runtime thread, get that arbiter's `Handle` and call
+`spawn()` on it. Both the future and its output must be `Send + 'static`.
+**`Handle::spawn()` returns a `RemoteJoinHandle<T>`**, not a `JoinHandle<T>`.
+Like the local handle, it is neither `Send` nor `Sync` and stays on the thread
+that called `spawn()`.
 
 ```rust
 async fn example(handle: ntex_rt::Handle) {
@@ -99,210 +92,38 @@ async fn example(handle: ntex_rt::Handle) {
 }
 ```
 
-Dropping the handle detaches the task, `RemoteJoinHandle::cancel()` cancels it on the
-runtime thread. Shutdown or cancellation before producing a result yields
-`JoinError`. Rejected submissions are never polled and their futures may be
-dropped on the submitting thread.
+Called on the runtime's own thread, `Handle::spawn()` simply spawns a local
+task. From any other thread, the future is placed in a single allocation,
+which later also holds its output, and handed to the runtime thread, where it
+is polled and dropped. This works the same way on the native, Tokio, and
+Compio backends.
 
-For fire-and-forget work, use `Handle::spawn_detached()`: it returns `()` and
-permits non-`Send` outputs because they are discarded on the runtime thread.
+Dropping a `RemoteJoinHandle` detaches the task, and
+`RemoteJoinHandle::cancel()` cancels it on the runtime thread. If the runtime
+shuts down or the task is canceled before it produces a result, the handle
+returns `JoinError`. A rejected submission is never polled, and its future may
+be dropped on the submitting thread.
 
-A submitted future can start non-`Send` local work with `ntex::rt::spawn`.
-To await its local join, start a local task rather than holding that join across
-an `.await` in the submitted `Send` future.
+The two handle types are separate so the common local case stays small: a
+native `JoinHandle` is a single pointer. `RemoteJoinHandle` supports both
+paths, so a same-thread submission still avoids the shared allocation.
+
+For fire-and-forget work, use `Handle::spawn_detached()`. It returns `()`, and
+because the output is discarded on the runtime thread, the output does not need
+to be `Send`.
+
+A submitted future can start non-`Send` work with `ntex::rt::spawn`. It cannot
+hold that local `JoinHandle` across an `.await`, though, because the submitted
+future must stay `Send`. To await the local result, do it inside a local task.
 
 [`JoinHandle`]: https://docs.ntex.rs/api/ntex/rt/struct.JoinHandle.html
 [`RemoteJoinHandle`]: https://docs.ntex.rs/api/ntex/rt/struct.RemoteJoinHandle.html
 [`ntex::rt::spawn`]: https://docs.ntex.rs/api/ntex/rt/fn.spawn.html
 
-## Owner-thread wake handles
-
-[`ntex_rt::LocalWaker`] is an owned, thread-confined wake handle, not the
-notification slot named `ntex::task::LocalWaker`. Native ntex task wakers
-acquired on their owner thread use local operations without repeating the
-thread-identity check on every clone, wake, or drop. Timers, I/O waiters, and
-notification slots retain these handles internally.
-
-Acquisition from a borrowed standard waker checks its representation, owner,
-and runtime endpoint, then acquires owner-local wake ownership.
-Retaining the handle amortizes that work;
-repeatedly acquiring and converting it is not a free optimization.
-`into_waker()` consumes the handle to produce a thread-safe standard waker.
-Native conversion acquires standard-waker ownership before releasing the local
-reference. Local handles cannot themselves cross threads.
-
-On 64-bit targets the handle, its `Option`, and the notification slot each
-occupy 16 bytes. Neither native nor fallback handles add a wrapper allocation.
-Native tasks coallocate immutable routing metadata, a pinned execution core,
-and future/result storage. There is no separate wake-token allocation or
-per-task lookup registry. Segments of the remote command queue also consume memory.
-Arbitrary waker callbacks may still allocate, as may timer or I/O storage
-when it first grows.
-
-This is a hot-path optimization, not a guarantee of faster task scheduling or
-request handling. Same-waker registration still has representation-checking
-overhead. Tokio, Compio, and wrapped or custom wakers retain their original
-callbacks and may incur small additional dispatch costs. Standard native
-wakers publish typed reference and wake commands to the owner through a
-Crossbeam FIFO. On 64-bit targets each command occupies one pointer-sized word:
-three task-pointer alignment bits encode its operation. Encoding preserves pointer
-provenance, and decoding removes the tag before any task access. Other targets
-retain separate pointer and operation fields without increasing task alignment.
-The owner alone updates waker reference counts, including after
-completion. Each task has a sticky atomic flag, set before its first remote
-waker publication and never cleared. Untouched tasks release directly, including
-their final reference, without inspecting or publishing to the FIFO. Remote
-submission alone does not set the flag: its initial reference transfers to the
-owner before the task can expose a waker.
-
-For touched tasks, a final owner release waits behind already-published
-acquisitions. Other owner releases also join the FIFO when commands are pending,
-so they cannot invalidate a later wake or acquisition by overtaking earlier
-queued releases. Returning a remotely cloned waker to the owner synchronizes
-the flag store; until then the publisher's source protects the allocation.
-Processing a queued command also acquires the preceding flag store. The flag
-is shared metadata, not a remotely updated reference count.
-
-Completion drops the future. Surviving native standard wakers, local handles,
-and join handles retain completed task storage; a join handle also
-owns its unconsumed result. This retained storage is not a still-running future.
-Dropping the join handle releases its result independently of wake handles.
-
-The unfinished-task list is non-owning and does not keep orphaned futures alive.
-A global registry routes standard wakers by never-reused runtime IDs. Each remote
-thread caches at most one owned endpoint reference; hits avoid registry lookup
-and per-operation queue reference counting. Both remote waker commands and unpolled
-submissions reserve admission before publication, so shutdown waits for accepted
-work even when a publisher bypasses the registry. A cached closed endpoint rejects
-new work. Notifications run after releasing admission, registry locks, and cache
-borrows. Cache eviction also drops the old endpoint outside locks and borrows,
-before admitting the new operation, allowing driver destructors to reenter safely.
-Wakers used during thread-local destruction fall back to registry lookup.
-
-Owner-thread operations separately cache the last checked runtime ID and whether its endpoint is open.
-A matching cache entry also proves ownership, avoiding a separate thread-ID
-lookup; cache misses check ownership before consulting the registry.
-Shutdown caches its closed state before running callbacks; never-reused IDs make
-that state permanent. The cache holds no queue reference. Switching between
-runtimes on one thread checks the registry again.
-Unpolled `Send` submissions share the remote wake FIFO; once activated,
-all task state, references, join results, and awaiters are owner-local.
-Owner-local wakes use the intrusive local ready queue. Native join awaiters
-retain `LocalWaker`s and remain releasable after unregistering.
-Deferred releases on a busy owner publish without acquiring a temporary strong
-queue reference; releases that may notify or run shutdown cleanup still retain it.
-Each task stores an owner-only raw queue pointer, not a strong or weak queue
-reference. Unfinished tasks access it while their runtime or runner keeps the queue
-alive; completed tasks require a live endpoint before borrowing it. Callback-capable
-cleanup resolves the runtime ID to a strong queue reference outside the registry lock.
-
-Runtime IDs and owner-thread indexes are 16-bit, keeping the task core at 80
-bytes on 64-bit targets. A process can create at most 65,535 native runtimes, and
-at most 65,535 threads can own one; neither is reused, and the process aborts when
-either runs out. Threads that only wake tasks or spawn through a Handle do not
-use an index. Fields used by wakes, runs and releases share the first 64 bytes of
-the core; the task list links, used only on spawn, completion and shutdown, come
-last. Task allocations are not cache-line aligned, so this reduces rather than
-guarantees single-line access.
-
-After running local tasks, the native scheduler checks whether the remote FIFO
-is empty before entering its pop loop, avoiding the empty pop's full fence.
-It still rechecks readiness afterward; racing publications either keep the
-runtime polling or notify the driver. Nonempty drains retain their existing
-FIFO ordering and per-turn budget.
-
-Shutdown closes admission and disables the runtime's wake endpoint, drains accepted
-commands, and drops live futures on their owner thread. The closed registry entry
-remains available to owner cleanup until draining finishes, including panic cleanup.
-Only then is the entry removed, so owner releases cannot overtake pending commands.
-Later standard-waker operations are
-ignored, and cloning such a waker produces an inert waker. **Outstanding standard
-wakers at shutdown permanently retain their task allocations**, even after those
-wakers are dropped. This is storage retention, not continued execution: task
-allocations do not keep the driver or the queue's backing allocation alive.
-A remote thread's endpoint cache can independently retain one closed queue and
-driver until it caches a different endpoint or the thread exits.
-Owner-local handles remain releasable after shutdown without dereferencing the
-possibly dangling queue pointer. Release standard wakers and service their queued
-releases before shutdown when task-storage reclamation matters.
-
-### Measured costs
-
-The measurements below predate the local/remote join-handle split, the empty-FIFO
-fast path, raw task queue pointers, compact task cores, pointer-tagged FIFO
-entries, remote endpoint caching, and `LocalWaker` reference-count inlining,
-and do not measure their performance.
-
-A release-build comparison against the earlier option-1 LocalWaker prototype,
-using matched dependencies and Rust 1.99.1 on x86-64 Linux/WSL2, measured these
-allocator-requested sizes:
-
-| Allocation | Earlier prototype | Owner-directed implementation |
-| --- | ---: | ---: |
-| Empty pending task | 88 bytes | 104 bytes |
-| Task with the tested 24-byte future | 104 bytes | 120 bytes |
-| Warm runtime, before FIFO segments | 904 bytes | 896 bytes |
-
-These sizes include the merged submission/wake queue and sticky publication
-flag. The flag fits existing padding, adding no allocation bytes versus the
-same implementation without it. Each tested task still used one allocation.
-Local-only final releases needed no FIFO segments; remote FIFO segments required
-752 bytes each, with one empty serviced segment retained until runtime
-destruction. The shared registry used 80 bytes of static storage and 84 bytes
-of retained map capacity with one active runtime. The endpoint cache occupied
-16 bytes of thread-local storage per owner thread. The tested `usize` oneshot
-channel required a separate 32-byte allocation. These are measurements of
-specific types and a specific build, not layout guarantees or RSS estimates.
-
-With pointer-tagged FIFO entries on x86-64, an entry shrinks from 16 to 8 bytes
-and a queue segment from 752 to 504 bytes. The 80-byte task core and the queue's
-cache-line separation are unchanged.
-
-Owner-only reference counting is not an across-the-board speedup. Across nine
-alternating paired runs after local fast-path optimization, active standard-waker
-clone/drop increased from 5.12 to 5.58 ns versus the earlier prototype (10%
-median paired increase), LocalWaker acquisition/drop from 3.82 to 4.85 ns (25%),
-and serviced local spawn/join from 224 to 235 ns (5%). Retained active LocalWaker
-clone/drop improved from 4.65 to 2.43 ns (49%). Remote clone/drop with a paused
-owner increased from 21 to 123 ns on the producer, plus about 39 ns of deferred
-owner work. Backlogged completed standard-waker clone/drop increased from
-18 to 57 ns including owner service; the tested 64:1 local/remote mix increased
-from 5.4 to 8.4 ns per local operation. These are microbenchmark costs, not
-application-throughput predictions.
-
-A separate paired comparison isolating the sticky flag measured serviced local
-spawn/join at 325 to 235 ns (27% median paired reduction), detached completion
-at 190 to 143 ns (25%), and completed-join drop plus service at 79 to 37 ns
-(54%). Remote clone/drop producer cost was essentially unchanged. The tradeoffs
-included about 10% more total CPU for backlogged completed standard-waker
-clone/drop and 13% more owner CPU in the tested 64:1 local/remote mix.
-These are separate paired runs, not an additive breakdown of lifecycle costs.
-
-A subsequent nine-pair comparison isolated the local fast-path refactoring:
-untouched releases are inlined, remotely touched releases are outlined, and
-endpoint-cache misses are isolated from cache-hit routing. The baseline and
-candidate both included the pinned remote-future destruction fix. Active
-standard-waker clone/drop improved from 7.05 to 5.62 ns (20% median paired
-reduction), retained LocalWaker clone/drop from 4.25 to 2.45 ns (43%), and
-I/O-style waker replacement from 11.43 to 9.53 ns (18%). Allocation/retention
-probe outputs were identical. These changes preserve all endpoint-liveness,
-reference-count and FIFO-ordering checks; the remote-FIFO and backlogged-release
-regressions against the earlier prototype remain.
-
-Shutdown retention is cumulative across runtime lifetimes. In the same build,
-four runtimes with 32 surviving standard wakers each, targeting futures with
-64 KiB inline payloads, permanently retained 8,407,552 requested bytes even
-after the wakers were dropped. That older weak-reference implementation included
-896 bytes of queue backing per runtime; raw queue pointers no longer retain it.
-Future destructors, unconsumed-result destruction on join drop, and
-driver destruction still ran; surviving owner-local handles remained reclaimable.
-
-[`ntex_rt::LocalWaker`]: https://docs.ntex.rs/api/ntex_rt/struct.LocalWaker.html
-
 ## Timers and timeouts
 
-Use `ntex::time` instead of a backend-specific timer so the code works with
-all three runtime backends:
+Use `ntex::time` rather than a backend-specific timer, so the code works with
+all three backends:
 
 ```rust
 use ntex::time::{Millis, sleep, timeout};
@@ -316,20 +137,19 @@ async fn main() {
 }
 ```
 
-ntex timers are intended for scheduling and timeouts, not high-resolution
-measurement. Their granularity is roughly 16 milliseconds. A zero-duration
-`sleep` or `timeout` still waits for at least one timer tick.
-`timeout_checked` is the variant that treats a zero timeout as disabled.
-See [Timers and Time Utilities](12-time.md) for the timer design and the
-full API.
+ntex timers are meant for scheduling and timeouts, not precise measurement.
+Their resolution is about 16 milliseconds, and even a zero-duration `sleep` or
+`timeout` waits for at least one timer tick. Use `timeout_checked` if a zero
+timeout should mean "no timeout". [Timers and Time Utilities](12-time.md)
+covers the timer design and the full API.
 
 ## System lifecycle
 
-[`System`] is the top-level runtime context. It owns the shared runtime
-configuration, tracks arbiters, manages signal delivery, and provides the
-blocking thread pool. `#[ntex::main]` builds a system automatically.
+[`System`] is the top-level runtime context. It holds the shared runtime
+configuration, keeps track of arbiters, delivers signals, and provides the
+blocking thread pool. `#[ntex::main]` builds a system for you.
 
-Building one manually returns a [`SystemRunner`]:
+Building one by hand gives you a [`SystemRunner`]:
 
 ```rust
 fn main() {
@@ -342,15 +162,15 @@ fn main() {
 }
 ```
 
-`SystemRunner` has two common ownership models:
+A `SystemRunner` can be driven in two ways:
 
-* `block_on(future)` starts a system, drives one root future, and returns its
-  output when that future completes;
-* `run(callback)` invokes a synchronous startup callback inside the running
-  system, then keeps the event loop alive until `System::stop()` or
+* `block_on(future)` starts the system, runs one root future, and returns its
+  output when the future completes;
+* `run(callback)` calls a synchronous startup callback inside the running
+  system, then keeps the event loop going until `System::stop()` or
   `System::stop_with_code()` is called.
 
-For a process driven by an explicit stop request:
+For a process that runs until something explicitly stops it:
 
 ```rust,no_run
 use std::io;
@@ -371,50 +191,49 @@ fn main() -> io::Result<()> {
 }
 ```
 
-`run_until_stop()` is `run()` without a startup callback. All these methods
-consume the runner, so choose one model rather than calling `block_on()` and
-then `run_until_stop()` on the same value. A non-zero stop code is returned as
-an I/O error.
+`run_until_stop()` is `run()` without a startup callback. Each of these methods
+consumes the runner, so pick one; you cannot call `block_on()` and then
+`run_until_stop()` on the same runner. A non-zero stop code is returned as an
+I/O error.
 
-Signal and panic handling are disabled by default. Enabling signal handling
-makes process signals available through `ntex::rt::signals`; it does not by
-itself define the application's shutdown policy. ntex servers listen for
-process signals while they are running and coordinate their own shutdown.
+Signal and panic handling are off by default. Turning on signal handling makes
+process signals available through `ntex::rt::signals`, but it does not decide
+how the application shuts down. ntex servers listen for signals while they run
+and handle their own shutdown.
 
 [`System`]: https://docs.ntex.rs/api/ntex_rt/struct.System.html
 [`SystemRunner`]: https://docs.ntex.rs/api/ntex_rt/struct.SystemRunner.html
 
 ## Arbiters and runtime threads
 
-An [`Arbiter`] represents one runtime event-loop thread. Every system has a
-primary arbiter. `Arbiter::new()` or `Arbiter::with_name()` starts another OS
-thread using the same system runtime configuration. ntex server workers are
-also arbiter threads.
+An [`Arbiter`] is one runtime thread with its own event loop. Every system has
+a primary arbiter. `Arbiter::new()` and `Arbiter::with_name()` start another
+OS thread with the same runtime configuration. ntex server workers are arbiter
+threads too.
 
-`Arbiter::current()` returns the arbiter for the current thread and panics when
-called outside one. For an arbiter created with `new()` or `with_name()`,
-`stop()` requests shutdown and `join()` waits for its thread to exit.
+`Arbiter::current()` returns the arbiter for the current thread and panics
+outside one. For an arbiter created with `new()` or `with_name()`, `stop()`
+asks it to shut down and `join()` waits for its thread to exit.
 
 The primary arbiter runs on the thread that started the system. It cannot be
-stopped independently, has no owned thread handle, and `join()` returns
-immediately. Stop the `System` to end the primary arbiter.
+stopped on its own, has no thread handle, and its `join()` returns
+immediately. Stop the `System` to end it.
 
-The two levels have different shutdown scopes:
+The two levels shut down different things:
 
 * `Arbiter::stop()` stops one separately created runtime thread;
 * `System::stop()` stops every registered arbiter and ends the system.
 
-The runtime also offers two typed storage scopes. `System::get_value()` stores
-a thread-safe value shared by the complete system, while
-`Arbiter::get_value()` stores a cloneable value local to one runtime thread.
-The latter is useful for per-worker clients or caches that should not be
-shared.
+There are also two scopes for typed storage. `System::get_value()` stores a
+thread-safe value shared by the whole system, while `Arbiter::get_value()`
+stores a cloneable value local to one runtime thread. The latter is handy for
+per-worker clients or caches that should not be shared.
 
 [`Arbiter`]: https://docs.ntex.rs/api/ntex_rt/struct.Arbiter.html
 
 ## Blocking work
 
-Blocking an arbiter thread pauses connection handling, timers, and every other
+Blocking an arbiter thread stalls connection handling, timers, and every other
 task on that thread. Move CPU-heavy work and blocking system calls to
 [`spawn_blocking()`]:
 
@@ -429,10 +248,10 @@ async fn main() {
 }
 ```
 
-The closure and its result must implement `Send`. Inside a system, the work
-runs on a dynamically sized blocking pool. The pool allows up to 256 workers
-by default, and an idle worker exits after 60 seconds. Configure those values
-with `thread_pool_limit()` and `thread_pool_recv_timeout()`:
+The closure and its result must be `Send`. Inside a system, the work runs on a
+blocking pool that grows and shrinks as needed. By default the pool allows up
+to 256 threads, and an idle thread exits after 60 seconds. Change these with
+`thread_pool_limit()` and `thread_pool_recv_timeout()`:
 
 ```rust,no_run
 use std::time::Duration;
@@ -446,66 +265,66 @@ fn main() {
 }
 ```
 
-If `spawn_blocking()` is called outside a running system, it does **not**
-create a background worker. The closure runs immediately on the calling thread
-and the returned future is already ready. Treat that as a fallback, not as a
-way to start asynchronous work before the runtime.
+Outside a running system, `spawn_blocking()` does **not** start a background
+thread. The closure runs immediately on the calling thread, and the returned
+future is already complete. Treat this as a fallback, not as a way to start
+work before the runtime is up.
 
-Dropping the returned future prevents queued work from starting, but cannot
-interrupt a closure that is already running. Use `detach()` when queued work
-should continue even if nobody needs its result. Cancellation and closure
-panics are reported as `BlockingError`.
+Dropping the returned future stops queued work from starting, but it cannot
+interrupt a closure that is already running. Call `detach()` if the work should
+go ahead even when nobody needs the result. Cancellation and panics in the
+closure are reported as `BlockingError`.
 
 [`spawn_blocking()`]: https://docs.ntex.rs/api/ntex_rt/fn.spawn_blocking.html
 
 ## Runtime diagnostics
 
-The system pings spawned arbiters every two seconds and keeps their ten most
-recent round-trip records. `System::list_arbiter_pings()` exposes those
-records. Set `ping_interval(0)` to disable pings.
+The system pings each spawned arbiter every two seconds and keeps the ten most
+recent round-trip times, which `System::list_arbiter_pings()` returns. Set
+`ping_interval(0)` to turn pings off.
 
-Every arbiter also samples its scheduling latency every `latency_interval()`,
+Each arbiter also measures its scheduling latency every `latency_interval()`,
 100 milliseconds by default. `Arbiter::latency()` returns a histogram of how
-late the samples woke up. A watchdog thread marks an arbiter as stalled when it
-records no sample for longer than the interval plus `ping_threshold()`, which
-defaults to one second, and counts stalls in `Arbiter::latency()`. Set
-`latency_interval(0)` to disable sampling and stall detection.
+late those measurements woke up. A watchdog thread marks an arbiter as stalled
+when it records no measurement for longer than the interval plus
+`ping_threshold()` (one second by default), and `Arbiter::latency()` counts
+the stalls. Set `latency_interval(0)` to turn off both measurement and stall
+detection.
 
-On the default neon runtime, `Handle::current_task()` returns the spawn
-location of the task the runtime is polling, and the stall log names it. A
-stall without a running task happens in the driver. Tasks spawned by ntex
-itself report the location inside ntex. The tokio and compio runtimes return
-`None`.
+On the native (neon) runtime, `Handle::current_task()` returns the spawn
+location of the task being polled, and the stall log includes it. A stall with
+no running task happened in the driver. Tasks that ntex spawns itself report a
+location inside ntex. On Tokio and Compio, `current_task()` returns `None`.
 
-The neon runtime also counts self-wakes, wakes a task triggers while it is
-being polled, in `Handle::self_wake_count()`. A task that wakes itself 10000
-times in a row over at least one second without waiting for anything is logged
-once with its spawn location as a possible busy loop. Change the limits with
-`RuntimeBuilder::self_wake_threshold()`; a count of zero disables the warning.
+The native runtime also counts self-wakes, that is, wakes a task triggers while
+it is being polled, in `Handle::self_wake_count()`. If a task wakes itself
+10,000 times in a row over at least one second without waiting for anything,
+it is logged once, with its spawn location, as a possible busy loop. Adjust the
+limits with `RuntimeBuilder::self_wake_threshold()`; a count of zero turns the
+warning off.
 
 On Linux and Windows, `System::set_latency_callback()` can receive a backtrace
-when an arbiter stalls, together with the spawn location of the running task
-when it is still the same task after the capture; without a callback the
-backtrace is logged.
-On Linux, backtrace capture requires ntex signal handling and uses `SIGUSR2`;
-an embedding application should not reserve that signal for another purpose.
-On Windows, the watchdog briefly suspends the stalled arbiter thread and walks
+of a stalled arbiter. If the same task is still running after the capture, the
+callback also gets its spawn location. Without a callback, the backtrace is
+logged. On Linux, capturing a backtrace requires ntex signal handling and uses
+`SIGUSR2`, so an embedding application should not use that signal for anything
+else. On Windows, the watchdog briefly suspends the stalled thread and walks
 its stack (x86_64 and aarch64 only).
 
 ## Custom runners
 
 `System::build().build(...)` accepts any implementation of `ntex_rt::Runner`.
-This is an advanced integration point, not merely an executor switch: ntex
-networking also expects a compatible reactor on every runtime thread. A custom
-runner must establish everything expected by the selected backend.
+This is an advanced integration point, not just a way to swap executors: ntex
+networking also expects a compatible reactor on every runtime thread, and a
+custom runner must set up everything the chosen backend relies on.
 
-Use `DefaultRuntime` unless the application deliberately provides both sides
-of that integration.
+Stick with `DefaultRuntime` unless the application deliberately provides both
+halves of that integration.
 
 ## Runtime attributes
 
-`#[ntex::main]` turns an async function into a synchronous entry point, builds
-a `System`, and drives the function's future:
+`#[ntex::main]` turns an async function into a synchronous entry point. It
+builds a `System` and drives the function's future:
 
 ```rust
 #[ntex::main]
@@ -514,13 +333,13 @@ async fn main() {
 }
 ```
 
-Supported options are:
+It accepts these options:
 
-* `name = "..."` for the system name;
+* `name = "..."` sets the system name;
 * `signals = true` or `false`;
 * `panic_handling = true` or `false`;
-* `ping_interval = N` in milliseconds, where zero disables arbiter pings;
-* `rt = Type` to select a custom runtime runner.
+* `ping_interval = N` in milliseconds, where zero turns off arbiter pings;
+* `rt = Type` selects a custom runtime runner.
 
 For example:
 
@@ -536,11 +355,11 @@ async fn main() {
 }
 ```
 
-The async function may return a value such as `Result<(), E>`; the generated
-synchronous function returns the root future's output.
+The async function can return a value such as `Result<(), E>`, and the
+generated synchronous function returns it.
 
 `#[ntex::test]` creates a fresh system named after the test, marks it as a
-testing system, disables signal and panic handling, and initializes ntex test
+test system, turns off signal and panic handling, and sets up ntex test
 logging:
 
 ```rust
@@ -551,16 +370,197 @@ async fn runtime_test() {
 }
 ```
 
-Test logging initialization is skipped when the `no-test-logging` feature is
-enabled.
+The `no-test-logging` feature skips the logging setup.
 
-The useful boundaries to remember are:
+The main points to remember:
 
-* local tasks may be non-`Send`, but cross-arbiter work must be `Send`;
+* local tasks can be non-`Send`, but work sent to another arbiter must be
+  `Send`;
 * dropping a join handle does not stop its task;
 * blocking closures belong in `spawn_blocking`;
-* ntex timers keep code independent of the selected backend;
-* stop a separately created `Arbiter` for one runtime thread and the `System`
-  for the whole runtime;
+* ntex timers keep code independent of the backend;
+* stop an `Arbiter` you created to end one runtime thread, and the `System` to
+  end the whole runtime;
 * use `DefaultRuntime` unless the application also provides the matching ntex
   network reactor.
+
+## Native runtime
+
+The native runtime, called neon (hence the `neon-polling` and `neon-uring`
+features), has two parts: a task runner that polls futures, and a reactor that
+performs I/O. The task runner is the same on every platform. The reactor
+depends on the platform: io_uring or polling on Linux, polling on other Unix
+systems, and IOCP on Windows.
+
+Like the rest of ntex, the runtime is single-threaded and shares nothing. Each
+runtime thread runs its own tasks, and a task never moves to another thread.
+
+What sets it apart from Tokio or async-task is how tasks are woken. Rust's
+standard `Waker` must be `Send + Sync`, because any thread can hold a clone
+and call `wake()`. Tokio and async-task meet that requirement by synchronizing
+every waker operation: reference counts and task state are atomics, so each
+clone, wake, and drop pays for synchronization, even on the task's own thread.
+
+The native runtime separates local and remote access instead. A waker detects
+whether it is used on the thread that owns the task or on another thread:
+
+* **On the owner thread**, task state and reference counts are plain values
+  wrapped in `Cell`. Cloning, waking, and dropping a waker need no atomic
+  operations, and a woken task goes straight onto the local ready queue.
+* **From another thread**, the waker never touches the task directly. It
+  pushes a command onto a Crossbeam queue, and the owner thread applies it on
+  its next turn.
+
+This is a trade-off. Local wakes are cheaper than in Tokio or async-task, and
+most wakes in an ntex application are local, because a connection's I/O,
+timers, and services all live on one thread. Remote wakes are slower than in
+Tokio or async-task: each one goes through the queue, and the owner thread
+finishes the work later.
+
+The rest of this section covers the mechanics in detail. You do not need it to
+use ntex.
+
+### Owner-thread wake handles
+
+[`ntex_rt::LocalWaker`] is how ntex code takes advantage of local wakes. It is
+an owned wake handle that stays on its owner thread. Do not confuse it with
+`ntex::task::LocalWaker`, which is a notification slot. Timers, I/O waiters,
+and notification slots store these handles internally.
+
+Creating a `LocalWaker` from a borrowed standard waker checks what kind of
+waker it is, which thread owns the task, and which runtime it belongs to, and
+then takes a local reference to the task. After that, cloning, waking, and
+dropping the handle are local operations with no further thread checks. The
+savings come from keeping the handle: acquiring a new one and converting it
+back every time is not free. `into_waker()` consumes the handle and returns a
+thread-safe standard waker; for native tasks it takes the standard-waker
+reference before releasing the local one. The handle itself cannot cross
+threads.
+
+On 64-bit targets, the handle, `Option<LocalWaker>`, and the notification slot
+are each 16 bytes, and neither native nor fallback handles allocate a wrapper.
+A native task is a single allocation that holds its routing metadata, its
+pinned execution core, and the storage for its future and result. There is no
+separate wake-token allocation and no per-task lookup table. The remote
+command queue does allocate segments, and arbitrary waker callbacks, timers,
+and I/O storage may allocate as they grow.
+
+All of this speeds up a hot path; it does not guarantee faster scheduling or
+request handling. Registering the same waker again still pays for checking its
+kind. Tokio, Compio, and wrapped or custom wakers keep their original
+callbacks and may pay a small extra dispatch cost.
+
+### Remote wakes
+
+Only the owner thread changes a task's reference count, even after the task
+completes. A standard native waker used on another thread therefore never
+touches the count. Instead, it publishes reference and wake commands to the
+owner through a Crossbeam FIFO. On 64-bit targets each command is one
+pointer-sized word, with the operation stored in the three low bits that task
+alignment leaves free. The encoding preserves pointer provenance, and the tag
+is removed before the task is accessed. Other targets store the pointer and the
+operation separately, without increasing task alignment.
+
+Each task also has a sticky atomic flag. It is set just before the first
+remote waker command for the task is published, and it is never cleared. Tasks
+without the flag release their references directly, including the last one,
+without looking at the FIFO. Submitting a task from another thread does not
+set the flag, because its initial reference passes to the owner before the
+task can hand out a waker.
+
+Once the flag is set, ordering matters. The owner's final release waits behind
+acquisitions that are already queued, and while commands are pending, the
+owner's other releases go through the queue too. Otherwise a release could
+overtake an earlier queued release and invalidate a later wake or acquisition.
+When a remotely cloned waker returns to the owner, the flag store is
+synchronized; until then, the waker it was cloned from keeps the allocation
+alive. Processing a queued command also synchronizes with the flag store. The
+flag is only shared metadata; remote threads never update the reference count.
+
+### Task completion
+
+When a task completes, its future is dropped. Its storage stays allocated while
+any native standard waker, local handle, or join handle still points to it,
+and a join handle also owns the result until it is taken. This leftover storage
+is not a running future. Dropping the join handle frees the result, whether or
+not wake handles remain.
+
+The list of unfinished tasks does not own them, so it never keeps an orphaned
+future alive.
+
+### Routing remote commands
+
+A global registry maps runtime IDs, which are never reused, to runtimes, so a
+standard waker can find where to send its commands. Each remote thread caches
+an owned reference to the last runtime endpoint it used. A cache hit skips the
+registry lookup and the per-operation reference counting on the queue.
+
+Remote waker commands and unpolled submissions reserve admission before they
+publish, so shutdown waits for work that was already accepted, even when the
+publisher bypassed the registry. A cached endpoint that has closed rejects new
+work. Notifications run only after admission, registry locks, and cache borrows
+are released. When the cache evicts an endpoint, it drops the old one outside
+any locks or borrows and before admitting the new operation, so driver
+destructors can safely re-enter. Wakers used while thread-locals are being
+destroyed fall back to the registry.
+
+The owner thread has its own cache: the last runtime ID it checked and whether
+that endpoint is open. A hit also proves that the current thread owns the
+runtime, which saves a separate thread-ID lookup; a miss checks ownership
+before consulting the registry. Shutdown records the closed state in this
+cache before running callbacks, and because IDs are never reused, that entry
+stays correct. This cache holds no queue reference. Switching between runtimes
+on one thread goes back to the registry.
+
+Unpolled `Send` submissions travel through the same FIFO as remote wakes. Once
+a task is running, all of its state, references, join results, and awaiters
+are owner-local, and local wakes use the intrusive local ready queue. Native
+join awaiters hold `LocalWaker`s, which can still be released after they
+unregister.
+
+Each task stores a raw pointer to its queue that only the owner thread uses,
+rather than a strong or weak reference. Unfinished tasks use it while their
+runtime or runner keeps the queue alive; completed tasks need a live endpoint
+before they borrow it. Deferred releases on a busy owner publish without taking
+a temporary strong queue reference, but releases that may send a notification
+or run shutdown cleanup still take one. Cleanup that can run callbacks resolves
+the runtime ID to a strong queue reference outside the registry lock.
+
+### Limits and memory layout
+
+Runtime IDs and owner-thread indexes are 16 bits, which keeps the task core at
+80 bytes on 64-bit targets. A process can create at most 65,535 native
+runtimes, and at most 65,535 threads can own one. Neither is reused, and the
+process aborts if either runs out. Threads that only wake tasks or spawn
+through a `Handle` do not use an index. The fields used by wakes, runs, and
+releases sit in the first 64 bytes of the core, and the task-list links, used
+only on spawn, completion, and shutdown, come last. Task allocations are not
+cache-line aligned, so this makes single-cache-line access more likely but
+does not guarantee it.
+
+After running local tasks, the scheduler checks whether the remote FIFO is
+empty before trying to pop from it, avoiding the full memory fence that an
+empty pop costs. It still rechecks readiness afterward, so a command published
+in the meantime either keeps the runtime polling or wakes the driver. A
+non-empty FIFO is drained in order, within the same per-turn budget as before.
+
+### Shutdown
+
+Shutdown closes admission, disables the runtime's wake endpoint, drains
+accepted commands, and drops live futures on their owner thread. The closed
+registry entry stays available for owner cleanup, including panic cleanup,
+until draining finishes. Only then is it removed, so owner releases cannot
+overtake pending commands. After that, standard-waker operations are ignored,
+and cloning such a waker produces an inert one.
+
+**Standard wakers still alive at shutdown permanently keep their task
+allocations**, even after they are dropped. This is retained memory, not
+continued execution: task allocations do not keep the driver or the queue's
+backing memory alive. Separately, a remote thread's endpoint cache can keep one
+closed queue and its driver alive until it caches a different endpoint or the
+thread exits. Owner-local handles can still be released after shutdown without
+touching the possibly dangling queue pointer. If reclaiming task memory
+matters, drop standard wakers and let the owner process their queued releases
+before shutdown.
+
+[`ntex_rt::LocalWaker`]: https://docs.ntex.rs/api/ntex_rt/struct.LocalWaker.html
