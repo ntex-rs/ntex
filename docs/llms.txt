@@ -485,6 +485,7 @@ async fn main() -> std::io::Result<()> {
 - [Securing Connections with TLS](https://docs.ntex.rs/10-tls.html): backend and component configuration, identities, peer certificates, and mutual authentication
 - [Making HTTP Requests](https://docs.ntex.rs/13-client.html): the `ntex::client` HTTP/1.1 and HTTP/2 client, connection pooling, `ClientConfig` and timeouts, TLS connectors, request bodies, reading responses, and client middleware
 - [HTTP/2 with ntex-h2](https://docs.ntex.rs/14-h2.html): standalone HTTP/2 client and server, `ServiceConfig`, pooled and single-connection clients, streams and resets, `Capacity` and flow control, publish and control services
+- [MQTT with ntex-mqtt](https://docs.ntex.rs/15-mqtt.html): MQTT 3.1.1 and 5 clients and servers, `MqttServiceConfig`, publishing and acks, streaming payloads, flow control, subscriptions, routing, `MqttSink`, protocol and control services
 - [Timers and Time Utilities](https://docs.ntex.rs/12-time.html): timer wheel design and precision, `Millis` and `Seconds`, `sleep`, `deadline`, `timeout`, `interval`, and callback timers
 
 ## API
