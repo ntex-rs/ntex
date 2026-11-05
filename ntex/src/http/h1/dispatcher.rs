@@ -112,6 +112,14 @@ where
             },
         }
     }
+
+    /// Shuts down the per-connection application and control services.
+    pub(in crate::http) async fn shutdown_services(&self) {
+        self.inner.service.shutdown().await;
+        if let Some(ctl) = &self.inner.control {
+            ctl.shutdown().await;
+        }
+    }
 }
 
 impl<F, B, Err> future::Future for Dispatcher<F, B, Err>
