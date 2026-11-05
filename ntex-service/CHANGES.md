@@ -1,5 +1,11 @@
 # Changes
 
+## [5.7.1] - 2026-11-05
+
+* Prune `ReadyNotifier` subscriptions and pipeline links of dropped scopes,
+  releasing their waiter stores; long-lived notifiers no longer grow with every
+  subscribed connection
+
 ## [5.7.0] - 2026-11-04
 
 * Require matching error types when constructing `ServiceChain::and_then` and

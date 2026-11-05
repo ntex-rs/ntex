@@ -365,6 +365,113 @@ fn pipeline_links_retain_only_store_allocations() {
     assert!(endpoint.resolve().is_none());
 }
 
+/// STATEMENT: Notifier entries for dropped scopes are pruned as subscriptions grow and their stores are released.
+///
+/// HOW:
+/// - Subscribe two live roots, one twice, then subscribe and drop 1000 short-lived roots.
+/// - Verify the entry list and retained waiter stores stay bounded.
+/// - Notify and verify live entries keep registration order and duplicate delivery.
+#[test]
+fn notifier_prunes_dropped_subscriptions() {
+    let source = ReadyNotifier::new();
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let first = crate::ctx::WaitersRef::new();
+    let second = crate::ctx::WaitersRef::new();
+    for (label, waiters) in [(1, &first), (2, &second)] {
+        let captured = order.clone();
+        waiters.scope().on_notify(&ReadyCallback::new(move |_| {
+            captured.borrow_mut().push(label);
+        }));
+    }
+    first.scope().subscribe(&source);
+    let mut stores = Vec::new();
+    for idx in 0..1000 {
+        if idx == 500 {
+            second.scope().subscribe(&source);
+            first.scope().subscribe(&source);
+        }
+        let waiters = crate::ctx::WaitersRef::new();
+        waiters.scope().subscribe(&source);
+        stores.push(Rc::downgrade(&waiters.scope().bound().store));
+    }
+    assert!(source.0.borrow().len() <= PRUNE_MIN);
+    let retained = stores.iter().filter(|s| s.strong_count() > 0).count();
+    assert!(retained < PRUNE_MIN, "retained {retained} stores");
+
+    source.notify();
+    assert_eq!(*order.borrow(), [1, 2, 1]);
+    assert_eq!(source.0.borrow().len(), 3);
+    assert!(stores.iter().all(|s| s.strong_count() == 0));
+}
+
+/// STATEMENT: Notification prunes entries only when most of them belong to dropped scopes.
+///
+/// HOW:
+/// - Subscribe ten roots, below the subscription pruning threshold, and drop six.
+/// - Notify and verify the dead entries and their stores are released.
+/// - Drop one more root and verify a minority of dead entries is kept.
+#[test]
+fn notification_prunes_mostly_dropped_subscriptions() {
+    let source = ReadyNotifier::new();
+    let mut live: Vec<_> = (0..10).map(|_| crate::ctx::WaitersRef::new()).collect();
+    for waiters in &live {
+        waiters.scope().subscribe(&source);
+    }
+    let dropped: Vec<_> = live
+        .drain(..6)
+        .map(|waiters| Rc::downgrade(&waiters.scope().bound().store))
+        .collect();
+    assert_eq!(source.0.borrow().len(), 10);
+    assert!(dropped.iter().all(|s| s.strong_count() == 1));
+    source.notify();
+    assert_eq!(source.0.borrow().len(), 4);
+    assert!(dropped.iter().all(|s| s.strong_count() == 0));
+    for waiters in &live {
+        assert_eq!(waiters.scope().generation().value, 1);
+    }
+
+    drop(live.pop());
+    source.notify();
+    assert_eq!(source.0.borrow().len(), 4);
+    for waiters in &live {
+        assert_eq!(waiters.scope().generation().value, 2);
+    }
+}
+
+/// STATEMENT: A long-lived pipeline prunes links from dropped foreign subscribers.
+///
+/// HOW:
+/// - Link 1000 short-lived roots and one live root to a long-lived source pipeline.
+/// - Verify the source's external parents and retained stores stay bounded.
+/// - Notify the source and verify the live subscriber is still invalidated.
+#[test]
+fn pipeline_links_prune_dropped_subscribers() {
+    let source_store = crate::ctx::WaitersRef::new();
+    let link = source_store.scope().readiness_link();
+    let live = crate::ctx::WaitersRef::new();
+    live.scope().subscribe_pipeline(&link);
+    let mut stores = Vec::new();
+    for _ in 0..1000 {
+        let waiters = crate::ctx::WaitersRef::new();
+        waiters.scope().subscribe_pipeline(&link);
+        stores.push(Rc::downgrade(&waiters.scope().bound().store));
+    }
+    let parents = || {
+        source_store
+            .scope()
+            .with(|s| s.external_parents.borrow().len())
+    };
+    assert!(parents() <= PRUNE_MIN);
+    let retained = stores.iter().filter(|s| s.strong_count() > 0).count();
+    assert!(retained < PRUNE_MIN, "retained {retained} stores");
+
+    let source = ReadyNotifier::new();
+    source_store.scope().subscribe(&source);
+    assert!(live.scope().set_ready(live.scope().generation()));
+    source.notify();
+    assert!(!live.scope().is_ready());
+}
+
 /// STATEMENT: Callback delivery rejects conflicting scope-table and callback-list mutations.
 ///
 /// HOW:

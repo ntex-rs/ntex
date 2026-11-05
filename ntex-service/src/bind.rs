@@ -85,7 +85,8 @@ impl<'a> BindCtx<'a> {
     /// Subscriptions are appended without deduplication and persist across
     /// completed or cancelled checks. Repeated subscriptions cause repeated
     /// invalidations and callback delivery. Entries for dropped scopes are
-    /// ignored and remain stored until the source is dropped.
+    /// ignored and pruned as later subscriptions grow the source; see
+    /// [`ReadyNotifier`].
     ///
     /// # Panics
     ///
