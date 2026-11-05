@@ -1,4 +1,4 @@
-use std::cell::{Cell, OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, Ref, RefCell};
 use std::future::{Future, poll_fn};
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -83,8 +83,10 @@ impl fmt::Debug for ReadyCallback {
 /// and persist until the scope or source is dropped, even after a readiness
 /// check completes or is cancelled. Repeated subscriptions are not deduplicated
 /// and cause repeated invalidations and callback delivery. Entries for dropped
-/// scopes are ignored and remain stored until the source is dropped. These
-/// entries retain waiter-store allocations, but not retired scope resources.
+/// scopes are ignored and pruned when later subscriptions double the number of
+/// entries, or when a notification finds more than half of them dropped. Until
+/// pruned, these entries retain waiter-store allocations, but not retired scope
+/// resources.
 ///
 /// Notify after any change that can affect readiness, including consuming the
 /// last available slot and releasing capacity. The change and notification must
@@ -93,7 +95,7 @@ impl fmt::Debug for ReadyCallback {
 /// This type is neither `Send` nor `Sync`.
 /// Register sources with [`crate::BindCtx::subscribe`] in [`crate::Service::bind`].
 #[derive(Clone, Debug, Default)]
-pub struct ReadyNotifier(Rc<RefCell<Vec<Endpoint>>>);
+pub struct ReadyNotifier(Rc<Endpoints>);
 
 impl ReadyNotifier {
     /// Creates an independent notification source.
@@ -123,19 +125,27 @@ impl ReadyNotifier {
     /// already being delivered on this thread. Subscribing to this source or
     /// mutating borrowed scope or callback storage during delivery also panics.
     pub fn notify(&self) {
+        let mut prune = false;
         with_notification(|epoch| {
             let scopes = self.0.borrow();
+            let mut dead = 0;
             // Direct subscribers must not also be delivered as ancestors.
             for endpoint in &*scopes {
-                endpoint
+                let live = endpoint
                     .store
                     .scopes
                     .with(endpoint.scope, |s| s.direct_epoch.set(epoch));
+                dead += usize::from(live.is_none());
             }
+            prune = dead * 2 > scopes.len();
             for endpoint in &*scopes {
                 notify_scope(&endpoint.store, endpoint.scope, epoch, true, true);
             }
         });
+        if prune {
+            // Dropped after delivery and all borrows end; may release waiter stores.
+            drop(self.0.prune());
+        }
     }
 }
 
@@ -270,8 +280,9 @@ fn link<T: PartialEq>(links: &RefCell<Vec<T>>, item: T) -> bool {
 /// Registrations belong to the subscribing scope, not this handle. Dropping a
 /// temporary link does not unsubscribe it. Links become inert when their source
 /// pipeline is dropped. Links and registrations retain the waiter-store
-/// allocation, but not retired scope resources. This type is neither `Send` nor
-/// `Sync`.
+/// allocation, but not retired scope resources. Registrations of dropped scopes
+/// are pruned when later registrations on the same source double their number.
+/// This type is neither `Send` nor `Sync`.
 #[derive(Clone)]
 pub struct ReadyLink {
     store: Rc<WaitersInner>,
@@ -298,6 +309,17 @@ impl PartialEq for Endpoint {
     }
 }
 
+impl Endpoint {
+    /// Returns false once the scope is retired; IDs are never reused.
+    ///
+    /// Treats a mutably borrowed scope table as live.
+    fn is_live(&self) -> bool {
+        self.store.scopes.slots.try_borrow().map_or(true, |slots| {
+            slots.get(self.scope).is_some_and(Option::is_some)
+        })
+    }
+}
+
 impl fmt::Debug for Endpoint {
     /// Formats the store address and scope ID without accessing scope storage.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -305,6 +327,61 @@ impl fmt::Debug for Endpoint {
             .field("store", &Rc::as_ptr(&self.store))
             .field("scope", &self.scope)
             .finish()
+    }
+}
+
+/// Minimum number of entries before subscription pruning is considered.
+const PRUNE_MIN: usize = 32;
+
+/// Registered endpoints, pruned of retired scopes as the list grows.
+///
+/// Subscription prunes once the list reaches twice its size after the previous
+/// prune, keeping amortized cost constant. Pruning preserves order and
+/// duplicates of live entries. Removed endpoints are returned so callers can
+/// drop them after releasing borrows, since a final store release can drop
+/// wakers and other reentrant resources.
+#[derive(Debug, Default)]
+struct Endpoints {
+    list: RefCell<Vec<Endpoint>>,
+    prune_at: Cell<usize>,
+}
+
+impl Endpoints {
+    /// Borrows the registered endpoints in registration order.
+    fn borrow(&self) -> Ref<'_, Vec<Endpoint>> {
+        self.list.borrow()
+    }
+
+    /// Appends an endpoint, skipping an existing equal entry if `dedup` is set.
+    ///
+    /// Panics if the list is already borrowed.
+    #[must_use]
+    fn push(&self, endpoint: Endpoint, dedup: bool) -> Vec<Endpoint> {
+        let mut list = self.list.borrow_mut();
+        let dead = if list.len() >= self.prune_at.get().max(PRUNE_MIN) {
+            self.extract_dead(&mut list)
+        } else {
+            Vec::new()
+        };
+        if !dedup || !list.contains(&endpoint) {
+            list.push(endpoint);
+        }
+        dead
+    }
+
+    /// Removes retired entries, doing nothing while the list is borrowed.
+    #[must_use]
+    fn prune(&self) -> Vec<Endpoint> {
+        self.list
+            .try_borrow_mut()
+            .map(|mut list| self.extract_dead(&mut list))
+            .unwrap_or_default()
+    }
+
+    fn extract_dead(&self, list: &mut Vec<Endpoint>) -> Vec<Endpoint> {
+        let dead = list.extract_if(.., |e| !e.is_live()).collect();
+        self.prune_at.set(list.len() * 2);
+        dead
     }
 }
 
@@ -483,14 +560,16 @@ impl ReadyScope {
     /// Panics if the source is live but this handle is unbound, or if registration
     /// conflicts with a borrow of the source's parent list.
     pub(crate) fn subscribe_pipeline(&self, source_link: &ReadyLink) {
-        source_link.store.scopes.with(0, |source| {
+        // Pruned endpoints are dropped after the source table borrow ends.
+        let _dead = source_link.store.scopes.with(0, |source| {
             let scope = self.bound();
             if Rc::ptr_eq(&scope.store, &source_link.store) {
                 if scope.id != 0 {
                     link(&source.parents, scope.id);
                 }
+                Vec::new()
             } else {
-                link(&source.external_parents, self.endpoint());
+                source.external_parents.push(self.endpoint(), true)
             }
         });
     }
@@ -558,10 +637,10 @@ impl ReadyScope {
     /// Appends a persistent notifier subscription during service initialization.
     ///
     /// Does not deduplicate: repeated subscriptions cause repeated direct delivery.
+    /// Prunes retired entries as the list grows.
     /// Panics if this handle is unbound or the source is delivering a notification.
     pub(crate) fn subscribe(&self, source: &ReadyNotifier) {
-        let endpoint = self.endpoint();
-        source.0.borrow_mut().push(endpoint);
+        let _dead = source.0.push(self.endpoint(), false);
     }
 
     /// Sets the callback payload before forwarding service binding.
@@ -717,7 +796,7 @@ struct ScopeInner {
     direct_epoch: Cell<u64>,
     callbacks: RefCell<Vec<ReadyCallback>>,
     parents: RefCell<Vec<usize>>,
-    external_parents: RefCell<Vec<Endpoint>>,
+    external_parents: Endpoints,
     observers: ReadyObservers,
 }
 
@@ -734,7 +813,7 @@ impl Default for ScopeInner {
             direct_epoch: Cell::default(),
             callbacks: RefCell::default(),
             parents: RefCell::default(),
-            external_parents: RefCell::default(),
+            external_parents: Endpoints::default(),
             observers: ReadyObservers::default(),
         }
     }
