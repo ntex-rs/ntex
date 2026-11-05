@@ -55,6 +55,64 @@ async fn test_h1() {
     assert!(response.status().is_success());
 }
 
+/// Counts shutdowns of the wrapped service.
+struct ShutdownCount<S> {
+    svc: S,
+    shutdowns: Arc<AtomicUsize>,
+}
+
+impl<St, Req, S: ntex::Service<St, Req>> ntex::Service<St, Req> for ShutdownCount<S> {
+    type Res = S::Res;
+    type Error = S::Error;
+
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+        ctx.call(&self.svc, req).await
+    }
+
+    async fn shutdown(&self, _: Ctx<'_, Self, St>) {
+        self.shutdowns.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// STATEMENT: HTTP/1 shuts down the per-connection application and control services
+/// when the connection ends.
+///
+/// HOW:
+/// - Wrap the application and control services with shutdown counters.
+/// - Serve one request with keep-alive disabled.
+/// - Wait until each counter reaches one.
+#[ntex::test]
+async fn test_h1_shuts_down_connection_services() {
+    let app = Arc::new(AtomicUsize::new(0));
+    let ctl = Arc::new(AtomicUsize::new(0));
+    let (app2, ctl2) = (app.clone(), ctl.clone());
+
+    let srv = test::server_with_config(
+        async move |_| {
+            let (app, ctl) = (app2.clone(), ctl2.clone());
+            HttpService::h1(ntex::service::fn_factory(async move |_: &_| {
+                Ok::<_, io::Error>(ShutdownCount {
+                    svc: fn_service(async |_: Request| Ok::<_, io::Error>(Response::Ok().build())),
+                    shutdowns: app.clone(),
+                })
+            }))
+            .control(ntex::service::fn_factory(async move |_: &_| {
+                Ok::<_, io::Error>(ShutdownCount {
+                    svc: fn_service(async |msg: Control<_, _>| Ok::<_, io::Error>(msg.ack())),
+                    shutdowns: ctl.clone(),
+                })
+            }))
+        },
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
+    );
+
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
+    assert!(response.status().is_success());
+    wait_for(|| app.load(Ordering::Relaxed) == 1 && ctl.load(Ordering::Relaxed) == 1)
+        .await
+        .unwrap();
+}
+
 /// STATEMENT: Opt-in HTTP/1 decoding normalizes targets before application filters and routing.
 ///
 /// HOW:

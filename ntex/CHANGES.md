@@ -1,5 +1,11 @@
 # Changes
 
+## [4.6.1] - Unreleased
+
+* web: Fix resource shutdown not reaching its filter, routes, and default service
+
+* http: Fix HTTP/1 not shutting down per-connection application and control services
+
 ## [4.6.0] - 2026-11-04
 
 * server: Test-server service factories now receive worker state. Replace

@@ -144,14 +144,26 @@ where
 {
     // Notify control service
     let io = if let Some(ctl) = &ctl {
-        let ack = ctl.call(Control::connect(id, io)).await?;
-        let ControlResult::Connect(io) = ack.result else {
-            unreachable!();
-        };
-        io
+        match ctl.call(Control::connect(id, io)).await {
+            Ok(ack) => {
+                let ControlResult::Connect(io) = ack.result else {
+                    unreachable!();
+                };
+                io
+            }
+            Err(err) => {
+                svc.shutdown().await;
+                ctl.shutdown().await;
+                return Err(err);
+            }
+        }
     } else {
         io
     };
 
-    Dispatcher::new(id, io, svc, ctl, config).await
+    // services are created per connection, shut them down once it ends
+    let mut disp = std::pin::pin!(Dispatcher::new(id, io, svc, ctl, config));
+    let result = disp.as_mut().await;
+    disp.as_ref().get_ref().shutdown_services().await;
+    result
 }

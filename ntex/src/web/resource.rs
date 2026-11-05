@@ -744,6 +744,16 @@ where
         Ok(())
     }
 
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.shutdown(&self.filter).await;
+        for route in &self.routes {
+            ctx.shutdown(route).await;
+        }
+        if let Some(default) = &self.default {
+            ctx.shutdown(default).await;
+        }
+    }
+
     async fn call(
         &self,
         req: WebRequest<In>,
@@ -916,6 +926,58 @@ mod tests {
         filter.changed.notify();
         assert_eq!(call.await.unwrap().status(), StatusCode::OK);
         assert_eq!((filter.binds.get(), default.binds.get()), (1, 1));
+    }
+
+    /// STATEMENT: Shutting down a resource shuts down its filter and fallback services.
+    ///
+    /// HOW:
+    /// - Build a resource whose filter and default service count `shutdown` calls.
+    /// - Shut down the resource pipeline and assert each counter is exactly one.
+    #[crate::rt_test]
+    async fn shutdown_reaches_filter_and_fallback() {
+        use std::{cell::Cell, rc::Rc};
+
+        use crate::service::{Ctx, Service, ServiceFactory, fn_factory};
+
+        struct Counted(Rc<Cell<usize>>);
+
+        impl Service<(), WebRequest<()>> for Counted {
+            type Res = WebRequest<()>;
+            type Error = Infallible;
+
+            async fn call(
+                &self,
+                req: WebRequest<()>,
+                _: Ctx<'_, Self>,
+            ) -> Result<WebRequest<()>, Infallible> {
+                Ok(req)
+            }
+
+            async fn shutdown(&self, _: Ctx<'_, Self>) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let filter = Rc::new(Cell::new(0));
+        let default = Rc::new(Cell::new(0));
+        let factory = |count: Rc<Cell<usize>>| {
+            fn_factory(async move |(): &()| Ok::<_, Infallible>(Counted(count.clone())))
+        };
+        let srv = crate::factory(
+            web::resource("/test")
+                .filter(factory(filter.clone()))
+                .route(web::get().to(async || HttpResponse::Ok()))
+                .default_service(
+                    factory(default.clone())
+                        .map(|req: WebRequest<()>| req.into_response(HttpResponse::Created())),
+                ),
+        )
+        .pipeline(())
+        .await
+        .unwrap();
+
+        srv.shutdown().await;
+        assert_eq!((filter.get(), default.get()), (1, 1));
     }
 
     /// STATEMENT: `Resource::to` supports handlers that complete asynchronously.
