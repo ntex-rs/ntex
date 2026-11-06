@@ -1,13 +1,11 @@
 //! Json extractor/responder
-use std::{fmt, future::Future, ops, pin::Pin, sync::Arc, task::Context, task::Poll};
+use std::task::{Context, Poll, ready};
+use std::{fmt, future::Future, marker::PhantomData, ops, pin::Pin, sync::Arc};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-#[cfg(feature = "compress")]
-use crate::http::encoding::Decoder;
 use crate::http::header::CONTENT_LENGTH;
 use crate::http::{HttpMessage, Payload, Response, StatusCode, error::PayloadError};
-use crate::util::BoxFuture;
 use crate::web::error::{JsonError, JsonPayloadError, WebResponseError};
 use crate::web::{FromRequest, HttpRequest, Responder, State};
 
@@ -282,14 +280,9 @@ impl fmt::Debug for JsonConfig {
 /// * content length is greater than the limit (256k by default; the `Json`
 ///   extractor sets it from [`JsonConfig`], 32k by default)
 struct JsonBody<U> {
-    limit: usize,
-    length: Option<usize>,
-    #[cfg(feature = "compress")]
-    stream: Option<Decoder<Payload>>,
-    #[cfg(not(feature = "compress"))]
-    stream: Option<Payload>,
+    body: Option<super::ReadBody<super::BodyStream>>,
     err: Option<JsonPayloadError>,
-    fut: Option<BoxFuture<'static, Result<U, JsonPayloadError>>>,
+    _t: PhantomData<fn() -> U>,
 }
 
 impl<U> JsonBody<U>
@@ -312,13 +305,7 @@ where
         };
 
         if !json {
-            return JsonBody {
-                limit: 262_144,
-                length: None,
-                stream: None,
-                fut: None,
-                err: Some(JsonPayloadError::ContentType),
-            };
+            return Self::err(JsonPayloadError::ContentType);
         }
 
         let len = match req.headers().get(&CONTENT_LENGTH).map(|l| {
@@ -329,34 +316,29 @@ where
         }) {
             None => None,
             Some(Ok(len)) => Some(len),
-            Some(Err(e)) => {
-                return JsonBody {
-                    limit: 262_144,
-                    length: None,
-                    stream: None,
-                    fut: None,
-                    err: Some(JsonPayloadError::Payload(e)),
-                };
-            }
+            Some(Err(e)) => return Self::err(JsonPayloadError::Payload(e)),
         };
 
-        #[cfg(feature = "compress")]
-        let payload = Decoder::from_headers(payload.take(), req.headers());
-        #[cfg(not(feature = "compress"))]
-        let payload = payload.take();
-
         JsonBody {
-            limit: 262_144,
-            length: len,
-            stream: Some(payload),
-            fut: None,
+            body: Some(super::ReadBody::from_request(req, payload, 262_144).length(len)),
             err: None,
+            _t: PhantomData,
+        }
+    }
+
+    fn err(err: JsonPayloadError) -> Self {
+        JsonBody {
+            body: None,
+            err: Some(err),
+            _t: PhantomData,
         }
     }
 
     /// Change max size of payload. By default max size is 256Kb
     fn limit(mut self, limit: usize) -> Self {
-        self.limit = limit;
+        if let Some(body) = self.body.as_mut() {
+            body.limit = limit;
+        }
         self
     }
 }
@@ -368,29 +350,26 @@ where
     type Output = Result<U, JsonPayloadError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(ref mut fut) = self.fut {
-            return Pin::new(fut).poll(cx);
-        }
-
         if let Some(err) = self.err.take() {
             return Poll::Ready(Err(err));
         }
 
-        let (limit, length) = (self.limit, self.length);
-        if let Some(len) = length
-            && len > limit
+        let body = self.body.as_mut().expect("polled after completion");
+        if let Some(len) = body.length
+            && len > body.limit
         {
             return Poll::Ready(Err(JsonPayloadError::Overflow));
         }
-        let mut stream = self.stream.take().unwrap();
-
-        self.fut = Some(Box::pin(async move {
-            let body = super::read_body(&mut stream, limit, length, |_| JsonPayloadError::Overflow)
-                .await?;
-            Ok(serde_json::from_slice::<U>(&body)?)
-        }));
-
-        self.poll(cx)
+        let body = match ready!(Pin::new(body).poll(cx)) {
+            Ok(body) => body,
+            Err(super::ReadBodyError::Overflow(_)) => {
+                return Poll::Ready(Err(JsonPayloadError::Overflow));
+            }
+            Err(super::ReadBodyError::Payload(err)) => {
+                return Poll::Ready(Err(JsonPayloadError::Payload(err)));
+            }
+        };
+        Poll::Ready(serde_json::from_slice::<U>(&body).map_err(JsonPayloadError::from))
     }
 }
 

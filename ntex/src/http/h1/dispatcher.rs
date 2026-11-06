@@ -303,7 +303,7 @@ where
                         return Poll::Ready(st);
                     }
                     if let Some(item) = decoded.item {
-                        Ok(item)
+                        Ok((item, decoded.remains))
                     } else {
                         // the filter chain pauses reading, the peer is not
                         // charged for it
@@ -318,7 +318,7 @@ where
 
             // decode incoming bytes stream
             let st = match result {
-                Ok((mut req, pl)) => {
+                Ok(((mut req, pl), buffered)) => {
                     log::trace!(
                         "{}: Http message is received: {:?} and payload {:?}",
                         self.io.tag(),
@@ -331,13 +331,17 @@ where
                     match pl {
                         PayloadType::None => (),
                         PayloadType::Payload(decoder) | PayloadType::Stream(decoder) => {
-                            let (ps, pl) = Payload::create();
-                            req.replace_payload(http::Payload::H1(pl));
-                            self.payload = Some((decoder, ps));
+                            if let Some(pl) = self.buffered_payload(&req, &decoder, buffered) {
+                                req.replace_payload(http::Payload::H1(pl));
+                            } else {
+                                let (ps, pl) = Payload::create();
+                                req.replace_payload(http::Payload::H1(pl));
+                                self.payload = Some((decoder, ps));
 
-                            // the client does not send the body before `100 Continue`
-                            if !req.head().expect() {
-                                self.start_payload_timer();
+                                // the client does not send the body before `100 Continue`
+                                if !req.head().expect() {
+                                    self.start_payload_timer();
+                                }
                             }
                         }
                     }
@@ -911,6 +915,31 @@ where
         }
     }
 
+    /// Decodes a `Content-Length` request body that is completely buffered
+    /// together with the request head.
+    ///
+    /// The body is passed to the request without a payload channel, so the
+    /// dispatcher does not read it and does not start the payload timer.
+    fn buffered_payload(
+        &self,
+        req: &Request,
+        decoder: &PayloadDecoder,
+        buffered: usize,
+    ) -> Option<Payload> {
+        let len = decoder.fixed_length()?;
+        // expectations and upgrades hand the following bytes to other handlers
+        if len > buffered as u64 || req.head().expect() || req.upgrade() {
+            return None;
+        }
+        match self.io.decode_item(decoder) {
+            Ok(Decoded {
+                item: Some(PayloadItem::Chunk(chunk)),
+                ..
+            }) => Some(bstream::empty(Some(chunk)).into()),
+            _ => None,
+        }
+    }
+
     /// Starts payload timing for the current request if it is not started
     /// yet, an expectation can be handled without `100 Continue`.
     fn start_payload_timer(&mut self) {
@@ -1145,7 +1174,7 @@ fn write_timeout_error() -> io::Error {
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{error, future::Future, future::poll_fn, sync::Arc};
+    use std::{error, future::Future, future::poll_fn, pin::pin, sync::Arc};
 
     use rand::Rng;
 
@@ -2698,6 +2727,52 @@ mod tests {
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
         assert!(!client.is_server_dropped());
+
+        client.close().await;
+        assert!(client.is_server_dropped());
+    }
+
+    /// STATEMENT: A `Content-Length` body buffered with its request head is complete when the service is called, and the connection stays persistent.
+    ///
+    /// HOW:
+    /// - Send two `POST` requests one after another, each body in the same write as its head.
+    /// - Inside the service call, poll the payload twice with a no-op waker before any await.
+    /// - Check each body is returned with end of stream, both responses succeed, and the server keeps the connection.
+    #[crate::rt_test]
+    async fn test_buffered_payload_is_ready() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
+        let bodies = Rc::new(RefCell::new(Vec::new()));
+        let bodies2 = bodies.clone();
+
+        spawn_h1(server, move |mut req: Request| {
+            let mut p = req.take_payload();
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            let chunk = match pin!(stream_recv(&mut p)).poll(&mut cx) {
+                Poll::Ready(Some(Ok(chunk))) => Some(chunk),
+                _ => None,
+            };
+            let eof = matches!(pin!(stream_recv(&mut p)).poll(&mut cx), Poll::Ready(None));
+            bodies2.borrow_mut().push((chunk, eof));
+            async { Ok::<_, io::Error>(Response::Ok().build()) }
+        });
+
+        for body in ["hello", "world"] {
+            client.write(format!(
+                "POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\n{body}"
+            ));
+            let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
+            assert!(load(&mut decoder, &mut buf).status.is_success());
+            assert!(!client.is_server_dropped());
+        }
+        assert_eq!(
+            *bodies.borrow(),
+            [
+                (Some(Bytes::from_static(b"hello")), true),
+                (Some(Bytes::from_static(b"world")), true)
+            ]
+        );
 
         client.close().await;
         assert!(client.is_server_dropped());

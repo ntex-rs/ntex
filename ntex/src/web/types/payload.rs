@@ -8,7 +8,7 @@ use encoding_rs::UTF_8;
 use mime::Mime;
 
 use crate::http::{HttpMessage, error, header};
-use crate::util::{BoxFuture, Bytes, Stream};
+use crate::util::{Bytes, Stream};
 use crate::web::{FromRequest, HttpRequest, State, error::PayloadError};
 
 /// Payload extractor returns request's payload stream.
@@ -344,14 +344,8 @@ impl fmt::Debug for PayloadConfig {
 /// `PayloadError::Overflow` is returned. Use `HttpMessageBody::limit()`
 /// method to change upper limit.
 struct HttpMessageBody {
-    limit: usize,
-    length: Option<usize>,
-    #[cfg(feature = "compress")]
-    stream: Option<crate::http::encoding::Decoder<crate::http::Payload>>,
-    #[cfg(not(feature = "compress"))]
-    stream: Option<crate::http::Payload>,
+    body: Option<super::ReadBody<super::BodyStream>>,
     err: Option<PayloadError>,
-    fut: Option<BoxFuture<'static, Result<Bytes, PayloadError>>>,
 }
 
 impl HttpMessageBody {
@@ -370,36 +364,24 @@ impl HttpMessageBody {
             }
         }
 
-        #[cfg(feature = "compress")]
-        let stream = Some(crate::http::encoding::Decoder::from_headers(
-            payload.take(),
-            req.headers(),
-        ));
-        #[cfg(not(feature = "compress"))]
-        let stream = Some(payload.take());
-
         HttpMessageBody {
-            stream,
-            limit: 262_144,
-            length: len,
-            fut: None,
+            body: Some(super::ReadBody::from_request(req, payload, 262_144).length(len)),
             err: None,
         }
     }
 
     /// Change max size of payload. By default max size is 256Kb
     fn limit(mut self, limit: usize) -> Self {
-        self.limit = limit;
+        if let Some(body) = self.body.as_mut() {
+            body.limit = limit;
+        }
         self
     }
 
     fn err(e: PayloadError) -> Self {
         HttpMessageBody {
-            stream: None,
-            limit: 262_144,
-            fut: None,
+            body: None,
             err: Some(e),
-            length: None,
         }
     }
 }
@@ -408,30 +390,20 @@ impl Future for HttpMessageBody {
     type Output = Result<Bytes, PayloadError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(ref mut fut) = self.fut {
-            return Pin::new(fut).poll(cx);
-        }
-
         if let Some(err) = self.err.take() {
             return Poll::Ready(Err(err));
         }
 
-        if let Some(len) = self.length
-            && len > self.limit
+        let body = self.body.as_mut().expect("polled after completion");
+        if let Some(len) = body.length
+            && len > body.limit
         {
             return Poll::Ready(Err(PayloadError::from(error::PayloadError::Overflow)));
         }
-
-        // future
-        let (limit, length) = (self.limit, self.length);
-        let mut stream = self.stream.take().unwrap();
-        self.fut = Some(Box::pin(async move {
-            super::read_body(&mut stream, limit, length, |_| {
-                PayloadError::from(error::PayloadError::Overflow)
-            })
-            .await
-        }));
-        self.poll(cx)
+        Pin::new(body).poll(cx).map_err(|err| match err {
+            super::ReadBodyError::Overflow(_) => PayloadError::from(error::PayloadError::Overflow),
+            super::ReadBodyError::Payload(err) => PayloadError::from(err),
+        })
     }
 }
 
