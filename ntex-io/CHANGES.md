@@ -1,5 +1,10 @@
 # Changes
 
+## [4.7.0] - 2026-11-06
+
+* Add `tokio` feature, implements tokio `AsyncRead` and `AsyncWrite` for `Io<F>` and `IoBoxed`.
+  Writes wait while write backpressure is active, `poll_flush` waits for a full flush
+
 ## [4.6.1] - 2026-11-01
 
 * Add `QueryItem::into_inner()` to take ownership of the query result

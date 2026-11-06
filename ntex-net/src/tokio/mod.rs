@@ -15,6 +15,8 @@ use crate::channel::{self, Receiver};
 
 mod io;
 
+#[doc(hidden)]
+#[allow(deprecated)]
 pub use self::io::TokioIoBoxed;
 
 pub(crate) struct TcpStream(tok_io::net::TcpStream);

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "4.6.1"
+version = "4.7.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
@@ -13,7 +13,7 @@ edition = "2024"
 rust-version = "1.97"
 
 [package.metadata.docs.rs]
-features = ["tracker"]
+features = ["tracker", "tokio"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
@@ -30,6 +30,9 @@ trace = []
 # read buffer memory attribution
 tracker = ["ntex-bytes/tracker"]
 
+# tokio `AsyncRead`/`AsyncWrite` for `Io` and `IoBoxed`
+tokio = ["dep:tok-io"]
+
 [dependencies]
 ntex-codec = { workspace = true }
 ntex-bytes = { workspace = true }
@@ -42,6 +45,9 @@ log = { workspace = true }
 pin-project-lite = { workspace = true }
 slab = { workspace = true }
 
+tok-io = { workspace = true, optional = true }
+
 [dev-dependencies]
 ntex = { workspace = true }
 rand = { workspace = true }
+tok-io = { workspace = true, features = ["io-util"] }
