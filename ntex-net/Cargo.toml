@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "4.7.0"
+version = "4.8.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -24,7 +24,7 @@ workspace = true
 default = []
 
 # tokio runtime
-tokio = ["ntex-rt/tokio", "tok-io"]
+tokio = ["ntex-rt/tokio", "ntex-io/tokio", "tok-io"]
 
 # compio runtime
 compio = ["ntex-rt/compio", "compio-net", "compio-driver", "compio-runtime", "compio-buf", "compio-io"]

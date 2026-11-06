@@ -417,9 +417,18 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
     }
 }
 
+#[doc(hidden)]
 #[derive(Debug)]
+#[deprecated(
+    since = "4.8.0",
+    note = "`Io` and `IoBoxed` implement tokio `AsyncRead` and `AsyncWrite` with the `tokio` feature of `ntex-io`"
+)]
+/// Tokio [`AsyncRead`] and [`AsyncWrite`] wrapper of an [`IoBoxed`].
+///
+/// Delegates to the tokio implementations of [`IoBoxed`].
 pub struct TokioIoBoxed(IoBoxed);
 
+#[allow(deprecated)]
 impl std::ops::Deref for TokioIoBoxed {
     type Target = IoBoxed;
 
@@ -429,58 +438,47 @@ impl std::ops::Deref for TokioIoBoxed {
     }
 }
 
+#[allow(deprecated)]
 impl From<IoBoxed> for TokioIoBoxed {
     fn from(io: IoBoxed) -> TokioIoBoxed {
         TokioIoBoxed(io)
     }
 }
 
+#[allow(deprecated)]
 impl<F: Filter> From<Io<F>> for TokioIoBoxed {
     fn from(io: Io<F>) -> TokioIoBoxed {
         TokioIoBoxed(IoBoxed::from(io))
     }
 }
 
+#[allow(deprecated)]
 impl AsyncRead for TokioIoBoxed {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let len = self.0.with_read_dst(|src| {
-            let len = cmp::min(src.len(), buf.remaining());
-            buf.put_slice(&src.split_to(len));
-            len
-        });
-
-        if len == 0 {
-            match ready!(self.0.poll_read_more(cx)) {
-                Ok(Some(())) => Poll::Pending,
-                Err(e) => Poll::Ready(Err(e)),
-                Ok(None) => Poll::Ready(Ok(())),
-            }
-        } else {
-            Poll::Ready(Ok(()))
-        }
+        Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
 
+#[allow(deprecated)]
 impl AsyncWrite for TokioIoBoxed {
     fn poll_write(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        self.0.encode_slice(buf)?;
-        Poll::Ready(Ok(buf.len()))
+        Pin::new(&mut self.0).poll_write(cx, buf)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.as_ref().0.poll_flush(cx, false)
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.as_ref().0.poll_shutdown(cx)
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
 

@@ -1,5 +1,13 @@
 # Changes
 
+## [4.8.0] - 2026-11-06
+
+* `tokio` feature enables `ntex-io/tokio`, the tokio `AsyncRead` and `AsyncWrite` implementations
+  of `Io` and `IoBoxed`
+
+* Deprecate `TokioIoBoxed` in favor of the `ntex-io` implementations, it delegates to them.
+  Writes now wait while write backpressure is active, and `poll_flush` waits for a full flush
+
 ## [4.7.0] - 2026-10-17
 
 * compio: abort the process if dropping the runtime panics after the event loop panicked

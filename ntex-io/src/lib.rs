@@ -33,6 +33,8 @@ mod macros;
 mod metrics;
 mod ops;
 mod seal;
+#[cfg(feature = "tokio")]
+mod tokio;
 mod utils;
 mod waiters;
 
