@@ -1,14 +1,12 @@
 //! Form extractor
-use std::{borrow::Cow, fmt, future::Future, ops, pin::Pin, task::Context, task::Poll};
+use std::task::{Context, Poll, ready};
+use std::{borrow::Cow, fmt, future::Future, marker::PhantomData, ops, pin::Pin};
 
 use encoding_rs::{Encoding, UTF_8};
 use serde::{Serialize, de::DeserializeOwned};
 
-#[cfg(feature = "compress")]
-use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::BoxFuture;
 use crate::web::error::{UrlencodedError, WebResponseError};
 use crate::web::{FromRequest, HttpRequest, Responder, State};
 
@@ -208,15 +206,10 @@ impl Default for FormConfig {
 ///   extractor sets it from [`FormConfig`], 16k by default)
 ///
 struct UrlEncoded<U> {
-    #[cfg(feature = "compress")]
-    stream: Option<Decoder<Payload>>,
-    #[cfg(not(feature = "compress"))]
-    stream: Option<Payload>,
-    limit: usize,
-    length: Option<usize>,
+    body: Option<super::ReadBody<super::BodyStream>>,
     encoding: &'static Encoding,
     err: Option<UrlencodedError>,
-    fut: Option<BoxFuture<'static, Result<U, UrlencodedError>>>,
+    _t: PhantomData<fn() -> U>,
 }
 
 impl<U> UrlEncoded<U> {
@@ -246,35 +239,28 @@ impl<U> UrlEncoded<U> {
             }
         }
 
-        #[cfg(feature = "compress")]
-        let payload = Decoder::from_headers(payload.take(), req.headers());
-        #[cfg(not(feature = "compress"))]
-        let payload = payload.take();
-
         UrlEncoded {
             encoding,
-            stream: Some(payload),
-            limit: 32_768,
-            length: len,
-            fut: None,
+            body: Some(super::ReadBody::from_request(req, payload, 32_768).length(len)),
             err: None,
+            _t: PhantomData,
         }
     }
 
     fn err(e: UrlencodedError) -> Self {
         UrlEncoded {
-            stream: None,
-            limit: 32_768,
-            fut: None,
+            body: None,
             err: Some(e),
-            length: None,
             encoding: UTF_8,
+            _t: PhantomData,
         }
     }
 
     /// Change max size of payload. By default max size is 32Kb
     fn limit(mut self, limit: usize) -> Self {
-        self.limit = limit;
+        if let Some(body) = self.body.as_mut() {
+            body.limit = limit;
+        }
         self
     }
 }
@@ -286,43 +272,41 @@ where
     type Output = Result<U, UrlencodedError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(ref mut fut) = self.fut {
-            return Pin::new(fut).poll(cx);
-        }
-
         if let Some(err) = self.err.take() {
             return Poll::Ready(Err(err));
         }
 
         // payload size
-        let (limit, length) = (self.limit, self.length);
-        if let Some(len) = length
+        let encoding = self.encoding;
+        let body = self.body.as_mut().expect("polled after completion");
+        let limit = body.limit;
+        if let Some(len) = body.length
             && len > limit
         {
             return Poll::Ready(Err(UrlencodedError::Overflow { size: len, limit }));
         }
 
-        // future
-        let encoding = self.encoding;
-        let mut stream = self.stream.take().unwrap();
-
-        self.fut = Some(Box::pin(async move {
-            let body = super::read_body(&mut stream, limit, length, |size| {
-                UrlencodedError::Overflow { size, limit }
-            })
-            .await?;
-
-            if encoding == UTF_8 {
-                serde_urlencoded::from_bytes::<U>(&body).map_err(|_| UrlencodedError::Parse)
-            } else {
-                let body = encoding
-                    .decode_without_bom_handling_and_without_replacement(&body)
-                    .map(Cow::into_owned)
-                    .ok_or(UrlencodedError::Parse)?;
-                serde_urlencoded::from_str::<U>(&body).map_err(|_| UrlencodedError::Parse)
+        let body = match ready!(Pin::new(body).poll(cx)) {
+            Ok(body) => body,
+            Err(super::ReadBodyError::Overflow(size)) => {
+                return Poll::Ready(Err(UrlencodedError::Overflow { size, limit }));
             }
-        }));
-        self.poll(cx)
+            Err(super::ReadBodyError::Payload(err)) => {
+                return Poll::Ready(Err(UrlencodedError::Payload(err)));
+            }
+        };
+
+        Poll::Ready(if encoding == UTF_8 {
+            serde_urlencoded::from_bytes::<U>(&body).map_err(|_| UrlencodedError::Parse)
+        } else {
+            encoding
+                .decode_without_bom_handling_and_without_replacement(&body)
+                .map(Cow::into_owned)
+                .ok_or(UrlencodedError::Parse)
+                .and_then(|body| {
+                    serde_urlencoded::from_str::<U>(&body).map_err(|_| UrlencodedError::Parse)
+                })
+        })
     }
 }
 

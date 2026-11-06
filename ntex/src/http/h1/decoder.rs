@@ -828,6 +828,15 @@ impl PayloadDecoder {
     pub(crate) fn is_eof(&self) -> bool {
         self.kind.get() == Kind::Eof
     }
+
+    /// Returns the remaining size of a `Content-Length` delimited payload.
+    pub(super) fn fixed_length(&self) -> Option<u64> {
+        if let Kind::Length(len) = self.kind.get() {
+            Some(len)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
