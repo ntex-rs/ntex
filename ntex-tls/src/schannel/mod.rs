@@ -737,9 +737,8 @@ mod tests {
         use tls_openssl::{asn1::Asn1Time, hash::MessageDigest, pkcs12::Pkcs12, pkey::PKey};
         use tls_openssl::{rsa::Rsa, x509::X509Builder, x509::X509NameBuilder};
         use windows_sys::Win32::Security::Cryptography::{
-            CRYPT_INTEGER_BLOB, CertCloseStore, CertDuplicateCertificateContext,
-            CertEnumCertificatesInStore, PFXImportCertStore, PKCS12_ALWAYS_CNG_KSP,
-            PKCS12_NO_PERSIST_KEY,
+            CRYPT_INTEGER_BLOB, CertCloseStore, CertEnumCertificatesInStore, PFXImportCertStore,
+            PKCS12_ALWAYS_CNG_KSP, PKCS12_NO_PERSIST_KEY,
         };
 
         assert!(supports_sch_credentials());
@@ -781,8 +780,10 @@ mod tests {
                 PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP,
             );
             assert!(!store.is_null());
-            let cert =
-                CertDuplicateCertificateContext(CertEnumCertificatesInStore(store, ptr::null()));
+            // the enumerated context holds its own reference, which is
+            // handed over to `Certificate` and released on drop
+            let cert = CertEnumCertificatesInStore(store, ptr::null());
+            assert!(!cert.is_null());
             CertCloseStore(store, 0);
             Certificate::from_context(cert)
         };

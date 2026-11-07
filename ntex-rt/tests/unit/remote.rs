@@ -107,27 +107,29 @@ fn debug_remote_join() {
 /// STATEMENT: Spawner diagnostics identify the owner without inspecting or running queued jobs.
 ///
 /// HOW:
-/// - Start a spawner, enqueue a job and format a spawner clone on another thread.
+/// - Inside a `TestRunner` system, start a spawner, enqueue a job and format a spawner clone on another thread.
 /// - Check the owner-only representation and verify the job remains unfinished.
 #[cfg(any(feature = "tokio", feature = "compio"))]
-#[ntex::test]
-async fn debug_spawner() {
-    let spawner = Spawner::start();
-    let job = Job::new(async { 7usize }, true);
-    let join = RemoteJoin::new(job.clone());
-    spawner.submit(job);
-    let expected = format!(
-        "Spawner {{ owner: {:?}, .. }}",
-        crate::rt::current_thread_id()
-    );
-    let remote = spawner.clone();
-    assert_eq!(
-        std::thread::spawn(move || format!("{remote:?}"))
-            .join()
-            .unwrap(),
-        expected
-    );
-    assert!(!join.is_finished());
+#[test]
+fn debug_spawner() {
+    crate::System::new("debug-spawner", crate::testing::TestRunner).block_on(async {
+        let spawner = Spawner::start();
+        let job = Job::new(async { 7usize }, true);
+        let join = RemoteJoin::new(job.clone());
+        spawner.submit(job);
+        let expected = format!(
+            "Spawner {{ owner: {:?}, .. }}",
+            crate::rt::current_thread_id()
+        );
+        let remote = spawner.clone();
+        assert_eq!(
+            std::thread::spawn(move || format!("{remote:?}"))
+                .join()
+                .unwrap(),
+            expected
+        );
+        assert!(!join.is_finished());
+    });
 }
 
 /// STATEMENT: Remote completion drops the pinned future before waking the joiner, even if drop panics.
