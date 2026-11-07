@@ -463,4 +463,47 @@ mod tests {
             Poll::Ready(ConditionResult::Locked)
         );
     }
+
+    /// STATEMENT: Waiters stored in the shared slab observe values, locking and the
+    /// condition's drop without undefined behavior.
+    ///
+    /// HOW:
+    /// - Poll two waiters pending with `Waker::noop`, notify `1`, and check both get it.
+    /// - Lock a cloned condition with `2`, check the waiter returns it, then `Locked`.
+    /// - Check a new waiter of the locked condition is immediately `Locked`.
+    /// - Drop both condition handles and check the remaining waiter reports `Dropped`.
+    #[test]
+    fn miri_waiters_follow_notify_lock_and_drop() {
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let cond = Condition::<String>::new();
+        let w1 = cond.wait();
+        let w2 = w1.clone();
+        assert!(w1.poll_ready(&mut cx).is_pending());
+        assert!(w2.poll_ready(&mut cx).is_pending());
+
+        cond.notify("1".to_string());
+        let one = Poll::Ready(ConditionResult::Value("1".to_string()));
+        assert_eq!(w1.poll_ready(&mut cx), one);
+        assert_eq!(w2.poll_ready(&mut cx), one);
+        assert!(w1.poll_ready(&mut cx).is_pending());
+
+        let cond2 = cond.clone();
+        cond2.notify_and_lock("2".to_string());
+        assert!(format!("{cond2:?}").contains("Locked"));
+        let two = Poll::Ready(ConditionResult::Value("2".to_string()));
+        assert_eq!(w1.poll_ready(&mut cx), two);
+        assert_eq!(w1.poll_ready(&mut cx), Poll::Ready(ConditionResult::Locked));
+        drop(w1);
+
+        let w3 = cond.wait();
+        assert_eq!(w3.poll_ready(&mut cx), Poll::Ready(ConditionResult::Locked));
+
+        assert_eq!(w2.poll_ready(&mut cx), two);
+        drop(cond);
+        drop(cond2);
+        assert_eq!(
+            w2.poll_ready(&mut cx),
+            Poll::Ready(ConditionResult::Dropped)
+        );
+    }
 }

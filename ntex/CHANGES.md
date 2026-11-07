@@ -1,12 +1,12 @@
 # Changes
 
-## [4.6.1] - Unreleased
-
-* web: Fix resource shutdown not reaching its filter, routes, and default service
+## [4.6.1] - 2026-11-07
 
 * http: Fix HTTP/1 not shutting down per-connection application and control services
 
 * http: Add fast path for payload parsing
+
+* web: Fix resource shutdown not reaching its filter, routes, and default service
 
 * web: Use resource id indexed vec for route service cache
 

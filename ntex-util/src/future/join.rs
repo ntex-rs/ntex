@@ -119,4 +119,35 @@ mod tests {
         let res = join_all([time::sleep(time::Millis(50)), time::sleep(time::Millis(60))]).await;
         assert_eq!(res, vec![(), ()]);
     }
+
+    /// STATEMENT: `join_all` pin-projects its boxed slice and returns every output in
+    /// input order without undefined behavior.
+    ///
+    /// HOW:
+    /// - Join three futures that stay pending for zero, one and two polls before
+    ///   returning a `String`.
+    /// - Poll with `Waker::noop` and check the first two polls are pending.
+    /// - Check the third poll returns the outputs in input order.
+    #[test]
+    fn miri_join_all_collects_outputs() {
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let futs = (0..3).map(|i| {
+            let mut pending = i;
+            std::future::poll_fn(move |_| {
+                if pending == 0 {
+                    Poll::Ready(i.to_string())
+                } else {
+                    pending -= 1;
+                    Poll::Pending
+                }
+            })
+        });
+        let mut fut = std::pin::pin!(join_all(futs));
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            fut.as_mut().poll(&mut cx),
+            Poll::Ready(vec!["0".to_string(), "1".to_string(), "2".to_string()])
+        );
+    }
 }
