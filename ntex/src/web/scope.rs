@@ -11,7 +11,7 @@ use super::dev::{WebServiceConfig, WebServiceFactory};
 use super::error::{WebError, WebResponseError};
 use super::guard::Guard;
 use super::rmap::ResourceMap;
-use super::service::{AppServiceFactory, ServiceFactoryWrapper};
+use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebRoute};
 use super::stack::{Filter, WebStack};
 use super::{HttpService, Resource, Route, ServiceConfig, State, WebRequest, WebResponse};
 
@@ -608,7 +608,7 @@ where
 struct ScopeServiceFactory<St: State, In, Out, M, F> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
-    router: Rc<Router<HttpService<St, Out>, Guards>>,
+    router: Rc<Router<WebRoute<St, Out>, Guards>>,
     default: HttpService<St, Out>,
 }
 

@@ -256,6 +256,15 @@ impl<St: State, In> RouteService<St, In> {
 
         self.guards.check(req.head())
     }
+
+    /// Call the route handler directly, without service readiness.
+    pub(super) fn handle<'a>(
+        &'a self,
+        st: &'a St,
+        req: WebRequest<In>,
+    ) -> impl Future<Output = WebResponse> + 'a {
+        self.handler.call(st, req)
+    }
 }
 
 impl<St: State, In> fmt::Debug for RouteService<St, In> {
