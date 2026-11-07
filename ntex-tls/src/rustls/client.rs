@@ -1,5 +1,5 @@
 //! Client-side rustls session ownership and filter integration.
-use std::{any, cell::UnsafeCell, io, sync::Arc, task::Poll};
+use std::{any, cell::RefCell, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use tls_rustls::{ClientConfig, ClientConnection, pki_types::ServerName};
@@ -15,12 +15,15 @@ use super::stream::Stream;
 /// already disconnected.
 pub struct TlsClientFilter {
     /// Single-threaded session; mutable access is scoped to `stream` calls.
-    session: UnsafeCell<ClientConnection>,
+    session: RefCell<ClientConnection>,
 }
 
 impl FilterLayer for TlsClientFilter {
+    /// Returns `None` while the session is busy, for example when a
+    /// certificate verifier queries its own connection during the handshake.
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        self.stream(|s| s.query(id))
+        let mut session = self.session.try_borrow_mut().ok()?;
+        Stream::new(&mut *session).query(id)
     }
 
     /// Decrypts input, releasing the session borrow before a peer-close notification can reenter.
@@ -66,7 +69,7 @@ impl TlsClientFilter {
         let mut session = ClientConnection::new(cfg, domain).map_err(io::Error::other)?;
         session.set_buffer_limit(Some(io.cfg().write_size().capacity()));
         let io = io.add_filter(TlsClientFilter {
-            session: UnsafeCell::new(session),
+            session: RefCell::new(session),
         });
 
         crate::utils::handshake(&io, || Ok(io.filter().is_handshaking())).await?;
@@ -75,13 +78,13 @@ impl TlsClientFilter {
 
     /// Observes handshake completion outside any mutable session borrow.
     fn is_handshaking(&self) -> bool {
-        unsafe { &*self.session.get() }.is_handshaking()
+        self.session.borrow().is_handshaking()
     }
 
     /// Gives `f` exclusive access to the session through the shared stream adapter.
     ///
     /// The callback must not reenter this filter or trigger a notification that
-    /// does so while the mutable session reference is live.
+    /// does so while the session is borrowed; reentrant I/O operations panic.
     pub(super) fn stream<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Stream<'_, ClientConnection>) -> R,
@@ -89,7 +92,7 @@ impl TlsClientFilter {
         #[cfg(test)]
         let _borrow = crate::utils::testing::TlsBorrow::new();
 
-        let mut s = Stream::new(unsafe { &mut *self.session.get() });
-        f(&mut s)
+        let mut session = self.session.borrow_mut();
+        f(&mut Stream::new(&mut *session))
     }
 }
