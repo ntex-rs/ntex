@@ -1,4 +1,4 @@
-use std::{any::Any, any::TypeId, cell::UnsafeCell, net::SocketAddr, rc::Rc};
+use std::{any::Any, any::TypeId, cell::RefCell, net::SocketAddr, rc::Rc};
 
 use urly::Url;
 
@@ -145,24 +145,38 @@ impl WebAppConfig {
 
 /// Get message from the pool of the shared configuration with the given id.
 pub(crate) fn get_request(id: usize) -> Option<HttpRequest> {
-    CACHE.with(|cache| cache.with(id, |cache| cache.pop().map(HttpRequest)))
+    CACHE
+        .try_with(|cache| cache.with(id, Vec::pop))
+        .ok()
+        .flatten()
+        .map(HttpRequest)
 }
 
 /// Put message from the pool.
+///
+/// The request is dropped instead if the pool is full, the request is still
+/// shared, or the thread's pool is already destroyed.
 pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestInner>) {
-    CACHE.with(|cache| {
-        cache.with(id, |cache| {
-            if cache.len() < pool_size
-                && let Some(inner) = Rc::get_mut(req)
-            {
-                // the head and the path may share the connection read buffer,
-                // a pooled request must not keep it alive
-                inner.head.clear();
-                inner.path.set(Url::new());
-                cache.push(req.clone());
-            }
+    let has_room = |cache: &LocalCache| cache.with(id, |cache| cache.len() < pool_size);
+    if !CACHE.try_with(has_room).unwrap_or(false) {
+        return;
+    }
+    if let Some(inner) = Rc::get_mut(req) {
+        // the head and the path may share the connection read buffer,
+        // a pooled request must not keep it alive.
+        // clearing runs user drop code that may drop other requests,
+        // so the pool must not be borrowed here
+        inner.head.clear();
+        inner.path.set(Url::new());
+
+        let _ = CACHE.try_with(|cache| {
+            cache.with(id, |cache| {
+                if cache.len() < pool_size {
+                    cache.push(req.clone());
+                }
+            });
         });
-    });
+    }
 }
 
 /// Service config is used for external configuration.
@@ -256,21 +270,25 @@ thread_local! {
 
 /// Request's objects pool
 struct LocalCache {
-    cache: UnsafeCell<Vec<Vec<Rc<HttpRequestInner>>>>,
+    cache: RefCell<Vec<Vec<Rc<HttpRequestInner>>>>,
 }
 
 impl LocalCache {
     fn new() -> Self {
         Self {
-            cache: UnsafeCell::new(Vec::with_capacity(16)),
+            cache: RefCell::new(Vec::with_capacity(16)),
         }
     }
 
+    /// Calls `f` with the pool for `idx`.
+    ///
+    /// `f` must not drop requests or run user code, the pool stays borrowed
+    /// while it runs.
     fn with<F, R>(&self, idx: usize, f: F) -> R
     where
         F: FnOnce(&mut Vec<Rc<HttpRequestInner>>) -> R,
     {
-        let cache = unsafe { &mut *self.cache.get() };
+        let mut cache = self.cache.borrow_mut();
 
         while cache.len() <= idx {
             cache.push(Vec::new());
@@ -287,6 +305,69 @@ mod tests {
     use crate::util::Bytes;
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, App, HttpRequest, HttpResponse};
+
+    struct DropRequest(#[allow(dead_code)] HttpRequest);
+
+    /// STATEMENT: Returning a request to the pool tolerates request extensions
+    /// that drop other requests while they are cleared.
+    ///
+    /// HOW:
+    /// - Create an outer request, then keep creating requests until one has a
+    ///   config id far beyond the outer one, so pooling it grows the pool list.
+    /// - Store that request in an extension of the outer request and drop the
+    ///   outer request, which re-enters `put_request` while clearing the head.
+    /// - Check both requests were pooled under their own config ids and the
+    ///   pooled outer request has no extensions left.
+    #[test]
+    fn miri_put_request_reentrant_drop() {
+        let outer = TestRequest::default().to_http_request();
+        let outer_id = outer.0.config.id();
+
+        let mut held = Vec::new();
+        let inner = loop {
+            let req = TestRequest::default().to_http_request();
+            if req.0.config.id() > 2 * outer_id + 32 {
+                break req;
+            }
+            held.push(req);
+        };
+        let inner_id = inner.0.config.id();
+
+        outer.extensions_mut().insert(DropRequest(inner));
+        drop(outer);
+
+        let pooled = get_request(outer_id).unwrap();
+        assert!(pooled.extensions().get::<DropRequest>().is_none());
+        assert!(get_request(inner_id).is_some());
+        drop(held);
+    }
+
+    thread_local! {
+        static HELD: std::cell::RefCell<Option<HttpRequest>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// STATEMENT: Dropping a request after the thread's request pool is
+    /// destroyed does not panic.
+    ///
+    /// HOW:
+    /// - On a new thread, touch `HELD` before the pool so its destructor is
+    ///   registered first and therefore runs after the pool is destroyed.
+    /// - Initialize the pool by dropping a request, then store another request
+    ///   in `HELD`.
+    /// - Join the thread and check it exited without a panic or abort.
+    #[test]
+    fn miri_drop_request_after_pool_destroyed() {
+        std::thread::spawn(|| {
+            HELD.with(|_| {});
+            drop(TestRequest::default().to_http_request());
+            HELD.with(|held| {
+                *held.borrow_mut() = Some(TestRequest::default().to_http_request());
+            });
+        })
+        .join()
+        .unwrap();
+    }
 
     /// STATEMENT: `WebAppConfig` retains explicit settings and exposes its default identity.
     ///

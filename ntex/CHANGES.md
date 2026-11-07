@@ -10,6 +10,9 @@
 
 * web: Use resource id indexed vec for route service cache
 
+* web: Fix request pool aliasing when a request extension drops another
+  request, and a panic when a request is dropped during thread-local teardown
+
 * web: Bypass default identity filter
 
 * web: Dispatch routes of resources without middleware, filter, or fallback directly from the router

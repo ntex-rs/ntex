@@ -54,8 +54,8 @@ jobs:
           MIRIFLAGS: -Zmiri-disable-stacked-borrows
         run: cargo miri nextest run -p ntex-service -- "miri_"
 
-      - name: Run Miri (ntex::web handler futures)
-        run: cargo miri nextest run -p ntex --lib -- "web::handler::tests::"
+      - name: Run Miri (ntex::web handler futures, request pool)
+        run: cargo miri nextest run -p ntex --lib -- "web::handler::tests::" "web::config::tests::miri_"
 
       - name: Run Miri (ntex ws mask, h1 codec)
         # Runtime tests need an I/O driver; the skipped decoder tests take minutes under Miri.
