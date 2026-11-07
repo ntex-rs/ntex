@@ -5,7 +5,7 @@ use std::{fmt, panic::UnwindSafe, pin::Pin, task::Context, task::Poll};
 
 use futures_core::{FusedStream, Stream};
 
-use super::cell::Cell;
+use super::cell::{Cell, wake};
 use crate::task::LocalWaker;
 
 /// Creates an unbounded in-memory channel.
@@ -31,12 +31,14 @@ struct Shared<T> {
     has_receiver: bool,
 }
 
-impl<T> Shared<T> {
-    fn close(&mut self) {
-        self.has_receiver = false;
-        self.blocked_recv.wake();
-        self.closed.wake();
-    }
+fn close<T>(shared: &Cell<Shared<T>>) {
+    let (recv, closed) = {
+        let shared = shared.get_mut();
+        shared.has_receiver = false;
+        (shared.blocked_recv.take_local(), shared.closed.take_local())
+    };
+    wake(recv);
+    wake(closed);
 }
 
 /// The transmission end of a channel.
@@ -52,12 +54,15 @@ impl<T> Unpin for Sender<T> {}
 impl<T> Sender<T> {
     /// Sends the provided message along this channel.
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        let shared = self.shared.get_mut();
-        if !shared.has_receiver {
-            return Err(SendError(item)); // receiver was dropped
-        }
-        shared.buffer.push_back(item);
-        shared.blocked_recv.wake();
+        let waker = {
+            let shared = self.shared.get_mut();
+            if !shared.has_receiver {
+                return Err(SendError(item)); // receiver was dropped
+            }
+            shared.buffer.push_back(item);
+            shared.blocked_recv.take_local()
+        };
+        wake(waker);
         Ok(())
     }
 
@@ -67,7 +72,7 @@ impl<T> Sender<T> {
     /// this sender or any of its clones, while still enabling the receiver to
     /// drain messages that are buffered.
     pub fn close(&self) {
-        self.shared.get_mut().close();
+        close(&self.shared);
     }
 
     /// Returns `true` if the channel is closed or the receiver has been dropped.
@@ -80,9 +85,13 @@ impl<T> Sender<T> {
     /// Only the task from the most recent call is woken, across this sender
     /// and all of its clones.
     pub fn poll_closed(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let shared = self.shared.get_mut();
-        if shared.has_receiver {
-            shared.closed.register(cx.waker());
+        if !self.shared.get_ref().has_receiver {
+            return Poll::Ready(());
+        }
+        LocalWaker::register_in(|| &self.shared.get_ref().closed, cx.waker());
+
+        // the waker callbacks may have closed the channel
+        if self.shared.get_ref().has_receiver {
             Poll::Pending
         } else {
             Poll::Ready(())
@@ -108,13 +117,18 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         let count = self.shared.strong_count();
-        let shared = self.shared.get_mut();
+        let waker = {
+            let shared = self.shared.get_mut();
 
-        // check is last sender is about to drop
-        if shared.has_receiver && count == 2 {
-            // Wake up receiver as its stream has ended
-            shared.blocked_recv.wake();
-        }
+            // check is last sender is about to drop
+            if shared.has_receiver && count == 2 {
+                // Wake up receiver as its stream has ended
+                shared.blocked_recv.take_local()
+            } else {
+                None
+            }
+        };
+        wake(waker);
     }
 }
 
@@ -139,7 +153,7 @@ impl<T> Receiver<T> {
     /// This prevents any further messages from being sent on the channel
     /// while still enabling the receiver to drain messages that are buffered.
     pub fn close(&self) {
-        self.shared.get_mut().close();
+        close(&self.shared);
     }
 
     /// Returns whether this channel is closed.
@@ -160,21 +174,25 @@ impl<T> Receiver<T> {
     /// Returns `Ready(None)` once the channel is closed or every sender has
     /// been dropped, and every buffered message has been received.
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        let shared = self.shared.get_mut();
+        if let Poll::Ready(msg) = self.try_recv() {
+            return Poll::Ready(msg);
+        }
+        LocalWaker::register_in(|| &self.shared.get_ref().blocked_recv, cx.waker());
 
+        // the waker callbacks may have sent a message or closed the channel
+        self.try_recv()
+    }
+
+    fn try_recv(&self) -> Poll<Option<T>> {
+        let shared = self.shared.get_mut();
         if let Some(msg) = shared.buffer.pop_front() {
             Poll::Ready(Some(msg))
-        } else if shared.has_receiver {
-            shared.blocked_recv.register(cx.waker());
-            if self.shared.strong_count() == 1 {
-                // All senders have been dropped, so drain the buffer and end the
-                // stream.
-                Poll::Ready(None)
-            } else {
-                Poll::Pending
-            }
-        } else {
+        } else if !shared.has_receiver || self.shared.strong_count() == 1 {
+            // The channel is closed or all senders have been dropped, and the
+            // buffer is drained, so end the stream.
             Poll::Ready(None)
+        } else {
+            Poll::Pending
         }
     }
 }
@@ -201,10 +219,15 @@ impl<T> UnwindSafe for Receiver<T> {}
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
-        let shared = self.shared.get_mut();
-        shared.has_receiver = false;
-        let buffer = std::mem::take(&mut shared.buffer);
-        shared.closed.wake();
+        let (buffer, waker) = {
+            let shared = self.shared.get_mut();
+            shared.has_receiver = false;
+            (
+                std::mem::take(&mut shared.buffer),
+                shared.closed.take_local(),
+            )
+        };
+        wake(waker);
 
         // queued messages may send on this channel from their `Drop`
         drop(buffer);
@@ -239,6 +262,7 @@ impl<T> SendError<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task::hooks::{ON_CLONE, hook_waker};
     use crate::{future::lazy, future::stream_recv};
 
     /// STATEMENT: MPSC sender clones share delivery and closure state.
@@ -421,5 +445,22 @@ mod tests {
         assert_eq!(rx.recv().await, Some(1));
         drop(tx);
         assert_eq!(rx.recv().await, None);
+    }
+
+    /// STATEMENT: `poll_recv` returns a message sent by its waker's clone callback instead of missing it.
+    ///
+    /// HOW:
+    /// - Set an `ON_CLONE` hook that sends `1` through a sender clone.
+    /// - Poll the empty receiver with `hook_waker` and check it returns `Ready(Some(1))`.
+    #[test]
+    fn miri_poll_recv_with_reentrant_clone() {
+        let (tx, rx) = channel();
+        let tx2 = tx.clone();
+        ON_CLONE.set(Some(Box::new(move || tx2.send(1).unwrap())));
+
+        let waker = hook_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(rx.poll_recv(&mut cx), Poll::Ready(Some(1)));
+        drop(tx);
     }
 }
