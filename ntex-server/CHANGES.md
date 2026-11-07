@@ -1,17 +1,17 @@
 # Changes
 
-## [4.4.1] - 2026-11-07
+## [4.5.0] - 2026-11-07
 
 * Delete listeners from the accept poller before closing them, as the poller
   requires; Windows IOCP could otherwise keep polling closed sockets
-
-## [4.4.0] - 2026-11-04
 
 * Add `ServerBuilder::acceptors()` and `AcceptLoop::acceptors()`, on Linux TCP listeners
   are replicated with `SO_REUSEPORT` and served by several accept threads, defaults to
   a single accept thread; other platforms always use a single accept thread
 
 * Fix paused accept loop accepting connections after a wakeup
+
+## [4.4.0] - 2026-11-04
 
 * Change `test_server` and `TestServerBuilder` service factories to receive
   worker state, matching production server factories. Replace `async || service`
