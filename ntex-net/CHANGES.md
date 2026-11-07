@@ -11,6 +11,9 @@
 * io-uring: `submit` callbacks must not submit or cancel requests, debug builds panic
   if they do
 
+* io-uring: completions that arrive after a stream is closed no longer reach a new
+  stream that reuses its slot
+
 ## [4.8.0] - 2026-11-06
 
 * `tokio` feature enables `ntex-io/tokio`, the tokio `AsyncRead` and `AsyncWrite` implementations
