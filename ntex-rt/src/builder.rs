@@ -25,6 +25,8 @@ pub struct Builder {
     /// Thread pool config
     pool_limit: usize,
     pool_recv_timeout: time::Duration,
+    /// Timer wheel resolution in milliseconds
+    timer_resolution: u8,
     /// testing flag
     testing: bool,
 }
@@ -42,6 +44,7 @@ impl Builder {
             testing: false,
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_mins(1),
+            timer_resolution: 16,
         }
     }
 
@@ -157,6 +160,30 @@ impl Builder {
     }
 
     #[must_use]
+    /// Sets the resolution of the timer wheel, in milliseconds.
+    ///
+    /// Timers of the `ntex` time utilities fire on ticks of this length, a
+    /// timer may fire up to one tick late. A finer resolution reduces the
+    /// latency of short timers but wakes the timer driver more often and
+    /// shrinks the range of each wheel level.
+    ///
+    /// The resolution must be a power of two between 1 and 16. The default
+    /// is 16. Each thread reads the setting when its first timer is armed
+    /// and keeps it until the system stops.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `millis` is not a power of two between 1 and 16.
+    pub fn timer_resolution(mut self, millis: u8) -> Self {
+        assert!(
+            millis.is_power_of_two() && millis <= 16,
+            "timer resolution must be a power of two between 1 and 16 ms, got {millis}"
+        );
+        self.timer_resolution = millis;
+        self
+    }
+
+    #[must_use]
     /// Configures the system for testing.
     ///
     /// Sets the testing flag and disables signal and panic handling on this
@@ -194,6 +221,7 @@ impl Builder {
             latency_interval: self.latency_interval,
             pool_limit: self.pool_limit,
             pool_recv_timeout: self.pool_recv_timeout,
+            timer_resolution: self.timer_resolution,
             runner: Arc::new(runner),
         };
         self.build_with(config)

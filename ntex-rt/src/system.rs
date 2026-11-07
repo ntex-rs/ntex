@@ -65,6 +65,7 @@ pub struct SystemConfig {
     pub(super) latency_interval: usize,
     pub(super) pool_limit: usize,
     pub(super) pool_recv_timeout: Duration,
+    pub(super) timer_resolution: u8,
     pub(super) testing: bool,
     pub(super) runner: Arc<dyn Runner>,
 }
@@ -354,6 +355,14 @@ impl System {
         self.0.config.testing()
     }
 
+    #[inline]
+    /// Returns the timer wheel resolution in milliseconds.
+    ///
+    /// See [`Builder::timer_resolution`].
+    pub fn timer_resolution(&self) -> u8 {
+        self.0.config.timer_resolution()
+    }
+
     /// Submits blocking work to this system's thread pool and returns its result future.
     ///
     /// This method does not wait for completion. It may be called from any
@@ -407,6 +416,14 @@ impl SystemConfig {
     pub fn testing(&self) -> bool {
         self.testing
     }
+
+    #[inline]
+    /// Returns the timer wheel resolution in milliseconds.
+    ///
+    /// See [`Builder::timer_resolution`].
+    pub fn timer_resolution(&self) -> u8 {
+        self.timer_resolution
+    }
 }
 
 impl fmt::Debug for System {
@@ -426,6 +443,7 @@ impl fmt::Debug for SystemConfig {
             .field("name", &self.name)
             .field("testing", &self.testing)
             .field("stack_size", &self.stack_size)
+            .field("timer_resolution", &self.timer_resolution)
             .finish()
     }
 }

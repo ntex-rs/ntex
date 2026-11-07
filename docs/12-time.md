@@ -38,13 +38,15 @@ all timers that expire during the same slice of time. Adding a timer means
 computing a bucket index and pushing an entry; cancelling it means removing
 that entry. Both are `O(1)`, however many timers there are.
 
-The wheel doesn't count time in milliseconds but in *units*, and **one unit
-is 16 milliseconds**. Every delay is converted to units before it is stored,
-so 16 ms is the finest resolution an ntex timer can have.
+The wheel doesn't count time in milliseconds but in *units*, and by default
+**one unit is 16 milliseconds**. Every delay is converted to units before it
+is stored, so one unit is the finest resolution an ntex timer can have. The
+unit can be made smaller, see [Choosing the resolution](#choosing-the-resolution).
 
 Each bucket on the first level covers one unit, so 64 buckets reach only
 about one second ahead. To cover longer delays, ntex stacks 8 levels of 64
-buckets, and each level is 8 times coarser than the one below it:
+buckets, and each level is 8 times coarser than the one below it. With the
+default 16 ms unit:
 
 | Level | Granularity | Range            |
 |-------|-------------|------------------|
@@ -104,14 +106,61 @@ pending timer is marked as elapsed.
 ntex timers are made for network work: timeouts, keep-alives, retries and
 periodic housekeeping. They give up precision in exchange for constant-time
 operations. Don't use them to measure time, to rate-limit at millisecond
-resolution, or to drive animations. Their resolution is one unit (16 ms),
-and even a zero-duration [`sleep`] waits for the next timer tick. To measure
+resolution, or to drive animations. Their resolution is one unit (16 ms by
+default), and even a zero-duration [`sleep`] waits for the next timer tick. To measure
 how long something took, use [`std::time::Instant`].
 
 The ntex I/O layer goes a step further. Per-connection dispatcher timeouts,
 such as keep-alive and frame read rate, are grouped into one-second slots,
 and all connections on a thread share a single timer. That's one reason
 most I/O configuration methods take [`Seconds`].
+
+### Choosing the resolution
+
+The unit is a per-system setting. It must be a power of two between 1 and
+16 milliseconds; other values panic. Set it with
+[`Builder::timer_resolution`] when building the system yourself, or with the
+`timer_resolution` argument of `#[ntex::main]`:
+
+```rust
+#[ntex::main(timer_resolution = 2)]
+async fn main() {
+    // timers on this system tick every 2 ms
+    assert_eq!(ntex::rt::System::current().timer_resolution(), 2);
+}
+```
+
+```rust
+let sys = ntex::rt::System::build()
+    .name("server")
+    .timer_resolution(2)
+    .build(ntex::rt::DefaultRuntime);
+```
+
+Every thread of the system, including server workers, reads the setting
+when its timer driver starts, and keeps it until the runtime stops and the
+wheel is empty. A thread without a running system uses 16 ms.
+
+The level layout stays the same; only the unit changes. All granularities
+and ranges in the table above scale with it. With a 2 ms unit, level 0 has
+2 ms buckets and covers about 128 ms, and level 1 has 16 ms buckets. The
+whole wheel shrinks in the same proportion:
+
+| Unit  | Level 0 range | Whole wheel |
+|-------|---------------|-------------|
+| 16 ms | ~1 s          | ~24.5 d     |
+| 8 ms  | ~512 ms       | ~12 d       |
+| 4 ms  | ~256 ms       | ~6 d        |
+| 2 ms  | ~128 ms       | ~3 d        |
+| 1 ms  | ~64 ms        | ~1.5 d      |
+
+A smaller unit helps services that wait on short delays, for example a
+handler that sleeps for 10 ms, which otherwise always waits a full 16 ms
+tick. Longer delays gain little, since they land on a higher level with
+about the same granularity as before. The cost is more frequent driver
+wakeups while short timers are pending, and a shorter maximum delay: longer
+timers are clamped to the end of the wheel. Keep the default
+unless short sleeps or timeouts show up in your latency.
 
 ## `Millis` and `Seconds`
 
@@ -561,8 +610,11 @@ and the tracker would never be dropped.
   extended often.
 - Expect timers to fire on time or a little late, never early. Measure
   elapsed time with `Instant`.
+- Keep the default 16 ms timer resolution unless short delays dominate your
+  latency; then lower it with `timer_resolution`.
 
 [`ntex::time`]: https://docs.ntex.rs/api/ntex/time/index.html
+[`Builder::timer_resolution`]: https://docs.ntex.rs/api/ntex/rt/struct.Builder.html#method.timer_resolution
 [`CallbackTimer`]: https://docs.ntex.rs/api/ntex/time/struct.CallbackTimer.html
 [`Deadline`]: https://docs.ntex.rs/api/ntex/time/struct.Deadline.html
 [`deadline`]: https://docs.ntex.rs/api/ntex/time/fn.deadline.html

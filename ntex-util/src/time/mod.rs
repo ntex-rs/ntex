@@ -21,9 +21,10 @@ pub use self::wheel::{TimerHandle, now, system_time};
 /// Waits until `dur` has elapsed.
 ///
 /// No work is performed while awaiting the returned [`Sleep`]. Timers have a
-/// granularity of approximately 16 milliseconds and are not suitable for
-/// high-resolution timing. A zero duration still waits for at least one timer
-/// tick.
+/// granularity of approximately 16 milliseconds by default, see
+/// [`Builder::timer_resolution`](ntex_rt::Builder::timer_resolution), and are
+/// not suitable for high-resolution timing. A zero duration still waits for at
+/// least one timer tick.
 #[inline]
 pub fn sleep<T: Into<Millis>>(dur: T) -> Sleep {
     Sleep::new(dur.into())
