@@ -120,7 +120,7 @@ rand = "0.9"
 regex = { version = "1.11", default-features = false, features = ["std"] }
 rustls-pemfile = "2"
 rustls-webpki = { version = "0.103", default-features = false, features = ["std"] }
-tls_rustls = { version = "0.23", package = "rustls", default-features = false }
+tls_rustls = { version = "0.23.22", package = "rustls", default-features = false }
 scoped-tls = "1.0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

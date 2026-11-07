@@ -1,7 +1,8 @@
 //! Buffer and shutdown operations shared by client and server rustls sessions.
-use std::{any, io, io::IoSlice, io::Write, ops::Deref, ops::DerefMut, task::Poll};
+use std::io::{self, BufRead, IoSlice, Write};
+use std::{any, ops::Deref, ops::DerefMut, task::Poll};
 
-use ntex_bytes::{BufMut, BytePages, Bytes};
+use ntex_bytes::{BytePages, Bytes};
 use ntex_io::{FilterBuf, types};
 use tls_rustls::{CipherSuite, ConnectionCommon, ProtocolVersion, SideData};
 
@@ -99,10 +100,18 @@ where
                 if new_b > 0 {
                     r_dst.reserve(new_b);
 
-                    let chunk: &mut [u8] =
-                        unsafe { &mut *(&raw mut *r_dst.chunk_mut() as *mut [u8]) };
-                    let v = io::Read::read(&mut self.session.reader(), chunk)?;
-                    unsafe { r_dst.advance_mut(v) };
+                    let mut reader = self.session.reader();
+                    let mut remaining = new_b;
+                    while remaining > 0 {
+                        let chunk = reader.fill_buf()?;
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        let n = chunk.len().min(remaining);
+                        r_dst.extend_from_slice(&chunk[..n]);
+                        reader.consume(n);
+                        remaining -= n;
+                    }
                 }
                 // every complete record is processed, so plaintext is drained
                 if state.peer_has_closed() {
