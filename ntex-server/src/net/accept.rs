@@ -254,6 +254,7 @@ impl Accept {
             if let Either::Right(rx) = self.process_cmd() {
                 // cleanup
                 for info in self.sockets.drain(..) {
+                    delete_source(&self.poller, &info);
                     info.sock.remove_source();
                 }
                 log::info!("Accept loop {:?} has been stopped", self.name);
@@ -466,6 +467,29 @@ impl Accept {
                 }
             }
         }
+    }
+}
+
+impl Drop for Accept {
+    fn drop(&mut self) {
+        // the normal shutdown path drains the sockets, this covers panics
+        for info in &self.sockets {
+            delete_source(&self.poller, info);
+        }
+    }
+}
+
+/// Deletes a registered listener from the poller, as `Poller::add` requires
+/// before the listener is dropped.
+fn delete_source(poller: &Poller, info: &ServerSocketInfo) {
+    if info.registered.replace(false)
+        && let Err(err) = poller.delete(&info.sock)
+    {
+        log::error!(
+            "Cannot delete socket listener for {} err: {}",
+            info.addr,
+            err
+        );
     }
 }
 
