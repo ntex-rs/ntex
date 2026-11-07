@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::panic::Location;
-use std::{cell::RefCell, ffi::c_void, fmt, fmt::Write, os, path, ptr, sync::Arc, sync::LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
+use std::{cell::RefCell, ffi::c_void, fmt, fmt::Write, os, path, ptr};
 
 use backtrace::{BacktraceFmt, BytesOrWideString, Frame, SymbolName};
 
@@ -13,24 +14,36 @@ thread_local! {
     static DEFAULT: Arc<str> = Arc::from("Unresolved backtrace");
 }
 
-static mut START: Option<(&'static str, u32)> = None;
-static mut START_ALT: Option<(&'static str, u32)> = None;
+type StartLoc = (&'static str, u32);
+
+const START_ALT_SLOTS: usize = 8;
+
+static START: OnceLock<StartLoc> = OnceLock::new();
+static START_ALT: [OnceLock<StartLoc>; START_ALT_SLOTS] =
+    [const { OnceLock::new() }; START_ALT_SLOTS];
 
 /// Sets the source location where rendered backtraces are cut off.
 ///
 /// The frame matching `file` (a path suffix) and `line` (`0` matches any line),
 /// and all of its callers, are omitted from the rendered backtrace.
-/// Must be called once during initialization, before any backtrace is resolved.
+/// Only the first call takes effect; later calls are ignored.
 pub fn set_backtrace_start(file: &'static str, line: u32) {
-    unsafe {
-        START = Some((file, line));
-    }
+    let _ = START.set((file, line));
 }
 
+/// Adds an alternative cut-off location.
+///
+/// Each distinct location is kept, up to a small fixed number; duplicates
+/// and locations beyond that limit are ignored.
 #[doc(hidden)]
 pub fn set_backtrace_start_alt(file: &'static str, line: u32) {
-    unsafe {
-        START_ALT = Some((file, line));
+    let loc = (file, line);
+    for slot in &START_ALT {
+        // `set` waits for a concurrent initialization of the same slot,
+        // so a failed `set` always observes the winning value
+        if slot.set(loc).is_ok() || slot.get() == Some(&loc) {
+            return;
+        }
     }
 }
 
@@ -314,20 +327,17 @@ impl BacktraceResolver {
 
         find_loc(self.bt.location, &mut frames);
 
-        #[allow(static_mut_refs)]
-        {
-            if let Some(start) = unsafe { START } {
-                find_loc_start(start, &mut frames);
-            }
-            if let Some(start) = unsafe { START_ALT } {
-                find_loc_start(start, &mut frames);
-            }
-            PATHS2.with(|paths| {
-                for s in paths {
-                    find_loc_start((s.as_str(), 0), &mut frames);
-                }
-            });
+        if let Some(start) = START.get() {
+            find_loc_start(*start, &mut frames);
         }
+        for start in START_ALT.iter().map_while(OnceLock::get) {
+            find_loc_start(*start, &mut frames);
+        }
+        PATHS2.with(|paths| {
+            for s in paths {
+                find_loc_start((s.as_str(), 0), &mut frames);
+            }
+        });
 
         let mut idx = 0;
         for frm in &mut frames {
@@ -524,5 +534,49 @@ impl fmt::Display for Backtrace {
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// STATEMENT: Concurrent backtrace cut-off setters are race-free, the
+    /// first `START` wins and every distinct `START_ALT` is kept once.
+    ///
+    /// HOW:
+    /// - Set `START` and two alternates on the main thread.
+    /// - From four threads, repeatedly call `set_backtrace_start` with another
+    ///   location and `set_backtrace_start_alt` with both known alternates and
+    ///   a third one, while also reading the stored values.
+    /// - Check `START` keeps the first location and `START_ALT` holds exactly
+    ///   the three distinct alternates in insertion order.
+    #[test]
+    fn miri_backtrace_start_concurrent_set() {
+        set_backtrace_start("first.rs", 1);
+        set_backtrace_start_alt("alt-a.rs", 0);
+        set_backtrace_start_alt("alt-b.rs", 0);
+
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..4 {
+                        set_backtrace_start("second.rs", 2);
+                        set_backtrace_start_alt("alt-b.rs", 0);
+                        set_backtrace_start_alt("alt-c.rs", 0);
+                        set_backtrace_start_alt("alt-a.rs", 0);
+                        assert_eq!(START.get(), Some(&("first.rs", 1)));
+                        assert!(START_ALT.iter().map_while(OnceLock::get).count() >= 2);
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        assert_eq!(START.get(), Some(&("first.rs", 1)));
+        let alts: Vec<_> = START_ALT.iter().map_while(OnceLock::get).copied().collect();
+        assert_eq!(alts, [("alt-a.rs", 0), ("alt-b.rs", 0), ("alt-c.rs", 0)]);
     }
 }

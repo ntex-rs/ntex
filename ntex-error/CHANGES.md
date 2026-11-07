@@ -1,5 +1,11 @@
 # Changes
 
+## [3.2.0] - Unreleased
+
+* Fix data race in `set_backtrace_start()` and `set_backtrace_start_alt()`.
+  The first `set_backtrace_start()` call now takes effect, and every distinct
+  alternative start location is kept
+
 ## [3.1.0] - 2026-10-16
 
 * Add BacktraceRaw::from_ips() for stacks walked outside of the backtrace crate
