@@ -358,7 +358,8 @@ mod tests {
     /// HOW:
     /// - Connect an in-memory client and acceptor with `h2`, checking ALPN, SNI, certificate
     ///   representations, and absent client certificates and unsupported queries.
-    /// - Receive 256 KiB on the server, check a reply, then verify shutdown yields peer EOF.
+    /// - Receive 256 KiB of patterned data on the server and check the bytes are intact
+    ///   and in order, check a reply, then verify shutdown yields peer EOF.
     #[ntex::test]
     async fn acceptor_and_connector() {
         let (client, server) = pair();
@@ -428,12 +429,13 @@ mod tests {
         assert!(server.query::<u32>().as_ref().is_none());
 
         // larger than the session buffer limit
-        let data = Bytes::from(vec![b'a'; 256 * 1024]);
+        let data: Bytes = (0..=250u8).cycle().take(256 * 1024).collect();
         client.send(data.clone(), &BytesCodec).await.unwrap();
-        let mut received = 0;
-        while received < data.len() {
-            received += server.recv(&BytesCodec).await.unwrap().unwrap().len();
+        let mut received = Vec::new();
+        while received.len() < data.len() {
+            received.extend_from_slice(&server.recv(&BytesCodec).await.unwrap().unwrap());
         }
+        assert_eq!(received, data);
         server
             .send(Bytes::from_static(b"reply"), &BytesCodec)
             .await

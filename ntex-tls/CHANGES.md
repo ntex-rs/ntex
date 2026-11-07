@@ -11,6 +11,9 @@
   threading contract. It no longer replaces OpenSSL memory hooks installed by
   another component, which made the shim free blocks it did not allocate
 
+* rustls: read decrypted plaintext through `BufRead` instead of exposing
+  uninitialized buffer memory to `Reader::read`; requires rustls 0.23.22
+
 ## [4.7.2] - 2026-11-03
 
 * Use native CNG (`BCrypt`) hashing on Windows and drop the `symcrypt` dependency
