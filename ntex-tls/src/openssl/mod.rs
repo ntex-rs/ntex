@@ -10,7 +10,7 @@
 //! backend-independent DER certificates, SNI, PSK identity, TLS version, and
 //! cipher metadata when available. [`ntex_io::types::HttpProtocol`] reports
 //! HTTP/2 only for negotiated `h2`, otherwise HTTP/1.
-use std::{any, borrow::ToOwned, cell::Cell, cell::UnsafeCell, cmp, io, ptr, task::Poll};
+use std::{any, borrow::ToOwned, cell::Cell, cell::RefCell, cmp, io, ptr, task::Poll};
 
 use foreign_types_shared::ForeignType;
 use ntex_bytes::{BufMut, BytePages, Bytes, BytesMut};
@@ -89,7 +89,7 @@ pub struct PeerCertChain(
 #[derive(Debug)]
 pub struct SslFilter {
     /// Stream accessed only within non-reentrant, single-threaded filter operations.
-    inner: UnsafeCell<SslStream<IoInner>>,
+    inner: RefCell<SslStream<IoInner>>,
 }
 
 /// In-memory transport adapter used by OpenSSL's BIO callbacks.
@@ -136,24 +136,14 @@ impl SslFilter {
     /// Wraps an initialized stream without starting negotiation.
     fn new(stream: SslStream<IoInner>) -> Self {
         Self {
-            inner: UnsafeCell::new(stream),
+            inner: RefCell::new(stream),
         }
-    }
-
-    /// Borrows session metadata outside an exclusive `with_buffers_inner` scope.
-    ///
-    /// The reference must not overlap any operation that mutably borrows the stream.
-    fn ssl(&self) -> &ssl::SslRef {
-        // SAFETY: the filter is single-threaded, and a mutable reference to
-        // the stream exists only inside `with_buffers`, which never calls back
-        // into the filter.
-        unsafe { (*self.inner.get()).ssl() }
     }
 
     /// Reads the negotiated IANA cipher identifier and optional standard name.
     #[cfg(ntex_openssl_cipher)]
-    fn cipher(&self) -> Option<TlsCipher> {
-        let cipher = self.ssl().current_cipher()?;
+    fn cipher(ssl: &ssl::SslRef) -> Option<TlsCipher> {
+        let cipher = ssl.current_cipher()?;
         Some(TlsCipher {
             id: u16::from_be_bytes(cipher.protocol_id()),
             name: cipher.standard_name(),
@@ -162,8 +152,7 @@ impl SslFilter {
 
     /// Leaves the cipher query unavailable for libraries without the required API.
     #[cfg(not(ntex_openssl_cipher))]
-    #[allow(clippy::unused_self)]
-    fn cipher(&self) -> Option<TlsCipher> {
+    fn cipher(_: &ssl::SslRef) -> Option<TlsCipher> {
         None
     }
 
@@ -200,9 +189,11 @@ impl SslFilter {
         #[cfg(test)]
         let _borrow = crate::utils::testing::TlsBorrow::new();
 
-        // SAFETY: see `ssl()`. Neither the BIO callbacks nor the buffer
-        // operations below re-enter the filter.
-        let stream = unsafe { &mut *self.inner.get() };
+        // Neither the BIO callbacks nor the buffer operations below reenter
+        // the filter. User handshake callbacks may only query it, which
+        // returns `None` while the stream is borrowed.
+        let mut stream = self.inner.borrow_mut();
+        let stream = &mut *stream;
 
         let st = stream.get_mut();
         st.source = buf.with_read_src(Option::take);
@@ -232,22 +223,26 @@ impl SslFilter {
 
 impl FilterLayer for SslFilter {
     /// Produces owned metadata, normalizing the DER chain to include the peer leaf.
+    ///
+    /// Returns `None` while the stream is busy, for example when a verify or
+    /// ALPN callback queries its own connection during the handshake.
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        let stream = self.inner.try_borrow().ok()?;
+        let ssl = stream.ssl();
         if id == any::TypeId::of::<types::HttpProtocol>() {
-            let alpn = self.ssl().selected_alpn_protocol();
+            let alpn = ssl.selected_alpn_protocol();
             Some(Box::new(crate::utils::http_protocol(alpn)))
         } else if id == any::TypeId::of::<PeerCert>() {
-            Some(Box::new(PeerCert(self.ssl().peer_certificate()?)))
+            Some(Box::new(PeerCert(ssl.peer_certificate()?)))
         } else if id == any::TypeId::of::<PeerCertChain>() {
-            let chain = self.ssl().peer_cert_chain()?;
+            let chain = ssl.peer_cert_chain()?;
             Some(Box::new(PeerCertChain(
                 chain.iter().map(ToOwned::to_owned).collect(),
             )))
         } else if id == any::TypeId::of::<PeerCertDer>() {
-            let cert = self.ssl().peer_certificate()?;
+            let cert = ssl.peer_certificate()?;
             Some(Box::new(PeerCertDer(Bytes::from(cert.to_der().ok()?))))
         } else if id == any::TypeId::of::<PeerCertChainDer>() {
-            let ssl = self.ssl();
             let mut chain = Vec::new();
             for cert in ssl.peer_cert_chain().into_iter().flatten() {
                 chain.push(Bytes::from(cert.to_der().ok()?));
@@ -266,13 +261,13 @@ impl FilterLayer for SslFilter {
                 Some(Box::new(PeerCertChainDer(chain)))
             }
         } else if id == any::TypeId::of::<Servername>() {
-            let name = self.ssl().servername(NameType::HOST_NAME)?;
+            let name = ssl.servername(NameType::HOST_NAME)?;
             Some(Box::new(Servername(name.to_string())))
         } else if id == any::TypeId::of::<PskIdentity>() {
-            let psk_id = self.ssl().psk_identity()?;
+            let psk_id = ssl.psk_identity()?;
             Some(Box::new(PskIdentity(Bytes::copy_from_slice(psk_id))))
         } else if id == any::TypeId::of::<TlsVersion>() {
-            let version = match self.ssl().version2()? {
+            let version = match ssl.version2()? {
                 ssl::SslVersion::TLS1 => TlsVersion::Tls10,
                 ssl::SslVersion::TLS1_1 => TlsVersion::Tls11,
                 ssl::SslVersion::TLS1_2 => TlsVersion::Tls12,
@@ -281,7 +276,7 @@ impl FilterLayer for SslFilter {
             };
             Some(Box::new(version))
         } else if id == any::TypeId::of::<TlsCipher>() {
-            Some(Box::new(self.cipher()?))
+            Some(Box::new(Self::cipher(ssl)?))
         } else {
             None
         }
@@ -655,6 +650,64 @@ pub(crate) mod tests {
         )
         .await;
         (client.unwrap(), server.unwrap())
+    }
+
+    /// STATEMENT: Handshake callbacks that query their own connection get `None`
+    /// instead of aliasing the borrowed stream.
+    ///
+    /// HOW:
+    /// - Install a client verify callback and a server SNI callback that query
+    ///   `HttpProtocol` on their own `IoRef` while the stream is busy.
+    /// - Check both callbacks ran and every query they made was unanswered.
+    /// - Check the same query is answered on both sides after the handshake.
+    #[ntex::test]
+    async fn handshake_callbacks_query_own_io() {
+        use crate::utils::testing;
+
+        let (client, server) = pair();
+        let client = Io::new(client, SharedCfg::new("CLI"));
+        let server = Io::new(server, SharedCfg::new("SRV"));
+        let cli = testing::callback_io(client.get_ref());
+        let srv = testing::callback_io(server.get_ref());
+
+        let mut connector = ssl::SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify_callback(SslVerifyMode::PEER, move |_, _| {
+            testing::query_from_callback(cli);
+            true
+        });
+        let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        acceptor
+            .set_private_key(&PKey::private_key_from_pem(KEY).unwrap())
+            .unwrap();
+        acceptor
+            .set_certificate(&X509::from_pem(CERT).unwrap())
+            .unwrap();
+        acceptor.set_servername_callback(move |_, _| {
+            testing::query_from_callback(srv);
+            Ok(())
+        });
+
+        let (client, server) = join(
+            connect(
+                client,
+                connector
+                    .build()
+                    .configure()
+                    .unwrap()
+                    .into_ssl("localhost")
+                    .unwrap(),
+            ),
+            accept(server, ssl::Ssl::new(acceptor.build().context()).unwrap()),
+        )
+        .await;
+        let (client, server) = (client.unwrap(), server.unwrap());
+
+        let queries = testing::callback_queries();
+        assert!(queries.contains(&(cli, false)), "{queries:?}");
+        assert!(queries.contains(&(srv, false)), "{queries:?}");
+        assert!(queries.iter().all(|(_, answered)| !answered), "{queries:?}");
+        assert!(client.query::<types::HttpProtocol>().as_ref().is_some());
+        assert!(server.query::<types::HttpProtocol>().as_ref().is_some());
     }
 
     /// STATEMENT: Peer-close notifications release TLS borrows before waking reentrant shutdown.

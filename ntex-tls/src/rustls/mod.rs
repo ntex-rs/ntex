@@ -183,6 +183,121 @@ mod tests {
         (client.unwrap(), server.unwrap())
     }
 
+    /// Client verifier that queries its own connection mid-handshake.
+    #[derive(Debug)]
+    struct QueryingVerifier(usize);
+
+    impl ServerCertVerifier for QueryingVerifier {
+        fn verify_server_cert(
+            &self,
+            cert: &CertificateDer<'_>,
+            chain: &[CertificateDer<'_>],
+            name: &ServerName<'_>,
+            ocsp: &[u8],
+            now: UnixTime,
+        ) -> Result<ServerCertVerified, tls_rustls::Error> {
+            crate::utils::testing::query_from_callback(self.0);
+            NoVerify.verify_server_cert(cert, chain, name, ocsp, now)
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            msg: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, tls_rustls::Error> {
+            NoVerify.verify_tls12_signature(msg, cert, dss)
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            msg: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, tls_rustls::Error> {
+            NoVerify.verify_tls13_signature(msg, cert, dss)
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            NoVerify.supported_verify_schemes()
+        }
+    }
+
+    /// Server certificate resolver that queries its own connection mid-handshake.
+    #[derive(Debug)]
+    struct QueryingResolver(usize, Arc<tls_rustls::sign::CertifiedKey>);
+
+    impl tls_rustls::server::ResolvesServerCert for QueryingResolver {
+        fn resolve(
+            &self,
+            _: tls_rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<tls_rustls::sign::CertifiedKey>> {
+            crate::utils::testing::query_from_callback(self.0);
+            Some(self.1.clone())
+        }
+    }
+
+    /// STATEMENT: Handshake callbacks that query their own connection get `None`
+    /// instead of aliasing the borrowed session.
+    ///
+    /// HOW:
+    /// - Install a client `ServerCertVerifier` and a server `ResolvesServerCert`
+    ///   that query `HttpProtocol` on their own `IoRef` while the session is busy.
+    /// - Check both callbacks ran and saw unanswered queries.
+    /// - Check the same query is answered on both sides after the handshake.
+    #[ntex::test]
+    async fn handshake_callbacks_query_own_io() {
+        use crate::utils::testing;
+
+        let (client, server) = pair();
+        let client = Io::new(client, SharedCfg::new("CLI"));
+        let server = Io::new(server, SharedCfg::new("SRV"));
+        let cli = testing::callback_io(client.get_ref());
+        let srv = testing::callback_io(server.get_ref());
+
+        let client_cfg = ClientConfig::builder_with_provider(
+            tls_rustls::crypto::ring::default_provider().into(),
+        )
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(QueryingVerifier(cli)))
+        .with_no_client_auth();
+        let certs = rustls_pemfile::certs(&mut &CERT[..])
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = rustls_pemfile::private_key(&mut &KEY[..]).unwrap().unwrap();
+        let key = tls_rustls::crypto::ring::sign::any_supported_type(&key).unwrap();
+        let resolver = QueryingResolver(
+            srv,
+            Arc::new(tls_rustls::sign::CertifiedKey::new(certs, key)),
+        );
+        let server_cfg = ServerConfig::builder_with_provider(
+            tls_rustls::crypto::ring::default_provider().into(),
+        )
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(resolver));
+
+        let (client, server) = join(
+            TlsClientFilter::create(
+                client,
+                Arc::new(client_cfg),
+                ServerName::try_from("localhost").unwrap(),
+            ),
+            TlsServerFilter::create(server, Arc::new(server_cfg), Millis(5_000)),
+        )
+        .await;
+        let (client, server) = (client.unwrap(), server.unwrap());
+
+        let mut queries = testing::callback_queries();
+        queries.sort_unstable();
+        assert_eq!(queries, vec![(cli, false), (srv, false)]);
+        assert!(client.query::<HttpProtocol>().as_ref().is_some());
+        assert!(server.query::<HttpProtocol>().as_ref().is_some());
+    }
+
     /// STATEMENT: TLS version and cipher queries expose matching negotiated metadata.
     ///
     /// HOW:
