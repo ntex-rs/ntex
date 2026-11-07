@@ -58,8 +58,19 @@ impl ReactorApi {
     #[inline]
     /// Submit request to the driver.
     ///
-    /// `f` initializes the submission entry in place with an opcode.
-    pub fn submit<F>(&self, id: u32, f: F)
+    /// `f` initializes a zeroed submission entry in place with an opcode.
+    ///
+    /// # Safety
+    ///
+    /// The kernel uses the entry after this call returns. Every buffer,
+    /// address and file descriptor the entry refers to must stay valid, and
+    /// must not move, until the handler receives the completion for `id`.
+    /// Canceling the request does not end this, the completion still arrives.
+    ///
+    /// `f` runs while the entry is borrowed from the submission queue, it
+    /// must not submit or cancel requests on this reactor. Debug builds panic
+    /// if it does.
+    pub unsafe fn submit<F>(&self, id: u32, f: F)
     where
         F: FnOnce(&mut SEntry),
     {
@@ -160,6 +171,18 @@ struct ReactorInner {
     ring: IoUring<SEntry, CEntry>,
     changes: UnsafeCell<VecDeque<mem::MaybeUninit<SEntry>>>,
     notify_read: NotifierRead,
+    #[cfg(debug_assertions)]
+    pushing: Cell<bool>,
+}
+
+#[cfg(debug_assertions)]
+struct PushGuard<'a>(&'a Cell<bool>);
+
+#[cfg(debug_assertions)]
+impl Drop for PushGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
 }
 
 impl ReactorInner {
@@ -167,6 +190,16 @@ impl ReactorInner {
     where
         F: FnOnce(&mut SEntry),
     {
+        // `f` runs while the entry is borrowed from a queue, see `submit`
+        #[cfg(debug_assertions)]
+        let _guard = {
+            assert!(
+                !self.pushing.replace(true),
+                "submit or cancel called from a `submit` callback"
+            );
+            PushGuard(&self.pushing)
+        };
+
         unsafe {
             let changes = &mut *self.changes.get();
             // the queue tail is published by the run loop submit
@@ -251,6 +284,8 @@ impl Reactor {
             flags: Cell::new(if new { Flags::NEW } else { Flags::empty() }),
             changes: UnsafeCell::new(VecDeque::with_capacity(32)),
             notify_read: NotifierRead::new(),
+            #[cfg(debug_assertions)]
+            pushing: Cell::new(false),
         });
 
         // Remote notifier
@@ -543,6 +578,12 @@ mod tests {
     use super::notifier::NotifierState;
     use super::*;
 
+    /// STATEMENT: Queued changes that wrap around the deque storage are submitted in order.
+    ///
+    /// HOW:
+    /// - Fill and drain the change deque so four `Nop` entries wrap its end.
+    /// - Run `apply_changes()` and check the deque is empty and four entries are queued.
+    /// - Submit them and check the completions carry user data `0..4` in order.
     #[test]
     fn apply_wrapped_changes() {
         let Ok(reactor) = Reactor::new(4) else {
@@ -556,28 +597,31 @@ mod tests {
         sq.sync();
         assert_eq!(sq.len(), 0);
 
-        // queued entries wrap around the end of the deque storage
-        let changes = unsafe { &mut *reactor.inner.changes.get() };
-        let cap = changes.capacity();
-        let nop = |user_data| {
-            let mut entry = SEntry::default();
-            Nop::new(&mut entry).user_data(user_data);
-            mem::MaybeUninit::new(entry)
-        };
-        for _ in 0..cap - 2 {
-            changes.push_back(nop(0));
+        // queued entries wrap around the end of the deque storage; the borrow
+        // ends before `apply_changes()` takes its own
+        {
+            let changes = unsafe { &mut *reactor.inner.changes.get() };
+            let cap = changes.capacity();
+            let nop = |user_data| {
+                let mut entry = SEntry::default();
+                Nop::new(&mut entry).user_data(user_data);
+                mem::MaybeUninit::new(entry)
+            };
+            for _ in 0..cap - 2 {
+                changes.push_back(nop(0));
+            }
+            for _ in 0..cap - 2 {
+                changes.pop_front();
+            }
+            for i in 0..4 {
+                changes.push_back(nop(i));
+            }
+            assert_eq!(changes.as_slices().0.len(), 2);
         }
-        for _ in 0..cap - 2 {
-            changes.pop_front();
-        }
-        for i in 0..4 {
-            changes.push_back(nop(i));
-        }
-        assert_eq!(changes.as_slices().0.len(), 2);
 
         assert!(!reactor.apply_changes(sq));
         sq.sync();
-        assert!(changes.is_empty());
+        assert!(unsafe { &*reactor.inner.changes.get() }.is_empty());
         assert_eq!(sq.len(), 4);
 
         ring.submitter().submit_and_wait(4).unwrap();
@@ -585,6 +629,84 @@ mod tests {
         cq.sync();
         let ids: Vec<_> = cq.map(|e| e.user_data()).collect();
         assert_eq!(ids, [0, 1, 2, 3]);
+    }
+
+    /// STATEMENT: In debug builds, a `submit` or `cancel` from a `submit` callback panics
+    /// before it touches the entry being built, on the ring and on the overflow path.
+    ///
+    /// HOW:
+    /// - With a free submission queue, submit from the callback of a `submit` and check
+    ///   it panics with the nested submit message and nothing is queued.
+    /// - Fill the submission queue so entries go to the overflow deque, cancel from the
+    ///   callback and check the same panic, leaving only the zeroed outer entry.
+    /// - Submit once more and check the flag was reset by the unwind.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn nested_submit_panics() {
+        struct Noop;
+        impl Handler for Noop {
+            fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {}
+            fn canceled(&mut self, _: usize) {}
+            fn tick(&mut self) {}
+            fn cleanup(&mut self) {}
+        }
+
+        let Ok(reactor) = Reactor::new(4) else {
+            return;
+        };
+        let mut api = None;
+        reactor.register(|a| {
+            api = Some(a);
+            Box::new(Noop)
+        });
+        let api = api.unwrap();
+        let message = |err: Box<dyn std::any::Any + Send>| {
+            err.downcast_ref::<&str>().copied().unwrap_or_default()
+        };
+        let changes = || unsafe { &*reactor.inner.changes.get() }.len();
+        let ring = &reactor.inner.ring;
+
+        let err = catch_unwind(AssertUnwindSafe(|| unsafe {
+            api.submit(1, |en| {
+                Nop::new(en);
+                api.submit(2, |en| {
+                    Nop::new(en);
+                });
+            });
+        }))
+        .unwrap_err();
+        assert_eq!(
+            message(err),
+            "submit or cancel called from a `submit` callback"
+        );
+        assert!(ring.submission().is_empty());
+        assert_eq!(changes(), 0);
+
+        for _ in 0..4 {
+            reactor.inner.push(|en| {
+                Nop::new(en);
+            });
+        }
+        assert!(ring.submission().is_full());
+        let err = catch_unwind(AssertUnwindSafe(|| unsafe {
+            api.submit(1, |en| {
+                Nop::new(en);
+                api.cancel(2);
+            });
+        }))
+        .unwrap_err();
+        assert_eq!(
+            message(err),
+            "submit or cancel called from a `submit` callback"
+        );
+        assert_eq!(changes(), 1);
+
+        unsafe {
+            api.submit(3, |en| {
+                Nop::new(en);
+            });
+        }
+        assert_eq!(changes(), 2);
     }
 
     fn sync_cancel_reactor() -> Option<Reactor> {
@@ -802,9 +924,11 @@ mod tests {
             fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {
                 assert!(!self.seen, "unwind with the rearmed notifier in flight");
                 self.seen = true;
-                self.api.submit(0, |en| {
-                    Nop::new(en);
-                });
+                unsafe {
+                    self.api.submit(0, |en| {
+                        Nop::new(en);
+                    });
+                }
             }
             fn canceled(&mut self, _: usize) {}
             fn tick(&mut self) {}
@@ -818,9 +942,11 @@ mod tests {
             unsafe { OwnedFd::from_raw_fd(syscall!(libc::dup(reactor.as_raw_fd())).unwrap()) };
         let notify = reactor.notifier.handle();
         reactor.register(|api| {
-            api.submit(0, |en| {
-                Nop::new(en);
-            });
+            unsafe {
+                api.submit(0, |en| {
+                    Nop::new(en);
+                });
+            }
             Box::new(Panicking { api, seen: false })
         });
         let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
