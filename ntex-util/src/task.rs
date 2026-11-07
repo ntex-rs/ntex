@@ -72,6 +72,25 @@ impl LocalWaker {
         registered
     }
 
+    /// Registers `waker` in the slot returned by `slot`, like [`register`](Self::register).
+    ///
+    /// Waker clone and drop callbacks may reenter the owner of the slot and
+    /// move or mutate it. `slot` is called again after every callback, so it
+    /// must derive a fresh reference from the owner each time. No reference
+    /// to the slot is kept while a callback runs.
+    pub(crate) fn register_in<'a>(slot: impl Fn() -> &'a LocalWaker, waker: &Waker) -> bool {
+        let prev = slot().waker.take();
+        let registered = prev.is_some();
+        let same = prev.as_ref().is_some_and(|prev| prev.will_wake(waker));
+        slot().waker.set(prev);
+        if !same {
+            let next = ntex_rt::LocalWaker::from_waker(waker);
+            let prev = slot().waker.replace(Some(next));
+            drop(prev);
+        }
+        registered
+    }
+
     #[inline]
     /// Calls `wake` on the last `Waker` passed to `register`.
     ///
@@ -208,6 +227,43 @@ mod test {
     }
 }
 
+/// Wakers whose callbacks run one-shot hooks, for reentrancy tests.
+#[cfg(test)]
+pub(crate) mod hooks {
+    use std::cell::Cell;
+    use std::task::{RawWaker, RawWakerVTable, Waker};
+    use std::thread::LocalKey;
+
+    pub(crate) type Hook = Cell<Option<Box<dyn FnOnce()>>>;
+
+    // Waker callbacks may run on any thread; local test closures stay in TLS.
+    thread_local! {
+        pub(crate) static ON_CLONE: Hook = Cell::new(None);
+        pub(crate) static ON_DROP: Hook = Cell::new(None);
+        pub(crate) static ON_WAKE: Hook = Cell::new(None);
+    }
+
+    fn run_hook(key: &'static LocalKey<Hook>) {
+        if let Some(hook) = key.with(Cell::take) {
+            hook();
+        }
+    }
+
+    /// Returns a waker that runs the pending `ON_CLONE`, `ON_WAKE` or `ON_DROP` hook.
+    pub(crate) fn hook_waker() -> Waker {
+        static HOOK_VTABLE: RawWakerVTable = RawWakerVTable::new(
+            |p| {
+                run_hook(&ON_CLONE);
+                RawWaker::new(p, &HOOK_VTABLE)
+            },
+            |_| run_hook(&ON_WAKE),
+            |_| run_hook(&ON_WAKE),
+            |_| run_hook(&ON_DROP),
+        );
+        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &HOOK_VTABLE)) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -215,8 +271,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{RawWaker, RawWakerVTable, Wake};
-    use std::thread::LocalKey;
 
+    use super::hooks::{ON_CLONE, ON_DROP, ON_WAKE, hook_waker};
     use super::*;
 
     static CLONES: AtomicUsize = AtomicUsize::new(0);
@@ -230,34 +286,6 @@ mod tests {
         |_| {},
         |_| {},
     );
-
-    type Hook = Cell<Option<Box<dyn FnOnce()>>>;
-
-    // Waker callbacks may run on any thread; local test closures stay in TLS.
-    thread_local! {
-        static ON_CLONE: Hook = Cell::new(None);
-        static ON_DROP: Hook = Cell::new(None);
-        static ON_WAKE: Hook = Cell::new(None);
-    }
-
-    fn run_hook(key: &'static LocalKey<Hook>) {
-        if let Some(hook) = key.with(Cell::take) {
-            hook();
-        }
-    }
-
-    fn hook_waker() -> Waker {
-        static HOOK_VTABLE: RawWakerVTable = RawWakerVTable::new(
-            |p| {
-                run_hook(&ON_CLONE);
-                RawWaker::new(p, &HOOK_VTABLE)
-            },
-            |_| run_hook(&ON_WAKE),
-            |_| run_hook(&ON_WAKE),
-            |_| run_hook(&ON_DROP),
-        );
-        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &HOOK_VTABLE)) }
-    }
 
     #[derive(Default)]
     struct WakeCounter(AtomicUsize);
