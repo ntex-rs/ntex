@@ -724,7 +724,7 @@ impl Handler for StreamOpsHandler {
         // Reactor has flushed pending submissions and canceled all in-flight
         // operations. Release every socket here, otherwise stored `IoContext`s
         // keep `StreamOpsInner` alive through the io handle and nothing closes.
-        if let Some(mut v) = self.inner.storage.take() {
+        self.inner.try_with(|v| {
             for item in v.streams.drain() {
                 if item.flags.intersects(Flags::DROPPED_PRI | Flags::CLOSING) {
                     // descriptor is closed or being closed by the kernel
@@ -738,8 +738,7 @@ impl Handler for StreamOpsHandler {
                     drop(item.io);
                 }
             }
-            self.inner.storage.set(Some(v));
-        }
+        });
         self.inner.delayed_feed.clear();
     }
 }
@@ -1204,26 +1203,46 @@ impl Drop for StreamOpsInner {
 }
 
 impl StreamOpsInner {
+    /// Runs `f` with the storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the storage is already in use, a re-entrant call.
     fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut StreamOpsStorage) -> R,
     {
-        let mut storage = self.storage.take().unwrap();
+        self.try_with(f)
+            .expect("io-uring stream storage is in use, re-entrant call")
+    }
+
+    /// Runs `f` with the storage, returns `None` if it is already in use.
+    ///
+    /// Aborts the process if `f` panics. The storage owns buffers and sockets
+    /// of in-flight operations, dropping it while unwinding would release
+    /// memory the kernel still writes to.
+    fn try_with<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut StreamOpsStorage) -> R,
+    {
+        let mut storage = self.storage.take()?;
+        // declared after `storage`, so it is dropped first while unwinding
+        let guard = ntex_rt::AbortOnUnwind("io-uring stream operation panicked");
         let result = f(&mut storage);
+        guard.disarm();
         self.storage.set(Some(storage));
-        result
+        Some(result)
     }
 
     fn check_delayed_feed(&self) {
-        if let Some(mut storage) = self.storage.take() {
+        self.try_with(|storage| {
             while let Some(id) = self.delayed_feed.pop() {
                 match id {
                     IdType::Stream(id) => storage.drop_stream(id, &self.api),
                     IdType::Weak(id) => storage.drop_weak_stream(id),
                 }
             }
-            self.storage.set(Some(storage));
-        }
+        });
     }
 }
 
@@ -1302,31 +1321,36 @@ impl StreamCtl {
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        if let Some(mut storage) = self.inner.storage.take() {
-            storage.drop_stream(self.id, &self.inner.api);
-            self.inner.storage.set(Some(storage));
-        } else {
+        let dropped = self
+            .inner
+            .try_with(|storage| storage.drop_stream(self.id, &self.inner.api));
+        if dropped.is_none() {
             self.inner.delayed_feed.push(IdType::Stream(self.id));
         }
     }
 }
 
 impl WeakStreamCtl {
+    /// Runs `f` with the socket.
+    ///
+    /// Returns `None` if the stream is gone, or if called while the storage
+    /// is in use, from a filter that processes received data for example.
     pub(crate) fn with_io<F, R>(&self, f: F) -> Option<R>
     where
         F: FnOnce(&Socket) -> R,
     {
         self.inner
-            .with(|storage| storage.streams.get(self.id).map(|item| f(&item.io)))
+            .try_with(|storage| storage.streams.get(self.id).map(|item| f(&item.io)))
+            .flatten()
     }
 }
 
 impl Drop for WeakStreamCtl {
     fn drop(&mut self) {
-        if let Some(mut storage) = self.inner.storage.take() {
-            storage.drop_weak_stream(self.id);
-            self.inner.storage.set(Some(storage));
-        } else {
+        let dropped = self
+            .inner
+            .try_with(|storage| storage.drop_weak_stream(self.id));
+        if dropped.is_none() {
             self.inner.delayed_feed.push(IdType::Weak(self.id));
         }
     }

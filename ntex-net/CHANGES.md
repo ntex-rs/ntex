@@ -1,6 +1,6 @@
 # Changes
 
-## [4.8.1] - Unreleased
+## [4.8.1] - 2026-11-07
 
 * io-uring: take send buffer and connect address pointers after the operation is stored,
   so moving it no longer invalidates pointers passed to the kernel
@@ -17,6 +17,17 @@
 * io-uring: on shutdown, wait up to 1s for canceled operations to complete before
   releasing their buffers and sockets, leak them if they do not complete. Handlers
   are released when the driver fails too
+
+* io-uring: a `PeerAddr` query from a filter that processes received data returns `None`
+  instead of panicking, and a panic while the stream storage is in use aborts the process
+  instead of releasing buffers of in-flight operations
+
+* iocp: a `PeerAddr` query from a filter that processes output returns `None` instead of
+  panicking, and a panic while the stream storage is in use aborts the process instead of
+  releasing `OVERLAPPED`s and buffers of in-flight operations
+
+* iocp: on runtime shutdown, wait up to 1s for cancelled operations to complete and free
+  their memory, only operations that do not complete in time are leaked
 
 ## [4.8.0] - 2026-11-06
 

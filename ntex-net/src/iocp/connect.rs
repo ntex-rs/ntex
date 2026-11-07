@@ -223,12 +223,29 @@ impl Handler for ConnectOpsHandler {
         }
     }
 
+    fn cancel(&mut self) {
+        // Closing cancels `ConnectEx`, its completion frees the op. Taken
+        // under the borrow, closed after it, as in `tick()`.
+        let socks: Vec<_> = self
+            .inner
+            .ops
+            .borrow_mut()
+            .iter_mut()
+            .filter_map(|(_, op)| op.sock.take())
+            .collect();
+        drop(socks);
+    }
+
+    fn in_flight(&self) -> usize {
+        self.inner.ops.borrow().len()
+    }
+
     fn cleanup(&mut self) {
-        // The reactor has stopped, so the completions of pending `ConnectEx`
-        // calls are never dequeued. Closing the socket cancels the connect,
-        // but the kernel still writes its completion into the `OVERLAPPED`,
-        // so the op allocation is leaked to keep that memory valid. The
-        // other fields are dropped, which closes the socket and the channel.
+        // The connects cancelled by `cancel()` that did not complete in time
+        // are never dequeued. The kernel still writes their completion into
+        // the `OVERLAPPED`, so the op allocation is leaked to keep that
+        // memory valid. The other fields are dropped, which closes the socket
+        // if `cancel()` did not run, and the channel.
         let ops = mem::take(&mut *self.inner.ops.borrow_mut());
         for (_, op) in ops {
             let op = op.into_raw();
@@ -430,6 +447,38 @@ mod tests {
 
         assert!(ops.0.ops.borrow().is_empty());
         assert!(!is_ours(raw, &local), "cleanup leaked the socket");
+        let err = rx.await.unwrap_err();
+        assert_eq!(err.to_string(), "IO Driver is gone");
+    }
+
+    /// STATEMENT: On shutdown, `cancel()` cancels a pending connect, and its
+    /// completion frees the op instead of leaving it to `cleanup()`.
+    ///
+    /// HOW:
+    /// - Start a connect to a port nobody listens on, so it stays pending.
+    /// - Call `cancel()`, and confirm the socket is closed, while the op is
+    ///   still counted by `in_flight()`.
+    /// - Dispatch completions until the op is gone, and confirm the receiver
+    ///   gets "IO Driver is gone".
+    #[ntex::test]
+    async fn cancel_frees_pending_connect_on_completion() {
+        let reactor = Reactor::new().unwrap();
+        let ops = ConnectOps::get(&reactor);
+        let addr = net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let (rx, raw, local) = pending_connect(&ops, addr);
+
+        let mut handler = ConnectOpsHandler {
+            inner: ops.0.clone(),
+        };
+        handler.cancel();
+        assert!(!is_ours(raw, &local), "cancel did not close the socket");
+        assert_eq!(handler.in_flight(), 1);
+
+        drain_connects(&reactor, &ops);
+        assert_eq!(handler.in_flight(), 0);
         let err = rx.await.unwrap_err();
         assert_eq!(err.to_string(), "IO Driver is gone");
     }

@@ -7,10 +7,10 @@
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::{any::Any, future::Future, future::poll_fn, net, panic, sync::mpsc, task::Poll, thread};
-use std::{time::Duration, time::Instant};
+use std::{cell::Cell, rc::Rc, time::Duration, time::Instant};
 
 use ntex::codec::BytesCodec;
-use ntex::io::{Io, IoConfig, types::PeerAddr};
+use ntex::io::{FilterBuf, FilterLayer, Io, IoConfig, types::PeerAddr};
 use ntex::time::{Seconds, sleep};
 use ntex::util::Bytes;
 use ntex_rt::{BlockFuture, Runner, System};
@@ -415,6 +415,59 @@ fn io_outlives_close() {
         drop(io);
         sleep(Duration::from_millis(10)).await;
         drop(peer);
+    });
+}
+
+/// Queries `PeerAddr` while it processes received data, and passes the data on.
+#[derive(Debug)]
+struct QueryPeer(Rc<Cell<usize>>);
+
+impl FilterLayer for QueryPeer {
+    fn process_read_buf(&self, buf: &FilterBuf<'_>) -> std::io::Result<()> {
+        let _ = buf.io().query::<PeerAddr>().get();
+        self.0.set(self.0.get() + 1);
+        buf.with_read_buffers(|src, dst| {
+            if let Some(s) = src.take() {
+                dst.extend_from_slice(&s);
+            }
+        });
+        Ok(())
+    }
+
+    fn process_write_buf(&self, buf: &FilterBuf<'_>) -> std::io::Result<()> {
+        buf.with_write_buffers(|src, dst| {
+            while let Some(p) = src.take() {
+                dst.append(p);
+            }
+        });
+        Ok(())
+    }
+}
+
+/// STATEMENT: A filter can query `PeerAddr` while it processes data from a
+/// completed receive, the re-entrant query neither panics nor breaks the read.
+///
+/// HOW:
+/// - Wrap a TCP io in a `QueryPeer` filter, which queries `PeerAddr` from
+///   `process_read_buf`, while the receive completion holds the stream storage.
+/// - Send data from the peer and confirm it is received through the filter and
+///   that the filter ran.
+/// - Confirm `PeerAddr` outside of a read still reports the peer address.
+#[test]
+fn filter_queries_peer_addr_while_reading() {
+    run(64, move || async {
+        let (sock, mut peer) = tcp_pair(None);
+        let addr = peer.local_addr().unwrap();
+        let calls = Rc::new(Cell::new(0));
+        let io = ntex_net::from_tcp_stream(sock, cfg())
+            .unwrap()
+            .add_filter(QueryPeer(calls.clone()));
+
+        peer.write_all(b"hello").unwrap();
+        let data = io.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(&data[..], b"hello");
+        assert!(calls.get() > 0);
+        assert_eq!(io.query::<PeerAddr>().get().map(|a| a.0), Some(addr));
     });
 }
 
