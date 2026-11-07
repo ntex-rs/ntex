@@ -1,5 +1,9 @@
 # Changes
 
+## [4.7.3] - 2026-11-07
+
+* Do not use deprecated bytes method
+
 ## [4.7.2] - 2026-11-03
 
 * Use native CNG (`BCrypt`) hashing on Windows and drop the `symcrypt` dependency

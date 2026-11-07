@@ -323,8 +323,9 @@ impl FilterLayer for SslFilter {
                         dst.reserve_more();
                     }
 
-                    let chunk = dst.chunk_mut();
-                    match stream.ssl_read_uninit(chunk.as_mut()) {
+                    // SAFETY: `ssl_read_uninit` only writes decrypted, initialized bytes.
+                    let chunk = unsafe { dst.chunk_mut().as_uninit_slice_mut() };
+                    match stream.ssl_read_uninit(chunk) {
                         Ok(v) => unsafe { dst.advance_mut(v) },
                         Err(e) => {
                             return match e.code() {
