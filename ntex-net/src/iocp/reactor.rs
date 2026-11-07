@@ -1,5 +1,6 @@
 use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle, RawHandle};
 use std::sync::{Arc, OnceLock, atomic::AtomicU8, atomic::Ordering};
+use std::time::{Duration, Instant};
 use std::{cell::Cell, fmt, io, mem, net, ptr};
 
 use windows_sys::Win32::{
@@ -42,7 +43,22 @@ pub(crate) trait Handler {
     /// Reactor turn is completed
     fn tick(&mut self) {}
 
+    /// The runtime has stopped: cancels the operations in flight, so that
+    /// their completions are dispatched before `cleanup()`.
+    ///
+    /// Completions, notifications and ticks dispatched afterwards must not
+    /// start new operations.
+    fn cancel(&mut self) {}
+
+    /// Number of operations the kernel still owns.
+    fn in_flight(&self) -> usize {
+        0
+    }
+
     /// Clean up the handle before dropping the driver.
+    ///
+    /// Operations still in flight never complete, the memory the kernel
+    /// writes their completion into must be leaked.
     fn cleanup(&mut self) {}
 }
 
@@ -213,9 +229,7 @@ impl ntex_rt::Driver for Reactor {
             }
         };
 
-        for mut h in self.handlers.take().unwrap().into_iter() {
-            h.cleanup();
-        }
+        self.shutdown(Self::SHUTDOWN_TIMEOUT);
         result
     }
 
@@ -262,6 +276,73 @@ pub(crate) fn map_socket_error(err: io::Error) -> io::Error {
 }
 
 impl Reactor {
+    /// How long a stopped runtime waits for its cancelled operations.
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// Cancels the operations in flight and dispatches their completions for
+    /// up to `timeout`, then cleans up the handlers.
+    ///
+    /// The kernel writes the completion of an operation into its `OVERLAPPED`
+    /// and buffers even after its socket is closed, so `cleanup()` has to
+    /// leak the memory of the operations still in flight.
+    fn shutdown(&self, timeout: Duration) {
+        let mut handlers = self.handlers.take().unwrap();
+        for h in handlers.iter_mut() {
+            h.cancel();
+        }
+        self.handlers.set(Some(handlers));
+
+        let deadline = Instant::now() + timeout;
+        let mut events = [OVERLAPPED_ENTRY::default(); 64];
+        loop {
+            let in_flight = self.in_flight();
+            if in_flight == 0 {
+                break;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                log::warn!(
+                    "{in_flight} operation(s) did not complete on shutdown, their memory is leaked"
+                );
+                break;
+            }
+            let wait = u32::try_from(left.as_micros().div_ceil(1000)).unwrap_or(INFINITE - 1);
+            let mut count = 0;
+            let result = syscall!(
+                BOOL,
+                GetQueuedCompletionStatusEx(
+                    self.reactor.port.as_raw_handle().cast(),
+                    events.as_mut_ptr().cast(),
+                    64,
+                    &raw mut count,
+                    wait,
+                    0
+                )
+            );
+            match result {
+                Ok(_) => self.poll_completions(&events[..count as usize]),
+                Err(err) if err.raw_os_error() == Some(WAIT_TIMEOUT.cast_signed()) => (),
+                Err(err) => {
+                    log::error!(
+                        "Cannot wait for {in_flight} cancelled operation(s), their memory is leaked: {err:?}"
+                    );
+                    break;
+                }
+            }
+        }
+
+        for mut h in self.handlers.take().unwrap().into_iter() {
+            h.cleanup();
+        }
+    }
+
+    fn in_flight(&self) -> usize {
+        let handlers = self.handlers.take().unwrap();
+        let n = handlers.iter().map(|h| h.in_flight()).sum();
+        self.handlers.set(Some(handlers));
+        n
+    }
+
     /// Handle ring completions, forward changes to specific handler
     fn poll_completions(&self, events: &[OVERLAPPED_ENTRY]) {
         let mut handlers = self.handlers.take().unwrap();
@@ -848,5 +929,112 @@ mod tests {
     fn check_ifs_rejects_non_socket() {
         let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
         assert!(check_ifs_socket(file.as_raw_handle()).is_err());
+    }
+
+    type Events = Rc<std::cell::RefCell<Vec<&'static str>>>;
+
+    /// An operation that is in flight until its completion is dispatched.
+    /// `cancel()` posts that completion, unless the operation is stuck.
+    struct Cancellable {
+        api: ReactorApi,
+        ov: Box<Overlapped>,
+        pending: bool,
+        stuck: bool,
+        events: Events,
+    }
+
+    impl Cancellable {
+        fn register(reactor: &Reactor, stuck: bool, events: &Events) {
+            reactor.register(|api| {
+                let ov = Box::new(api.overlapped(0));
+                Box::new(Cancellable {
+                    api,
+                    ov,
+                    pending: true,
+                    stuck,
+                    events: events.clone(),
+                })
+            });
+        }
+    }
+
+    impl Handler for Cancellable {
+        fn completed(&mut self, _: u32, _: io::Result<usize>, optr: *mut Overlapped) {
+            assert_eq!(optr, &raw mut *self.ov);
+            self.pending = false;
+            self.events.borrow_mut().push("completed");
+        }
+
+        fn cancel(&mut self) {
+            self.events.borrow_mut().push("cancel");
+            if !self.stuck {
+                syscall!(
+                    BOOL,
+                    PostQueuedCompletionStatus(
+                        self.api.reactor.port.as_raw_handle().cast(),
+                        0,
+                        0,
+                        (&raw mut self.ov.base).cast()
+                    )
+                )
+                .unwrap();
+            }
+        }
+
+        fn in_flight(&self) -> usize {
+            usize::from(self.pending)
+        }
+
+        fn cleanup(&mut self) {
+            self.events
+                .borrow_mut()
+                .push(if self.pending { "cleanup-pending" } else { "cleanup" });
+        }
+    }
+
+    /// STATEMENT: On shutdown, the completions of cancelled operations are
+    /// dispatched before `cleanup()`, so their memory can be freed.
+    ///
+    /// HOW:
+    /// - Register a handler whose `cancel()` posts the completion of its
+    ///   in-flight operation.
+    /// - Run `shutdown()` with a long timeout, and confirm the handler saw
+    ///   `cancel`, `completed`, then `cleanup` with nothing in flight, well
+    ///   before the timeout.
+    #[test]
+    fn shutdown_dispatches_cancelled_completions() {
+        let reactor = Reactor::new().unwrap();
+        let events = Events::default();
+        Cancellable::register(&reactor, false, &events);
+
+        let start = Instant::now();
+        reactor.shutdown(Duration::from_secs(10));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert_eq!(*events.borrow(), ["cancel", "completed", "cleanup"]);
+    }
+
+    /// STATEMENT: On shutdown, an operation that never completes delays the
+    /// cleanup only up to the timeout, and does not hold up the completions
+    /// of other handlers.
+    ///
+    /// HOW:
+    /// - Register a stuck handler that never posts its completion, and one
+    ///   that does.
+    /// - Run `shutdown()` with a 100 ms timeout, and confirm it waited for
+    ///   the timeout, the second handler's completion was dispatched, and
+    ///   both handlers were cleaned up, the stuck one with its op in flight.
+    #[test]
+    fn shutdown_gives_up_on_stuck_operations() {
+        let reactor = Reactor::new().unwrap();
+        let stuck = Events::default();
+        let events = Events::default();
+        Cancellable::register(&reactor, true, &stuck);
+        Cancellable::register(&reactor, false, &events);
+
+        let start = Instant::now();
+        reactor.shutdown(Duration::from_millis(100));
+        assert!(start.elapsed() >= Duration::from_millis(100));
+        assert_eq!(*stuck.borrow(), ["cancel", "cleanup-pending"]);
+        assert_eq!(*events.borrow(), ["cancel", "completed", "cleanup"]);
     }
 }

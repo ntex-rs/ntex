@@ -185,6 +185,8 @@ struct StreamOpsInner {
     storage: Cell<Option<Box<StreamOpsStorage>>>,
     delayed_feed: Queue<IdType>,
     pool: pool::Pool<io::Result<()>>,
+    /// The runtime has stopped, completions only finish their operations
+    stopped: Cell<bool>,
 }
 
 struct StreamOpsStorage {
@@ -204,6 +206,7 @@ impl StreamOps {
                         streams: Slab::new(),
                     }))),
                     delayed_feed: Queue::new(),
+                    stopped: Cell::new(false),
                 });
                 inner = Some(ops.clone());
                 Box::new(StreamOpsHandler { inner: ops })
@@ -235,50 +238,52 @@ impl StreamOps {
         #[cfg(feature = "trace")]
         log::trace!("{}: Registered({:?}) {:?}", ctx.tag(), sock, addr);
 
-        let mut storage = self.0.storage.take().unwrap();
-        let entry = storage.streams.vacant_entry();
-        let id = entry.key();
+        let id = self.0.with(|storage| {
+            let entry = storage.streams.vacant_entry();
+            let id = entry.key();
 
-        // read op
-        //
-        // A non-blocking socket is read in place without waiting for the kernel
-        // to report it readable first; overlapped operations are not affected
-        let nonblocking = match io.set_nonblocking(true) {
-            Ok(()) => true,
-            Err(err) => {
-                log::error!(
-                    "{}: Cannot switch socket({sock:?}) to non-blocking mode, {err:?}",
-                    ctx.tag()
-                );
-                false
-            }
-        };
-        let mut rd_op = ops::ReadOperation::new(id, sock, ctx.clone(), nonblocking);
-        // edge-triggered notifications need a non-blocking socket, it is
-        // read until drained. Such a read never waits with an overlapped
-        // recv, so it needs no kernel header.
-        let rd_overlapped = if notify && nonblocking && self.0.api.register_notify(sock as _, id) {
-            rd_op.use_notifications();
-            None
-        } else {
-            Some(self.0.api.overlapped(ops::RD_OP))
-        };
+            // read op
+            //
+            // A non-blocking socket is read in place without waiting for the kernel
+            // to report it readable first; overlapped operations are not affected
+            let nonblocking = match io.set_nonblocking(true) {
+                Ok(()) => true,
+                Err(err) => {
+                    log::error!(
+                        "{}: Cannot switch socket({sock:?}) to non-blocking mode, {err:?}",
+                        ctx.tag()
+                    );
+                    false
+                }
+            };
+            let mut rd_op = ops::ReadOperation::new(id, sock, ctx.clone(), nonblocking);
+            // edge-triggered notifications need a non-blocking socket, it is
+            // read until drained. Such a read never waits with an overlapped
+            // recv, so it needs no kernel header.
+            let rd_overlapped =
+                if notify && nonblocking && self.0.api.register_notify(sock as _, id) {
+                    rd_op.use_notifications();
+                    None
+                } else {
+                    Some(self.0.api.overlapped(ops::RD_OP))
+                };
 
-        let ops = OpPairBox::new(
-            rd_overlapped,
-            rd_op,
-            self.0.api.overlapped(ops::WR_OP),
-            ops::WriteOperation::new(id, sock, ctx),
-        );
+            let ops = OpPairBox::new(
+                rd_overlapped,
+                rd_op,
+                self.0.api.overlapped(ops::WR_OP),
+                ops::WriteOperation::new(id, sock, ctx),
+            );
 
-        entry.insert(StreamItem {
-            io,
-            ops,
-            addr,
-            close: None,
-            flags: Flags::empty(),
+            entry.insert(StreamItem {
+                io,
+                ops,
+                addr,
+                close: None,
+                flags: Flags::empty(),
+            });
+            id
         });
-        self.0.storage.set(Some(storage));
 
         (
             StreamCtl {
@@ -303,6 +308,10 @@ impl Handler for StreamOpsHandler {
                 None
             }
         } {
+            if self.inner.stopped.get() {
+                // `cleanup()` closes the socket and frees the item
+                return;
+            }
             self.inner.with(|st| {
                 if let Some(item) = st.streams.get_mut(id)
                     && !item.flags.contains(Flags::CLOSED)
@@ -351,6 +360,9 @@ impl Handler for StreamOpsHandler {
         // harmless: a non-blocking socket is found drained, a blocking one is
         // not read before the kernel reports input, and a paused stream is
         // not read at all.
+        if self.inner.stopped.get() {
+            return;
+        }
         let op = self.inner.with(|st| {
             st.streams
                 .get_mut(id)
@@ -364,14 +376,47 @@ impl Handler for StreamOpsHandler {
     }
 
     fn tick(&mut self) {
-        self.inner.check_delayed_feed();
+        // once stopped, `cleanup()` releases the dropped streams
+        if !self.inner.stopped.get() {
+            self.inner.check_delayed_feed();
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.inner.stopped.set(true);
+        self.inner.try_with(|storage| {
+            for (_, item) in &mut storage.streams {
+                // the operations of a closed item are already cancelled, and
+                // its socket handle may belong to another one by now
+                if !item.flags.contains(Flags::CLOSED) {
+                    item.pause_ops();
+                }
+            }
+        });
+    }
+
+    fn in_flight(&self) -> usize {
+        self.inner
+            .try_with(|storage| {
+                storage
+                    .streams
+                    .iter()
+                    .map(|(_, item)| {
+                        usize::from(item.ops.read().is_pending())
+                            + usize::from(item.ops.write().is_pending())
+                    })
+                    .sum()
+            })
+            .unwrap_or(0)
     }
 
     fn cleanup(&mut self) {
         // The reactor has stopped, so nothing will close the sockets that are
         // still registered: stored `IoContext`s keep `StreamOpsInner` alive
-        // through the io handle, and the drop paths never run for them.
-        if let Some(mut storage) = self.inner.storage.take() {
+        // through the io handle, and the drop paths never run for them. The
+        // completions of the operations cancelled by `cancel()` have been
+        // dispatched, unless they did not arrive in time.
+        self.inner.try_with(|storage| {
             for item in storage.streams.drain() {
                 if item.flags.contains(Flags::CLOSED) {
                     // a close job owns the socket, a forced close may have left
@@ -408,34 +453,53 @@ impl Handler for StreamOpsHandler {
                     mem::forget(item.io);
                 }
             }
-            self.inner.storage.set(Some(storage));
-        }
+        });
         self.inner.delayed_feed.clear();
     }
 }
 
 impl StreamOpsInner {
+    /// Runs `f` with the storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the storage is already in use, a re-entrant call.
     fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut StreamOpsStorage) -> R,
     {
-        let mut storage = self.storage.take().unwrap();
+        self.try_with(f)
+            .expect("iocp stream storage is in use, re-entrant call")
+    }
+
+    /// Runs `f` with the storage, returns `None` if it is already in use.
+    ///
+    /// Aborts the process if `f` panics. The storage owns the `OVERLAPPED`s
+    /// and buffers of in-flight operations, dropping it while unwinding would
+    /// release memory the kernel still writes to.
+    fn try_with<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut StreamOpsStorage) -> R,
+    {
+        let mut storage = self.storage.take()?;
+        // declared after `storage`, so it is dropped first while unwinding
+        let guard = ntex_rt::AbortOnUnwind("iocp stream operation panicked");
         let result = f(&mut storage);
+        guard.disarm();
         self.storage.set(Some(storage));
-        result
+        Some(result)
     }
 
     fn check_delayed_feed(&self) {
-        if !self.delayed_feed.is_empty()
-            && let Some(mut storage) = self.storage.take()
-        {
-            while let Some(id) = self.delayed_feed.pop() {
-                match id {
-                    IdType::Stream(id) => storage.drop_stream(id as usize),
-                    IdType::Weak(id) => storage.drop_weak_stream(id as usize),
+        if !self.delayed_feed.is_empty() {
+            self.try_with(|storage| {
+                while let Some(id) = self.delayed_feed.pop() {
+                    match id {
+                        IdType::Stream(id) => storage.drop_stream(id as usize),
+                        IdType::Weak(id) => storage.drop_weak_stream(id as usize),
+                    }
                 }
-            }
-            self.storage.set(Some(storage));
+            });
         }
     }
 }
@@ -669,10 +733,8 @@ impl StreamOpsStorage {
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        if let Some(mut storage) = self.inner.storage.take() {
-            storage.drop_stream(self.id);
-            self.inner.storage.set(Some(storage));
-        } else {
+        let dropped = self.inner.try_with(|storage| storage.drop_stream(self.id));
+        if dropped.is_none() {
             self.inner.delayed_feed.push(IdType::Stream(self.id as u32));
         }
     }
@@ -680,9 +742,13 @@ impl Drop for StreamCtl {
 
 impl WeakStreamCtl {
     /// Returns the peer address, or `None` once `cleanup()` released the stream.
+    ///
+    /// Also returns `None` if called while the storage is in use, from a
+    /// filter that processes output for example.
     pub(crate) fn peer_addr(&self) -> Option<net::SocketAddr> {
         self.inner
-            .with(|st| st.streams.get(self.id).and_then(|item| item.addr))
+            .try_with(|st| st.streams.get(self.id).and_then(|item| item.addr))
+            .flatten()
     }
 
     pub(crate) fn write(&self) {
@@ -699,10 +765,10 @@ impl WeakStreamCtl {
 
 impl Drop for WeakStreamCtl {
     fn drop(&mut self) {
-        if let Some(mut storage) = self.inner.storage.take() {
-            storage.drop_weak_stream(self.id);
-            self.inner.storage.set(Some(storage));
-        } else {
+        let dropped = self
+            .inner
+            .try_with(|storage| storage.drop_weak_stream(self.id));
+        if dropped.is_none() {
             self.inner.delayed_feed.push(IdType::Weak(self.id as u32));
         }
     }
@@ -711,6 +777,7 @@ impl Drop for WeakStreamCtl {
 #[cfg(test)]
 mod tests {
     use std::os::windows::io::{AsRawHandle, FromRawSocket, IntoRawSocket};
+    use std::time::{Duration, Instant};
 
     use ntex_bytes::BytesMut;
     use socket2::{Domain, Protocol, Type};
@@ -1120,6 +1187,47 @@ mod tests {
         drop(io);
     }
 
+    /// STATEMENT: On shutdown, `cancel()` cancels a pending recv, and its
+    /// completion is dispatched without releasing the item, which
+    /// `cleanup()` then frees with its socket closed.
+    ///
+    /// HOW:
+    /// - Register a stream and start a recv that stays pending.
+    /// - Call `cancel()`, and dispatch completions until `in_flight()` is 0.
+    /// - Confirm the item is still registered with no recv pending, then run
+    ///   `cleanup()` and confirm the socket is closed and the item removed.
+    #[ntex::test]
+    async fn cancel_drains_pending_recv() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        ctl.read();
+        assert!(
+            ops.0.with(|st| st.streams[ctl.id].ops.read().is_pending()),
+            "recv completed without data"
+        );
+
+        let mut handler = StreamOpsHandler {
+            inner: ops.0.clone(),
+        };
+        handler.cancel();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while handler.in_flight() > 0 && Instant::now() < deadline {
+            reactor.dispatch(10);
+        }
+        assert_eq!(handler.in_flight(), 0, "cancelled recv did not complete");
+        assert!(
+            ops.0.with(|st| !st.streams[ctl.id].ops.read().is_pending()),
+            "item was released by the completion"
+        );
+
+        handler.cleanup();
+        assert!(ops.0.with(|st| st.streams.is_empty()));
+        assert_closed(raw, &mut peer);
+
+        drop(ctl);
+        drop(io);
+    }
+
     /// A recv waiting for input on an idle connection must not hold a read
     /// buffer, the kernel is only asked to report that input is available.
     #[ntex::test]
@@ -1308,6 +1416,29 @@ mod tests {
         );
         let addr = peer.peer_addr().unwrap().into();
         assert!(!is_ours(raw, &addr), "socket not closed");
+    }
+
+    /// STATEMENT: A `PeerAddr` query made while the stream storage is in use,
+    /// e.g. from a write filter, returns nothing instead of panicking.
+    ///
+    /// HOW:
+    /// - Take the storage, as `StreamOpsInner::with` does, and query `PeerAddr`
+    ///   through the io handle; confirm it returns `None`.
+    /// - Put the storage back and confirm the query returns the peer address.
+    #[ntex::test]
+    async fn peer_addr_query_while_storage_in_use() {
+        let reactor = Reactor::new().unwrap();
+        let (io, _ctl, ops, _raw, peer) = registered(&reactor);
+
+        let storage = ops.0.storage.take().unwrap();
+        assert!(io.query::<ntex_io::types::PeerAddr>().get().is_none());
+        ops.0.storage.set(Some(storage));
+
+        assert_eq!(
+            io.query::<ntex_io::types::PeerAddr>().get().map(|a| a.0),
+            Some(peer.local_addr().unwrap())
+        );
+        cleanup(&ops);
     }
 
     /// A handle dropped while the storage is in use, e.g. from within a

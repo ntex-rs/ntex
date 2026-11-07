@@ -201,17 +201,7 @@ impl RunnableQueue {
 
         // Aborts if the notifier unwinds, producers coalesced behind this
         // wakeup would never be woken.
-        struct AbortOnUnwind;
-
-        impl Drop for AbortOnUnwind {
-            /// Prevents unwinding from abandoning a coalesced driver wakeup.
-            fn drop(&mut self) {
-                log::error!(target: LOG_TARGET, "Runtime notifier panicked; aborting");
-                std::process::abort();
-            }
-        }
-
-        let guard = AbortOnUnwind;
+        let guard = crate::AbortOnUnwind("Runtime notifier panicked");
         // Keep responsibility for this wakeup: other producers may already
         // have coalesced behind it, even if no later submission arrives.
         while let Err(err) = self.handle.notify() {
@@ -219,7 +209,7 @@ impl RunnableQueue {
                 failed(&err);
             }
         }
-        std::mem::forget(guard);
+        guard.disarm();
     }
 
     /// Reserves a submission or wake before publication or acquiring a task queue reference.

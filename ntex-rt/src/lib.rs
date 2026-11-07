@@ -76,6 +76,7 @@
     clippy::must_use_candidate
 )]
 
+mod abort;
 mod arbiter;
 mod builder;
 mod busy;
@@ -102,6 +103,7 @@ pub mod rt_compio;
 #[cfg(feature = "tokio")]
 pub mod rt_tokio;
 
+pub use self::abort::AbortOnUnwind;
 pub use self::arbiter::{Arbiter, get_item, remove_all_items, set_item, with_item};
 pub use self::builder::{Builder, SystemRunner};
 pub use self::driver::{BlockFuture, Driver, DriverType, Notify, PollResult, Runner};

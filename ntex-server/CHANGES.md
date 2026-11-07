@@ -1,6 +1,6 @@
 # Changes
 
-## [4.4.1] - Unreleased
+## [4.4.1] - 2026-11-07
 
 * Delete listeners from the accept poller before closing them, as the poller
   requires; Windows IOCP could otherwise keep polling closed sockets
