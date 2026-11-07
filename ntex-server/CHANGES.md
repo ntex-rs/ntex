@@ -1,5 +1,10 @@
 # Changes
 
+## [4.4.1] - Unreleased
+
+* Delete listeners from the accept poller before closing them, as the poller
+  requires; Windows IOCP could otherwise keep polling closed sockets
+
 ## [4.4.0] - 2026-11-04
 
 * Change `test_server` and `TestServerBuilder` service factories to receive
