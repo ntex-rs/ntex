@@ -1,4 +1,4 @@
-use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, ptr, rc::Rc, task::Poll};
+use std::{cell::Cell, fmt, io, mem, num::NonZeroU32, os::fd::AsRawFd, ptr, rc::Rc, task::Poll};
 
 use ntex_bytes::{BufMut, BytePage, BytePages, Bytes, BytesMut, info::PageKind};
 use ntex_io::{IoContext, IoTaskStatus};
@@ -18,18 +18,94 @@ use crate::helpers::Queue;
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
 
 pub(crate) struct StreamCtl {
-    id: usize,
+    id: StreamId,
     inner: Rc<StreamOpsInner>,
 }
 
 pub(crate) struct WeakStreamCtl {
-    id: usize,
+    id: StreamId,
     inner: Rc<StreamOpsInner>,
 }
 
 enum IdType {
-    Stream(u32),
-    Weak(u32),
+    Stream(StreamId),
+    Weak(StreamId),
+}
+
+/// Slot of a stream and the generation of the stream registered in it.
+///
+/// Completions of a closed stream can arrive after its slot is reused, the
+/// generation keeps them from reaching the new stream.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct StreamId {
+    idx: u32,
+    generation: u32,
+}
+
+impl fmt::Display for StreamId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.idx, self.generation)
+    }
+}
+
+/// Registered streams, lookups by a stale `StreamId` find nothing.
+struct Streams {
+    items: Slab<StreamItem>,
+    generation: u32,
+}
+
+impl Streams {
+    fn new() -> Self {
+        Streams {
+            items: Slab::new(),
+            generation: 0,
+        }
+    }
+
+    fn insert(&mut self, mut item: StreamItem) -> StreamId {
+        let generation = self.generation;
+        self.generation = generation.wrapping_add(1);
+        item.generation = generation;
+        let idx = u32::try_from(self.items.insert(item)).expect("Too many streams");
+        StreamId { idx, generation }
+    }
+
+    fn get(&self, id: StreamId) -> Option<&StreamItem> {
+        self.items
+            .get(id.idx as usize)
+            .filter(|item| item.generation == id.generation)
+    }
+
+    fn get_mut(&mut self, id: StreamId) -> Option<&mut StreamItem> {
+        self.items
+            .get_mut(id.idx as usize)
+            .filter(|item| item.generation == id.generation)
+    }
+
+    fn remove(&mut self, id: StreamId) -> StreamItem {
+        assert!(self.get(id).is_some(), "Stream {id} is gone");
+        self.items.remove(id.idx as usize)
+    }
+
+    fn drain(&mut self) -> slab::Drain<'_, StreamItem> {
+        self.items.drain()
+    }
+}
+
+impl std::ops::Index<StreamId> for Streams {
+    type Output = StreamItem;
+
+    fn index(&self, id: StreamId) -> &StreamItem {
+        self.get(id)
+            .unwrap_or_else(|| panic!("Stream {id} is gone"))
+    }
+}
+
+impl std::ops::IndexMut<StreamId> for Streams {
+    fn index_mut(&mut self, id: StreamId) -> &mut StreamItem {
+        self.get_mut(id)
+            .unwrap_or_else(|| panic!("Stream {id} is gone"))
+    }
 }
 
 bitflags::bitflags! {
@@ -68,6 +144,8 @@ const IORING_NOTIF_USAGE_ZC_COPIED: usize = 1 << 31;
 #[derive(Debug)]
 struct StreamItem {
     io: Socket,
+    /// Generation of the slot, see `StreamId`
+    generation: u32,
     flags: Flags,
     rd_op: Option<NonZeroU32>,
     wr_op: Option<NonZeroU32>,
@@ -77,22 +155,22 @@ struct StreamItem {
 #[derive(Debug)]
 enum Operation {
     Recv {
-        id: usize,
+        id: StreamId,
         buf: BytesMut,
     },
     /// Receive into a buffer selected from the provided buffer ring
     RecvRing {
-        id: usize,
+        id: StreamId,
     },
     /// Send of gathered pages, or of an inline page
     Send {
-        id: usize,
+        id: StreamId,
         buf: Box<SendBuf>,
         state: SendState,
     },
     /// Send of a single heap backed page, no allocation required
     SendOne {
-        id: usize,
+        id: StreamId,
         page: BytePage,
         state: SendState,
     },
@@ -100,7 +178,7 @@ enum Operation {
         tx: Option<pool::Sender<io::Result<()>>>,
     },
     Close {
-        id: usize,
+        id: StreamId,
     },
     Nop,
 }
@@ -130,7 +208,7 @@ struct SendState {
 
 impl Operation {
     /// Splits `Send` and `SendOne` operations for shared completion handling
-    fn into_send(self) -> (usize, SendData, SendState) {
+    fn into_send(self) -> (StreamId, SendData, SendState) {
         match self {
             Operation::Send { id, buf, state } => (id, SendData::Pages(buf), state),
             Operation::SendOne { id, page, state } => (id, SendData::Page(page), state),
@@ -242,7 +320,7 @@ impl SendData {
         Some(SendData::Pages(buf))
     }
 
-    fn into_op(self, id: usize, state: SendState) -> Operation {
+    fn into_op(self, id: StreamId, state: SendState) -> Operation {
         match self {
             SendData::Page(page) => Operation::SendOne { id, page, state },
             SendData::Pages(buf) => Operation::Send { id, buf, state },
@@ -373,7 +451,7 @@ struct StreamOpsInner {
 
 struct StreamOpsStorage {
     ops: Slab<Option<Operation>>,
-    streams: Slab<StreamItem>,
+    streams: Streams,
     /// Provided buffers for receives that wait for input
     bufs: Option<BufRing>,
     /// `IORING_SEND_ZC_REPORT_USAGE` is supported, cleared on first `EINVAL`
@@ -417,7 +495,7 @@ impl StreamOps {
                     pool: pool::new(),
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
-                        streams: Slab::new(),
+                        streams: Streams::new(),
                         bufs,
                         zc_report: true,
                     }))),
@@ -439,6 +517,7 @@ impl StreamOps {
         let item = StreamItem {
             io,
             ctx,
+            generation: 0,
             rd_op: None,
             wr_op: None,
             flags: if zc {
@@ -685,7 +764,7 @@ fn complete_send(ctx: &IoContext, buf: SendData, res: io::Result<usize>) -> io::
 }
 
 impl StreamOpsStorage {
-    fn recv(&mut self, id: usize, poll_first: bool, api: &ReactorApi) {
+    fn recv(&mut self, id: StreamId, poll_first: bool, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id)
             && !item.flags.contains(Flags::CLOSING)
         {
@@ -749,7 +828,7 @@ impl StreamOpsStorage {
     /// is closing, so the receive is reissued only for a resume that raced
     /// the cancel, it could not submit while the canceled receive was pending.
     /// Later resumes submit it themselves.
-    fn recv_canceled(&mut self, id: usize, buf: Option<BytesMut>, api: &ReactorApi) {
+    fn recv_canceled(&mut self, id: StreamId, buf: Option<BytesMut>, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
             #[cfg(feature = "trace")]
             log::trace!("{}: Recv canceled {:?}", item.tag(), item.fd());
@@ -768,7 +847,7 @@ impl StreamOpsStorage {
 
     fn recv_done(
         &mut self,
-        id: usize,
+        id: StreamId,
         mut buf: BytesMut,
         flags: u32,
         res: io::Result<usize>,
@@ -807,7 +886,13 @@ impl StreamOpsStorage {
         }
     }
 
-    fn recv_ring_done(&mut self, id: usize, flags: u32, res: io::Result<usize>, api: &ReactorApi) {
+    fn recv_ring_done(
+        &mut self,
+        id: StreamId,
+        flags: u32,
+        res: io::Result<usize>,
+        api: &ReactorApi,
+    ) {
         let bid = cqueue::buffer_select(flags);
         if matches!(res, Err(ref e) if e.raw_os_error() == Some(libc::ECANCELED)) {
             // canceled after a buffer was selected
@@ -875,7 +960,7 @@ impl StreamOpsStorage {
     /// Completes a receive into `buf`.
     fn recv_complete(
         &mut self,
-        id: usize,
+        id: StreamId,
         buf: BytesMut,
         flags: u32,
         res: io::Result<usize>,
@@ -900,7 +985,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn recv_more(&mut self, id: usize, mut buf: BytesMut, resize: bool, api: &ReactorApi) {
+    fn recv_more(&mut self, id: StreamId, mut buf: BytesMut, resize: bool, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id)
             && !item.flags.contains(Flags::CLOSING)
         {
@@ -924,7 +1009,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn send(&mut self, id: usize, api: &ReactorApi) {
+    fn send(&mut self, id: StreamId, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id)
             && !item.flags.contains(Flags::CLOSING)
         {
@@ -1029,7 +1114,7 @@ impl StreamOpsStorage {
         self.ops.insert(Some(op)) as u32
     }
 
-    fn pause_read(&mut self, id: usize, api: &ReactorApi) {
+    fn pause_read(&mut self, id: StreamId, api: &ReactorApi) {
         let Some(item) = self.streams.get_mut(id) else {
             return;
         };
@@ -1045,7 +1130,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn drop_stream(&mut self, id: usize, api: &ReactorApi) {
+    fn drop_stream(&mut self, id: StreamId, api: &ReactorApi) {
         // Dropping while `StreamOps` handling event
         let Some(item) = self.streams.get_mut(id) else {
             return;
@@ -1081,7 +1166,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn drop_weak_stream(&mut self, id: usize) {
+    fn drop_weak_stream(&mut self, id: StreamId) {
         // Dropping while `StreamOps` handling event
         let Some(item) = self.streams.get_mut(id) else {
             return;
@@ -1122,8 +1207,8 @@ impl StreamOpsInner {
         if let Some(mut storage) = self.storage.take() {
             while let Some(id) = self.delayed_feed.pop() {
                 match id {
-                    IdType::Stream(id) => storage.drop_stream(id as usize, &self.api),
-                    IdType::Weak(id) => storage.drop_weak_stream(id as usize),
+                    IdType::Stream(id) => storage.drop_stream(id, &self.api),
+                    IdType::Weak(id) => storage.drop_weak_stream(id),
                 }
             }
             self.storage.set(Some(storage));
@@ -1210,7 +1295,7 @@ impl Drop for StreamCtl {
             storage.drop_stream(self.id, &self.inner.api);
             self.inner.storage.set(Some(storage));
         } else {
-            self.inner.delayed_feed.push(IdType::Stream(self.id as u32));
+            self.inner.delayed_feed.push(IdType::Stream(self.id));
         }
     }
 }
@@ -1231,7 +1316,108 @@ impl Drop for WeakStreamCtl {
             storage.drop_weak_stream(self.id);
             self.inner.storage.set(Some(storage));
         } else {
-            self.inner.delayed_feed.push(IdType::Weak(self.id as u32));
+            self.inner.delayed_feed.push(IdType::Weak(self.id));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::net::UnixStream;
+
+    use ntex_io::{Handle, Io, IoStream};
+    use ntex_service::cfg::SharedCfg;
+
+    use super::*;
+
+    struct TestStream {
+        socket: Socket,
+        ops: StreamOps,
+        ctl: Rc<Cell<Option<StreamCtl>>>,
+    }
+
+    struct TestHandle {
+        _ctl: WeakStreamCtl,
+    }
+
+    impl Handle for TestHandle {}
+
+    impl IoStream for TestStream {
+        fn start(self, ctx: IoContext) -> Box<dyn Handle> {
+            let (ctl, weak) = self.ops.register(self.socket, ctx, false);
+            self.ctl.set(Some(ctl));
+            Box::new(TestHandle { _ctl: weak })
+        }
+    }
+
+    /// Registers one end of a socket pair, returns the peer as well.
+    fn register(ops: &StreamOps) -> (Io, StreamCtl, UnixStream) {
+        let (socket, peer) = UnixStream::pair().unwrap();
+        let ctl = Rc::new(Cell::new(None));
+        let io = Io::new(
+            TestStream {
+                socket: Socket::from(socket),
+                ops: ops.clone(),
+                ctl: ctl.clone(),
+            },
+            SharedCfg::default(),
+        );
+        (io, ctl.take().unwrap(), peer)
+    }
+
+    /// STATEMENT: A completion that arrives after its stream was removed does not reach
+    /// a new stream registered in the same slot.
+    ///
+    /// HOW:
+    /// - Register a stream and store a `Recv` operation for it, as if the receive was
+    ///   still in flight.
+    /// - Close the stream, complete its `Close` and drop the `Io`, so the slot is freed.
+    /// - Register a new stream and check it reuses the slot with another generation.
+    /// - Complete the stale receive with data and check the operation is released, the
+    ///   new stream received nothing and no receive was issued for it.
+    #[ntex::test]
+    async fn stale_completion_skips_reused_slot() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        let mut handler = StreamOpsHandler {
+            inner: ops.0.clone(),
+        };
+
+        let (io, ctl, _peer) = register(&ops);
+        let old = ctl.id;
+        let fd = ops.0.with(|st| st.streams[old].fd().0);
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"stale");
+        buf.clear();
+        let recv_op = ops
+            .0
+            .with(|st| st.add_operation(Operation::Recv { id: old, buf }));
+
+        drop(ctl);
+        let close_op = ops.0.with(|st| {
+            st.ops
+                .iter()
+                .find_map(|(op_id, op)| {
+                    matches!(op, Some(Operation::Close { .. })).then_some(op_id)
+                })
+                .unwrap()
+        });
+        handler.completed(close_op, 0, Ok(0));
+        drop(io);
+        handler.tick();
+        assert!(ops.0.with(|st| st.streams.get(old).is_none()));
+        // `Close` was never submitted, the kernel did not close the descriptor
+        unsafe { libc::close(fd) };
+
+        let (io, ctl, _peer) = register(&ops);
+        assert_eq!(ctl.id.idx, old.idx);
+        assert_ne!(ctl.id.generation, old.generation);
+
+        handler.completed(recv_op as usize, 0, Ok(5));
+        assert!(ops.0.with(|st| !st.ops.contains(recv_op as usize)));
+        assert_eq!(io.read_dst_size(), 0);
+        assert!(ops.0.with(|st| st.streams[ctl.id].rd_op.is_none()));
     }
 }
