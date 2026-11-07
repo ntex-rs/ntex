@@ -6,12 +6,13 @@ use crate::router::{Path, ResourceDef, Router};
 use crate::service::cfg::{Cfg, Configuration};
 use crate::service::{ReadyBinding, ReadyCallback, ReadyNotifier, ServiceChainFactory, boxed};
 use crate::util::OnDropFn;
-use crate::{BindCtx, Ctx, Middleware, Service, ServiceFactory, factory, util::HashMap};
+use crate::{BindCtx, Ctx, Middleware, Service, ServiceFactory, factory};
 
 use super::config::WebAppConfig;
 use super::guard::Guard;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebServiceConfig};
+use super::stack::{Filter, FilterBypass};
 use super::{HttpHandler, HttpRequest, HttpService, State, WebError, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
@@ -136,7 +137,7 @@ where
             Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
-        >,
+        > + 'static,
     M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
@@ -150,6 +151,7 @@ where
         // main service
         let service = WebServiceRouter::new(
             self.filter.create(st).await?,
+            Filter::<St, In>::bypass::<F, Out>(),
             self.router.clone(),
             self.default.clone(),
         );
@@ -231,17 +233,23 @@ where
 #[debug("Router")]
 pub struct WebServiceRouter<St: State, In, Out, F> {
     filter: ReadyBinding<CachedService<F>>,
+    /// Set if `filter` is the identity filter, which is never called.
+    bypass: Option<FilterBypass<In, Out>>,
     router: Rc<Router<HttpService<St, Out>, Guards>>,
     default: HttpService<St, Out>,
-    cache: RefCell<HashMap<usize, Rc<ReadyBinding<CachedService<HttpHandler<St, Out>>>>>>,
-    cache_default: RefCell<Option<Rc<ReadyBinding<CachedService<HttpHandler<St, Out>>>>>>,
+    /// Created route services indexed by resource id.
+    cache: RefCell<Vec<Option<CachedHandler<St, Out>>>>,
+    cache_default: RefCell<Option<CachedHandler<St, Out>>>,
     readiness: Rc<RouterReadiness>,
     ph: PhantomData<In>,
 }
 
+type CachedHandler<St, Out> = Rc<ReadyBinding<CachedService<HttpHandler<St, Out>>>>;
+
 impl<St: State, In, Out, F> WebServiceRouter<St, In, Out, F> {
-    pub fn new(
+    pub(super) fn new(
         filter: F,
+        bypass: Option<FilterBypass<In, Out>>,
         router: Rc<Router<HttpService<St, Out>, Guards>>,
         default: HttpService<St, Out>,
     ) -> Self {
@@ -253,10 +261,11 @@ impl<St: State, In, Out, F> WebServiceRouter<St, In, Out, F> {
 
         Self {
             filter,
+            bypass,
             router,
             default,
             readiness,
-            cache: RefCell::new(HashMap::default()),
+            cache: RefCell::new(Vec::new()),
             cache_default: RefCell::new(None),
             ph: PhantomData,
         }
@@ -275,7 +284,7 @@ where
     fn bind(&self, ctx: BindCtx<'_>) {
         ctx.subscribe(&self.readiness.changed);
         ctx.bind(&self.filter);
-        for service in self.cache.borrow().values() {
+        for service in self.cache.borrow().iter().flatten() {
             ctx.bind(service);
         }
         if let Some(service) = &*self.cache_default.borrow() {
@@ -301,7 +310,7 @@ where
             loop {
                 let id = self.readiness.unknown.borrow_mut().pop();
                 if let Some(id) = id {
-                    let hnd = self.cache.borrow().get(&id).cloned();
+                    let hnd = self.cache.borrow().get(id).cloned().flatten();
                     if let Some(hnd) = hnd {
                         let pending = OnDropFn::new(|| {
                             self.readiness.unknown.borrow_mut().push(id);
@@ -326,7 +335,11 @@ where
         req: WebRequest<In>,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
-        let mut req = ctx.call(&self.filter, req).await?;
+        let mut req = if let Some(bypass) = self.bypass {
+            bypass(req)
+        } else {
+            ctx.call(&self.filter, req).await?
+        };
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
@@ -340,7 +353,11 @@ where
 
         let (sf, id) = res.map_or((&self.default, None), |(sf, id)| (sf, Some(id)));
         let cached = if let Some(id) = id {
-            self.cache.borrow().get(&(id.get() as usize)).cloned()
+            self.cache
+                .borrow()
+                .get(id.get() as usize)
+                .cloned()
+                .flatten()
         } else {
             self.cache_default.borrow().clone()
         };
@@ -356,9 +373,12 @@ where
         {
             let svc = Rc::new(service);
             if let Some(id) = id {
-                self.cache
-                    .borrow_mut()
-                    .insert(id.get() as usize, svc.clone());
+                let idx = id.get() as usize;
+                let mut cache = self.cache.borrow_mut();
+                if cache.len() <= idx {
+                    cache.resize(idx + 1, None);
+                }
+                cache[idx] = Some(svc.clone());
             } else {
                 *self.cache_default.borrow_mut() = Some(svc.clone());
             }
@@ -376,7 +396,7 @@ where
             ctx.shutdown(&svc).await;
         }
         let services = mem::take(&mut *self.cache.borrow_mut());
-        for (_, svc) in services {
+        for svc in services.into_iter().flatten() {
             ctx.shutdown(&svc).await;
         }
     }
@@ -551,6 +571,7 @@ mod tests {
         }
         Rc::new(WebServiceRouter::new(
             Gated(filter),
+            None,
             Rc::new(routes.build()),
             handler(default),
         ))
@@ -578,6 +599,34 @@ mod tests {
                 ctx.ready::<_, WebRequest<()>>(&self.0).await
             }
         }
+    }
+
+    /// STATEMENT: Only the default identity filter is bypassed by the app router.
+    ///
+    /// HOW:
+    /// - Create an app service without a filter and assert the router `bypass` is set.
+    /// - Create one with a custom filter and assert the router `bypass` is unset.
+    #[crate::rt_test]
+    async fn default_filter_is_bypassed() {
+        use crate::service::IntoServiceFactory;
+        use crate::web::{self, App, HttpResponse};
+
+        let srv = App::new()
+            .route("/", web::get().to(async || HttpResponse::Ok()))
+            .into_factory()
+            .create(&())
+            .await
+            .unwrap();
+        assert!(srv.service.bypass.is_some());
+
+        let srv = App::new()
+            .filter(async |req: WebRequest<()>| Ok::<_, WebError>(req))
+            .route("/", web::get().to(async || HttpResponse::Ok()))
+            .into_factory()
+            .create(&())
+            .await
+            .unwrap();
+        assert!(srv.service.bypass.is_none());
     }
 
     /// STATEMENT: Cached aggregate readiness visits no handlers and invalidation targets one entry.
@@ -761,6 +810,7 @@ mod tests {
         );
         let outer = Rc::new(WebServiceRouter::new(
             Gated(filter.clone()),
+            None,
             Rc::new(routes.build()),
             handler(Rc::new(Gate::default())),
         ));
@@ -827,6 +877,7 @@ mod tests {
             };
             let router = Rc::new(WebServiceRouter::new(
                 Gated(Rc::new(Gate::default())),
+                None,
                 Rc::new(routes.build()),
                 default,
             ));
@@ -848,7 +899,14 @@ mod tests {
             let previous = if is_default {
                 router.cache_default.borrow().as_ref().unwrap().clone()
             } else {
-                router.cache.borrow().values().next().unwrap().clone()
+                router
+                    .cache
+                    .borrow()
+                    .iter()
+                    .flatten()
+                    .next()
+                    .unwrap()
+                    .clone()
             };
             gates[0].blocked.set(true);
             gates[0].changed.notify();
@@ -861,7 +919,14 @@ mod tests {
             let current = if is_default {
                 router.cache_default.borrow().as_ref().unwrap().clone()
             } else {
-                router.cache.borrow().values().next().unwrap().clone()
+                router
+                    .cache
+                    .borrow()
+                    .iter()
+                    .flatten()
+                    .next()
+                    .unwrap()
+                    .clone()
             };
             assert!(!Rc::ptr_eq(&previous, &current));
             assert!(router.readiness.unknown.borrow().is_empty());

@@ -1,5 +1,17 @@
 # Changes
 
+## [2.2.0] - Unreleased
+
+* Match a single `{name}` path segment without regex
+
+* Look up sub trees by their first static segment instead of trying each one
+
+* Look up static paths in a table before walking the tree
+
+* Add `ResourcePath::needs_unquote()`, skip decoding paths without `%`
+
+* Fix `ResourcePath for &T` not decoding path segments
+
 ## [2.1.0] - 2026-10-04
 
 * Implement `ResourcePath` for `urly::Url` instead of `http::Uri`, remove `http` feature

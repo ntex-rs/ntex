@@ -641,7 +641,12 @@ where
         // router service
         Ok(self.middleware.create(
             st,
-            WebServiceRouter::new(filter, self.router.clone(), self.default.clone()),
+            WebServiceRouter::new(
+                filter,
+                Filter::<St, In>::bypass::<F, Out>(),
+                self.router.clone(),
+                self.default.clone(),
+            ),
         ))
     }
 }

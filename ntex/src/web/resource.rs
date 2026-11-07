@@ -10,7 +10,7 @@ use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
 use super::error::{WebError, WebResponseError};
 use super::guard::Guard;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::stack::{Filter, WebStack};
+use super::stack::{Filter, FilterBypass, WebStack};
 use super::{
     FromRequest, Handler, HandlerSt, HttpHandler, HttpService, State, WebRequest, WebResponse,
 };
@@ -668,6 +668,7 @@ impl<St, Outer, In, Out, M, F> ServiceFactory<St, WebRequest<Outer>>
     for ResourceServiceFactory<St, In, Out, M, F>
 where
     St: State,
+    In: 'static,
     Out: 'static,
     F: ServiceFactory<
             St,
@@ -697,6 +698,7 @@ where
             st,
             ResourceService {
                 filter,
+                bypass: Filter::<St, In>::bypass::<F, Out>(),
                 default,
                 routes: self.routes.iter().map(Route::service).collect(),
                 ph: PhantomData,
@@ -713,6 +715,8 @@ where
 #[debug("ResourceService")]
 pub struct ResourceService<St: State, In, Out, F> {
     filter: F,
+    /// Set if `filter` is the identity filter, which is never called.
+    bypass: Option<FilterBypass<In, Out>>,
     routes: Vec<RouteService<St, Out>>,
     default: Option<ReadyBinding<HttpHandler<St, Out>>>,
     ph: PhantomData<In>,
@@ -759,7 +763,11 @@ where
         req: WebRequest<In>,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
-        let mut req = ctx.call(&self.filter, req).await?;
+        let mut req = if let Some(bypass) = self.bypass {
+            bypass(req)
+        } else {
+            ctx.call(&self.filter, req).await?
+        };
 
         for route in &self.routes {
             if route.check(&mut req) {
@@ -810,6 +818,34 @@ mod tests {
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(filter.get());
+    }
+
+    /// STATEMENT: Only the default identity filter is bypassed by resource services.
+    ///
+    /// HOW:
+    /// - Create a resource service without a filter and assert `bypass` is set.
+    /// - Create one with a custom filter and assert `bypass` is unset.
+    #[crate::rt_test]
+    async fn default_filter_is_bypassed() {
+        use crate::service::{IntoServiceFactory, ServiceFactory};
+
+        let srv = IntoServiceFactory::<_, (), WebRequest<()>>::into_factory(
+            web::resource("/test").to(async || HttpResponse::Ok()),
+        )
+        .create(&())
+        .await
+        .unwrap();
+        assert!(srv.bypass.is_some());
+
+        let srv = IntoServiceFactory::<_, (), WebRequest<()>>::into_factory(
+            web::resource("/test")
+                .filter(async |req: WebRequest<()>| Ok::<_, Infallible>(req))
+                .to(async || HttpResponse::Ok()),
+        )
+        .create(&())
+        .await
+        .unwrap();
+        assert!(srv.bypass.is_none());
     }
 
     /// STATEMENT: Resource readiness requires both the filter and initialized fallback to be ready.
