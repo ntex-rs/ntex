@@ -14,6 +14,10 @@
 
 * web: Dispatch routes of resources without middleware, filter, or fallback directly from the router
 
+* web: Do not clone app config for pooled requests
+
+* web: Store small handler futures inline
+
 ## [4.6.0] - 2026-11-04
 
 * server: Test-server service factories now receive worker state. Replace

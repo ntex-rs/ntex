@@ -3,12 +3,12 @@ use std::{cell::Cell, cell::RefCell, marker::PhantomData, mem, rc::Rc};
 use crate::error::Failure;
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
-use crate::service::cfg::{Cfg, Configuration};
+use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::service::{ReadyBinding, ReadyCallback, ReadyNotifier, ServiceChainFactory, boxed};
 use crate::util::OnDropFn;
 use crate::{BindCtx, Ctx, Middleware, Service, ServiceFactory, factory};
 
-use super::config::WebAppConfig;
+use super::config::{WebAppConfig, get_request};
 use super::guard::Guard;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebRoute, WebServiceConfig};
@@ -190,17 +190,20 @@ where
     crate::forward!(St, service);
 
     async fn call(&self, req: Request, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, F::Error> {
-        let config: Cfg<WebAppConfig> = if let Some(cfg) = &self.config {
-            cfg.clone()
+        // Pooled requests keep the config of their shared configuration, so the
+        // config handle is created only for new requests. Cloning it touches the
+        // shared configuration's atomic ref count, which every worker uses.
+        let cfg_id = if let Some(cfg) = &self.config {
+            cfg.id()
         } else if let Some(io) = req.io() {
-            io.cfg().ctx().get()
+            io.cfg().ctx().id()
         } else {
-            Cfg::<WebAppConfig>::default()
+            CfgContext::default().id()
         };
 
         let (head, payload) = req.into_parts();
 
-        let req = if let Some(mut req) = config.get_request() {
+        let req = if let Some(mut req) = get_request(cfg_id) {
             let inner = Rc::get_mut(&mut req.0).unwrap();
             inner.path.set(head.uri.clone());
             inner.head = head;
@@ -210,6 +213,13 @@ where
             }
             req
         } else {
+            let config = if let Some(cfg) = &self.config {
+                cfg.clone()
+            } else if let Some(io) = head.io.as_ref() {
+                io.cfg().ctx().get()
+            } else {
+                Cfg::<WebAppConfig>::default()
+            };
             HttpRequest::new(Path::new(head.uri.clone()), head, self.rmap.clone(), config)
         };
         match ctx
