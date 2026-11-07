@@ -102,11 +102,48 @@ mod shim {
         };
         if current == hooks(malloc, realloc, free) {
             true
-        } else if current == hooks(CRYPTO_malloc, CRYPTO_realloc, CRYPTO_free) {
+        } else if current == hooks(CRYPTO_malloc, CRYPTO_realloc, CRYPTO_free)
+            || current.0.and_then(dll_defaults) == Some(current)
+        {
             unsafe { CRYPTO_set_mem_functions(malloc, realloc, free) == 1 }
         } else {
             false
         }
+    }
+
+    /// Default hooks exported by the DLL containing the `malloc` hook address.
+    ///
+    /// With a DLL OpenSSL our `CRYPTO_*` items are import thunks, while OpenSSL
+    /// reports its own addresses. Returns `None` if the address is not in a module.
+    #[cfg(windows)]
+    fn dll_defaults(malloc: usize) -> Option<(Option<usize>, Option<usize>, Option<usize>)> {
+        use windows_sys::Win32::System::LibraryLoader::{
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            GetModuleHandleExW, GetProcAddress,
+        };
+        let flags =
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+        let mut module = ptr::null_mut();
+        // SAFETY: with FROM_ADDRESS the name is an address, the reference count is unchanged.
+        if unsafe { GetModuleHandleExW(flags, malloc as *const u16, &raw mut module) } == 0 {
+            return None;
+        }
+        // SAFETY: the module stays loaded, it provides the installed hooks.
+        let export = |name: &std::ffi::CStr| {
+            unsafe { GetProcAddress(module, name.as_ptr().cast()) }.map(|f| f as usize)
+        };
+        Some((
+            export(c"CRYPTO_malloc"),
+            export(c"CRYPTO_realloc"),
+            export(c"CRYPTO_free"),
+        ))
+    }
+
+    /// Import thunks only exist on Windows.
+    #[cfg(not(windows))]
+    #[allow(clippy::unnecessary_wraps)]
+    fn dll_defaults(_: usize) -> Option<(Option<usize>, Option<usize>, Option<usize>)> {
+        None
     }
 
     /// Includes the aligned header, rejecting arithmetic overflow and invalid layouts.
