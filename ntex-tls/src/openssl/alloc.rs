@@ -9,17 +9,25 @@
 ///
 /// The setting is process wide and OpenSSL accepts it only before its first
 /// allocation, call this at the start of `main` before any other OpenSSL use.
-/// Returns `false` if OpenSSL has already allocated memory or the linked library
-/// does not support custom allocators (OpenSSL older than 1.1.0, `LibreSSL`,
-/// `BoringSSL`, `aws-lc`). A failed call leaves the existing allocator unchanged,
-/// which may already be a custom allocator installed by another caller.
+/// Returns `false` if OpenSSL has already allocated memory, another component
+/// has installed OpenSSL memory hooks, or the linked library does not support
+/// custom allocators (OpenSSL older than 1.1.0, `LibreSSL`, `BoringSSL`,
+/// `aws-lc`). A failed call leaves the existing allocator unchanged.
 ///
-/// Returns `true` when the hooks were installed. This affects all OpenSSL users
-/// in the process, not just connections created by this crate.
-pub fn use_global_allocator() -> bool {
+/// Returns `true` when the hooks were installed, or were already installed by
+/// an earlier call. This affects all OpenSSL users in the process, not just
+/// connections created by this crate.
+///
+/// # Safety
+///
+/// OpenSSL keeps its allocator hooks in unsynchronized globals. No other
+/// thread may use OpenSSL or replace its memory hooks while this function
+/// runs, and no other component may replace the hooks afterwards, otherwise
+/// a block may be released by an allocator that did not allocate it.
+pub unsafe fn use_global_allocator() -> bool {
     #[cfg(ntex_openssl_mem)]
     {
-        shim::install()
+        unsafe { shim::install() }
     }
     #[cfg(not(ntex_openssl_mem))]
     {
@@ -52,11 +60,53 @@ mod shim {
     unsafe extern "C" {
         /// Installs callbacks only while OpenSSL still permits allocator replacement.
         fn CRYPTO_set_mem_functions(m: MallocFn, r: ReallocFn, f: FreeFn) -> c_int;
+        /// Reads the currently installed callbacks.
+        fn CRYPTO_get_mem_functions(
+            m: *mut Option<MallocFn>,
+            r: *mut Option<ReallocFn>,
+            f: *mut Option<FreeFn>,
+        );
+        /// OpenSSL's default allocation hook.
+        fn CRYPTO_malloc(size: usize, file: *const c_char, line: c_int) -> *mut c_void;
+        /// OpenSSL's default reallocation hook.
+        fn CRYPTO_realloc(
+            p: *mut c_void,
+            size: usize,
+            file: *const c_char,
+            line: c_int,
+        ) -> *mut c_void;
+        /// OpenSSL's default deallocation hook.
+        fn CRYPTO_free(p: *mut c_void, file: *const c_char, line: c_int);
     }
 
     /// Attempts to install this shim; failure leaves the existing hooks intact.
-    pub(super) fn install() -> bool {
-        unsafe { CRYPTO_set_mem_functions(malloc, realloc, free) == 1 }
+    ///
+    /// OpenSSL stops accepting hooks after its default allocator first runs,
+    /// but a foreign custom allocator never closes that window. Installing
+    /// over one would make this shim free blocks that lack its size header,
+    /// so only OpenSSL's default hooks are replaced.
+    ///
+    /// # Safety
+    ///
+    /// See [`super::use_global_allocator`].
+    pub(super) unsafe fn install() -> bool {
+        let (mut m, mut r, mut f) = (None, None, None);
+        unsafe { CRYPTO_get_mem_functions(&raw mut m, &raw mut r, &raw mut f) };
+        let current = (
+            m.map(|m| m as usize),
+            r.map(|r| r as usize),
+            f.map(|f| f as usize),
+        );
+        let hooks = |m: MallocFn, r: ReallocFn, f: FreeFn| {
+            (Some(m as usize), Some(r as usize), Some(f as usize))
+        };
+        if current == hooks(malloc, realloc, free) {
+            true
+        } else if current == hooks(CRYPTO_malloc, CRYPTO_realloc, CRYPTO_free) {
+            unsafe { CRYPTO_set_mem_functions(malloc, realloc, free) == 1 }
+        } else {
+            false
+        }
     }
 
     /// Includes the aligned header, rejecting arithmetic overflow and invalid layouts.
@@ -224,6 +274,6 @@ mod tests {
     #[test]
     fn rejected_after_openssl_allocated() {
         drop(SslConnector::builder(SslMethod::tls()).unwrap());
-        assert!(!super::use_global_allocator());
+        assert!(!unsafe { super::use_global_allocator() });
     }
 }

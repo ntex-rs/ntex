@@ -1,11 +1,15 @@
 # Changes
 
-## [4.7.3] - 2026-11-07
+## [4.8.0] - 2026-11-07
 
 * Do not use deprecated bytes method
 
 * Fix aliased TLS session access when a handshake callback queries its own
   connection; such queries now return `None` while the session is busy
+
+* openssl: `use_global_allocator()` is now `unsafe` and documents its
+  threading contract. It no longer replaces OpenSSL memory hooks installed by
+  another component, which made the shim free blocks it did not allocate
 
 ## [4.7.2] - 2026-11-03
 

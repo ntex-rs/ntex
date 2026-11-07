@@ -43,10 +43,12 @@ static GLOBAL: Recording = Recording;
 /// HOW:
 /// - Install the allocator before OpenSSL use and check a 1000-byte allocation includes
 ///   the shim's 16-byte header in the recorded allocation size.
+/// - Check a repeated `use_global_allocator` call reports the hooks as installed.
 /// - Complete a handshake, transfer 256 KiB in each direction, and check orderly shutdown.
 #[ntex::test]
 async fn openssl_uses_global_allocator() {
-    assert!(use_global_allocator());
+    // SAFETY: no other thread uses OpenSSL yet
+    assert!(unsafe { use_global_allocator() });
 
     // the block carries a 16 byte header
     LAST.set(0);
@@ -54,6 +56,8 @@ async fn openssl_uses_global_allocator() {
     assert!(!p.is_null());
     assert_eq!(LAST.get(), 1016);
     unsafe { openssl_sys::CRYPTO_free(p, c"test".as_ptr(), 0) };
+    // SAFETY: as above
+    assert!(unsafe { use_global_allocator() });
 
     let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(ssl::SslMethod::tls()).unwrap();
     acceptor
