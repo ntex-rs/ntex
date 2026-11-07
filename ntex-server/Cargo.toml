@@ -33,7 +33,8 @@ event-listener = { workspace = true }
 oneshot = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
-socket2 = { workspace = true }
+parking_lot = { workspace = true }
+socket2 = { workspace = true, features = ["all"] }
 uuid = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

@@ -105,10 +105,22 @@ impl<T> Server<T> {
     /// items submitted right after start or while no worker is available are
     /// rejected.
     pub fn process(&self, item: T) -> Result<(), T> {
+        self.process_with(item, |item| self.router.incoming_cpu(item))
+    }
+
+    /// Submits an item like [`process`](Self::process), `cpu` returns the
+    /// incoming CPU of the item instead of the configuration's callback.
+    ///
+    /// Unlike the callback, `cpu` may run concurrently on several threads.
+    pub(crate) fn process_with(
+        &self,
+        item: T,
+        cpu: impl FnOnce(&T) -> Option<usize>,
+    ) -> Result<(), T> {
         if self.shared.status() != ServerStatus::Ready {
             return Err(item);
         }
-        let item = match self.router.dispatch(item, &self.shared.metrics) {
+        let item = match self.router.dispatch_with(item, &self.shared.metrics, cpu) {
             Ok(()) => return Ok(()),
             // the server started stopping after the status check
             Err(Rejected::Closed(item)) => return Err(item),

@@ -1,10 +1,10 @@
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
-use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, pin::pin, rc::Rc};
+use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, pin::pin, rc::Rc, sync::Arc};
 
 use async_channel::{Receiver, Sender, unbounded};
 use ntex_rt::{System, signals::PanicSource, signals::Signal};
 use ntex_util::future::{Either, join_all, select};
 use ntex_util::time::{Millis, interval, sleep, timeout};
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::affinity::{self, Placement};
 use crate::{Server, ServerConfiguration, ServerStatus};
@@ -112,12 +112,30 @@ impl<T> Routing<T> {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Router<T>> {
-        self.router.lock().unwrap_or_else(PoisonError::into_inner)
+        self.router.lock()
     }
 
     /// Sends `item` to a worker, returns it if the server is stopping or no
     /// worker is available.
     pub(crate) fn dispatch(&self, item: T, metrics: &Metrics) -> Result<(), Rejected<T>> {
+        self.dispatch_with(item, metrics, |item| self.incoming_cpu(item))
+    }
+
+    /// Returns the incoming CPU of `item` from the configuration's callback.
+    pub(crate) fn incoming_cpu(&self, item: &T) -> Option<usize> {
+        // the callback is busy if it submits the item to this server, or
+        // another thread runs it, the item is sent without its cpu
+        self.incoming_cpu.try_lock().and_then(|f| f(item))
+    }
+
+    /// Sends `item` to a worker, `cpu` returns its incoming CPU and is
+    /// called without holding the router's lock.
+    pub(crate) fn dispatch_with(
+        &self,
+        item: T,
+        metrics: &Metrics,
+        cpu: impl FnOnce(&T) -> Option<usize>,
+    ) -> Result<(), Rejected<T>> {
         let uses_cpu = {
             let mut r = self.lock();
             if r.closed {
@@ -128,17 +146,7 @@ impl<T> Routing<T> {
             let r = &mut *r;
             r.balancer.uses_incoming_cpu(&r.workers)
         };
-        // the callback is busy if it submits the item to this server, or
-        // another thread runs it, the item is sent without its cpu
-        let cpu = if uses_cpu {
-            match self.incoming_cpu.try_lock() {
-                Ok(f) => f(&item),
-                Err(TryLockError::Poisoned(f)) => f.into_inner()(&item),
-                Err(TryLockError::WouldBlock) => None,
-            }
-        } else {
-            None
-        };
+        let cpu = if uses_cpu { cpu(&item) } else { None };
         self.lock().dispatch(item, cpu, metrics)
     }
 
@@ -790,6 +798,45 @@ mod tests {
         let res = rx.recv_timeout(Duration::from_secs(5));
         assert_eq!(res, Ok(Ok(())), "dispatch deadlocked");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        wrk.stop(Millis::ZERO).await;
+    }
+
+    /// STATEMENT: `dispatch_with` uses its own incoming CPU lookup, so items
+    /// keep their CPU while another thread runs the configuration's callback.
+    ///
+    /// HOW:
+    /// - Hold the callback's lock, as a concurrent dispatch does.
+    /// - Check that `dispatch` sends the item without its CPU, so the metrics
+    ///   count no incoming CPU hit.
+    /// - Check that `dispatch_with` calls its lookup and the metrics count one
+    ///   incoming CPU hit.
+    #[ntex::test]
+    async fn dispatch_with_ignores_busy_callback() {
+        let mut wrk = Worker::start("test".into(), Cfg, None);
+        assert_eq!(wrk.wait_for_status().await, WorkerStatus::Available);
+        wrk.set_cpus(&[0]);
+
+        let callback: IncomingCpu<usize> = Box::new(|_| Some(0));
+        let mut balancer = Balancer::new(LoadBalancing::IncomingCpu);
+        balancer.insert(0);
+        let r = Routing::new(balancer, 1, callback);
+        r.lock().workers.push(wrk.clone());
+
+        let metrics = Metrics::new(1);
+        let busy = r.incoming_cpu.lock();
+        assert_eq!(r.dispatch(1, &metrics), Ok(()));
+        assert_eq!(metrics.snapshot().incoming_cpu_hits, 0);
+
+        let calls = AtomicUsize::new(0);
+        let res = r.dispatch_with(2, &metrics, |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some(0)
+        });
+        assert_eq!(res, Ok(()));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(metrics.snapshot().incoming_cpu_hits, 1);
+        drop(busy);
 
         wrk.stop(Millis::ZERO).await;
     }

@@ -4,11 +4,11 @@ use ntex_io::{IoConfig, IoMetricsGroup};
 use ntex_service::{BindCtx, Ctx, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter, services::counter::CounterGuard};
 
-use crate::{ServerAppConfig, ServerConfiguration, affinity, metrics::WorkerSlot};
+use crate::{ServerAppConfig, ServerConfiguration, metrics::WorkerSlot};
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService};
-use super::{MAX_CONNS_COUNTER, Token, socket::Connection, socket::Stream};
+use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
 
 /// Worker configuration for network servers.
 ///
@@ -101,11 +101,7 @@ impl<Cfg: ServerAppConfig> ServerConfiguration for StreamServer<Cfg> {
     }
 
     fn incoming_cpu(&self, con: &Connection) -> Option<usize> {
-        match con.io {
-            Stream::Tcp(ref stream) => affinity::incoming_cpu(stream),
-            #[cfg(unix)]
-            Stream::Uds(_) => None,
-        }
+        con.incoming_cpu()
     }
 }
 

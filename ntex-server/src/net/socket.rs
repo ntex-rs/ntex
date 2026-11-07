@@ -32,6 +32,17 @@ pub struct Connection {
     pub(crate) token: Token,
 }
 
+impl Connection {
+    /// Returns the CPU that handled the connection's incoming packets.
+    pub(crate) fn incoming_cpu(&self) -> Option<usize> {
+        match self.io {
+            Stream::Tcp(ref stream) => crate::affinity::incoming_cpu(stream),
+            #[cfg(unix)]
+            Stream::Uds(_) => None,
+        }
+    }
+}
+
 pub enum Listener {
     Tcp(net::TcpListener),
     #[cfg(unix)]

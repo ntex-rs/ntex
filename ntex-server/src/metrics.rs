@@ -1,11 +1,12 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering, fence};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::{cell::RefCell, panic::Location, time::Duration, time::Instant};
 
 use ntex_bytes::{PageCacheMetrics, PageCacheSnapshot};
 use ntex_io::{IoConfigMetrics, IoMetricsGroup, IoMetricsSnapshot};
 use ntex_rt::Arbiter;
 use ntex_rt::metrics::{Histogram, LatencyMetrics};
+use parking_lot::Mutex;
 
 use crate::WorkerId;
 
@@ -263,6 +264,7 @@ impl Metrics {
                 })
                 .collect(),
             paused: Period::default(),
+            paused_loops: Mutex::new(0),
             backlog: AtomicUsize::new(0),
         })
     }
@@ -400,7 +402,7 @@ impl WorkerSlot {
     /// Sets the arbiter the worker runs on, the totals of the previous
     /// arbiter are kept.
     pub(crate) fn set_arbiter(&self, arbiter: Arbiter) {
-        let mut rt = self.runtime.lock().unwrap();
+        let mut rt = self.runtime.lock();
         if let Some(prev) = rt.arbiter.replace(arbiter) {
             let m = runtime_metrics(&prev);
             rt.base.add(&m);
@@ -408,7 +410,7 @@ impl WorkerSlot {
     }
 
     fn runtime_metrics(&self) -> RuntimeMetrics {
-        let rt = self.runtime.lock().unwrap();
+        let rt = self.runtime.lock();
         let Some(ref arb) = rt.arbiter else {
             return RuntimeMetrics::default();
         };
@@ -473,6 +475,8 @@ pub(crate) struct AcceptSlot {
     epoch: Instant,
     listeners: Box<[ListenerSlot]>,
     paused: Period,
+    /// Number of paused accept threads, also serializes `paused` updates.
+    paused_loops: Mutex<usize>,
     backlog: AtomicUsize,
 }
 
@@ -486,12 +490,30 @@ struct ListenerSlot {
 }
 
 impl AcceptSlot {
+    /// Reports that one accept thread paused or resumed.
+    ///
+    /// The accept loop is paused while any of its threads is paused. Every
+    /// thread reports a resume only after a pause.
     pub(crate) fn paused(&self, paused: bool) {
-        self.paused.set(self.epoch, paused);
+        let mut loops = self.paused_loops.lock();
+        if paused {
+            *loops += 1;
+        } else {
+            debug_assert!(*loops > 0);
+            *loops = loops.saturating_sub(1);
+        }
+        self.paused.set(self.epoch, *loops > 0);
     }
 
-    pub(crate) fn backlog(&self, len: usize) {
-        self.backlog.store(len, Ordering::Relaxed);
+    /// Updates the backlog of one accept thread from `prev` to `len`.
+    ///
+    /// The metric is the sum of the backlogs of all accept threads.
+    pub(crate) fn backlog(&self, prev: usize, len: usize) {
+        if len > prev {
+            self.backlog.fetch_add(len - prev, Ordering::Relaxed);
+        } else {
+            self.backlog.fetch_sub(prev - len, Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn accepted(&self, idx: usize) {
@@ -592,7 +614,7 @@ mod tests {
         acc.connection_error(0);
         acc.resource_error(0);
         acc.resource_error(1);
-        acc.backlog(3);
+        acc.backlog(0, 3);
         // the first registration wins
         m.listeners([]);
 
