@@ -42,7 +42,7 @@ impl PathElement {
         if let PathElement::Str(s) = self {
             s
         } else {
-            panic!()
+            unreachable!("not a string element")
         }
     }
 
@@ -424,10 +424,11 @@ impl ResourceDef {
             }
             if elems[idx].is_str() && elems[idx + 1].is_str() {
                 let s2 = elems.remove(idx + 1).into_str();
-                if let PathElement::Str(ref mut s1) = elems[idx] {
-                    s1.push_str(&s2);
-                    continue;
-                }
+                let PathElement::Str(ref mut s1) = elems[idx] else {
+                    unreachable!("checked by `is_str`");
+                };
+                s1.push_str(&s2);
+                continue;
             }
             idx += 1;
         }
@@ -494,6 +495,15 @@ mod tests {
     use crate::path::Path;
     use crate::tree::Tree;
 
+    /// STATEMENT: Static resources require exact path matches, including trailing slashes and
+    /// complete segments.
+    ///
+    /// HOW:
+    /// - Build trees for `/`, `/name`, `/name/`, and `/user/profile`; verify exact matches and
+    ///   reject the listed missing, extended, or altered paths.
+    /// - Register `/name` and `/name/` together and confirm they select distinct values.
+    /// - Register an empty pattern and `/test/index.html`; use an accepting check to verify the
+    ///   empty match, reject `index.html`, and accept `test/index.html`.
     #[test]
     fn test_parse_static() {
         let re = ResourceDef::new("/");
@@ -538,6 +548,17 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Dynamic patterns capture named values while enforcing segment boundaries,
+    /// literals, and custom regex constraints.
+    ///
+    /// HOW:
+    /// - Match `/{id}` and `/user/{id}` against text and numeric segments, reject extra path
+    ///   components, and verify captured `id` values.
+    /// - Match `/v{version}/resource/{id}` and verify both captures while rejecting missing
+    ///   versions, incomplete paths, and trailing slashes.
+    /// - Match `/{id:[[:digit:]]{6}}`, verify the six-digit capture, and reject wrong lengths,
+    ///   letters, or additional components.
+    /// - Match the composite version-and-minor pattern and verify all four named captures.
     #[test]
     fn test_parse_param() {
         let tree = Tree::new(&ResourceDef::new("/{id}"), 1);
@@ -596,6 +617,16 @@ mod tests {
         assert_eq!(resource.get("name").unwrap(), "name");
     }
 
+    /// STATEMENT: A single multi-pattern resource matches dynamic alternatives and preserves
+    /// their capture constraints.
+    ///
+    /// HOW:
+    /// - Build a resource from a vector containing `/user/{id}`, `/v{version}/resource/{id}`,
+    ///   and a six-digit `id` pattern.
+    /// - Verify successful matches and captured `id` and `version` values; reject extra
+    ///   components, missing versions, wrong digit counts, and letters.
+    /// - Rebuild the same alternatives from borrowed-string and owned-string arrays and verify
+    ///   the `/user/{id}` matches and trailing-component rejections.
     #[test]
     fn test_dynamic_set() {
         let re = ResourceDef::new(vec![
@@ -658,6 +689,15 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/user/2345/sdg")), None);
     }
 
+    /// STATEMENT: URL-backed dynamic captures decode percent escapes once without losing
+    /// encoded slash content.
+    ///
+    /// HOW:
+    /// - Match plain and percent-encoded `urly::Url` paths against `/user/{id}/test`.
+    /// - Verify plain digits, escaped percent signs, and `/user/foo-%2f-%252f-bar/test` capture
+    ///   the expected decoded `id` values.
+    /// - Match an encoded URL within `id` and confirm it becomes
+    ///   `http://localhost:80/file//var/log/syslog`.
     #[test]
     fn test_parse_urlencoded() {
         use urly::Url;
@@ -709,6 +749,16 @@ mod tests {
         assert_eq!(resource.get("id").unwrap(), "qwe%rty");
     }
 
+    /// STATEMENT: Captures decode valid percent-encoded UTF-8 once while retaining malformed
+    /// escapes and invalid UTF-8 bytes.
+    ///
+    /// HOW:
+    /// - Use `test_single_value!` to match URL-backed paths against `/{id}/` and compare each
+    ///   `id` with its expected value.
+    /// - Cover punctuation, Unicode, encoded slashes, double encoding, embedded URLs, and
+    ///   literal plus signs.
+    /// - Verify malformed or incomplete escapes remain literal, invalid UTF-8 remains percent-
+    ///   encoded, and adjacent valid escapes still decode.
     #[test]
     fn test_extract_path_decode() {
         use urly::Url;
@@ -820,6 +870,15 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Equivalent resource definitions can be compared and used as map keys, and
+    /// segment variants remain distinguishable.
+    ///
+    /// HOW:
+    /// - Compare `/user/-{id}*` definitions created with `new` and `from` using borrowed and
+    ///   owned strings.
+    /// - Insert a cloned definition into `HashMap` and confirm the original key is found.
+    /// - Compare equal static segments, distinguish a static segment from a dynamic regex
+    ///   segment, and verify the dynamic segment equals itself.
     #[test]
     #[allow(clippy::mutable_key_type)]
     fn test_def() {
@@ -844,6 +903,18 @@ mod tests {
         assert_eq!(seg2, seg2);
     }
 
+    /// STATEMENT: Multi-pattern definitions match every alternative, build paths from the
+    /// first, and compare their full pattern lists.
+    ///
+    /// HOW:
+    /// - Define `/a/{x}` and `/b/{x}`, check the pattern accessors, and verify both
+    ///   alternatives match.
+    /// - Build positional and named paths and confirm they use `/a/{x}` with the supplied
+    ///   values.
+    /// - Compare definitions with changed or missing alternatives and verify map lookup
+    ///   respects the entire pattern list.
+    /// - Create an empty pattern collection and check its empty primary pattern and pattern
+    ///   list.
     #[test]
     #[allow(clippy::mutable_key_type)]
     fn test_multiple_patterns() {
@@ -878,6 +949,11 @@ mod tests {
         assert_eq!(re.patterns(), Vec::<String>::new());
     }
 
+    /// STATEMENT: A dynamic resource pattern can match a path without a leading slash.
+    ///
+    /// HOW:
+    /// - Build a tree for `name/{id}` and match `name/1`.
+    /// - Verify the resource value is `1` and the captured `id` is `1`.
     #[test]
     fn test_leading_slash_is_optional() {
         let tree = Tree::new(&ResourceDef::new("name/{id}"), 1);
@@ -886,6 +962,15 @@ mod tests {
         assert_eq!(resource.get("id").unwrap(), "1");
     }
 
+    /// STATEMENT: Regex metacharacters in literal pattern portions are matched literally rather
+    /// than as regex syntax.
+    ///
+    /// HOW:
+    /// - Match `/{source}.json` against `/foo.json`, verify `source` is `foo`, and reject
+    ///   `/fooXjson`.
+    /// - Verify `/{name}.[x]` accepts `/a.[x]` but rejects `/a.x`.
+    /// - Verify `/files.v*` accepts `/files.v1` but rejects `/filesXv1`, and `/files(*` accepts
+    ///   `/files(1`.
     #[test]
     fn test_parse_escapes_literals() {
         // literal after a dynamic segment
@@ -908,6 +993,14 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/files(1")), Some(1));
     }
 
+    /// STATEMENT: A named tail capture includes all remaining content after its literal prefix,
+    /// including slashes.
+    ///
+    /// HOW:
+    /// - Build a tree for `/user/-{id}*` and match text, digits, a trailing slash, and an
+    ///   additional segment.
+    /// - Verify every path selects value `1` and `id` is respectively `profile`, `2345`,
+    ///   `2345/`, or `2345/sdg`.
     #[test]
     fn test_parse_tail() {
         let re = ResourceDef::new("/user/-{id}*");
@@ -930,6 +1023,16 @@ mod tests {
         assert_eq!(resource.get("id").unwrap(), "2345/sdg");
     }
 
+    /// STATEMENT: Static wildcard tails accept nonempty suffixes across segments but reject the
+    /// tested empty suffixes.
+    ///
+    /// HOW:
+    /// - Match `/*` against the listed single- and multi-segment paths, including trailing
+    ///   slashes, and reject a root-only `ByteString` path.
+    /// - Verify `/user*` and `/v/user*`, created from different string forms, accept their
+    ///   listed extended paths.
+    /// - Verify `/user/*` and `/v/user/*` accept nonempty tails but reject their bare prefixes
+    ///   and slash-only endings.
     #[test]
     #[allow(clippy::needless_borrows_for_generic_args)]
     fn test_static_tail() {
@@ -981,6 +1084,18 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/v/user")), None);
     }
 
+    /// STATEMENT: Static prefixes match at segment boundaries, enforce required slashes, and
+    /// leave the unmatched suffix available.
+    ///
+    /// HOW:
+    /// - Verify `/` matches root and descendant paths, while `/name` accepts exact and extended
+    ///   paths but rejects `/name1` and `/name~`.
+    /// - Match `/name/subpath1/subpath2/index.html` and verify the remaining path is
+    ///   `/subpath1/subpath2/index.html`.
+    /// - Test slash-ended prefixes with single and multiple patterns through `prefix` and
+    ///   `root_prefix`, checking descendant matches and missing-slash or partial-name
+    ///   rejections.
+    /// - Confirm the root-normalized multi-pattern prefix leaves the same unmatched suffix.
     #[test]
     fn test_resource_prefix() {
         let tree = Tree::new(&ResourceDef::prefix("/"), 1);
@@ -1032,6 +1147,19 @@ mod tests {
         assert_eq!(resource.path(), "/subpath1/subpath2/index.html");
     }
 
+    /// STATEMENT: Dynamic prefixes enforce required slashes, capture names, and fall back to
+    /// shorter nested prefixes.
+    ///
+    /// HOW:
+    /// - Compare `/{name}/` and `/{name}` matches and verify only the slash-ended pattern
+    ///   rejects paths lacking the separator.
+    /// - Match `/test2/` and extended paths, checking named and numeric captures and the
+    ///   remaining suffix.
+    /// - Repeat with `/1/{name}/` and `/2/{name}/`, verifying both alternatives and their
+    ///   missing-slash rejections.
+    /// - Register longer nested prefixes before shorter ones, using single and multiple
+    ///   alternatives, and verify selected values and captured `v1` and `v2` on complete and
+    ///   incomplete paths.
     #[test]
     fn test_reousrce_prefix_dynamic() {
         let tree = Tree::new(&ResourceDef::prefix("/{name}/"), 1);
@@ -1129,6 +1257,18 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/prefix2/1")), Some(3));
     }
 
+    /// STATEMENT: Path builders substitute parameters in order or by name and leave the output
+    /// unchanged when values are missing.
+    ///
+    /// HOW:
+    /// - Build one- and two-parameter patterns with differing endings and verify each generated
+    ///   path.
+    /// - Provide too few positional values and confirm both empty and previously populated
+    ///   output strings remain unchanged.
+    /// - Build with vectors and owned strings, then share one iterator between two builders and
+    ///   verify the concatenated result and exhausted iterator.
+    /// - Supply incomplete named values and preserve `/prefix`; add the missing name and verify
+    ///   `/user/item/item2/`.
     #[test]
     fn test_resource_path() {
         let mut s = String::new();
@@ -1190,6 +1330,17 @@ mod tests {
         assert_eq!(s, "/user/item/item2/");
     }
 
+    /// STATEMENT: Non-rooted patterns retain static boundaries, dynamic captures, and custom
+    /// regex constraints.
+    ///
+    /// HOW:
+    /// - Match static and multi-segment patterns with and without a leading slash; reject
+    ///   altered names, missing endings, or additional components.
+    /// - Match non-rooted dynamic patterns, verify embedded `version` and `id` captures, and
+    ///   reject missing versions or extra components.
+    /// - Exercise a six-digit regex pattern with valid and invalid lengths, letters, and
+    ///   suffixes, then verify its `id` capture.
+    /// - Match a composite non-rooted pattern and verify `version`, `minor`, `id`, and `name`.
     #[test]
     fn test_non_rooted() {
         let tree = Tree::new(&ResourceDef::new("name"), 1);
@@ -1257,6 +1408,13 @@ mod tests {
         assert_eq!(resource.get("name").unwrap(), "name");
     }
 
+    /// STATEMENT: Specific static resources are selected before a root-prefix fallback for
+    /// otherwise unmatched paths.
+    ///
+    /// HOW:
+    /// - Register `/name`, `/name/`, and `/name/index.html`, followed by a `/` prefix.
+    /// - Verify each specific path returns its distinct resource value.
+    /// - Verify `/`, `/test`, and `/test/index.html` all select the prefix fallback value `4`.
     #[test]
     fn test_recursive() {
         let mut tree = Tree::new(&ResourceDef::new("/name"), 1);
@@ -1272,6 +1430,14 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/test/index.html")), Some(4));
     }
 
+    /// STATEMENT: An incomplete overlapping route does not prevent a later complete route from
+    /// supplying its captures.
+    ///
+    /// HOW:
+    /// - Register `/p/{tp}/{id}/{r}` before `/p/ih/{tp}/d/{id}/sid/{r}/r/{s}`.
+    /// - Match `/p/ih/def/d/abc/sid/5bddc58f/r/srv` and verify resource value `3`.
+    /// - Confirm exactly four captures with `tp`, `id`, `r`, and `s` equal to `def`, `abc`,
+    ///   `5bddc58f`, and `srv`.
     #[test]
     fn test_with_some_match() {
         let mut tree = Tree::new(&ResourceDef::new("/p/{tp}/{id}/{r}"), 1);
@@ -1286,6 +1452,14 @@ mod tests {
         assert_eq!(p.len(), 4);
     }
 
+    /// STATEMENT: Array-based resource definitions preserve every pattern and accept borrowed
+    /// owned strings.
+    ///
+    /// HOW:
+    /// - Create an array of twenty borrowed patterns from `/p0` through `/p19` and verify the
+    ///   definition contains twenty patterns with `/p19` last.
+    /// - Create a definition from references to owned `/a` and `/b` strings and verify both
+    ///   patterns are retained.
     #[test]
     fn test_array_patterns() {
         let pats: Vec<String> = (0..20).map(|i| format!("/p{i}")).collect();

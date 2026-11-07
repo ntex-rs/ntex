@@ -519,6 +519,17 @@ mod tests {
         val: TestEnum,
     }
 
+    /// STATEMENT: Named path parameters deserialize into supported structs, tuples, sequences,
+    /// and scalar values.
+    ///
+    /// HOW:
+    /// - Populate `key` and `value` captures with `name` and `user1`; verify unit, `MyStruct`,
+    ///   tuple, and borrowed-string extraction, including `Path::load`.
+    /// - Replace `value` with `32` and verify numeric fields in `Test1`, its newtype wrapper,
+    ///   `Test2`, and a tuple.
+    /// - Confirm a tuple containing `Test2` is rejected, while unit and optional tuple elements
+    ///   and a string vector deserialize with the expected values.
+    /// - Verify a unit newtype, unit, and a tuple ending in unit also deserialize successfully.
     #[test]
     #[allow(clippy::let_unit_value, clippy::unit_cmp)]
     fn test_request_extract() {
@@ -603,6 +614,14 @@ mod tests {
         assert!(s.is_ok());
     }
 
+    /// STATEMENT: Single-value extraction accepts exactly one parameter and rejects
+    /// incompatible parameter counts.
+    ///
+    /// HOW:
+    /// - Set one capture to `32` and verify extraction as `i8`, a one-element tuple, and a
+    ///   newtype yields `32`.
+    /// - Confirm a two-element tuple fails with one capture.
+    /// - Add a second capture and confirm scalar `i8` extraction fails.
     #[test]
     fn test_extract_path_single() {
         let mut path = Path::new("/name/user1/");
@@ -626,6 +645,13 @@ mod tests {
         assert!(i.is_err());
     }
 
+    /// STATEMENT: Lowercase parameter values deserialize into unit enum variants as scalars and
+    /// tuple elements.
+    ///
+    /// HOW:
+    /// - Set one capture to `val1` and verify scalar extraction returns `TestEnum::Val1`.
+    /// - Set two captures to `val1` and `val2` and verify a tuple contains `TestEnum::Val1` and
+    ///   `TestEnum::Val2` in order.
     #[test]
     fn test_extract_enum() {
         let mut path = Path::new("/val1/");
@@ -643,6 +669,14 @@ mod tests {
         assert_eq!(i, (TestEnum::Val1, TestEnum::Val2));
     }
 
+    /// STATEMENT: Enum-valued struct fields accept known variants and report unknown variants
+    /// as errors.
+    ///
+    /// HOW:
+    /// - Populate the `val` capture with `val1`, deserialize `Test3`, and verify its field is
+    ///   `TestEnum::Val1`.
+    /// - Change the capture to `val3` and confirm deserialization fails with an `unknown
+    ///   variant` diagnostic.
     #[test]
     fn test_extract_enum_value() {
         let mut path = Path::new("/val1/");
@@ -658,6 +692,16 @@ mod tests {
         assert!(format!("{i:?}").contains("unknown variant"));
     }
 
+    /// STATEMENT: Invalid parameter counts, values, and missing fields produce descriptive
+    /// extraction errors.
+    ///
+    /// HOW:
+    /// - Set a single `value` capture to `name`; verify `Test1` and a two-string tuple fail
+    ///   with wrong-count diagnostics, while `Test2` and `u32` report parse failures.
+    /// - Extract a struct requiring `_inner` and confirm the error reports the missing field.
+    /// - Use a path without captures and verify borrowed-string extraction reports zero
+    ///   parameters instead of one, while enum extraction reports that at least one parameter
+    ///   is required.
     #[test]
     fn test_extract_errors() {
         let mut path = Path::new("/name/");
@@ -704,6 +748,18 @@ mod tests {
         assert!(format!("{s:?}").contains("expected at least one parameter"));
     }
 
+    /// STATEMENT: Struct and map extraction support typed values, ignore unused fields, and
+    /// report invalid keys or values.
+    ///
+    /// HOW:
+    /// - Populate captures for booleans, signed and unsigned integers, floats, a character,
+    ///   unit, newtype, option, and bytes, plus an ignored field.
+    /// - Load `Values` and compare every field with the expected typed value, including
+    ///   `Some(8)` and raw bytes.
+    /// - Load a string map and verify all fifteen entries and the character value; load a
+    ///   borrowed-key numeric map and verify its parsed value.
+    /// - Confirm numeric map keys produce an invalid-type diagnostic and an invalid `i32` field
+    ///   reports the attempted value and target type.
     #[test]
     fn test_extract_value_types() {
         use std::collections::HashMap;
@@ -814,6 +870,43 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Reading a map value without first reading its key is an error, and a
+    /// value can be read only once per key.
+    ///
+    /// HOW:
+    /// - Create a `ParamsDeserializer` over a path with the single capture `k` = `v`.
+    /// - Read a value before any key and confirm the `unexpected item` error.
+    /// - Read the key `k` and its value `v`, then confirm a second value read fails the
+    ///   same way.
+    #[test]
+    fn test_params_value_without_key() {
+        use serde::de::MapAccess;
+
+        let mut path = Path::new("/");
+        path.segments = vec![("k", PathItem::Static("v"))];
+        let mut params = ParamsDeserializer {
+            params: path.iter(),
+            current: None,
+        };
+
+        let err = params.next_value::<String>().unwrap_err();
+        assert_eq!(err.to_string(), "unexpected item");
+        assert_eq!(params.next_key::<String>().unwrap().as_deref(), Some("k"));
+        assert_eq!(params.next_value::<String>().unwrap(), "v");
+        let err = params.next_value::<String>().unwrap_err();
+        assert_eq!(err.to_string(), "unexpected item");
+    }
+
+    /// STATEMENT: Single captures deserialize into supported primitive types and report
+    /// unsupported scalar or nested types precisely.
+    ///
+    /// HOW:
+    /// - Load `false` as `bool` and `1` as signed and unsigned integers, floats within epsilon,
+    ///   `char`, `String`, and a unit struct.
+    /// - Verify exact unsupported-type errors for scalar `Option`, `IgnoredAny`, and custom
+    ///   requests for any, identifier, or bytes deserialization.
+    /// - Attempt vectors of sequences, maps, tuples, structs, tuple structs, and custom any or
+    ///   identifier values; verify each exact unsupported-type diagnostic.
     #[test]
     fn test_extract_single_value_types() {
         #[derive(Debug, Deserialize, PartialEq)]
@@ -935,6 +1028,16 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Enum extraction supports unit variants but rejects variants that require
+    /// associated data.
+    ///
+    /// HOW:
+    /// - Define lowercase unit, newtype, tuple, and struct variants and populate a capture with
+    ///   each variant name.
+    /// - Verify scalar extraction succeeds only for the unit variant and each other variant
+    ///   reports `not supported`.
+    /// - Repeat extraction as a one-element enum tuple and verify the same success and failure
+    ///   results.
     #[test]
     fn test_extract_enum_variants() {
         #[derive(Debug, Deserialize)]

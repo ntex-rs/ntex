@@ -163,10 +163,12 @@ impl Future for HandlerFuture<'_> {
     type Output = WebResponse;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<WebResponse> {
-        // SAFETY: the inline future is pinned together with `self`
+        // SAFETY: the inline future is pinned together with `self`.
+        // The slot is accessed through a raw pointer, a `&mut` to it would
+        // invalidate self-references of the stored future.
         unsafe {
             let this = self.get_unchecked_mut();
-            (this.vtable.poll)(this.slot.as_mut_ptr().cast(), cx)
+            (this.vtable.poll)((&raw mut this.slot).cast(), cx)
         }
     }
 }
@@ -174,7 +176,7 @@ impl Future for HandlerFuture<'_> {
 impl Drop for HandlerFuture<'_> {
     fn drop(&mut self) {
         // SAFETY: the slot holds the future described by the vtable
-        unsafe { (self.vtable.drop)(self.slot.as_mut_ptr().cast()) }
+        unsafe { (self.vtable.drop)((&raw mut self.slot).cast()) }
     }
 }
 
@@ -347,6 +349,16 @@ mod tests {
         HandlerFuture::fits::<F>()
     }
 
+    fn complete<F: Future>(fut: F) -> F::Output {
+        let mut fut = std::pin::pin!(fut);
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        loop {
+            if let Poll::Ready(res) = fut.as_mut().poll(&mut cx) {
+                return res;
+            }
+        }
+    }
+
     async fn yield_once() {
         let mut yielded = false;
         poll_fn(|cx| {
@@ -365,15 +377,15 @@ mod tests {
     ///
     /// HOW:
     /// - Build a small future that fits the inline slot and a large one that does not.
-    /// - Await both through `HandlerFuture` after one pending poll and check the status codes.
-    #[crate::rt_test]
-    async fn inline_and_boxed_futures_resolve() {
+    /// - Poll both through `HandlerFuture` with a no-op waker past one pending poll and check the status codes.
+    #[test]
+    fn inline_and_boxed_futures_resolve() {
         let small = async {
             yield_once().await;
             TestRequest::default().to_srv_response(Response::Ok().build())
         };
         assert!(fits_of(&small));
-        let res = HandlerFuture::new(small).await;
+        let res = complete(HandlerFuture::new(small));
         assert_eq!(res.status(), StatusCode::OK);
 
         let large = async {
@@ -387,7 +399,7 @@ mod tests {
             TestRequest::default().to_srv_response(Response::new(status))
         };
         assert!(!fits_of(&large));
-        let res = HandlerFuture::new(large).await;
+        let res = complete(HandlerFuture::new(large));
         assert_eq!(res.status(), StatusCode::CREATED);
     }
 
@@ -435,5 +447,115 @@ mod tests {
             drop(fut);
             assert_eq!(cnt.get(), idx * 2 + 2);
         }
+    }
+
+    /// Ready future of `N + 1` words that checks its padding when polled.
+    struct Padded<const N: usize> {
+        pad: [usize; N],
+        _guard: Option<DropGuard>,
+    }
+
+    impl<const N: usize> Padded<N> {
+        fn new(guard: Option<DropGuard>) -> Self {
+            Self {
+                pad: [N; N],
+                _guard: guard,
+            }
+        }
+    }
+
+    impl<const N: usize> Future for Padded<N> {
+        type Output = WebResponse;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<WebResponse> {
+            let status = if self.pad.iter().all(|w| *w == N) {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            Poll::Ready(TestRequest::default().to_srv_response(Response::new(status)))
+        }
+    }
+
+    /// Ready future that requires 16-byte alignment.
+    #[repr(align(16))]
+    struct Aligned(u8);
+
+    impl Future for Aligned {
+        type Output = WebResponse;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<WebResponse> {
+            let aligned = (&raw const *self).addr().is_multiple_of(16);
+            let status = if aligned && self.0 == 7 {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            Poll::Ready(TestRequest::default().to_srv_response(Response::new(status)))
+        }
+    }
+
+    /// STATEMENT: Futures up to the slot size are stored inline and larger ones are boxed.
+    ///
+    /// HOW:
+    /// - Check that a 32-word `Padded` future fits the slot and a 33-word one does not.
+    /// - Resolve both through `HandlerFuture` and check that each sees its padding intact.
+    #[test]
+    fn slot_size_boundary() {
+        assert_eq!(size_of::<Padded<31>>(), size_of::<[usize; SLOT_WORDS]>());
+        assert!(HandlerFuture::fits::<Padded<31>>());
+        assert!(!HandlerFuture::fits::<Padded<32>>());
+
+        let res = complete(HandlerFuture::new(Padded::<31>::new(None)));
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = complete(HandlerFuture::new(Padded::<32>::new(None)));
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    /// STATEMENT: Small futures aligned above `usize` are boxed rather than stored inline.
+    ///
+    /// HOW:
+    /// - Check that a 16-byte-aligned `Aligned` future, smaller than the slot, does not fit.
+    /// - Resolve it through `HandlerFuture` and check that it was polled at an aligned
+    ///   address with its value intact.
+    #[test]
+    fn over_aligned_futures_are_boxed() {
+        assert!(size_of::<Aligned>() < size_of::<[usize; SLOT_WORDS]>());
+        assert!(align_of::<Aligned>() > align_of::<usize>());
+        assert!(!HandlerFuture::fits::<Aligned>());
+
+        let res = complete(HandlerFuture::new(Aligned(7)));
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    /// STATEMENT: A completed handler future is dropped once, when the `HandlerFuture` is dropped.
+    ///
+    /// HOW:
+    /// - Wrap inline and boxed `Padded` futures holding drop-counting guards.
+    /// - Poll each to `Ready` and check that its guard is still alive.
+    /// - Drop each `HandlerFuture` and check that the counter grows by exactly one.
+    #[test]
+    fn dropping_after_ready_runs_destructor_once() {
+        let cnt = Rc::new(Cell::new(0));
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+
+        let mut inline = Box::pin(HandlerFuture::new(Padded::<31>::new(Some(DropGuard(
+            cnt.clone(),
+        )))));
+        let mut boxed = Box::pin(HandlerFuture::new(Padded::<32>::new(Some(DropGuard(
+            cnt.clone(),
+        )))));
+        for fut in [&mut inline, &mut boxed] {
+            let Poll::Ready(res) = fut.as_mut().poll(&mut cx) else {
+                panic!("ready future is pending")
+            };
+            assert_eq!(res.status(), StatusCode::OK);
+        }
+        assert_eq!(cnt.get(), 0);
+
+        drop(inline);
+        assert_eq!(cnt.get(), 1);
+        drop(boxed);
+        assert_eq!(cnt.get(), 2);
     }
 }
