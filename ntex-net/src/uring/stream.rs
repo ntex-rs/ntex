@@ -704,13 +704,17 @@ impl StreamOpsStorage {
                     item.rd_op = NonZeroU32::new(op_id);
 
                     let (bgid, buf_len) = (ring.bgid(), ring.buf_len());
-                    api.submit(op_id, move |entry| {
-                        let op = opcode::Recv::new(entry, item.fd(), ptr::null_mut(), buf_len)
-                            .buffer_select(bgid);
-                        if poll_first {
-                            op.ioprio(IORING_RECVSEND_POLL_FIRST);
-                        }
-                    });
+                    // SAFETY: the kernel selects a buffer from the registered
+                    // ring, the descriptor is closed by a later `Close` entry
+                    unsafe {
+                        api.submit(op_id, move |entry| {
+                            let op = opcode::Recv::new(entry, item.fd(), ptr::null_mut(), buf_len)
+                                .buffer_select(bgid);
+                            if poll_first {
+                                op.ioprio(IORING_RECVSEND_POLL_FIRST);
+                            }
+                        });
+                    }
                 } else {
                     #[cfg(feature = "trace")]
                     log::trace!("{}: Rcv({id})", item.ctx.tag());
@@ -722,12 +726,16 @@ impl StreamOpsStorage {
                     let op_id = self.ops.insert(Some(Operation::Recv { id, buf })) as u32;
                     item.rd_op = NonZeroU32::new(op_id);
 
-                    api.submit(op_id, move |entry| {
-                        let op = opcode::Recv::new(entry, item.fd(), buf_ptr, buf_len);
-                        if poll_first {
-                            op.ioprio(IORING_RECVSEND_POLL_FIRST);
-                        }
-                    });
+                    // SAFETY: the stored operation owns the heap buffer until
+                    // the receive completes
+                    unsafe {
+                        api.submit(op_id, move |entry| {
+                            let op = opcode::Recv::new(entry, item.fd(), buf_ptr, buf_len);
+                            if poll_first {
+                                op.ioprio(IORING_RECVSEND_POLL_FIRST);
+                            }
+                        });
+                    }
                 }
             } else if item.flags.contains(Flags::RD_CANCELING) {
                 item.flags.insert(Flags::RD_REISSUE);
@@ -906,9 +914,13 @@ impl StreamOpsStorage {
             let op_id = self.ops.insert(Some(Operation::Recv { id, buf })) as u32;
             item.rd_op = NonZeroU32::new(op_id);
 
-            api.submit(op_id, move |entry| {
-                opcode::Recv::new(entry, item.fd(), buf_ptr, buf_len);
-            });
+            // SAFETY: the stored operation owns the heap buffer until the
+            // receive completes
+            unsafe {
+                api.submit(op_id, move |entry| {
+                    opcode::Recv::new(entry, item.fd(), buf_ptr, buf_len);
+                });
+            }
         }
     }
 
@@ -928,7 +940,7 @@ impl StreamOpsStorage {
                 let buf = item
                     .ctx
                     .with_write_dst(|dst| SendData::take(dst, max_pages, max_size));
-                let Some(mut buf) = buf else {
+                let Some(buf) = buf else {
                     return;
                 };
                 let len = buf.len();
@@ -948,33 +960,6 @@ impl StreamOpsStorage {
                     item.ctx.tag(),
                 );
 
-                // SAFETY: a single page is heap backed, gathered pages are
-                // stored in the boxed `SendBuf`, the data does not move until
-                // the operation completes
-                let (ptr, msg) = if num == 1 {
-                    let ptr = match &buf {
-                        SendData::Page(page) => unsafe { page.as_ptr() },
-                        SendData::Pages(buf) => buf
-                            .pages()
-                            .next()
-                            .map(|page| unsafe { page.as_ptr() })
-                            .unwrap_or_default(),
-                    };
-                    (ptr, ptr::null())
-                } else {
-                    let SendData::Pages(buf) = &mut buf else {
-                        unreachable!()
-                    };
-                    let SendBuf { pages, iov, msg } = &mut **buf;
-                    for (iov, page) in iov.iter_mut().zip(pages.iter().flatten()) {
-                        iov.iov_base = unsafe { page.as_ptr() }.cast_mut().cast();
-                        iov.iov_len = page.len();
-                    }
-                    msg.msg_iov = iov.as_mut_ptr();
-                    msg.msg_iovlen = num as _;
-                    (ptr::null(), &raw const buf.msg)
-                };
-
                 let op_id = self.ops.insert(Some(buf.into_op(
                     id,
                     SendState {
@@ -986,20 +971,54 @@ impl StreamOpsStorage {
                 ))) as u32;
                 item.wr_op = NonZeroU32::new(op_id);
 
-                api.submit(op_id, move |entry| match (msg.is_null(), use_zc) {
-                    (true, true) => {
-                        opcode::SendZc::new(entry, item.fd(), ptr, len as u32).zc_flags(zc_flags);
+                // SAFETY: pointers are derived from the stored operation, so
+                // moving the box into the slab cannot invalidate them. A single
+                // page is heap backed, gathered pages are stored in the boxed
+                // `SendBuf`, the data does not move until the operation completes
+                let (ptr, msg) = match &mut self.ops[op_id as usize] {
+                    Some(Operation::SendOne { page, .. }) => {
+                        (unsafe { page.as_ptr() }, ptr::null())
                     }
-                    (true, false) => {
-                        opcode::Send::new(entry, item.fd(), ptr, len as u32);
+                    Some(Operation::Send { buf, .. }) if num == 1 => {
+                        let ptr = buf
+                            .pages()
+                            .next()
+                            .map(|page| unsafe { page.as_ptr() })
+                            .unwrap_or_default();
+                        (ptr, ptr::null())
                     }
-                    (false, true) => {
-                        opcode::SendMsgZc::new(entry, item.fd(), msg).ioprio(zc_flags);
+                    Some(Operation::Send { buf, .. }) => {
+                        let SendBuf { pages, iov, msg } = &mut **buf;
+                        for (iov, page) in iov.iter_mut().zip(pages.iter().flatten()) {
+                            iov.iov_base = unsafe { page.as_ptr() }.cast_mut().cast();
+                            iov.iov_len = page.len();
+                        }
+                        msg.msg_iov = iov.as_mut_ptr();
+                        msg.msg_iovlen = num as _;
+                        (ptr::null(), &raw const buf.msg)
                     }
-                    (false, false) => {
-                        opcode::SendMsg::new(entry, item.fd(), msg);
-                    }
-                });
+                    _ => unreachable!(),
+                };
+
+                // SAFETY: see above, the pointers stay valid until the send
+                // and its zero-copy notification complete
+                unsafe {
+                    api.submit(op_id, move |entry| match (msg.is_null(), use_zc) {
+                        (true, true) => {
+                            opcode::SendZc::new(entry, item.fd(), ptr, len as u32)
+                                .zc_flags(zc_flags);
+                        }
+                        (true, false) => {
+                            opcode::Send::new(entry, item.fd(), ptr, len as u32);
+                        }
+                        (false, true) => {
+                            opcode::SendMsgZc::new(entry, item.fd(), msg).ioprio(zc_flags);
+                        }
+                        (false, false) => {
+                            opcode::SendMsg::new(entry, item.fd(), msg);
+                        }
+                    });
+                }
             } else if item.flags.contains(Flags::WR_CANCELING) {
                 item.flags.insert(Flags::WR_REISSUE);
             }
@@ -1054,9 +1073,12 @@ impl StreamOpsStorage {
 
         let fd = item.fd();
         let op_id = self.add_operation(Operation::Close { id });
-        api.submit(op_id, move |entry| {
-            opcode::Close::new(entry, fd);
-        });
+        // SAFETY: the entry holds no pointers, the close owns the descriptor
+        unsafe {
+            api.submit(op_id, move |entry| {
+                opcode::Close::new(entry, fd);
+            });
+        }
     }
 
     fn drop_weak_stream(&mut self, id: usize) {
@@ -1153,9 +1175,13 @@ impl StreamCtl {
                 }
                 let (tx, rx) = self.inner.pool.channel();
                 let op_id = storage.add_operation(Operation::shutdown(tx));
-                self.inner.api.submit(op_id, move |entry| {
-                    opcode::Shutdown::new(entry, fd, libc::SHUT_RDWR);
-                });
+                // SAFETY: the entry holds no pointers, the descriptor is
+                // closed by a later `Close` entry
+                unsafe {
+                    self.inner.api.submit(op_id, move |entry| {
+                        opcode::Shutdown::new(entry, fd, libc::SHUT_RDWR);
+                    });
+                }
                 rx
             })
             .await

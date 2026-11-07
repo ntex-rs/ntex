@@ -53,17 +53,21 @@ impl ConnectOps {
         let mut ops = self.0.ops.borrow_mut();
 
         // addr must be stable, neon submits ops at the end of rt turn
-        let addr = Box::new(addr);
-        let (addr_ptr, addr_len) = (addr.as_ref().as_ptr().cast(), addr.len());
-
         let fd = sock.as_raw_fd();
         let entry = ops.vacant_entry();
         let id = entry.key();
         let (sender, rx) = channel::with_cancel(self.0.clone(), id as u32);
-        entry.insert((addr, sock, sender, cfg));
-        self.0.api.submit(id as u32, move |entry| {
-            opcode::Connect::new(entry, Fd(fd), addr_ptr, addr_len);
-        });
+        // derive the address pointer from the stored box, moving the box
+        // into the slab would invalidate a pointer derived before
+        let (addr, ..) = entry.insert((Box::new(addr), sock, sender, cfg));
+        let (addr_ptr, addr_len) = (addr.as_ref().as_ptr().cast(), addr.len());
+        // SAFETY: the slab owns the boxed address and the socket until the
+        // connect completes
+        unsafe {
+            self.0.api.submit(id as u32, move |entry| {
+                opcode::Connect::new(entry, Fd(fd), addr_ptr, addr_len);
+            });
+        }
         rx
     }
 }

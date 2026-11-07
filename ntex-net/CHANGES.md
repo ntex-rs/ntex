@@ -1,5 +1,16 @@
 # Changes
 
+## [4.8.1] - Unreleased
+
+* io-uring: take send buffer and connect address pointers after the operation is stored,
+  so moving it no longer invalidates pointers passed to the kernel
+
+* io-uring: `ReactorApi::submit` is `unsafe`, entries refer to memory the kernel uses
+  until the request completes
+
+* io-uring: `submit` callbacks must not submit or cancel requests, debug builds panic
+  if they do
+
 ## [4.8.0] - 2026-11-06
 
 * `tokio` feature enables `ntex-io/tokio`, the tokio `AsyncRead` and `AsyncWrite` implementations
