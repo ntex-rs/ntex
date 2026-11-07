@@ -10,6 +10,7 @@ use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 
 use super::error::{InternalError, WebError, WebResponseError};
 use super::guard::{AllGuard, Guard};
+use super::route::RouteService;
 use super::{HttpService, State, WebRequest, WebResponse, dev::insert_slash, rmap::ResourceMap};
 
 /// Factory of web services that can be registered with an application or scope.
@@ -53,6 +54,18 @@ where
 
 type Guards = Vec<Box<dyn Guard>>;
 
+/// Service registered with a router.
+#[derive(Debug)]
+pub(crate) enum WebRoute<St: State, In> {
+    /// A service created per router instance.
+    Service(HttpService<St, In>),
+    /// Routes of a resource without middleware, filter, or fallback.
+    ///
+    /// The router dispatches to the first matching route itself and returns
+    /// `405 Method Not Allowed` if no route matches.
+    Routes(Box<[RouteService<St, In>]>),
+}
+
 /// Application service configuration
 #[derive(derive_more::Debug)]
 #[debug("WebServiceConfig")]
@@ -60,7 +73,7 @@ pub struct WebServiceConfig<St: State, In = ()> {
     root: bool,
     services: Vec<(
         ResourceDef,
-        HttpService<St, In>,
+        WebRoute<St, In>,
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
@@ -84,7 +97,7 @@ impl<St: State, In: 'static> WebServiceConfig<St, In> {
         self,
     ) -> Vec<(
         ResourceDef,
-        HttpService<St, In>,
+        WebRoute<St, In>,
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )> {
@@ -107,8 +120,23 @@ impl<St: State, In: 'static> WebServiceConfig<St, In> {
                 InitError = Failure,
             > + 'static,
     {
+        self.services.push((
+            rdef,
+            WebRoute::Service(boxed::factory(factory.into_factory())),
+            guards,
+            nested,
+        ));
+    }
+
+    /// Register routes that the router dispatches to directly.
+    pub(super) fn register_routes(
+        &mut self,
+        rdef: ResourceDef,
+        guards: Option<Vec<Box<dyn Guard>>>,
+        routes: Vec<RouteService<St, In>>,
+    ) {
         self.services
-            .push((rdef, boxed::factory(factory.into_factory()), guards, nested));
+            .push((rdef, WebRoute::Routes(routes.into()), guards, None));
     }
 }
 

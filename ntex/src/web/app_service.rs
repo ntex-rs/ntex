@@ -11,7 +11,7 @@ use crate::{BindCtx, Ctx, Middleware, Service, ServiceFactory, factory};
 use super::config::WebAppConfig;
 use super::guard::Guard;
 use super::rmap::ResourceMap;
-use super::service::{AppServiceFactory, WebServiceConfig};
+use super::service::{AppServiceFactory, WebRoute, WebServiceConfig};
 use super::stack::{Filter, FilterBypass};
 use super::{HttpHandler, HttpRequest, HttpService, State, WebError, WebRequest, WebResponse};
 
@@ -37,7 +37,7 @@ where
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     rmap: Rc<ResourceMap>,
-    router: Rc<Router<HttpService<St, Out>, Guards>>,
+    router: Rc<Router<WebRoute<St, Out>, Guards>>,
     default: HttpService<St, Out>,
     config: Option<Cfg<WebAppConfig>>,
 }
@@ -235,7 +235,7 @@ pub struct WebServiceRouter<St: State, In, Out, F> {
     filter: ReadyBinding<CachedService<F>>,
     /// Set if `filter` is the identity filter, which is never called.
     bypass: Option<FilterBypass<In, Out>>,
-    router: Rc<Router<HttpService<St, Out>, Guards>>,
+    router: Rc<Router<WebRoute<St, Out>, Guards>>,
     default: HttpService<St, Out>,
     /// Created route services indexed by resource id.
     cache: RefCell<Vec<Option<CachedHandler<St, Out>>>>,
@@ -250,7 +250,7 @@ impl<St: State, In, Out, F> WebServiceRouter<St, In, Out, F> {
     pub(super) fn new(
         filter: F,
         bypass: Option<FilterBypass<In, Out>>,
-        router: Rc<Router<HttpService<St, Out>, Guards>>,
+        router: Rc<Router<WebRoute<St, Out>, Guards>>,
         default: HttpService<St, Out>,
     ) -> Self {
         let readiness = RouterReadiness::new();
@@ -351,7 +351,21 @@ where
             true
         });
 
-        let (sf, id) = res.map_or((&self.default, None), |(sf, id)| (sf, Some(id)));
+        let (sf, id) = match res {
+            Some((WebRoute::Service(sf), id)) => (sf, Some(id)),
+            Some((WebRoute::Routes(routes), _)) => {
+                for route in routes {
+                    if route.check(&mut req) {
+                        return Ok(route.handle(ctx.st(), req).await);
+                    }
+                }
+                return Ok(WebResponse::new(
+                    Response::MethodNotAllowed().build(),
+                    req.into_parts().0,
+                ));
+            }
+            None => (&self.default, None),
+        };
         let cached = if let Some(id) = id {
             self.cache
                 .borrow()
@@ -566,7 +580,7 @@ mod tests {
         let mut routes = Router::builder();
         for (id, gate) in gates.iter().enumerate() {
             routes
-                .path(format!("/{id}"), handler(gate.clone()))
+                .path(format!("/{id}"), WebRoute::Service(handler(gate.clone())))
                 .set_id(id as u16);
         }
         Rc::new(WebServiceRouter::new(
@@ -627,6 +641,54 @@ mod tests {
             .await
             .unwrap();
         assert!(srv.service.bypass.is_none());
+    }
+
+    /// STATEMENT: Resources without middleware, filter, or fallback are dispatched without creating a resource service.
+    ///
+    /// HOW:
+    /// - Register a GET-only resource and a GET resource with a `409` fallback.
+    /// - Send GET and POST to the first; assert `200`, then `405`, and that the router cache stays empty.
+    /// - Send POST to the second; assert `409` and that exactly one service is cached.
+    #[crate::rt_test]
+    async fn simple_resource_is_dispatched_directly() {
+        use crate::http::{Method, StatusCode};
+        use crate::service::IntoServiceFactory;
+        use crate::web::{self, App, HttpResponse};
+
+        let srv = Rc::new(
+            App::new()
+                .service(web::resource("/simple").route(web::get().to(async || HttpResponse::Ok())))
+                .service(
+                    web::resource("/full")
+                        .route(web::get().to(async || HttpResponse::Ok()))
+                        .default_service(web::to(async || HttpResponse::Conflict())),
+                )
+                .into_factory()
+                .create(&())
+                .await
+                .unwrap(),
+        );
+        let pl = Pipeline::new((), srv.clone());
+        let cached = || srv.service.cache.borrow().iter().flatten().count();
+
+        let res = pl
+            .call(TestRequest::with_uri("/simple").to_request())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let req = TestRequest::with_uri("/simple")
+            .method(Method::POST)
+            .to_request();
+        let res = pl.call(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(cached(), 0);
+
+        let req = TestRequest::with_uri("/full")
+            .method(Method::POST)
+            .to_request();
+        let res = pl.call(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        assert_eq!(cached(), 1);
     }
 
     /// STATEMENT: Cached aggregate readiness visits no handlers and invalidation targets one entry.
@@ -804,9 +866,9 @@ mod tests {
         let mut routes = Router::builder();
         routes.prefix(
             "/nested",
-            boxed::factory(fn_factory(async move |(): &()| {
+            WebRoute::Service(boxed::factory(fn_factory(async move |(): &()| {
                 Ok::<_, Failure>(nested.clone())
-            })),
+            }))),
         );
         let outer = Rc::new(WebServiceRouter::new(
             Gated(filter.clone()),
@@ -869,7 +931,7 @@ mod tests {
                 .map(|req: WebRequest<()>| req.into_response(Response::Ok().build())),
             );
             let mut routes = Router::builder();
-            routes.path("/route", sf.clone());
+            routes.path("/route", WebRoute::Service(sf.clone()));
             let default = if is_default {
                 sf
             } else {

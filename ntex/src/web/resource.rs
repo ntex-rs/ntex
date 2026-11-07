@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{any::Any, any::TypeId, marker::PhantomData};
 
 use crate::error::{Failure, IntoFailure};
 use crate::http::Response;
@@ -602,6 +602,24 @@ where
         };
         if let Some(ref name) = self.name {
             rdef.set_name(name.clone());
+        }
+
+        // A resource without middleware, filter, or fallback is dispatched
+        // by the router directly.
+        if self.default.is_none()
+            && TypeId::of::<M>() == TypeId::of::<Identity>()
+            && TypeId::of::<Out>() == TypeId::of::<Outer>()
+            && Filter::<St, In>::bypass::<F, Out>().is_some()
+        {
+            let routes: Vec<RouteService<St, Out>> =
+                self.routes.iter().map(Route::service).collect();
+            let mut routes = Some(routes);
+            let routes = (&mut routes as &mut dyn Any)
+                .downcast_mut::<Option<Vec<RouteService<St, Outer>>>>()
+                .and_then(Option::take)
+                .expect("request state types are equal");
+            config.register_routes(rdef, guards, routes);
+            return;
         }
 
         config.register_service(
