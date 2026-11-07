@@ -709,6 +709,17 @@ impl Handler for StreamOpsHandler {
         self.inner.check_delayed_feed();
     }
 
+    fn in_flight(&self) -> usize {
+        // slot 0 holds a placeholder that is never submitted
+        self.inner.with(|st| st.ops.len() - 1)
+    }
+
+    fn abandon(&mut self) {
+        // operations and provided buffers live in `StreamOpsInner`, the
+        // leaked handler keeps it alive
+        self.cleanup();
+    }
+
     fn cleanup(&mut self) {
         // Reactor has flushed pending submissions and canceled all in-flight
         // operations. Release every socket here, otherwise stored `IoContext`s
