@@ -669,6 +669,39 @@ fn remote_queue_lookup_caches_without_publishing() {
     }
 }
 
+/// STATEMENT: A remote wake that waits for the endpoint registry preserves the
+/// waking thread's pending park token.
+///
+/// HOW:
+/// - Hold the registry write lock while a remote thread with a pending unpark
+///   token wakes a task of an uncached runtime.
+/// - Release the lock while the remote wake waits for the registry.
+/// - Check the remote thread's next `park_timeout` returns at once.
+#[test]
+fn remote_wake_preserves_park_token() {
+    use std::time::{Duration, Instant};
+
+    let rt = runtime();
+    let waker = completed_waker(&rt);
+    let registry = wake::write_registry();
+    let remote = thread::spawn(move || {
+        thread::current().unpark();
+        waker.wake_by_ref();
+        let start = Instant::now();
+        thread::park_timeout(Duration::from_secs(5));
+        start.elapsed()
+    });
+    thread::sleep(Duration::from_millis(100));
+    drop(registry);
+    let elapsed = remote.join().unwrap();
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "park token lost: {elapsed:?}"
+    );
+    drain(&rt);
+    assert_eq!(rt.queue.task_count(), 0);
+}
+
 /// STATEMENT: Retained remote queues do not prevent shutdown or allow subsequent admission.
 ///
 /// HOW:

@@ -6,9 +6,14 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 use std::{cell::Cell, cell::RefCell, collections::HashMap, mem::ManuallyDrop, ptr, ptr::NonNull};
 
 #[cfg(ntex_loom)]
-use loom::sync::RwLock;
+use loom::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+// Remote wakers run on foreign threads that may rely on `thread::park` tokens,
+// such as the `futures-timer` helper. Queue-based std locks (macOS) wait with
+// `thread::park` and consume those tokens, `parking_lot` does not.
 #[cfg(not(ntex_loom))]
-use std::sync::{OnceLock, RwLock};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+#[cfg(not(ntex_loom))]
+use std::sync::OnceLock;
 
 use super::task::{self, Core, Header, Remote, Runnable};
 use super::{ThreadId, queue::RunnableQueue, try_current_thread_id};
@@ -56,7 +61,7 @@ loom::thread_local! {
     static REMOTE_ENDPOINTS: RefCell<RemoteEndpoints> = RefCell::new(RemoteEndpoints::default());
 }
 
-struct Registry {
+pub(super) struct Registry {
     /// The last issued runtime identity.
     next: u16,
     queues: HashMap<RuntimeId, Arc<RunnableQueue>>,
@@ -88,11 +93,27 @@ fn registry() -> &'static RwLock<Registry> {
     &REGISTRY
 }
 
+/// Locks the registry for lookups.
+fn read_registry() -> RwLockReadGuard<'static, Registry> {
+    #[cfg(not(ntex_loom))]
+    return registry().read();
+    #[cfg(ntex_loom)]
+    return registry().read().unwrap();
+}
+
+/// Locks the registry for updates.
+pub(super) fn write_registry() -> RwLockWriteGuard<'static, Registry> {
+    #[cfg(not(ntex_loom))]
+    return registry().write();
+    #[cfg(ntex_loom)]
+    return registry().write().unwrap();
+}
+
 /// Allocates a never-reused runtime identity, aborting on exhaustion.
 ///
 /// Identities are limited to `u16::MAX` per process.
 pub(crate) fn runtime_id() -> RuntimeId {
-    let mut registry = registry().write().unwrap();
+    let mut registry = write_registry();
     registry.next = registry.next.checked_add(1).unwrap_or_else(|| {
         log::error!(
             target: crate::rt::LOG_TARGET,
@@ -107,14 +128,12 @@ pub(crate) fn runtime_id() -> RuntimeId {
 /// Sets the last issued runtime identity, to test exhaustion.
 #[cfg(all(test, not(ntex_loom)))]
 pub(crate) fn set_runtime_index(last: u16) {
-    registry().write().unwrap().next = last;
+    write_registry().next = last;
 }
 
 /// Publishes a runtime's wake endpoint, rejecting duplicate registration.
 pub(crate) fn register(queue: &Arc<RunnableQueue>) {
-    let old = registry()
-        .write()
-        .unwrap()
+    let old = write_registry()
         .queues
         .insert(queue.runtime_id, queue.clone());
     assert!(old.is_none(), "runtime registered twice");
@@ -126,7 +145,7 @@ pub(crate) struct Shutdown(RuntimeId);
 
 impl Drop for Shutdown {
     fn drop(&mut self) {
-        let removed = registry().write().unwrap().queues.remove(&self.0);
+        let removed = write_registry().queues.remove(&self.0);
         // Endpoint destruction, like notification, must be outside the lock.
         drop(removed);
     }
@@ -142,7 +161,7 @@ impl Drop for Shutdown {
 )]
 pub(crate) fn unregister(id: RuntimeId) -> Shutdown {
     OWNER_ENDPOINT.with(|cached| cached.set(OwnerEndpoint::Closed(id)));
-    let registry = registry().write().unwrap();
+    let registry = write_registry();
     debug_assert!(
         registry
             .queues
@@ -248,7 +267,7 @@ pub(super) fn with_registered<R>(
     #[cfg(all(test, not(ntex_loom)))]
     REGISTRY_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
 
-    let registry = registry().read().unwrap();
+    let registry = read_registry();
     let queue = registry.queues.get(&id)?;
     if queue.is_closed() { None } else { Some(f(queue)) }
 }
@@ -271,7 +290,7 @@ pub(super) fn retain_owner_queue(id: RuntimeId) -> Option<Arc<RunnableQueue>> {
     #[cfg(all(test, not(ntex_loom)))]
     REGISTRY_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
 
-    registry().read().unwrap().queues.get(&id).cloned()
+    read_registry().queues.get(&id).cloned()
 }
 
 /// Retains a remote endpoint observed open, consulting TLS before the registry.
