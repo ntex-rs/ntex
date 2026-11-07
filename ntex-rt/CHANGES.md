@@ -6,6 +6,9 @@
   of two between 1 and 16 ms, and `System::timer_resolution()` and
   `SystemConfig::timer_resolution()` accessors
 
+* Fix lost timer wakeups on macOS. Remote wakes no longer consume the waking
+  thread's `thread::park` token while waiting for the runtime registry lock
+
 ## [4.5.1] - 2026-10-28
 
 * Change `spawn_sendable()` to return `SendableJoinHandle`. Dropping the handle
