@@ -7,6 +7,7 @@ pub(crate) struct MainArgs {
     name: Option<Literal>,
     signals: Option<Ident>,
     ping_interval: Option<Literal>,
+    timer_resolution: Option<Literal>,
     panic_handling: Option<Ident>,
     rt: Option<TokenStream>,
 }
@@ -23,6 +24,11 @@ impl MainArgs {
             .map(|interval| quote!(.ping_interval(#interval)))
             .unwrap_or_default();
 
+        let sys_timer_resolution = self
+            .timer_resolution
+            .map(|millis| quote!(.timer_resolution(#millis)))
+            .unwrap_or_default();
+
         let sys_signals = self
             .signals
             .map(|signals| quote!(.signals(#signals)))
@@ -36,6 +42,7 @@ impl MainArgs {
         quote! {
             #sys_name
             #sys_ping_interval
+            #sys_timer_resolution
             #sys_signals
             #sys_panics
         }
@@ -54,6 +61,7 @@ impl MainArgs {
             signals: None,
             panic_handling: None,
             ping_interval: None,
+            timer_resolution: None,
         };
 
         for param in parse_args(input)? {
@@ -63,11 +71,12 @@ impl MainArgs {
                 "signals" => args.signals.is_some(),
                 "panic_handling" => args.panic_handling.is_some(),
                 "ping_interval" => args.ping_interval.is_some(),
+                "timer_resolution" => args.timer_resolution.is_some(),
                 "rt" => args.rt.is_some(),
                 _ => {
                     return Err(Error::new_spanned(
                         &param.name,
-                        "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval` or `rt`",
+                        "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval`, `timer_resolution` or `rt`",
                     ));
                 }
             };
@@ -99,6 +108,11 @@ impl MainArgs {
                         param.value_error("`ping_interval` value must be an integer literal")
                     })?);
                 }
+                "timer_resolution" => {
+                    args.timer_resolution = Some(param.lit_int().ok_or_else(|| {
+                        param.value_error("`timer_resolution` value must be an integer literal")
+                    })?);
+                }
                 _ => {
                     args.rt = Some(
                         param
@@ -125,25 +139,38 @@ mod tests {
         parse(s).err().unwrap().to_string()
     }
 
+    /// STATEMENT: Unknown `main` arguments are rejected with the list of supported arguments.
+    ///
+    /// HOW:
+    /// - Parse `foo = 1` and compare the error with the expected argument list.
+    /// - Parse known boolean arguments and confirm they are accepted.
     #[test]
     fn unknown_arg() {
         assert_eq!(
             err("foo = 1"),
-            "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval` or `rt`"
+            "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval`, `timer_resolution` or `rt`"
         );
         assert!(parse("panic_handling = true, signals = true").is_ok());
     }
 
+    /// STATEMENT: `main` arguments generate builder calls and invalid values report errors.
+    ///
+    /// HOW:
+    /// - Parse all value arguments and compare the generated runtime and
+    ///   builder calls, including `.timer_resolution(2)`.
+    /// - Parse wrongly typed and duplicate arguments and compare their errors.
     #[test]
     fn args() {
-        let mut args = parse(r#"name = "srv", signals = true, ping_interval = 250, rt = my::Rt,"#)
-            .ok()
-            .unwrap();
+        let mut args = parse(
+            r#"name = "srv", signals = true, ping_interval = 250, timer_resolution = 2, rt = my::Rt,"#,
+        )
+        .ok()
+        .unwrap();
         assert_eq!(args.gen_sys_rt().to_string(), "my :: Rt");
         assert_eq!(
             args.gen_sys_config(&Ident::new("main", proc_macro2::Span::call_site()))
                 .to_string(),
-            r#". name ("srv") . ping_interval (250) . signals (true)"#
+            r#". name ("srv") . ping_interval (250) . timer_resolution (2) . signals (true)"#
         );
 
         assert_eq!(err("name = 1"), "`name` value must be an string literal");
@@ -158,6 +185,14 @@ mod tests {
         assert_eq!(
             err("ping_interval = 1.5"),
             "`ping_interval` value must be an integer literal"
+        );
+        assert_eq!(
+            err("timer_resolution = \"2\""),
+            "`timer_resolution` value must be an integer literal"
+        );
+        assert_eq!(
+            err("timer_resolution = 2, timer_resolution = 4"),
+            "duplicate `timer_resolution` argument"
         );
         assert_eq!(err("rt = \"x\""), "`rt` value must be a type");
         assert_eq!(err("rt = a, rt = b"), "duplicate `rt` argument");

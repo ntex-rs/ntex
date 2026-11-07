@@ -22,6 +22,7 @@ fn builder_options() {
         .ping_threshold(10)
         .thread_pool_limit(1)
         .thread_pool_recv_timeout(Duration::from_millis(100))
+        .timer_resolution(2)
         .testing();
     assert!(format!("{builder:?}").contains("opts"));
 
@@ -32,6 +33,8 @@ fn builder_options() {
         assert_eq!(sys.name(), "opts");
         assert!(sys.testing());
         assert!(!sys.signals());
+        assert_eq!(sys.timer_resolution(), 2);
+        assert_eq!(sys.config().timer_resolution(), 2);
 
         // arbiter thread with configured stack size
         let mut arb = Arbiter::new();
@@ -40,6 +43,20 @@ fn builder_options() {
 
         assert_eq!(sys.spawn_blocking(|| 1).await, Ok(1));
     });
+}
+
+/// STATEMENT: The builder rejects timer resolutions that are not a power of two up to 16 ms.
+///
+/// HOW:
+/// - Call `timer_resolution` with 0, 3 and 32 and check each call panics.
+/// - Call it with 1 and 16 and check both are accepted.
+#[test]
+fn timer_resolution_bounds() {
+    for millis in [0, 3, 32] {
+        let res = panic::catch_unwind(|| System::build().timer_resolution(millis));
+        assert!(res.is_err(), "{millis} ms must be rejected");
+    }
+    let _ = System::build().timer_resolution(1).timer_resolution(16);
 }
 
 /// STATEMENT: Running a system propagates initialization and exit errors while cleaning up.

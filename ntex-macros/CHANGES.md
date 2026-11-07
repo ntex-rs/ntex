@@ -1,6 +1,10 @@
 # Changes
 
-## [4.3.0] - 2026-11-xx
+## [4.4.0] - 2026-11-07
+
+* Add `timer_resolution` argument to `main` macro
+
+## [4.3.0] - 2026-11-04
 
 * Report the failing argument or return type for invalid route handlers
 

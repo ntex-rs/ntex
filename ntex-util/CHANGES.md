@@ -1,5 +1,10 @@
 # Changes
 
+## [4.8.0] - 2026-11-07
+
+* Use the timer resolution of the current system for the timer wheel, see
+  `ntex_rt::Builder::timer_resolution()`. Defaults to 16 ms
+
 ## [4.7.0] - 2026-11-04
 
 * `Timeout` and `Retry` use cache-aware `Ctx::call` instead of removed `Ctx::call_nowait`

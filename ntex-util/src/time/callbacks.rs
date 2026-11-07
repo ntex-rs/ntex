@@ -66,9 +66,11 @@ pub struct CallbackTimer {
 impl CallbackTimer {
     /// Arms a callback after `duration`, using the wheel's rounding and limits.
     ///
-    /// The base granularity is approximately 16 ms; longer delays use coarser
-    /// rounding, and delays beyond the wheel's capacity (about 24 days) are
-    /// clamped. Callback delivery may be delayed further while the runtime is busy.
+    /// The base granularity is approximately 16 ms by default, see
+    /// [`Builder::timer_resolution`](ntex_rt::Builder::timer_resolution);
+    /// longer delays use coarser rounding, and delays beyond the wheel's
+    /// capacity (about 24 days at 16 ms) are clamped. Callback delivery may be
+    /// delayed further while the runtime is busy.
     ///
     /// A zero duration waits for a subsequent timer tick, as with [`crate::time::Sleep`];
     /// the callback is never invoked inline.

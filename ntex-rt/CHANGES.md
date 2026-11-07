@@ -1,5 +1,11 @@
 # Changes
 
+## [4.6.0] - 2026-11-07
+
+* Add `Builder::timer_resolution()` to set the timer wheel resolution, a power
+  of two between 1 and 16 ms, and `System::timer_resolution()` and
+  `SystemConfig::timer_resolution()` accessors
+
 ## [4.5.1] - 2026-10-28
 
 * Change `spawn_sendable()` to return `SendableJoinHandle`. Dropping the handle

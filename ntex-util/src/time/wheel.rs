@@ -4,16 +4,20 @@
 //!
 //! # Clock
 //!
-//! The wheel counts time in *units* of 16 milliseconds (`1 << UNITS`). The
-//! wheel clock `elapsed` is the unit of the last processed expiry, and
-//! `elapsed_time` is the [`Instant`] that corresponds to it. Timer deadlines
-//! are converted to units relative to this pair.
+//! The wheel counts time in *units* of `1 << units` milliseconds. The unit
+//! is 16 milliseconds by default, see
+//! [`Builder::timer_resolution`](ntex_rt::Builder::timer_resolution). Each
+//! thread reads the resolution of its system when the first timer is armed
+//! and keeps it until the wheel is stopped. The wheel clock `elapsed` is the
+//! unit of the last processed expiry, and `elapsed_time` is the [`Instant`]
+//! that corresponds to it. Timer deadlines are converted to units relative to
+//! this pair.
 //!
 //! # Levels
 //!
 //! The wheel has `LVL_DEPTH` (8) levels of `LVL_SIZE` (64) buckets. Each level
 //! is 8 times coarser than the previous one, a timer is placed on the first
-//! level that can represent its delay:
+//! level that can represent its delay. With the default 16 ms unit:
 //!
 //! | Level | Granularity | Range            |
 //! |-------|-------------|------------------|
@@ -25,6 +29,9 @@
 //! | 5     | ~8.7 m      | ~69 m .. ~9.2 h  |
 //! | 6     | ~70 m       | ~9.2 h .. ~3 d   |
 //! | 7     | ~9.3 h      | ~3 d .. ~24.5 d  |
+//!
+//! A smaller unit scales the granularity and the range of every level by the
+//! same factor, with a 2 ms unit level 0 covers ~126 ms and the wheel ~3 d.
 //!
 //! Longer delays are clamped to the capacity of the wheel. The expiry is
 //! rounded up to the granularity of the level and the delay is measured from
@@ -71,8 +78,8 @@ use slab::Slab;
 use super::callbacks::Callbacks;
 use crate::task::LocalWaker;
 
-/// Resolution of the wheel clock, a unit is `1 << UNITS` milliseconds.
-const UNITS: u64 = 4;
+/// Default resolution of the wheel clock, a unit is `1 << units` milliseconds.
+const DEFAULT_UNITS: u8 = 4;
 
 /// Each level is `LVL_CLK_DIV` times coarser than the previous one.
 const LVL_CLK_SHIFT: u64 = 3;
@@ -113,12 +120,19 @@ const fn lvl_start(lvl: u64) -> u64 {
     (LVL_SIZE - 1) << ((lvl - 1) * LVL_CLK_SHIFT)
 }
 
-const fn to_units(millis: u64) -> u64 {
-    millis >> UNITS
+const fn to_units(millis: u64, units: u8) -> u64 {
+    millis >> units
 }
 
-const fn to_millis(units: u64) -> u64 {
-    units << UNITS
+const fn to_millis(val: u64, units: u8) -> u64 {
+    val << units
+}
+
+/// Resolution of the current system, `DEFAULT_UNITS` without a system.
+fn system_units() -> u8 {
+    ntex_rt::System::try_current().map_or(DEFAULT_UNITS, |sys| {
+        sys.timer_resolution().trailing_zeros() as u8
+    })
 }
 
 const fn as_millis(dur: Duration) -> u64 {
@@ -234,6 +248,10 @@ pub(super) struct Timer {
     flags: Cell<Flags>,
     /// Incremented on reset, drivers of an older generation are stale.
     pub(super) generation: Cell<u64>,
+    /// Resolution of the wheel clock, a unit is `1 << units` milliseconds.
+    /// Read from the current system when the first timer is armed, `None`
+    /// while the wheel is stopped.
+    units: Cell<Option<u8>>,
     driver: LocalWaker,
     lowres_stime: Cell<Option<SystemTime>>,
     lowres_driver: LocalWaker,
@@ -308,6 +326,7 @@ impl Timer {
             next_expiry: Cell::new(u64::MAX),
             flags: Cell::new(Flags::empty()),
             generation: Cell::new(0),
+            units: Cell::new(None),
             driver: LocalWaker::new(),
             lowres_stime: Cell::new(None),
             lowres_driver: LocalWaker::new(),
@@ -438,8 +457,17 @@ impl Timer {
         // The delay is measured from the wheel clock. The cached time is not
         // used, it goes stale while the thread is blocked and the timer would
         // fire early by its age
+        let units = if let Some(units) = self.units.get() {
+            units
+        } else {
+            // the wheel is stopped, it is empty and its clock is at zero
+            let units = system_units();
+            self.units.set(Some(units));
+            units
+        };
+
         let since = Instant::now().saturating_duration_since(self.elapsed_time());
-        let delta = to_units(as_millis(since) + millis);
+        let delta = to_units(as_millis(since) + millis, units);
         self.calc_wheel_index(self.elapsed.get().wrapping_add(delta), delta)
     }
 
@@ -484,8 +512,9 @@ impl Timer {
 
     /// Instant at which the bucket expiring at `expiry` is due.
     fn expiry_time(&self, expiry: u64) -> Instant {
+        let units = self.units.get().unwrap_or(DEFAULT_UNITS);
         self.elapsed_time()
-            + Duration::from_millis(to_millis(expiry.saturating_sub(self.elapsed.get())))
+            + Duration::from_millis(to_millis(expiry.saturating_sub(self.elapsed.get()), units))
     }
 
     /// Returns the expiry of the earliest occupied bucket.
@@ -578,6 +607,7 @@ impl Timer {
             self.next_expiry.set(u64::MAX);
             self.elapsed.set(0);
             self.elapsed_time.set(None);
+            self.units.set(None);
         });
     }
 }
@@ -2003,6 +2033,53 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || tx.send(res.join().is_ok()));
         assert_eq!(rx.recv_timeout(Duration::from_secs(10)), Ok(true));
+    }
+
+    /// STATEMENT: Each system run on a thread arms timers with its own configured resolution.
+    ///
+    /// HOW:
+    /// - Run systems with 2 ms, default and 1 ms resolutions on one thread.
+    /// - In each, complete a sleep and check the latched `units` shift and the
+    ///   level of a 500 ms timer, level 1 at 2 ms and level 0 at 16 ms.
+    /// - After each run, check `units` is cleared for the next system.
+    #[test]
+    fn test_timer_resolution_per_system() {
+        std::thread::spawn(|| {
+            for (resolution, units, level) in [(Some(2), 1, 1), (None, 4, 0), (Some(1), 0, 1)] {
+                let mut builder = ntex::rt::System::build();
+                if let Some(resolution) = resolution {
+                    builder = builder.timer_resolution(resolution);
+                }
+                builder
+                    .build(ntex::rt::DefaultRuntime)
+                    .block_on(async move {
+                        sleep(Millis(1)).await;
+                        let hnd = TimerHandle::new(500);
+                        TIMER.with(|timer| {
+                            assert_eq!(timer.units.get(), Some(units));
+                            let bucket =
+                                timer.with_wheel(|w| w.timers[hnd.0.get()].bucket).unwrap();
+                            assert_eq!(u64::from(bucket) / LVL_SIZE, level);
+                        });
+                    });
+                assert_eq!(TIMER.with(|timer| timer.units.get()), None);
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// STATEMENT: Timers armed without a running system use the default 16 ms resolution.
+    ///
+    /// HOW:
+    /// - Reset the thread's timer state and check `units` is unset.
+    /// - Arm a timer outside of any system and check `units` is `DEFAULT_UNITS`.
+    #[test]
+    fn test_timer_resolution_without_system() {
+        let timer = timer_state();
+        assert_eq!(timer.units.get(), None);
+        let _hnd = TimerHandle::new(10);
+        assert_eq!(timer.units.get(), Some(DEFAULT_UNITS));
     }
 
     /// STATEMENT: Dropping stale drivers does not clear a newer generation's running flags.

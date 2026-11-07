@@ -87,6 +87,21 @@ fn test_main_with_args() {
     main_with_ping_interval();
 }
 
+#[ntex::main(timer_resolution = 2)]
+async fn main_with_timer_resolution() -> u8 {
+    System::current().timer_resolution()
+}
+
+/// STATEMENT: The `timer_resolution` argument of `main` configures the system timer resolution.
+///
+/// HOW:
+/// - Run a `main` function declared with `timer_resolution = 2`.
+/// - Check the running system reports a 2 ms resolution.
+#[test]
+fn test_main_with_timer_resolution() {
+    assert_eq!(main_with_timer_resolution(), 2);
+}
+
 #[ntex::test]
 async fn test_params() {
     let srv = test::server(async |_| {
