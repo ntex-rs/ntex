@@ -181,13 +181,6 @@ enum Value {
     PrefixSlash(usize),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum PathState {
-    Empty,
-    Slash,
-    Tail,
-}
-
 impl Value {
     fn value(&self) -> usize {
         match self {
@@ -212,7 +205,7 @@ impl Tree {
             Value::Val(value)
         };
 
-        let mut tree = Tree::child(resource.tp[0].tp.clone(), Some(val));
+        let mut tree = Tree::child(resource.tp[0].tp.clone(), val);
 
         for seg in &resource.tp[1..] {
             let val = if seg.slesh {
@@ -232,15 +225,10 @@ impl Tree {
         tree
     }
 
-    fn child(key: Vec<Segment>, value: Option<Value>) -> Tree {
-        let items = if let Some(val) = value {
-            vec![Item::Value(val)]
-        } else {
-            Vec::new()
-        };
+    fn child(key: Vec<Segment>, value: Value) -> Tree {
         Tree {
             key,
-            items,
+            items: vec![Item::Value(value)],
             ..Default::default()
         }
     }
@@ -260,7 +248,7 @@ impl Tree {
             self.rest.push(pos);
         }
 
-        // sub trees with the same first segment are matched in order
+        // `insert_path` merges sub trees with the same first segment
         statics.sort_unstable();
         let empty = Static {
             key: (0, 0, 0),
@@ -268,25 +256,20 @@ impl Tree {
         };
         let size = (statics.len() * 2).next_power_of_two();
         let mut table = vec![empty; size];
-        let mut count = 0;
         for (i, (key, s, pos)) in statics.iter().enumerate() {
-            let dup =
-                (i > 0 && statics[i - 1].1 == *s) || statics.get(i + 1).is_some_and(|n| n.1 == *s);
-            if dup {
-                self.rest.push(*pos);
-            } else {
-                let mut slot = static_slot(*key, size - 1);
-                while table[slot].pos != u32::MAX {
-                    slot = (slot + 1) & (size - 1);
-                }
-                table[slot] = Static {
-                    key: *key,
-                    pos: *pos,
-                };
-                count += 1;
+            if i > 0 && statics[i - 1].1 == *s {
+                unreachable!("sub trees with the same first segment: {s}");
             }
+            let mut slot = static_slot(*key, size - 1);
+            while table[slot].pos != u32::MAX {
+                slot = (slot + 1) & (size - 1);
+            }
+            table[slot] = Static {
+                key: *key,
+                pos: *pos,
+            };
         }
-        if count == 0 {
+        if statics.is_empty() {
             table.clear();
         }
         self.statics = table;
@@ -336,9 +319,9 @@ impl Tree {
         match &self.items[pos as usize] {
             Item::Subtree(tree) => match tree.key.first() {
                 Some(Segment::Static(s)) => s.as_bytes(),
-                _ => &[],
+                _ => unreachable!("the static table holds only static sub trees"),
             },
-            Item::Value(_) => &[],
+            Item::Value(_) => unreachable!("the static table holds only sub trees"),
         }
     }
 
@@ -449,10 +432,8 @@ impl Tree {
         if p == key.len() {
             match value {
                 Value::PrefixSlash(v) => {
-                    self.items.push(Item::Subtree(Tree::child(
-                        Vec::new(),
-                        Some(Value::Prefix(v)),
-                    )));
+                    self.items
+                        .push(Item::Subtree(Tree::child(Vec::new(), Value::Prefix(v))));
                 }
                 value => self.items.push(Item::Value(value)),
             }
@@ -467,7 +448,7 @@ impl Tree {
                 }
             }
             self.items
-                .push(Item::Subtree(Tree::child(key[p..].to_vec(), Some(value))));
+                .push(Item::Subtree(Tree::child(key[p..].to_vec(), value)));
         }
     }
 
@@ -680,25 +661,14 @@ impl Tree {
         F: Fn(usize, &R) -> bool,
     {
         if self.key.is_empty() {
-            if path.is_empty() {
-                for val in &self.items {
-                    let v = match val {
-                        Item::Value(Value::Val(v) | Value::Prefix(v)) => *v,
-                        _ => continue,
-                    };
-                    if ctx.check(v) {
-                        return Some((v, skip));
-                    }
-                }
-            } else {
-                for val in &self.items {
-                    let v = match val {
-                        Item::Value(Value::Prefix(v)) => *v,
-                        _ => continue,
-                    };
-                    if ctx.check(v) {
-                        return Some((v, skip));
-                    }
+            // only a `/` prefix adds a sub tree with an empty key, see `insert_path`
+            for val in &self.items {
+                let v = match val {
+                    Item::Value(Value::Prefix(v)) => *v,
+                    _ => unreachable!("an empty key holds only prefix values"),
+                };
+                if ctx.check(v) {
+                    return Some((v, skip));
                 }
             }
             return None;
@@ -785,18 +755,20 @@ impl Tree {
                         if tail && is_match {
                             // checker
                             for val in &self.items {
-                                if let Item::Value(val) = val {
-                                    let v = val.value();
-                                    if ctx.check(v) {
-                                        return Some((v, skip + idx));
-                                    }
+                                let Item::Value(val) = val else {
+                                    unreachable!("a tail has no sub trees");
+                                };
+                                let v = val.value();
+                                if ctx.check(v) {
+                                    return Some((v, skip + idx));
                                 }
                             }
                             // tail consumed the rest of the path, values are
                             // already checked
-                            if key.len() == 1 {
-                                return None;
+                            if key.len() != 1 {
+                                unreachable!("a tail is the last segment");
                             }
+                            return None;
                         }
 
                         is_match
@@ -830,16 +802,10 @@ impl Tree {
                         None
                     };
                 } else if key.is_empty() {
+                    // `idx < path.len()`, so the rest of the path is not empty
                     path = &path[idx..];
                     let subtree_path = if path.len() == 1 { path } else { &path[1..] };
-
-                    let p = if path.is_empty() {
-                        PathState::Empty
-                    } else if path == "/" {
-                        PathState::Slash
-                    } else {
-                        PathState::Tail
-                    };
+                    let slash = path == "/";
 
                     let (sidx, seg) = first_segment::<T>(subtree_path, ctx.unquote);
                     let squoted = matches!(seg, Cow::Owned(_));
@@ -847,27 +813,15 @@ impl Tree {
                         match val {
                             Item::Value(val) => {
                                 let v = match val {
-                                    Value::Val(v) => {
-                                        if p == PathState::Empty {
-                                            *v
-                                        } else {
-                                            continue;
-                                        }
-                                    }
+                                    Value::Val(_) => continue,
                                     Value::Slash(v) => {
-                                        if p == PathState::Slash {
+                                        if slash {
                                             *v
                                         } else {
                                             continue;
                                         }
                                     }
-                                    Value::Prefix(v) | Value::PrefixSlash(v) => {
-                                        if p == PathState::Slash || p == PathState::Tail {
-                                            *v
-                                        } else {
-                                            continue;
-                                        }
-                                    }
+                                    Value::Prefix(v) | Value::PrefixSlash(v) => *v,
                                 };
                                 if ctx.check(v) {
                                     return Some((v, skip - 1));

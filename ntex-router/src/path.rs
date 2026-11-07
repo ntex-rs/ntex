@@ -242,6 +242,14 @@ impl<T: ResourcePath> Resource<T> for Path<T> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Path mutation, cloning, skipping, resetting, and indexed captures preserve
+    /// the underlying source.
+    ///
+    /// HOW:
+    /// - Mutate a default `Path<String>` to `test` and verify both the source and its clone.
+    /// - Skip two bytes and check the remaining path and fallback `tail` are `st`, an unknown
+    ///   key is absent, and the source remains `test`.
+    /// - Reset the path, then add an indexed `k1` segment and verify it extracts `te`.
     #[test]
     fn test_path() {
         let mut p: Path<String> = Path::default();
@@ -264,6 +272,15 @@ mod tests {
         assert_eq!(p.get("k1").unwrap(), "te");
     }
 
+    /// STATEMENT: Paths expose static and owned captures, bound skipping, and clear captures
+    /// when their source is replaced.
+    ///
+    /// HOW:
+    /// - Skip the prefix of `/first/path`, add static and owned captures, and verify the
+    ///   remaining path, length, named and numeric access, and iteration order.
+    /// - Skip beyond the source length and confirm the remaining path is empty.
+    /// - Set the source to `/second` and verify captures are cleared and both path accessors
+    ///   return the replacement.
     #[test]
     fn test_path_set_and_items() {
         let mut p = Path::new("/first/path");
@@ -292,6 +309,13 @@ mod tests {
         assert_eq!(*p.get_ref(), "/second");
     }
 
+    /// STATEMENT: Indexing a missing named parameter panics with the expected unavailable-value
+    /// message.
+    ///
+    /// HOW:
+    /// - Create a `Path` for `/` without captures and index it with `missing`.
+    /// - Use `should_panic` to verify the panic contains `Value for parameter is not
+    ///   available`.
     #[test]
     #[should_panic(expected = "Value for parameter is not available")]
     fn test_path_index_missing() {
@@ -299,6 +323,13 @@ mod tests {
         let _ = &p["missing"];
     }
 
+    /// STATEMENT: Numeric parameter indexing panics with the expected bounds message when the
+    /// index is too large.
+    ///
+    /// HOW:
+    /// - Add one static capture to `/test` and verify index `0` returns `static`.
+    /// - Access index `1` and use `should_panic` to verify the message reports index `1` and
+    ///   one segment.
     #[test]
     #[should_panic(expected = "Segment index 1 is out of range, path has 1 segments")]
     fn index_out_of_range() {

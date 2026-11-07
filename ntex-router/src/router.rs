@@ -272,6 +272,16 @@ mod tests {
     use crate::path::Path;
     use crate::router::{ResourceId, Router};
 
+    /// STATEMENT: Recognition returns registered values and IDs while extracting dynamic,
+    /// embedded, and tail parameters.
+    ///
+    /// HOW:
+    /// - Register nine exact, dynamic, extension, tail, and custom-regex routes with distinct
+    ///   values and IDs.
+    /// - Confirm immutable and mutable recognition both reject `/unknown` and return value
+    ///   `10`, ID `0`, and no captures for `/name`.
+    /// - Mutably recognize the listed dynamic paths and verify each value, `ResourceId`, and
+    ///   named capture, including extension and tail values.
     #[test]
     fn test_recognizer_1() {
         let mut router = Router::<usize>::builder();
@@ -356,6 +366,13 @@ mod tests {
         assert_eq!(path.get("custom").unwrap(), "blah-blah");
     }
 
+    /// STATEMENT: An earlier exact resource takes precedence over a matching dynamic extension
+    /// resource.
+    ///
+    /// HOW:
+    /// - Register `/index.json` before `/{source}.json`.
+    /// - Recognize `/index.json` and `/test.json` mutably and verify values `10` and `11`,
+    ///   respectively.
     #[test]
     fn test_recognizer_2() {
         let mut router = Router::<usize>::builder();
@@ -372,6 +389,13 @@ mod tests {
         assert_eq!(*h, 11);
     }
 
+    /// STATEMENT: Case-insensitive matching applies to static routes but does not relax literal
+    /// suffixes in dynamic segments.
+    ///
+    /// HOW:
+    /// - Register `/index.json` and `/{source}.json` with `case_insensitive` enabled.
+    /// - Verify `/index.json` and `/indeX.json` select value `10`.
+    /// - Confirm `/test.jsoN` does not match the dynamic route's lowercase `.json` suffix.
     #[test]
     fn test_recognizer_3() {
         let mut router = Router::<usize>::builder();
@@ -392,6 +416,16 @@ mod tests {
         assert!(router.recognize_mut(&mut path).is_none());
     }
 
+    /// STATEMENT: Recognition and prefix skipping retain correct offsets for paths longer than
+    /// `u16::MAX`.
+    ///
+    /// HOW:
+    /// - Match `/{name}/{id}/{tail}*` with a `name` longer than `u16::MAX` and verify the
+    ///   value, ID, and complete captures.
+    /// - Skip into the long suffix of `/prefix/{name}` and confirm the `/prefix` router does
+    ///   not match.
+    /// - Skip the long leading segment of `/{name}/prefix/test` and verify the prefix match
+    ///   leaves `/test`.
     #[test]
     fn test_recognizer_long_path() {
         let mut router = Router::<usize>::builder();
@@ -419,6 +453,16 @@ mod tests {
         assert_eq!(path.path(), "/test");
     }
 
+    /// STATEMENT: Recognition uses the unskipped suffix for matching and captured parameter
+    /// offsets.
+    ///
+    /// HOW:
+    /// - Register `/name` and `/name/{val}`, skip the entire `/name` path, and confirm no
+    ///   match.
+    /// - Skip `/test` or `/test2` from longer paths and verify static and dynamic resource
+    ///   values and captured `val` values.
+    /// - Check the explicitly assigned dynamic ID and verify `/name-test` still does not match
+    ///   after skipping.
     #[test]
     fn test_recognizer_with_path_skip() {
         let mut router = Router::<usize>::builder();
@@ -469,6 +513,15 @@ mod tests {
         assert_eq!(&path["val"], "ttt");
     }
 
+    /// STATEMENT: Immutable and mutable checked recognition select duplicate routes by their
+    /// attached check values.
+    ///
+    /// HOW:
+    /// - Register three `/name` resources with values `10`, `11`, and `12` and check values
+    ///   `0`, `1`, and `2`.
+    /// - Recognize a fresh `/name` path with each check-value predicate through
+    ///   `recognize_checked` and `recognize_checked_mut`.
+    /// - Verify both methods return the corresponding resource value for every predicate.
     #[test]
     fn test_recognizer_checked() {
         let mut router = Router::<usize, usize>::builder();
@@ -527,6 +580,15 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Case-insensitive checked recognition still filters duplicate routes by their
+    /// check values.
+    ///
+    /// HOW:
+    /// - Enable `case_insensitive` and register three `/name` routes with distinct check
+    ///   values.
+    /// - Use immutable checks on `/Name` to select values `10` and `11` by check values `0` and
+    ///   `1`.
+    /// - Repeat with mutable checks on `/Name` and `/name` and verify the same selected values.
     #[test]
     fn test_recognizer_checked_insensitive() {
         let mut router = Router::<usize, usize>::builder();
@@ -570,6 +632,13 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Prefix matches expose the remaining path as `tail`, including empty tails and
+    /// bounded skips.
+    ///
+    /// HOW:
+    /// - Match static and dynamic prefixes against the listed exact and extended paths.
+    /// - Verify each expected suffix through `path()`, `get("tail")`, and named indexing.
+    /// - Skip beyond `/app` and confirm both the remaining path and fallback `tail` are empty.
     #[test]
     fn test_prefix_exact_match_tail() {
         for (prefix, p, tail) in [

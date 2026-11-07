@@ -54,6 +54,9 @@ jobs:
           MIRIFLAGS: -Zmiri-disable-stacked-borrows
         run: cargo miri nextest run -p ntex-service -- "miri_"
 
+      - name: Run Miri (ntex::web handler futures)
+        run: cargo miri nextest run -p ntex --lib -- "web::handler::tests::"
+
       - name: Run Miri (ntex-io)
         # Run all of your tests inside of Miri interpreter
         run: cargo miri nextest run -p ntex-io -- "miri_"
