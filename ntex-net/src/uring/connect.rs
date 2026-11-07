@@ -118,6 +118,10 @@ impl Handler for ConnectOpsHandler {
 
     fn tick(&mut self) {}
 
+    fn in_flight(&self) -> usize {
+        self.inner.ops.borrow().len()
+    }
+
     fn cleanup(&mut self) {
         self.inner.ops.borrow_mut().clear();
     }

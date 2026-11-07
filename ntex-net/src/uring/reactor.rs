@@ -1,5 +1,6 @@
 use std::cell::{Cell, UnsafeCell};
 use std::os::fd::{AsRawFd, RawFd};
+use std::time::{Duration, Instant};
 use std::{collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc};
 
 #[cfg(unix)]
@@ -7,9 +8,10 @@ use std::os::unix::net::UnixStream as OsUnixStream;
 
 use ntex_io::Io;
 use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
-use ntex_io_uring::opcode::AsyncCancel;
+use ntex_io_uring::opcode::{AsyncCancel, AsyncCancel2};
 use ntex_io_uring::squeue::{Entry as SEntry, PushError, SubmissionQueue};
-use ntex_io_uring::{IoUring, Probe, Submitter, types::CancelBuilder, types::Fd};
+use ntex_io_uring::types::{CancelBuilder, Fd, SubmitArgs, Timespec};
+use ntex_io_uring::{IoUring, Probe, Submitter};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
@@ -31,8 +33,25 @@ pub trait Handler {
     /// The driver's turn has completed.
     fn tick(&mut self);
 
+    /// Number of submitted operations without their final completion.
+    ///
+    /// The driver waits for them on shutdown, see [`cleanup`](Self::cleanup).
+    fn in_flight(&self) -> usize {
+        0
+    }
+
     /// Clean up the handle before dropping the driver.
+    ///
+    /// Called on shutdown, after the operations counted by
+    /// [`in_flight`](Self::in_flight) completed.
     fn cleanup(&mut self);
+
+    /// Operations are still in flight when the driver stops.
+    ///
+    /// Called instead of [`cleanup`](Self::cleanup). The handler is leaked
+    /// afterwards, so memory referenced by the operations stays valid. It must
+    /// not release anything the kernel may still use.
+    fn abandon(&mut self) {}
 }
 
 /// Api for io-uring reactor.
@@ -231,6 +250,7 @@ impl Reactor {
     const BATCH: u64 = 48;
     const BATCH_MASK: u64 = 0xFFFF_0000_0000_0000;
     const DATA_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
     /// Create io-uring driver
     pub fn new(capacity: u32) -> io::Result<Self> {
@@ -365,6 +385,94 @@ impl Reactor {
             }
             if !more_changes {
                 break;
+            }
+        }
+    }
+
+    /// Cancels in-flight operations and releases handlers.
+    ///
+    /// Handlers own the buffers, addresses and sockets of their operations.
+    /// A handler is cleaned up only once the kernel is done with all of them,
+    /// otherwise it is abandoned and leaked.
+    fn shutdown(
+        &self,
+        sq: SubmissionQueue<'_, SEntry>,
+        submitter: &Submitter<'_>,
+        cq: &mut cqueue::CompletionQueue<'_, CEntry>,
+    ) {
+        let ring = &self.inner.ring;
+        self.inner.notify_read.stop_arming();
+        // Operations queued during the last turn (`Close` of dropped
+        // streams in particular) have not reached the kernel yet.
+        self.flush(sq, submitter);
+
+        let canceled = submitter.register_sync_cancel(None, CancelBuilder::any());
+        self.inner.notify_read.canceled(ring, &canceled);
+        if let Err(e) = canceled {
+            log::error!("Cannot cancel in-flight operations: {e:?}");
+            if e.raw_os_error() == Some(libc::EINVAL) {
+                // sync cancel is available since 6.0, cancel of any request since 5.19
+                self.inner.push(|en| {
+                    AsyncCancel2::new(en, CancelBuilder::any()).user_data(Self::CANCEL);
+                });
+                self.flush(sq, submitter);
+            }
+        }
+
+        let Some(handlers) = self.handlers.take() else {
+            return;
+        };
+
+        // Completions are counted, not delivered. Handlers would issue new
+        // operations, a resend of canceled output for example.
+        let mut in_flight: Vec<_> = handlers.iter().map(|h| h.hnd.in_flight()).collect();
+        let deadline = Instant::now() + Self::SHUTDOWN_TIMEOUT;
+        loop {
+            cq.sync();
+            for entry in &mut *cq {
+                match entry.user_data() {
+                    Self::CANCEL => {}
+                    Self::NOTIFY => self.inner.notify_read.completed(entry.result()),
+                    // the final completion, a zero-copy send ends with its notification
+                    user_data if !more(entry.flags()) => {
+                        let batch = ((user_data & Self::BATCH_MASK) >> Self::BATCH) as usize;
+                        if let Some(n) = in_flight.get_mut(batch) {
+                            *n = n.saturating_sub(1);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            cq.sync();
+
+            if in_flight.iter().all(|n| *n == 0) {
+                break;
+            }
+            let timeout = deadline.saturating_duration_since(Instant::now());
+            if timeout.is_zero() {
+                break;
+            }
+            let ts = Timespec::from(timeout);
+            if let Err(e) = submitter.submit_with_args(1, &SubmitArgs::new().timespec(&ts))
+                && !matches!(
+                    e.raw_os_error(),
+                    Some(libc::ETIME | libc::EINTR | libc::EBUSY | libc::EAGAIN)
+                )
+            {
+                log::error!("Cannot wait for in-flight operations: {e:?}");
+                break;
+            }
+        }
+
+        for (mut h, n) in handlers.into_iter().zip(in_flight) {
+            if n == 0 {
+                h.hnd.cleanup();
+            } else {
+                log::error!(
+                    "{n} io-uring operations are in flight on shutdown, leaking their memory"
+                );
+                h.hnd.abandon();
+                mem::forget(h);
             }
         }
     }
@@ -518,26 +626,7 @@ impl ntex_rt::Driver for Reactor {
             }
         };
 
-        // cleanup handlers
-        if result.is_ok() {
-            self.inner.notify_read.stop_arming();
-            // Operations queued during the last turn (`Close` of dropped
-            // streams in particular) have not reached the kernel yet.
-            self.flush(sq, &submitter);
-
-            // Handlers release buffers and sockets referenced by in-flight
-            // operations, the kernel must be done with all of them first.
-            let canceled = submitter.register_sync_cancel(None, CancelBuilder::any());
-            self.inner.notify_read.canceled(ring, &canceled);
-            if let Err(e) = canceled {
-                log::error!("Cannot cancel in-flight operations: {e:?}");
-            }
-
-            for mut h in self.handlers.take().unwrap().into_iter() {
-                h.hnd.cleanup();
-            }
-        }
-
+        self.shutdown(sq, &submitter, &mut cq);
         result
     }
 
@@ -572,7 +661,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
 
-    use ntex_io_uring::opcode::Nop;
+    use ntex_io_uring::opcode::{Nop, Read};
     use ntex_rt::syscall;
 
     use super::notifier::NotifierState;
@@ -707,6 +796,110 @@ mod tests {
             });
         }
         assert_eq!(changes(), 2);
+    }
+
+    #[derive(Default)]
+    struct Events {
+        cleanup: Cell<bool>,
+        abandon: Cell<bool>,
+    }
+
+    struct Tracked {
+        events: Rc<Events>,
+        in_flight: usize,
+    }
+
+    impl Handler for Tracked {
+        fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {}
+        fn canceled(&mut self, _: usize) {}
+        fn tick(&mut self) {}
+        fn in_flight(&self) -> usize {
+            self.in_flight
+        }
+        fn abandon(&mut self) {
+            self.events.abandon.set(true);
+        }
+        fn cleanup(&mut self) {
+            self.events.cleanup.set(true);
+        }
+    }
+
+    /// STATEMENT: On shutdown, in-flight operations are canceled and their handler is
+    /// cleaned up and released only after the kernel completed them.
+    ///
+    /// HOW:
+    /// - Register a handler that submits a read from an empty pipe into a buffer it owns.
+    /// - Run the reactor until the runtime finishes.
+    /// - Check `cleanup` was called, `abandon` was not, and the handler was dropped.
+    /// - Write to the pipe and check the byte is still readable, so the read was gone.
+    #[test]
+    fn shutdown_cancels_in_flight() {
+        let Some(reactor) = sync_cancel_reactor() else {
+            return;
+        };
+        let mut fds = [0; 2];
+        syscall!(libc::pipe(fds.as_mut_ptr())).unwrap();
+        let (rd, wr) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+
+        let events = Rc::new(Events::default());
+        let mut buf = Box::new([0u8; 8]);
+        let buf_ptr = buf.as_mut_ptr();
+        let fd = rd.as_raw_fd();
+        reactor.register(|api| {
+            unsafe {
+                api.submit(1, |en| {
+                    Read::new(en, Fd(fd), buf_ptr, 8);
+                });
+            }
+            Box::new(Tracked {
+                events: events.clone(),
+                in_flight: 1,
+            })
+        });
+        let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
+        rt.block_on(async {}, &reactor);
+
+        assert!(events.cleanup.get());
+        assert!(!events.abandon.get());
+        assert_eq!(Rc::strong_count(&events), 1);
+        drop(buf);
+
+        syscall!(libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK)).unwrap();
+        syscall!(libc::write(wr.as_raw_fd(), b"x".as_ptr().cast(), 1)).unwrap();
+        let mut out = [0u8; 8];
+        let n = syscall!(libc::read(fd, out.as_mut_ptr().cast(), 8)).unwrap();
+        assert_eq!(&out[..n.cast_unsigned()], b"x");
+    }
+
+    /// STATEMENT: A handler whose operations do not complete within the shutdown
+    /// timeout is abandoned and leaked instead of released.
+    ///
+    /// HOW:
+    /// - Register a handler that reports one in-flight operation it never submitted.
+    /// - Run the reactor until the runtime finishes.
+    /// - Check `abandon` was called, `cleanup` was not, and the handler was not dropped.
+    #[test]
+    fn shutdown_leaks_stuck_handler() {
+        let Ok(reactor) = Reactor::new(8) else {
+            return;
+        };
+        let events = Rc::new(Events::default());
+        reactor.register(|_| {
+            Box::new(Tracked {
+                events: events.clone(),
+                in_flight: 1,
+            })
+        });
+        let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
+        let start = Instant::now();
+        rt.block_on(async {}, &reactor);
+
+        assert!(start.elapsed() >= Reactor::SHUTDOWN_TIMEOUT);
+        assert!(events.abandon.get());
+        assert!(!events.cleanup.get());
+        drop(rt);
+        drop(reactor);
+        assert_eq!(Rc::strong_count(&events), 2);
     }
 
     fn sync_cancel_reactor() -> Option<Reactor> {
@@ -886,6 +1079,14 @@ mod tests {
         }
     }
 
+    /// STATEMENT: When the driver fails, the notifier read is retained and handlers are
+    /// still cleaned up and released.
+    ///
+    /// HOW:
+    /// - Replace the ring with a disabled one, register a handler with nothing in flight.
+    /// - Run the driver and check it fails with `EBADFD`.
+    /// - Check `cleanup` was called, the handler was dropped and the notifier is retained.
+    /// - Enable the ring and complete the retained notifier read.
     #[test]
     fn notifier_driver_error() {
         let Ok(mut reactor) = Reactor::new(8) else {
@@ -895,9 +1096,19 @@ mod tests {
         let inner = Rc::get_mut(&mut reactor.inner).unwrap();
         inner.ring = IoUring::builder().setup_r_disabled().build(8).unwrap();
         reactor.fd = inner.ring.as_raw_fd();
+        let events = Rc::new(Events::default());
+        reactor.register(|_| {
+            Box::new(Tracked {
+                events: events.clone(),
+                in_flight: 0,
+            })
+        });
         let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
         let err = ntex_rt::Driver::run(&reactor, &rt).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(libc::EBADFD));
+        // handlers are released on the error path too
+        assert!(events.cleanup.get());
+        assert_eq!(Rc::strong_count(&events), 1);
         assert_eq!(
             reactor.inner.notify_read.state.get(),
             NotifierState::Retained

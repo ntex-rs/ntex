@@ -14,6 +14,10 @@
 * io-uring: completions that arrive after a stream is closed no longer reach a new
   stream that reuses its slot
 
+* io-uring: on shutdown, wait up to 1s for canceled operations to complete before
+  releasing their buffers and sockets, leak them if they do not complete. Handlers
+  are released when the driver fails too
+
 ## [4.8.0] - 2026-11-06
 
 * `tokio` feature enables `ntex-io/tokio`, the tokio `AsyncRead` and `AsyncWrite` implementations
