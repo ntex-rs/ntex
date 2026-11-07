@@ -60,6 +60,9 @@ pub(crate) enum Segment {
         pattern: Regex,
         names: Vec<&'static str>,
         tail: bool,
+        /// The segment is a single `{name}` with the default pattern, it is
+        /// matched without the regex.
+        whole: bool,
     },
 }
 
@@ -362,9 +365,18 @@ impl ResourceDef {
                 .capture_names()
                 .filter_map(|name| name.map(|name| Box::leak(Box::new(name.to_owned())).as_str()))
                 .collect();
+            let src = &pattern[..pattern.len() - rem.len()];
+            let src = src.strip_prefix('/').unwrap_or(src);
+            let whole = !tail
+                && names.len() == 1
+                && src
+                    .strip_prefix('{')
+                    .and_then(|s| s.strip_suffix('}'))
+                    .is_some_and(|s| !s.contains(['{', '}', ':']));
             pelems.push(Segment::Dynamic {
                 names,
                 tail,
+                whole,
                 pattern: re,
             });
 
@@ -391,6 +403,7 @@ impl ResourceDef {
                     pattern,
                     names: Vec::new(),
                     tail: true,
+                    whole: false,
                 });
             } else {
                 pelems.push(Segment::Static(pattern.to_string()));
@@ -681,6 +694,21 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A `&Url` path is percent-decoded the same way as a `Url` path.
+    ///
+    /// HOW:
+    /// - Match `/user/qwe%25rty/test` against `/user/{id}/test` through a
+    ///   `Path<&Url>`.
+    /// - Confirm the route matches and `id` is the decoded `qwe%rty`.
+    #[test]
+    fn borrowed_url_path_is_decoded() {
+        let tree = Tree::new(&ResourceDef::new("/user/{id}/test"), 1);
+        let uri = urly::Url::try_from("/user/qwe%25rty/test").unwrap();
+        let mut resource = Path::new(&uri);
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(resource.get("id").unwrap(), "qwe%rty");
+    }
+
     #[test]
     fn test_extract_path_decode() {
         use urly::Url;
@@ -725,6 +753,73 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A whole-segment `{name}` is matched without its regex, with the same result.
+    ///
+    /// HOW:
+    /// - Check that only a single `{name}` segment without a custom pattern or tail is
+    ///   marked `whole`.
+    /// - Copy the definition with `whole` cleared, so it is matched by the regex.
+    /// - Match empty, percent-encoded, newline and multi-segment paths with both
+    ///   definitions and compare the matched value and the extracted `id`.
+    #[test]
+    fn whole_segment_param_matches_like_regex() {
+        fn whole(def: &ResourceDef) -> Vec<bool> {
+            def.tp[0]
+                .tp
+                .iter()
+                .filter_map(|seg| match seg {
+                    Segment::Dynamic { whole, .. } => Some(*whole),
+                    Segment::Static(_) => None,
+                })
+                .collect()
+        }
+        assert_eq!(whole(&ResourceDef::new("/a/{id}/{name}")), [true, true]);
+        assert_eq!(whole(&ResourceDef::new("{id}")), [true]);
+        assert_eq!(whole(&ResourceDef::new("/a/{id:.+}")), [false]);
+        assert_eq!(whole(&ResourceDef::new("/a/v{id}")), [false]);
+        assert_eq!(whole(&ResourceDef::new("/a/{id}.x")), [false]);
+        assert_eq!(whole(&ResourceDef::new("/a/{x}{y}")), [false]);
+        assert_eq!(whole(&ResourceDef::new("/a/{id}*")), [false]);
+
+        let fast = ResourceDef::new("/x/{id}/end");
+        let mut slow = fast.clone();
+        for seg in &mut slow.tp[0].tp {
+            if let Segment::Dynamic { whole, .. } = seg {
+                *whole = false;
+            }
+        }
+        assert_eq!(whole(&fast), [true]);
+        assert_eq!(whole(&slow), [false]);
+        let fast = Tree::new(&fast, 1);
+        let slow = Tree::new(&slow, 1);
+
+        for p in [
+            "/x/abc/end",
+            "/x//end",
+            "/x/%20/end",
+            "/x/%0A/end",
+            "/x/a%0Ab/end",
+            "/x/%C3%A9%2F/end",
+            "/x/a/b/end",
+            "/x/abc",
+            "/x/abc/end/",
+        ] {
+            let url = urly::Url::try_from(p).unwrap();
+            let mut r1 = Path::new(url.clone());
+            let mut r2 = Path::new(url);
+            assert_eq!(fast.find(&mut r1), slow.find(&mut r2), "{p}");
+            assert_eq!(r1.get("id"), r2.get("id"), "{p}");
+        }
+        let mut r = Path::new(urly::Url::try_from("/x/%20/end").unwrap());
+        assert_eq!(fast.find(&mut r), Some(1));
+        assert_eq!(r.get("id"), Some(" "));
+        assert_eq!(fast.find(&mut Path::new("/x/%0A/end")), Some(1));
+        assert_eq!(
+            fast.find(&mut Path::new(urly::Url::try_from("/x/%0A/end").unwrap())),
+            None
+        );
+    }
+
     #[test]
     #[allow(clippy::mutable_key_type)]
     fn test_def() {
@@ -743,6 +838,7 @@ mod tests {
             pattern: Regex::new("test").unwrap(),
             names: Vec::new(),
             tail: false,
+            whole: false,
         };
         assert_ne!(seg, seg2);
         assert_eq!(seg2, seg2);

@@ -592,7 +592,7 @@ where
             Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
-        >,
+        > + 'static,
     M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
@@ -639,7 +639,7 @@ where
             Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
-        >,
+        > + 'static,
     M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
@@ -703,7 +703,7 @@ where
             Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
-        >,
+        > + 'static,
     M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {

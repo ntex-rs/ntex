@@ -8,6 +8,10 @@
 
 * http: Add fast path for payload parsing
 
+* web: Use resource id indexed vec for route service cache
+
+* web: Bypass default identity filter
+
 ## [4.6.0] - 2026-11-04
 
 * server: Test-server service factories now receive worker state. Replace

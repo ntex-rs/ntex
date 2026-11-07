@@ -1,8 +1,8 @@
 //! Middleware stack types used by applications, scopes, and resources.
-use std::marker::PhantomData;
+use std::{any::Any, any::TypeId, marker::PhantomData};
 
 use crate::error::Failure;
-use crate::service::{Ctx, Middleware, Service, ServiceFactory};
+use crate::service::{Ctx, Middleware, Service, ServiceChainFactory, ServiceFactory};
 use crate::web::{State, WebError, WebRequest, WebResponse, WebResponseError};
 
 /// Stack of middlewares.
@@ -94,6 +94,34 @@ impl<St, In> Filter<St, In> {
     pub(super) fn new() -> Self {
         Filter(PhantomData)
     }
+}
+
+/// Converts a request passed through the identity filter.
+pub(super) type FilterBypass<In, Out> = fn(WebRequest<In>) -> WebRequest<Out>;
+
+impl<St: State, In: 'static> Filter<St, In> {
+    /// Returns a passthrough if the filter factory `F` is the identity filter.
+    ///
+    /// The identity filter is always ready and returns its request unchanged,
+    /// so callers may skip calling it.
+    pub(super) fn bypass<F: 'static, Out: 'static>() -> Option<FilterBypass<In, Out>> {
+        let id = TypeId::of::<F>();
+        if id == TypeId::of::<Filter<St, In>>()
+            || id == TypeId::of::<ServiceChainFactory<Filter<St, In>, St, WebRequest<In>>>()
+        {
+            Some(passthrough::<In, Out>)
+        } else {
+            None
+        }
+    }
+}
+
+fn passthrough<In: 'static, Out: 'static>(req: WebRequest<In>) -> WebRequest<Out> {
+    let mut req = Some(req);
+    (&mut req as &mut dyn Any)
+        .downcast_mut::<Option<WebRequest<Out>>>()
+        .and_then(Option::take)
+        .expect("identity filter preserves the request state type")
 }
 
 impl<St: State, In> ServiceFactory<St, WebRequest<In>> for Filter<St, In> {

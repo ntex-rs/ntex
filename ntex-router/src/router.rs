@@ -243,6 +243,19 @@ impl<T, U> RouterBuilder<T, U> {
             for (idx, r) in self.resources[1..].iter().enumerate() {
                 tree.insert(&r.rdef, idx + 1);
             }
+            let paths = self
+                .resources
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| !r.rdef.prefix);
+            let paths = paths.flat_map(|(idx, r)| {
+                r.rdef
+                    .patterns()
+                    .iter()
+                    .filter(|p| !p.contains(['{', '}']))
+                    .map(move |p| (idx, p.as_str()))
+            });
+            tree.set_exact(paths, self.insensitive);
             tree
         };
 

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
-use std::mem;
+use std::{marker::PhantomData, mem};
 
-use super::path::PathItem;
+use super::path::{Path, PathItem};
 use super::resource::{ResourceDef, Segment};
 use super::{Resource, ResourcePath};
 
@@ -9,6 +9,162 @@ use super::{Resource, ResourcePath};
 pub(super) struct Tree {
     key: Vec<Segment>,
     items: Vec<Item>,
+    /// Hash table of first static segments of sub trees, empty slots have
+    /// `pos == u32::MAX`
+    statics: Vec<Static>,
+    /// Positions of all other items, in order
+    rest: Vec<u32>,
+    /// Hash table of whole paths of static resources, only at the root
+    exact: Vec<Exact>,
+}
+
+/// Static path with the result of matching it, empty slots have
+/// `value == u32::MAX`
+#[derive(Debug, Clone)]
+struct Exact {
+    key: StaticKey,
+    path: Box<str>,
+    value: u32,
+    skip: u32,
+}
+
+/// Children that can match a path segment, in `items` order.
+///
+/// A sub tree that starts with a different static segment cannot match, it
+/// is skipped. Yields `true` with a sub tree whose first static segment is
+/// already known to match.
+enum Children<'a, 'b> {
+    Indexed {
+        tree: &'a Tree,
+        rest: usize,
+        stat: Option<u32>,
+    },
+    Filtered {
+        items: std::slice::Iter<'a, Item>,
+        seg: &'b str,
+    },
+}
+
+impl<'a> Iterator for Children<'a, '_> {
+    type Item = (&'a Item, bool);
+
+    #[inline]
+    fn next(&mut self) -> Option<(&'a Item, bool)> {
+        match self {
+            Children::Indexed { tree, rest, stat } => {
+                let (pos, matched) = match (tree.rest.get(*rest).copied(), *stat) {
+                    (Some(r), Some(s)) if s > r => {
+                        *rest += 1;
+                        (r, false)
+                    }
+                    (_, Some(s)) => {
+                        *stat = None;
+                        (s, true)
+                    }
+                    (Some(r), None) => {
+                        *rest += 1;
+                        (r, false)
+                    }
+                    (None, None) => return None,
+                };
+                Some((&tree.items[pos as usize], matched))
+            }
+            Children::Filtered { items, seg } => items.find_map(|item| match item {
+                Item::Subtree(tree) => match tree.key.first() {
+                    Some(Segment::Static(pattern)) => {
+                        pattern.eq_ignore_ascii_case(seg).then_some((item, true))
+                    }
+                    _ => Some((item, false)),
+                },
+                Item::Value(_) => Some((item, false)),
+            }),
+        }
+    }
+}
+
+/// First static segment of a sub tree, with its position in `items`
+#[derive(Debug, Clone)]
+struct Static {
+    key: StaticKey,
+    pos: u32,
+}
+
+/// Length, leading and trailing bytes of a segment, cheap to compare.
+///
+/// Segments up to 16 bytes long are equal if their keys are equal.
+type StaticKey = (usize, u64, u64);
+
+#[inline]
+fn static_key(s: &str) -> StaticKey {
+    let b = s.as_bytes();
+    let n = b.len();
+    let (head, tail) = if n >= 8 {
+        (
+            u64::from_le_bytes(*b.first_chunk::<8>().unwrap()),
+            u64::from_le_bytes(*b.last_chunk::<8>().unwrap()),
+        )
+    } else if n >= 4 {
+        (
+            u64::from(u32::from_le_bytes(*b.first_chunk::<4>().unwrap())),
+            u64::from(u32::from_le_bytes(*b.last_chunk::<4>().unwrap())),
+        )
+    } else if n > 0 {
+        let k = u64::from(b[0]) | u64::from(b[n / 2]) << 8 | u64::from(b[n - 1]) << 16;
+        (k, 0)
+    } else {
+        (0, 0)
+    };
+    (n, head, tail)
+}
+
+#[inline]
+fn static_slot(key: StaticKey, mask: usize) -> usize {
+    let h = (key.1 ^ key.2.rotate_left(29) ^ key.0 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    (h >> 32) as usize & mask
+}
+
+/// Position of the first `/`, or the length of the path.
+///
+/// Faster than `str::find` for short segments.
+#[inline]
+fn find_slash(path: &str) -> usize {
+    path.bytes().position(|b| b == b'/').unwrap_or(path.len())
+}
+
+/// First segment of the path, as it is matched by a sub tree
+fn first_segment<T: ResourcePath>(path: &str, unquote: bool) -> (usize, Cow<'_, str>) {
+    let idx = find_slash(path);
+    let seg = &path[..idx];
+    (
+        idx,
+        if unquote {
+            T::unquote(seg)
+        } else {
+            Cow::Borrowed(seg)
+        },
+    )
+}
+
+/// State shared by all levels of a match
+struct Ctx<'a, T, R, F> {
+    resource: &'a R,
+    check: &'a F,
+    segments: &'a mut Vec<(&'static str, PathItem)>,
+    insensitive: bool,
+    /// Segments may need decoding
+    unquote: bool,
+    /// Position of the matched path in the full path, minus one
+    base_skip: isize,
+    _t: PhantomData<T>,
+}
+
+impl<T, R, F> Ctx<'_, T, R, F>
+where
+    F: Fn(usize, &R) -> bool,
+{
+    fn check(&self, v: usize) -> bool {
+        (self.check)(v, self.resource)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +228,7 @@ impl Tree {
             };
             tree.insert_path(&seg.tp, val);
         }
+        tree.build_index();
         tree
     }
 
@@ -81,10 +238,183 @@ impl Tree {
         } else {
             Vec::new()
         };
-        Tree { key, items }
+        Tree {
+            key,
+            items,
+            ..Default::default()
+        }
+    }
+
+    fn build_index(&mut self) {
+        let mut statics = Vec::new();
+        self.rest.clear();
+        for (pos, item) in self.items.iter_mut().enumerate() {
+            let pos = pos as u32;
+            if let Item::Subtree(tree) = item {
+                tree.build_index();
+                if let Some(Segment::Static(s)) = tree.key.first() {
+                    statics.push((static_key(s), s.as_str(), pos));
+                    continue;
+                }
+            }
+            self.rest.push(pos);
+        }
+
+        // sub trees with the same first segment are matched in order
+        statics.sort_unstable();
+        let empty = Static {
+            key: (0, 0, 0),
+            pos: u32::MAX,
+        };
+        let size = (statics.len() * 2).next_power_of_two();
+        let mut table = vec![empty; size];
+        let mut count = 0;
+        for (i, (key, s, pos)) in statics.iter().enumerate() {
+            let dup =
+                (i > 0 && statics[i - 1].1 == *s) || statics.get(i + 1).is_some_and(|n| n.1 == *s);
+            if dup {
+                self.rest.push(*pos);
+            } else {
+                let mut slot = static_slot(*key, size - 1);
+                while table[slot].pos != u32::MAX {
+                    slot = (slot + 1) & (size - 1);
+                }
+                table[slot] = Static {
+                    key: *key,
+                    pos: *pos,
+                };
+                count += 1;
+            }
+        }
+        if count == 0 {
+            table.clear();
+        }
+        self.statics = table;
+        self.rest.sort_unstable();
+    }
+
+    #[inline]
+    fn children<'a, 'b>(&'a self, seg: &'b str, insensitive: bool) -> Children<'a, 'b> {
+        // without static sub trees every item is in `rest`
+        if insensitive && !self.statics.is_empty() {
+            Children::Filtered {
+                items: self.items.iter(),
+                seg,
+            }
+        } else {
+            let key = static_key(seg);
+            let stat = self.find_static(key, seg);
+            Children::Indexed {
+                tree: self,
+                rest: 0,
+                stat,
+            }
+        }
+    }
+
+    #[inline]
+    fn find_static(&self, key: StaticKey, seg: &str) -> Option<u32> {
+        if self.statics.is_empty() {
+            return None;
+        }
+        let mask = self.statics.len() - 1;
+        let mut slot = static_slot(key, mask);
+        loop {
+            let s = &self.statics[slot];
+            if s.pos == u32::MAX {
+                return None;
+            }
+            if s.key == key && (key.0 <= 16 || self.static_at(s.pos) == seg.as_bytes()) {
+                return Some(s.pos);
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    /// First static segment of the sub tree at `pos`
+    fn static_at(&self, pos: u32) -> &[u8] {
+        match &self.items[pos as usize] {
+            Item::Subtree(tree) => match tree.key.first() {
+                Some(Segment::Static(s)) => s.as_bytes(),
+                _ => &[],
+            },
+            Item::Value(_) => &[],
+        }
+    }
+
+    /// Builds the table of whole static paths.
+    ///
+    /// A path is added only if the tree itself matches it to the same
+    /// resource first, without extracting segments, so a lookup hit gives
+    /// the same result as the tree.
+    pub(super) fn set_exact<'a, I>(&mut self, paths: I, insensitive: bool)
+    where
+        I: IntoIterator<Item = (usize, &'a str)>,
+    {
+        self.exact.clear();
+        let mut found: Vec<(&str, u32, u32)> = Vec::new();
+        for (value, path) in paths {
+            if found.iter().any(|(p, _, _)| *p == path) {
+                continue;
+            }
+            let mut res = Path::new(path);
+            if self.find_checked_inner(&mut res, insensitive, &|_, _| true) == Some(value)
+                && res.segments.is_empty()
+                && let Ok(value) = u32::try_from(value)
+                && value != u32::MAX
+            {
+                found.push((path, value, res.skip));
+            }
+        }
+        if found.is_empty() {
+            return;
+        }
+
+        let size = (found.len() * 2).next_power_of_two();
+        let mut table = vec![
+            Exact {
+                key: (0, 0, 0),
+                path: Box::default(),
+                value: u32::MAX,
+                skip: 0,
+            };
+            size
+        ];
+        for (path, value, skip) in found {
+            let key = static_key(path);
+            let mut slot = static_slot(key, size - 1);
+            while table[slot].value != u32::MAX {
+                slot = (slot + 1) & (size - 1);
+            }
+            table[slot] = Exact {
+                key,
+                path: path.into(),
+                value,
+                skip,
+            };
+        }
+        self.exact = table;
+    }
+
+    #[inline]
+    fn find_exact(&self, path: &str) -> Option<&Exact> {
+        let mask = self.exact.len().checked_sub(1)?;
+        let key = static_key(path);
+        let mut slot = static_slot(key, mask);
+        loop {
+            let e = &self.exact[slot];
+            if e.value == u32::MAX {
+                return None;
+            }
+            if e.key == key && (key.0 <= 16 || &*e.path == path) {
+                return Some(e);
+            }
+            slot = (slot + 1) & mask;
+        }
     }
 
     pub(super) fn insert(&mut self, resource: &ResourceDef, value: usize) {
+        self.exact.clear();
         for seg in &resource.tp {
             let value = if seg.slesh {
                 if resource.prefix {
@@ -99,6 +429,7 @@ impl Tree {
             };
             self.insert_path(&seg.tp, value);
         }
+        self.build_index();
     }
 
     fn insert_path(&mut self, key: &[Segment], value: Value) {
@@ -109,6 +440,7 @@ impl Tree {
             let child = Tree {
                 key: self.key.split_off(p),
                 items: mem::take(&mut self.items),
+                ..Default::default()
             };
             self.items.push(Item::Subtree(child));
         }
@@ -189,39 +521,72 @@ impl Tree {
         F: Fn(usize, &R) -> bool,
     {
         let path = resource.resource_path();
-        let mut base_skip = path.skip as isize;
+        let base_skip = path.skip as isize;
+        // `check` sees no segments, they are restored after a match
         let mut segments = mem::take(&mut path.segments);
-        let path = resource.path();
 
+        let res = {
+            let resource = &*resource;
+            let path = resource.path();
+            let unquote = T::needs_unquote(path);
+            if let Some(e) = self.find_exact(path)
+                && (!unquote || matches!(T::unquote(path), Cow::Borrowed(_)))
+                && check(e.value as usize, resource)
+            {
+                Some((e.value as usize, Some(e.skip as usize)))
+            } else {
+                let mut ctx = Ctx {
+                    resource,
+                    check,
+                    segments: &mut segments,
+                    insensitive,
+                    unquote,
+                    base_skip,
+                    _t: PhantomData,
+                };
+                self.find_root(&mut ctx, path)
+            }
+        };
+        let (v, skip) = res?;
+
+        let path = resource.resource_path();
+        path.segments = segments;
+        if let Some(skip) = skip {
+            path.skip(skip as u32);
+        }
+        Some(v)
+    }
+
+    /// Matches the path at the root, returns the value and how much of the
+    /// path to skip if a sub tree matched it
+    fn find_root<T, R, F>(
+        &self,
+        ctx: &mut Ctx<'_, T, R, F>,
+        path: &str,
+    ) -> Option<(usize, Option<usize>)>
+    where
+        T: ResourcePath,
+        R: Resource<T>,
+        F: Fn(usize, &R) -> bool,
+    {
         if self.key.is_empty() {
             if path == "/" {
-                for val in &self.items {
+                ctx.base_skip -= 1;
+                for (val, matched) in self.children("", ctx.insensitive) {
                     match val {
                         Item::Value(val) => {
                             let v = match val {
                                 Value::Slash(v) | Value::Prefix(v) | Value::PrefixSlash(v) => *v,
                                 Value::Val(_) => continue,
                             };
-                            if check(v, resource) {
-                                resource.resource_path().segments = segments;
-                                return Some(v);
+                            if ctx.check(v) {
+                                return Some((v, None));
                             }
                         }
                         Item::Subtree(tree) => {
-                            let result = tree.find_inner_wrapped(
-                                "",
-                                resource,
-                                check,
-                                1,
-                                &mut segments,
-                                insensitive,
-                                base_skip - 1,
-                            );
-                            if let Some((val, skip)) = result {
-                                let path = resource.resource_path();
-                                path.segments = segments;
-                                path.skip(skip as u32);
-                                return Some(val);
+                            let first = Some((0, "", false, matched));
+                            if let Some((v, skip)) = tree.find_inner_wrapped(ctx, "", 1, first) {
+                                return Some((v, Some(skip)));
                             }
                         }
                     }
@@ -233,9 +598,8 @@ impl Tree {
                             Value::Val(v) | Value::Prefix(v) => *v,
                             _ => continue,
                         };
-                        if check(v, resource) {
-                            resource.resource_path().segments = segments;
-                            return Some(v);
+                        if ctx.check(v) {
+                            return Some((v, None));
                         }
                     }
                 }
@@ -243,37 +607,28 @@ impl Tree {
                 let subtree_path = if let Some(spath) = path.strip_prefix('/') {
                     spath
                 } else {
-                    base_skip -= 1;
+                    ctx.base_skip -= 1;
                     path
                 };
 
-                for val in &self.items {
+                let (idx, seg) = first_segment::<T>(subtree_path, ctx.unquote);
+                let quoted = matches!(seg, Cow::Owned(_));
+                for (val, matched) in self.children(&seg, ctx.insensitive) {
                     match val {
                         Item::Value(val) => {
                             let v = match val {
                                 Value::PrefixSlash(v) => *v,
                                 _ => continue,
                             };
-                            if check(v, resource) {
-                                resource.resource_path().segments = segments;
-                                return Some(v);
+                            if ctx.check(v) {
+                                return Some((v, None));
                             }
                         }
                         Item::Subtree(tree) => {
-                            let result = tree.find_inner_wrapped(
-                                subtree_path,
-                                resource,
-                                check,
-                                1,
-                                &mut segments,
-                                insensitive,
-                                base_skip,
-                            );
-                            if let Some((val, skip)) = result {
-                                let path = resource.resource_path();
-                                path.segments = segments;
-                                path.skip(skip as u32);
-                                return Some(val);
+                            let first = Some((idx, &*seg, quoted, matched));
+                            let result = tree.find_inner_wrapped(ctx, subtree_path, 1, first);
+                            if let Some((v, skip)) = result {
+                                return Some((v, Some(skip)));
                             }
                         }
                     }
@@ -283,71 +638,41 @@ impl Tree {
             let subtree_path = if let Some(spath) = path.strip_prefix('/') {
                 spath
             } else {
-                base_skip -= 1;
+                ctx.base_skip -= 1;
                 path
             };
-            let res = self.find_inner_wrapped(
-                subtree_path,
-                resource,
-                check,
-                1,
-                &mut segments,
-                insensitive,
-                base_skip,
-            );
-
-            if let Some((val, skip)) = res {
-                let path = resource.resource_path();
-                path.segments = segments;
-                path.skip(skip as u32);
-                return Some(val);
-            }
+            let (v, skip) = self.find_inner_wrapped(ctx, subtree_path, 1, None)?;
+            return Some((v, Some(skip)));
         }
         None
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn find_inner_wrapped<T, R, F>(
         &self,
+        ctx: &mut Ctx<'_, T, R, F>,
         path: &str,
-        resource: &R,
-        check: &F,
         skip: usize,
-        segments: &mut Vec<(&'static str, PathItem)>,
-        insensitive: bool,
-        base_skip: isize,
+        first: Option<(usize, &str, bool, bool)>,
     ) -> Option<(usize, usize)>
     where
         T: ResourcePath,
         R: Resource<T>,
         F: Fn(usize, &R) -> bool,
     {
-        let len = segments.len();
-        let res = self.find_inner2(
-            path,
-            resource,
-            check,
-            skip,
-            segments,
-            insensitive,
-            base_skip,
-        );
+        let len = ctx.segments.len();
+        let res = self.find_inner2(ctx, path, skip, first);
         if res.is_none() {
-            segments.truncate(len);
+            ctx.segments.truncate(len);
         }
         res
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn find_inner2<T, R, F>(
         &self,
+        ctx: &mut Ctx<'_, T, R, F>,
         mut path: &str,
-        resource: &R,
-        check: &F,
         mut skip: usize,
-        segments: &mut Vec<(&'static str, PathItem)>,
-        insensitive: bool,
-        base_skip: isize,
+        first: Option<(usize, &str, bool, bool)>,
     ) -> Option<(usize, usize)>
     where
         T: ResourcePath,
@@ -361,7 +686,7 @@ impl Tree {
                         Item::Value(Value::Val(v) | Value::Prefix(v)) => *v,
                         _ => continue,
                     };
-                    if check(v, resource) {
+                    if ctx.check(v) {
                         return Some((v, skip));
                     }
                 }
@@ -371,7 +696,7 @@ impl Tree {
                         Item::Value(Value::Prefix(v)) => *v,
                         _ => continue,
                     };
-                    if check(v, resource) {
+                    if ctx.check(v) {
                         return Some((v, skip));
                     }
                 }
@@ -379,20 +704,31 @@ impl Tree {
             return None;
         }
         let mut key: &[_] = &self.key;
+        let mut first = first;
 
         loop {
-            let idx = if let Some(idx) = path.find('/') {
-                idx
-            } else {
-                path.len()
-            };
-            let segment = T::unquote(&path[..idx]);
-            let quoted = matches!(segment, Cow::Owned(_));
+            // the first segment may be already split by the parent
+            let (idx, segment, quoted, matched) =
+                if let Some((idx, seg, quoted, matched)) = first.take() {
+                    (idx, Cow::Borrowed(seg), quoted, matched)
+                } else {
+                    let idx = find_slash(path);
+                    let segment = if ctx.unquote {
+                        T::unquote(&path[..idx])
+                    } else {
+                        Cow::Borrowed(&path[..idx])
+                    };
+                    let quoted = matches!(segment, Cow::Owned(_));
+                    (idx, segment, quoted, false)
+                };
 
             // check segment match
             let is_match = match key[0] {
                 Segment::Static(ref pattern) => {
-                    if insensitive {
+                    if matched {
+                        // the parent index already compared it
+                        true
+                    } else if ctx.insensitive {
                         pattern.eq_ignore_ascii_case(segment.as_ref())
                     } else {
                         pattern == segment.as_ref()
@@ -402,12 +738,28 @@ impl Tree {
                     ref pattern,
                     ref names,
                     tail,
-                    ..
+                    whole,
                 } => {
                     // special treatment for tail, it matches regardless of sleshes
                     let seg = if tail { path } else { segment.as_ref() };
 
-                    if let Some(captures) = pattern.captures(seg) {
+                    if whole {
+                        // same result as `^(?P<name>.+)$`, `.` does not match `\n`
+                        if seg.is_empty() || seg.contains('\n') {
+                            false
+                        } else {
+                            let item = if quoted {
+                                PathItem::Segment(seg.to_string())
+                            } else {
+                                PathItem::IdxSegment(
+                                    (ctx.base_skip + skip as isize) as u32,
+                                    (ctx.base_skip + (skip + seg.len()) as isize) as u32,
+                                )
+                            };
+                            ctx.segments.push((names[0], item));
+                            true
+                        }
+                    } else if let Some(captures) = pattern.captures(seg) {
                         let mut is_match = true;
                         for name in names {
                             if let Some(m) = captures.name(name) {
@@ -415,11 +767,11 @@ impl Tree {
                                     PathItem::Segment(m.as_str().to_string())
                                 } else {
                                     PathItem::IdxSegment(
-                                        (base_skip + (skip + m.start()) as isize) as u32,
-                                        (base_skip + (skip + m.end()) as isize) as u32,
+                                        (ctx.base_skip + (skip + m.start()) as isize) as u32,
+                                        (ctx.base_skip + (skip + m.end()) as isize) as u32,
                                     )
                                 };
-                                segments.push((name, item));
+                                ctx.segments.push((name, item));
                             } else {
                                 log::error!(
                                     "Dynamic path match but not all segments found: {name}"
@@ -435,7 +787,7 @@ impl Tree {
                             for val in &self.items {
                                 if let Item::Value(val) = val {
                                     let v = val.value();
-                                    if check(v, resource) {
+                                    if ctx.check(v) {
                                         return Some((v, skip + idx));
                                     }
                                 }
@@ -469,7 +821,7 @@ impl Tree {
                                         Value::Val(v) | Value::Prefix(v) => *v,
                                         Value::Slash(_) | Value::PrefixSlash(_) => continue,
                                     };
-                                    if check(v, resource) {
+                                    if ctx.check(v) {
                                         return Some((v, skip));
                                     }
                                 }
@@ -489,7 +841,9 @@ impl Tree {
                         PathState::Tail
                     };
 
-                    for val in &self.items {
+                    let (sidx, seg) = first_segment::<T>(subtree_path, ctx.unquote);
+                    let squoted = matches!(seg, Cow::Owned(_));
+                    for (val, matched) in self.children(&seg, ctx.insensitive) {
                         match val {
                             Item::Value(val) => {
                                 let v = match val {
@@ -515,19 +869,16 @@ impl Tree {
                                         }
                                     }
                                 };
-                                if check(v, resource) {
+                                if ctx.check(v) {
                                     return Some((v, skip - 1));
                                 }
                             }
                             Item::Subtree(tree) => {
                                 let result = tree.find_inner_wrapped(
+                                    ctx,
                                     subtree_path,
-                                    resource,
-                                    check,
                                     skip,
-                                    segments,
-                                    insensitive,
-                                    base_skip,
+                                    Some((sidx, &seg, squoted, matched)),
                                 );
                                 if result.is_some() {
                                     return result;
@@ -550,4 +901,196 @@ fn common_prefix(k1: &[Segment], k2: &[Segment]) -> usize {
         .zip(k2.iter())
         .take_while(|&(a, b)| a == b)
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::path::Path;
+
+    impl Tree {
+        /// Visit every child in order, like before the index existed, without
+        /// the table of static paths
+        fn unindexed(&mut self) {
+            self.exact.clear();
+            self.statics.clear();
+            self.rest = (0..self.items.len() as u32).collect();
+            for item in &mut self.items {
+                if let Item::Subtree(tree) = item {
+                    tree.unindexed();
+                }
+            }
+        }
+    }
+
+    /// STATEMENT: Indexed child lookup selects the same resource and segments as visiting
+    /// every child in order.
+    ///
+    /// HOW:
+    /// - Build a tree from overlapping static, dynamic, prefix, tail, slash and
+    ///   multi-pattern resources, registered so dynamic routes precede static ones.
+    ///   Static segments include short ones, and long ones that share length,
+    ///   leading and trailing bytes, a duplicate, a percent sign and a route
+    ///   shadowed by a dynamic one. Repeat without the root `/{name}` route that
+    ///   shadows most static paths.
+    /// - Copy it and make the copy visit every child, and add the table of
+    ///   static paths to other copies, case sensitive and insensitive.
+    /// - Match plain and percent-encoded paths with both trees, case sensitive and
+    ///   insensitive, while the check rejects different sets of resources to force
+    ///   backtracking. Also match each path after a skipped prefix with an
+    ///   extracted outer segment.
+    /// - Compare the resource, the unmatched path and the extracted segments.
+    ///   `check` passes only when it sees no segments, like inside the tree.
+    #[test]
+    fn indexed_children_match_like_linear_scan() {
+        let defs = [
+            ResourceDef::new("/"),
+            ResourceDef::new(""),
+            ResourceDef::new("/{name}"),
+            ResourceDef::new("/echo"),
+            ResourceDef::new("/Echo"),
+            ResourceDef::new("/json/{count}"),
+            ResourceDef::new("/json/{count}/x"),
+            ResourceDef::new("/json/list"),
+            ResourceDef::new("/a/{x}/c"),
+            ResourceDef::new("/a/b/d"),
+            ResourceDef::prefix("/api"),
+            ResourceDef::prefix("/api/v1"),
+            ResourceDef::new("/files/{tail}*"),
+            ResourceDef::new("/user/{id}/"),
+            ResourceDef::new("/pipeline"),
+            ResourceDef::new("/\u{e9}"),
+            ResourceDef::new(["/m1", "/m2/{x}"]),
+            ResourceDef::new("/v{ver}/info"),
+            ResourceDef::new("/ab"),
+            ResourceDef::new("/abc"),
+            ResourceDef::new("/baseline1"),
+            ResourceDef::new("/baseline11"),
+            ResourceDef::new("/aaaaaaaa-x-bbbbbbbb"),
+            ResourceDef::new("/aaaaaaaa-y-bbbbbbbb"),
+            ResourceDef::new("/echo"),
+            ResourceDef::new("/a%2F"),
+            ResourceDef::new("/user/{id}"),
+            ResourceDef::new("/user/me"),
+            ResourceDef::new("/slash/"),
+            ResourceDef::new(["/m3", "/m1"]),
+        ];
+        // without `/{name}`, which shadows most static paths
+        let unshadowed: Vec<_> = defs
+            .iter()
+            .filter(|d| d.pattern() != "/{name}")
+            .cloned()
+            .collect();
+        for (defs, min_exact) in [(&defs[..], 3), (&unshadowed[..], 15)] {
+            compare_with_linear_scan(defs, min_exact);
+        }
+    }
+
+    fn compare_with_linear_scan(defs: &[ResourceDef], min_exact: usize) {
+        let mut tree = Tree::new(&defs[0], 0);
+        for (idx, def) in defs.iter().enumerate().skip(1) {
+            tree.insert(def, idx);
+        }
+        let mut slow = tree.clone();
+        slow.unindexed();
+        assert!(tree.statics.iter().filter(|s| s.pos != u32::MAX).count() > 3);
+        let statics = defs.iter().enumerate().filter(|(_, d)| !d.prefix);
+        let statics = statics.flat_map(|(idx, d)| {
+            d.patterns()
+                .iter()
+                .filter(|p| !p.contains(['{', '}']))
+                .map(move |p| (idx, p.as_str()))
+        });
+        let mut fast = tree.clone();
+        fast.set_exact(statics.clone(), false);
+        let mut fast_i = tree;
+        fast_i.set_exact(statics, true);
+        assert!(fast.exact.iter().filter(|e| e.value != u32::MAX).count() > min_exact);
+
+        let paths = [
+            "/",
+            "/echo",
+            "/ECHO",
+            "/Echo",
+            "/e%63ho",
+            "/json/12",
+            "/json/list",
+            "/json/12/x",
+            "/json/",
+            "/json",
+            "/a/b/c",
+            "/a/b/d",
+            "/a/z/d",
+            "/api",
+            "/api/",
+            "/api/v1/x",
+            "/api/v2",
+            "/files/a/b",
+            "/user/1/",
+            "/user/1",
+            "/pipeline",
+            "/%C3%A9",
+            "/m1",
+            "/m2/q",
+            "/v2/info",
+            "/unknown/deep",
+            "//",
+            "/a//c",
+            "/ab",
+            "/abc",
+            "/abd",
+            "/baseline1",
+            "/baseline11",
+            "/baseline12",
+            "/aaaaaaaa-x-bbbbbbbb",
+            "/aaaaaaaa-y-bbbbbbbb",
+            "/aaaaaaaa-z-bbbbbbbb",
+            "/a%2F",
+            "/a%2f",
+            "/user/me",
+            "/slash/",
+            "/slash",
+            "/m3",
+        ];
+        let rejects: [&[usize]; 5] = [&[], &[2], &[2, 3, 5], &[8, 10, 13], &[0, 1, 2, 4, 6]];
+
+        for (p, pre) in paths.iter().flat_map(|p| [(*p, ""), (*p, "/pre")]) {
+            for reject in rejects {
+                for insensitive in [false, true] {
+                    // the tree hides matched segments from `check`
+                    let check =
+                        |v: usize, r: &Path<urly::Url>| r.is_empty() && !reject.contains(&v);
+                    let new = || {
+                        let mut r = Path::new(urly::Url::try_from(format!("{pre}{p}")).unwrap());
+                        if !pre.is_empty() {
+                            r.skip(pre.len() as u32);
+                            r.add_static("outer", "x");
+                        }
+                        r
+                    };
+                    let (mut r1, mut r2) = (new(), new());
+                    let (v1, v2) = if insensitive {
+                        (
+                            fast_i.find_checked_insensitive(&mut r1, &check),
+                            slow.find_checked_insensitive(&mut r2, &check),
+                        )
+                    } else {
+                        (
+                            fast.find_checked(&mut r1, &check),
+                            slow.find_checked(&mut r2, &check),
+                        )
+                    };
+                    let ctx =
+                        format!("{p:?} pre={pre:?} reject={reject:?} insensitive={insensitive}");
+                    assert_eq!(v1, v2, "{ctx}");
+                    assert_eq!(r1.path(), r2.path(), "{ctx}");
+                    assert_eq!(
+                        r1.iter().collect::<Vec<_>>(),
+                        r2.iter().collect::<Vec<_>>(),
+                        "{ctx}"
+                    );
+                }
+            }
+        }
+    }
 }

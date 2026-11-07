@@ -96,11 +96,24 @@ pub trait ResourcePath {
     fn unquote(s: &str) -> std::borrow::Cow<'_, str> {
         s.into()
     }
+
+    /// Returns `false` if `unquote` returns every segment of `path` unchanged,
+    /// so the router can skip decoding them.
+    ///
+    /// The default implementation returns `true`.
+    fn needs_unquote(path: &str) -> bool {
+        let _ = path;
+        true
+    }
 }
 
 impl ResourcePath for String {
     fn path(&self) -> &str {
         self.as_str()
+    }
+
+    fn needs_unquote(_: &str) -> bool {
+        false
     }
 }
 
@@ -108,17 +121,33 @@ impl ResourcePath for &str {
     fn path(&self) -> &str {
         self
     }
+
+    fn needs_unquote(_: &str) -> bool {
+        false
+    }
 }
 
 impl ResourcePath for ntex_bytes::ByteString {
     fn path(&self) -> &str {
         self
     }
+
+    fn needs_unquote(_: &str) -> bool {
+        false
+    }
 }
 
 impl<T: ResourcePath> ResourcePath for &T {
     fn path(&self) -> &str {
         (*self).path()
+    }
+
+    fn unquote(s: &str) -> std::borrow::Cow<'_, str> {
+        T::unquote(s)
+    }
+
+    fn needs_unquote(path: &str) -> bool {
+        T::needs_unquote(path)
     }
 }
 
@@ -180,6 +209,11 @@ mod url_support {
 
         fn unquote(s: &str) -> std::borrow::Cow<'_, str> {
             urly::quoting::unquote(s, urly::quoting::Component::Path)
+        }
+
+        fn needs_unquote(path: &str) -> bool {
+            // path segments are decoded only at `%`
+            path.bytes().any(|b| b == b'%')
         }
     }
 }
