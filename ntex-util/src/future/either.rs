@@ -421,4 +421,30 @@ mod test {
         assert_eq!(Either::<u8, u8>::Right(2).left(), None);
         assert_eq!(Either::<u8, u8>::Right(2).right(), Some(2));
     }
+
+    /// STATEMENT: Polling an `Either` future pin-projects to the active branch without
+    /// undefined behavior.
+    ///
+    /// HOW:
+    /// - Poll a `Left` ready `String` future with `Waker::noop` and check its output.
+    /// - Poll a `Right` future that is pending once, then check it returns its output.
+    #[test]
+    fn miri_either_polls_active_branch() {
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut left = std::pin::pin!(Either::<_, future::Ready<String>>::Left(future::ready(
+            "l".to_string()
+        )));
+        assert_eq!(left.as_mut().poll(&mut cx), Poll::Ready("l".to_string()));
+
+        let mut pending = true;
+        let mut right = std::pin::pin!(Either::<future::Ready<String>, _>::Right(future::poll_fn(
+            move |_| if std::mem::take(&mut pending) {
+                Poll::Pending
+            } else {
+                Poll::Ready("r".to_string())
+            }
+        )));
+        assert!(right.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(right.as_mut().poll(&mut cx), Poll::Ready("r".to_string()));
+    }
 }

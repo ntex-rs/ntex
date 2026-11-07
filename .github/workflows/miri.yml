@@ -57,6 +57,26 @@ jobs:
       - name: Run Miri (ntex::web handler futures)
         run: cargo miri nextest run -p ntex --lib -- "web::handler::tests::"
 
+      - name: Run Miri (ntex ws mask, h1 codec)
+        # Runtime tests need an I/O driver; the skipped decoder tests take minutes under Miri.
+        run: >-
+          cargo miri nextest run -p ntex --lib --
+          "ws::mask::" "h1::encoder::tests::" "h1::decoder::tests::"
+          --skip test_request_without_date
+          --skip test_request_stream_framing
+          --skip test_small_chunks_are_merged
+          --skip test_chunked_trailers_limit
+          --skip test_chunk_size_line_byte_by_byte
+
+      - name: Run Miri (ntex-http header values)
+        run: cargo miri nextest run -p ntex-http -- "value::"
+
+      - name: Run Miri (ntex-util)
+        run: cargo miri nextest run -p ntex-util -- "miri_"
+
+      - name: Run Miri (urly)
+        run: cargo miri nextest run -p urly
+
       - name: Run Miri (ntex-io)
         # Run all of your tests inside of Miri interpreter
         run: cargo miri nextest run -p ntex-io -- "miri_"

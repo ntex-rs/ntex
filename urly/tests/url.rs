@@ -720,6 +720,14 @@ fn http() {
     assert!(Uri::try_from(url("//h?q")).is_err());
 }
 
+/// STATEMENT: Parsed URLs are canonical and survive validation, reparsing,
+/// part round-trips and joining.
+///
+/// HOW:
+/// - Build pseudo-random inputs from a fixed seed and a set of tricky pieces.
+/// - For each input that parses, check `Url::validate`, `Url::parse_ref`
+///   idempotence, `into_parts`/`from_parts` round-trips and `join_url`.
+/// - Use fewer iterations under Miri to keep the run bounded.
 #[test]
 fn parse_invariants() {
     const PIECES: &[&str] = &[
@@ -776,7 +784,8 @@ fn parse_invariants() {
         seed ^= seed << 17;
         seed
     };
-    for _ in 0..50_000 {
+    let iterations = if cfg!(miri) { 300 } else { 50_000 };
+    for _ in 0..iterations {
         let n = (next() % 12) as usize;
         let src: String = (0..n)
             .map(|_| PIECES[(next() % PIECES.len() as u64) as usize])

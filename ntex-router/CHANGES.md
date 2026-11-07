@@ -1,6 +1,6 @@
 # Changes
 
-## [2.2.0] - Unreleased
+## [2.2.0] - 2026-11-07
 
 * Match a single `{name}` path segment without regex
 

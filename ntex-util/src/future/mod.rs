@@ -108,4 +108,24 @@ mod tests {
         assert_eq!(fut.as_mut().take_output(), Some(1));
         fut.as_mut().await;
     }
+
+    /// STATEMENT: `MaybeDone` moves its output out of the pinned value exactly once
+    /// without undefined behavior.
+    ///
+    /// HOW:
+    /// - Check a pending `MaybeDone` has no output and stays pending under `Waker::noop`.
+    /// - Poll a ready `String` future to completion and take its output.
+    /// - Check a second take returns `None`.
+    #[test]
+    fn miri_maybe_done_takes_output_once() {
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut fut = pin!(MaybeDone::Pending(pending::<String>()));
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        assert!(fut.as_mut().take_output().is_none());
+
+        let mut fut = pin!(MaybeDone::Pending(ready("a".to_string())));
+        assert!(fut.as_mut().poll(&mut cx).is_ready());
+        assert_eq!(fut.as_mut().take_output(), Some("a".to_string()));
+        assert!(fut.as_mut().take_output().is_none());
+    }
 }

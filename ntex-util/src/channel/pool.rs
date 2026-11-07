@@ -264,4 +264,40 @@ mod tests {
         tx.send("test").unwrap();
         assert_eq!(rx.await.unwrap(), "test");
     }
+
+    /// STATEMENT: Pooled channels access and release their shared slab slots without
+    /// undefined behavior.
+    ///
+    /// HOW:
+    /// - Poll a receiver and sender pending with `Waker::noop`, send a `String`, and receive it.
+    /// - Drop a sender before sending and check the receiver gets `Canceled`.
+    /// - Drop a receiver and check the sender is canceled and `send` returns the value.
+    /// - Drop the remaining receiver and check the pool reports no occupied slots.
+    #[test]
+    fn miri_pool_channels_share_slab_slots() {
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let pool = new::<String>();
+
+        let (tx, rx) = pool.channel();
+        assert!(rx.poll_recv(&mut cx).is_pending());
+        assert!(tx.poll_canceled(&mut cx).is_pending());
+        assert!(!tx.is_canceled());
+        tx.send("a".to_string()).unwrap();
+        assert_eq!(rx.poll_recv(&mut cx), Poll::Ready(Ok("a".to_string())));
+        drop(rx);
+
+        let (tx, rx) = pool.channel();
+        drop(tx);
+        assert_eq!(rx.poll_recv(&mut cx), Poll::Ready(Err(Canceled)));
+
+        let (tx2, rx2) = pool.channel();
+        drop(rx2);
+        assert!(tx2.is_canceled());
+        assert!(tx2.poll_canceled(&mut cx).is_ready());
+        assert_eq!(tx2.send("b".to_string()), Err("b".to_string()));
+
+        drop(rx);
+        assert!(format!("{pool:?}").contains("size: 0"));
+        pool.shrink_to_fit();
+    }
 }
