@@ -178,21 +178,6 @@ impl UninitSlice {
     }
 }
 
-/// Deprecated, use [`UninitSlice::as_uninit_slice_mut`] instead.
-///
-/// This impl is unsound. The memory may already be initialized, for example
-/// when the slice was returned by the [`BufMut`](crate::BufMut) implementation
-/// for `&mut [u8]`, and safe code can write uninitialized bytes to the
-/// returned slice. It will be removed in the next major release.
-///
-/// Rust does not allow `#[deprecated]` on trait impls, so using this impl
-/// does not emit a warning.
-impl AsMut<[MaybeUninit<u8>]> for UninitSlice {
-    fn as_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        &mut self.0
-    }
-}
-
 impl fmt::Debug for UninitSlice {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("UninitSlice[...]").finish()
@@ -237,7 +222,7 @@ mod tests {
     /// STATEMENT: `UninitSlice` supports standard range indexing and writes through uninitialized-slice views.
     ///
     /// HOW:
-    /// - Wrap an eight-byte array, check six range lengths, and write `a` and `b` through both uninitialized accessors.
+    /// - Wrap an eight-byte array, check six range lengths, and write `a` and `b` through `as_uninit_slice_mut`.
     /// - Verify the underlying array begins with `ab`.
     #[test]
     fn index_and_uninit_access() {
@@ -251,8 +236,10 @@ mod tests {
         assert_eq!(slice[1..3].len(), 2);
         assert_eq!(slice[1..=3].len(), 3);
 
-        unsafe { slice.as_uninit_slice_mut()[0].write(b'a') };
-        AsMut::<[MaybeUninit<u8>]>::as_mut(slice)[1].write(b'b');
+        unsafe {
+            slice.as_uninit_slice_mut()[0].write(b'a');
+            slice.as_uninit_slice_mut()[1].write(b'b');
+        }
         assert_eq!(&data[..2], b"ab");
     }
 }
