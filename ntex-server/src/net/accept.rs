@@ -1,11 +1,13 @@
 #![allow(clippy::missing_panics_doc)]
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
-use std::{cell::Cell, fmt, io, sync::mpsc, thread};
+use std::{cell::Cell, fmt, io, thread};
 use std::{collections::VecDeque, num::NonZeroUsize};
 
 use ntex_polling::{Event, Events, Notifier, Poller};
 use ntex_rt::System;
 use ntex_util::{future::Either, time::Millis, time::sleep};
+use parking_lot::Mutex;
 
 use super::socket::{Connection, Listener, SocketAddr};
 use super::{Server, Token};
@@ -14,6 +16,7 @@ use crate::metrics::AcceptSlot;
 const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ERR_TIMEOUT: Duration = Duration::from_millis(500);
 const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
+const DEFAULT_BACKLOG: i32 = 2048;
 
 /// Command sent to the accept loop.
 #[derive(Debug)]
@@ -30,40 +33,85 @@ pub enum AcceptorCommand {
     Timer,
 }
 
+/// Command delivered to a single accept thread.
+#[derive(Debug, Clone)]
+enum Command {
+    Stop(Arc<StopSignal>),
+    Terminate,
+    Pause,
+    Resume,
+    Timer,
+}
+
+/// Completes a stop request once every accept thread has released it.
+#[derive(Debug)]
+struct StopSignal(Option<oneshot::Sender<()>>);
+
+impl Drop for StopSignal {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ServerSocketInfo {
     addr: SocketAddr,
     token: Token,
     sock: Listener,
+    /// Listener index used for metrics, shared by replicated sockets.
+    idx: usize,
     registered: Cell<bool>,
     timeout: Cell<Option<Instant>>,
 }
 
-/// Handle for sending commands to the accept loop.
+/// Command channel of a single accept thread.
 #[derive(Debug, Clone)]
-pub struct AcceptNotify(Notifier, mpsc::Sender<AcceptorCommand>);
+struct AcceptHandle(Notifier, mpsc::Sender<Command>);
 
-impl AcceptNotify {
-    fn new(waker: Notifier, tx: mpsc::Sender<AcceptorCommand>) -> Self {
-        AcceptNotify(waker, tx)
-    }
-
-    /// Sends a command and wakes the accept loop.
-    pub fn send(&self, cmd: AcceptorCommand) {
+impl AcceptHandle {
+    fn send(&self, cmd: Command) {
         let _ = self.1.send(cmd);
         let _ = self.0.notify();
     }
 }
 
+/// Handle for sending commands to the accept loop.
+///
+/// Commands are delivered to every accept thread.
+#[derive(Debug, Clone)]
+pub struct AcceptNotify(Arc<Mutex<Vec<AcceptHandle>>>);
+
+impl AcceptNotify {
+    /// Sends a command and wakes the accept loop.
+    ///
+    /// A `Stop` command is signaled after every accept thread has stopped.
+    pub fn send(&self, cmd: AcceptorCommand) {
+        let handles = self.0.lock().clone();
+        let cmd = match cmd {
+            AcceptorCommand::Stop(tx) => Command::Stop(Arc::new(StopSignal(Some(tx)))),
+            AcceptorCommand::Terminate => Command::Terminate,
+            AcceptorCommand::Pause => Command::Pause,
+            AcceptorCommand::Resume => Command::Resume,
+            AcceptorCommand::Timer => Command::Timer,
+        };
+        for h in &handles {
+            h.send(cmd.clone());
+        }
+    }
+}
+
 /// Accept loop for network listeners.
 ///
-/// The loop runs on its own thread and passes accepted connections to the
+/// The loop runs on its own threads and passes accepted connections to the
 /// server.
 pub struct AcceptLoop {
     name: String,
     testing: bool,
+    backlog: i32,
     notify: AcceptNotify,
-    inner: Option<(mpsc::Receiver<AcceptorCommand>, Poller)>,
+    inner: Vec<(mpsc::Receiver<Command>, Poller)>,
 }
 
 impl Default for AcceptLoop {
@@ -73,33 +121,72 @@ impl Default for AcceptLoop {
 }
 
 impl AcceptLoop {
-    /// Creates an accept loop.
+    /// Creates an accept loop with one accept thread.
     ///
     /// # Panics
     ///
     /// Panics if the poller cannot be created.
     pub fn new() -> AcceptLoop {
-        // Create a poller instance
+        let mut slf = AcceptLoop {
+            notify: AcceptNotify(Arc::new(Mutex::new(Vec::new()))),
+            name: "ntex:accept".to_string(),
+            inner: Vec::new(),
+            testing: false,
+            backlog: DEFAULT_BACKLOG,
+        };
+        slf.add_acceptor();
+        slf
+    }
+
+    fn add_acceptor(&mut self) {
         let poll = Poller::new()
             .map_err(|e| panic!("Cannot create Poller {e}"))
             .unwrap();
-
         let (tx, rx) = mpsc::channel();
-        let notify = AcceptNotify::new(poll.notifier(), tx);
-
-        AcceptLoop {
-            notify,
-            name: "ntex:accept".to_string(),
-            inner: Some((rx, poll)),
-            testing: false,
-        }
+        self.notify.0.lock().push(AcceptHandle(poll.notifier(), tx));
+        self.inner.push((rx, poll));
     }
 
     /// Sets the server name.
     ///
-    /// The accept thread is named `{name}:accept`.
+    /// The first accept thread is named `{name}:accept`, additional threads
+    /// are named `{name}:accept{n}`.
     pub fn name<T: AsRef<str>>(&mut self, name: T) {
         self.name = format!("{}:accept", name.as_ref());
+    }
+
+    /// Sets the number of accept threads.
+    ///
+    /// Every TCP listener is replicated with `SO_REUSEPORT`, so each accept
+    /// thread has its own socket for the same address and the kernel spreads
+    /// incoming connections between them. Unix domain listeners are served
+    /// by the first thread only.
+    ///
+    /// Multiple accept threads are supported on Linux and Android. On other
+    /// platforms, a single thread is used.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a poller cannot be created.
+    pub fn acceptors(&mut self, num: usize) {
+        let num = if cfg!(any(target_os = "linux", target_os = "android")) {
+            num.max(1)
+        } else {
+            if num > 1 {
+                log::warn!("Multiple accept threads are not supported on this platform");
+            }
+            1
+        };
+        while self.inner.len() < num {
+            self.add_acceptor();
+        }
+        self.inner.truncate(num);
+        self.notify.0.lock().truncate(num);
+    }
+
+    /// Sets the listen backlog for replicated listeners.
+    pub(crate) fn backlog(&mut self, num: i32) {
+        self.backlog = num;
     }
 
     /// Returns a handle for sending commands to the loop.
@@ -112,37 +199,112 @@ impl AcceptLoop {
         self.testing = true;
     }
 
-    /// Starts the accept loop on a new thread.
+    /// Starts the accept loop on new threads.
     ///
     /// Blocks until the listeners are registered.
-    pub fn start(mut self, socks: Vec<(Token, Listener)>, srv: Server) {
-        let (tx, rx_start) = oneshot::channel();
-        let (rx, poll) = self
-            .inner
-            .take()
-            .expect("AcceptLoop cannot be used multiple times");
-
-        Accept::start(
-            tx,
-            rx,
-            poll,
-            socks,
-            srv,
-            self.name.clone(),
-            self.notify.clone(),
-            self.testing,
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn start(self, socks: Vec<(Token, Listener)>, srv: Server) {
+        // the builder registers named listeners, others only have an address
+        srv.metrics_ref().listeners(
+            socks
+                .iter()
+                .map(|(_, lst)| (String::new(), lst.local_addr().to_string())),
         );
 
-        let _ = rx_start.recv();
+        let num = self.inner.len();
+        let mut groups: Vec<Vec<(usize, Token, Listener)>> = (0..num).map(|_| Vec::new()).collect();
+        for (idx, (token, lst)) in socks.into_iter().enumerate() {
+            if num > 1 {
+                for (n, lst) in replicate(&lst, num - 1, self.backlog)
+                    .into_iter()
+                    .enumerate()
+                {
+                    groups[n + 1].push((idx, token, lst));
+                }
+            }
+            groups[0].push((idx, token, lst));
+        }
+
+        let handles = self.notify.0.lock().clone();
+        let mut started = Vec::new();
+        for (n, ((rx, poll), socks)) in self.inner.into_iter().zip(groups).enumerate() {
+            // the first thread always runs, others only serve replicated sockets
+            if n > 0 && socks.is_empty() {
+                continue;
+            }
+            let name = if n == 0 {
+                self.name.clone()
+            } else {
+                format!("{}{n}", self.name)
+            };
+            let (tx, rx_start) = oneshot::channel();
+            Accept::start(
+                tx,
+                rx,
+                poll,
+                handles[n].clone(),
+                socks,
+                srv.clone(),
+                name,
+                self.testing,
+            );
+            started.push(rx_start);
+        }
+
+        for rx in started {
+            let _ = rx.recv();
+        }
     }
+}
+
+/// Creates `num` more listeners bound to the address of `lst`.
+///
+/// `SO_REUSEPORT` is enabled on `lst` and on the new listeners, so the
+/// kernel balances incoming connections between all of them.
+fn replicate(lst: &Listener, num: usize, backlog: i32) -> Vec<Listener> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if let Listener::Tcp(lst) = lst {
+        use socket2::{Domain, SockAddr, SockRef, Socket, Type};
+
+        let create = || -> io::Result<std::net::TcpListener> {
+            let addr = lst.local_addr()?;
+            let sock = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
+            sock.set_reuse_address(true)?;
+            sock.set_reuse_port(true)?;
+            if addr.is_ipv6() {
+                sock.set_only_v6(SockRef::from(lst).only_v6()?)?;
+            }
+            sock.bind(&SockAddr::from(addr))?;
+            sock.listen(backlog)?;
+            Ok(sock.into())
+        };
+
+        if let Err(e) = SockRef::from(lst).set_reuse_port(true) {
+            log::warn!("Cannot enable SO_REUSEPORT for {lst:?}: {e}");
+            return Vec::new();
+        }
+        let mut items = Vec::with_capacity(num);
+        for _ in 0..num {
+            match create() {
+                Ok(item) => items.push(Listener::from_tcp(item)),
+                Err(e) => {
+                    log::warn!("Cannot replicate listener {lst:?}: {e}");
+                    break;
+                }
+            }
+        }
+        return items;
+    }
+    let _ = (lst, num, backlog);
+    Vec::new()
 }
 
 impl fmt::Debug for AcceptLoop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AcceptLoop")
             .field("name", &self.name)
+            .field("acceptors", &self.inner.len())
             .field("notify", &self.notify)
-            .field("inner", &self.inner)
             .finish()
     }
 }
@@ -150,26 +312,30 @@ impl fmt::Debug for AcceptLoop {
 struct Accept {
     name: String,
     poller: Poller,
-    rx: mpsc::Receiver<AcceptorCommand>,
+    rx: mpsc::Receiver<Command>,
     tx: Option<oneshot::Sender<()>>,
     sockets: Vec<ServerSocketInfo>,
     srv: Server,
-    notify: AcceptNotify,
+    notify: AcceptHandle,
     testing: bool,
     backpressure: bool,
     backlog: VecDeque<Connection>,
+    /// Backlog length last added to the shared metrics.
+    backlog_reported: usize,
+    /// Whether this thread is counted as paused in the shared metrics.
+    paused_reported: bool,
 }
 
 impl Accept {
     #[allow(clippy::too_many_arguments)]
     fn start(
         tx: oneshot::Sender<()>,
-        rx: mpsc::Receiver<AcceptorCommand>,
+        rx: mpsc::Receiver<Command>,
         poller: Poller,
-        socks: Vec<(Token, Listener)>,
+        notify: AcceptHandle,
+        socks: Vec<(usize, Token, Listener)>,
         srv: Server,
         name: String,
-        notify: AcceptNotify,
         testing: bool,
     ) {
         log::info!("Starting {name:?} accept loop");
@@ -178,7 +344,7 @@ impl Accept {
         let sys = System::current();
         let _ = thread::Builder::new().name(name.clone()).spawn(move || {
             System::set_current(sys);
-            Accept::new(name, tx, rx, poller, socks, srv, notify, testing).poll();
+            Accept::new(name, tx, rx, poller, notify, socks, srv, testing).poll();
         });
     }
 
@@ -186,29 +352,24 @@ impl Accept {
     fn new(
         name: String,
         tx: oneshot::Sender<()>,
-        rx: mpsc::Receiver<AcceptorCommand>,
+        rx: mpsc::Receiver<Command>,
         poller: Poller,
-        socks: Vec<(Token, Listener)>,
+        notify: AcceptHandle,
+        socks: Vec<(usize, Token, Listener)>,
         srv: Server,
-        notify: AcceptNotify,
         testing: bool,
     ) -> Accept {
-        let mut sockets = Vec::new();
-        // the builder registers named listeners, others only have an address
-        srv.metrics_ref().listeners(
-            socks
-                .iter()
-                .map(|(_, lst)| (String::new(), lst.local_addr().to_string())),
-        );
-        for (hnd_token, lst) in socks {
-            sockets.push(ServerSocketInfo {
-                addr: lst.local_addr(),
-                sock: lst,
-                token: hnd_token,
+        let sockets = socks
+            .into_iter()
+            .map(|(idx, token, sock)| ServerSocketInfo {
+                addr: sock.local_addr(),
+                sock,
+                idx,
+                token,
                 registered: Cell::new(false),
                 timeout: Cell::new(None),
-            });
-        }
+            })
+            .collect();
 
         Accept {
             name,
@@ -221,7 +382,22 @@ impl Accept {
             tx: Some(tx),
             backpressure: true,
             backlog: VecDeque::new(),
+            backlog_reported: 0,
+            paused_reported: false,
         }
+    }
+
+    fn report_paused(&mut self, paused: bool) {
+        if self.paused_reported != paused {
+            self.paused_reported = paused;
+            self.metrics().paused(paused);
+        }
+    }
+
+    fn report_backlog(&mut self) {
+        let len = self.backlog.len();
+        self.metrics().backlog(self.backlog_reported, len);
+        self.backlog_reported = len;
     }
 
     fn metrics(&self) -> &AcceptSlot {
@@ -243,7 +419,10 @@ impl Accept {
 
         loop {
             for idx in 0..self.sockets.len() {
-                if self.sockets[idx].registered.get() {
+                // paused sockets and sockets in error timeout must not be
+                // polled, a wakeup would re-register them
+                let info = &self.sockets[idx];
+                if !self.backpressure && info.registered.get() && info.timeout.get().is_none() {
                     let readd = self.accept(idx);
                     if readd {
                         self.add_source(idx);
@@ -259,11 +438,12 @@ impl Accept {
                 }
                 log::info!("Accept loop {:?} has been stopped", self.name);
 
-                if let Some(rx) = rx {
+                // the stop request completes when every accept thread releases it
+                if let Some(signal) = rx {
                     if !self.testing {
                         thread::sleep(EXIT_TIMEOUT);
                     }
-                    let _ = rx.send(());
+                    drop(signal);
                 }
 
                 break;
@@ -301,7 +481,7 @@ impl Accept {
                 let notify = self.notify.clone();
                 System::current().handle().spawn_detached(async move {
                     sleep(ERR_SLEEP_TIMEOUT).await;
-                    notify.send(AcceptorCommand::Timer);
+                    notify.send(Command::Timer);
                 });
             } else {
                 info.registered.set(true);
@@ -341,35 +521,35 @@ impl Accept {
         }
     }
 
-    fn process_cmd(&mut self) -> Either<(), Option<oneshot::Sender<()>>> {
+    fn process_cmd(&mut self) -> Either<(), Option<Arc<StopSignal>>> {
         loop {
             match self.rx.try_recv() {
                 Ok(cmd) => match cmd {
-                    AcceptorCommand::Stop(rx) => {
+                    Command::Stop(rx) => {
                         if !self.backpressure {
                             log::info!("Stopping accept loop {:?}", self.name);
                             self.backpressure(true);
                         }
                         break Either::Right(Some(rx));
                     }
-                    AcceptorCommand::Terminate => {
+                    Command::Terminate => {
                         log::info!("Stopping accept loop {:?}", self.name);
                         self.backpressure(true);
                         break Either::Right(None);
                     }
-                    AcceptorCommand::Pause => {
+                    Command::Pause => {
                         if !self.backpressure {
                             log::info!("Pausing accept loop {:?}", self.name);
                             self.backpressure(true);
                         }
                     }
-                    AcceptorCommand::Resume => {
+                    Command::Resume => {
                         if self.backpressure {
                             log::info!("Resuming accept loop {:?}", self.name);
                             self.backpressure(false);
                         }
                     }
-                    AcceptorCommand::Timer => {
+                    Command::Timer => {
                         self.process_timer();
                     }
                 },
@@ -391,15 +571,15 @@ impl Accept {
         if self.backpressure && !on {
             // handle backlog
             while let Some(msg) = self.backlog.pop_front() {
-                if let Err(msg) = self.srv.process(msg) {
+                if let Err(msg) = self.srv.process_with(msg, Connection::incoming_cpu) {
                     log::trace!("Server is unavailable");
                     self.backlog.push_front(msg);
-                    self.metrics().backlog(self.backlog.len());
+                    self.report_backlog();
                     return;
                 }
             }
-            self.metrics().backlog(0);
-            self.metrics().paused(false);
+            self.report_backlog();
+            self.report_paused(false);
 
             // re-enable acceptors
             self.backpressure = false;
@@ -415,7 +595,7 @@ impl Accept {
             }
         } else if !self.backpressure && on {
             self.backpressure = true;
-            self.metrics().paused(true);
+            self.report_paused(true);
             for key in 0..self.sockets.len() {
                 // disable err timeout
                 let info = &mut self.sockets[key];
@@ -430,17 +610,18 @@ impl Accept {
     fn accept(&mut self, token: usize) -> bool {
         loop {
             if let Some(info) = self.sockets.get_mut(token) {
+                let idx = info.idx;
                 match info.sock.accept() {
                     Ok(Some(io)) => {
-                        self.srv.metrics_ref().listeners([]).accepted(token);
+                        self.srv.metrics_ref().listeners([]).accepted(idx);
                         let msg = Connection {
                             io,
                             token: info.token,
                         };
-                        if let Err(msg) = self.srv.process(msg) {
+                        if let Err(msg) = self.srv.process_with(msg, Connection::incoming_cpu) {
                             log::trace!("Server is unavailable");
                             self.backlog.push_back(msg);
-                            self.metrics().backlog(self.backlog.len());
+                            self.report_backlog();
                             self.backpressure(true);
                             return false;
                         }
@@ -448,11 +629,11 @@ impl Accept {
                     Ok(None) => return true,
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return true,
                     Err(ref e) if connection_error(e) => {
-                        self.srv.metrics_ref().listeners([]).connection_error(token);
+                        self.srv.metrics_ref().listeners([]).connection_error(idx);
                     }
                     Err(e) => {
                         log::error!("Error accepting socket: {e}");
-                        self.srv.metrics_ref().listeners([]).resource_error(token);
+                        self.srv.metrics_ref().listeners([]).resource_error(idx);
 
                         // sleep after error
                         info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
@@ -460,7 +641,7 @@ impl Accept {
                         let notify = self.notify.clone();
                         System::current().handle().spawn_detached(async move {
                             sleep(ERR_SLEEP_TIMEOUT).await;
-                            notify.send(AcceptorCommand::Timer);
+                            notify.send(Command::Timer);
                         });
                         return false;
                     }

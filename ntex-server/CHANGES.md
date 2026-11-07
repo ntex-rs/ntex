@@ -7,6 +7,12 @@
 
 ## [4.4.0] - 2026-11-04
 
+* Add `ServerBuilder::acceptors()` and `AcceptLoop::acceptors()`, on Linux TCP listeners
+  are replicated with `SO_REUSEPORT` and served by several accept threads, defaults to
+  a single accept thread; other platforms always use a single accept thread
+
+* Fix paused accept loop accepting connections after a wakeup
+
 * Change `test_server` and `TestServerBuilder` service factories to receive
   worker state, matching production server factories. Replace `async || service`
   with `async |_| service`; state-initialization closures remain zero-argument.

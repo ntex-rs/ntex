@@ -762,3 +762,183 @@ async fn test_raw_tcp() {
     conn.read_exact(&mut buf).unwrap();
     assert_eq!(&buf, b"test");
 }
+
+/// Waits until the server has started its workers.
+#[cfg(target_os = "linux")]
+async fn wait_ready(srv: &ntex_server::Server<ntex_server::net::Connection>) {
+    ntex::time::timeout(Millis(3000), async {
+        while srv.status() != ServerStatus::Ready {
+            srv.status_changed().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// Returns the sorted names of the accept threads of server `name`.
+#[cfg(target_os = "linux")]
+fn accept_threads(name: &str) -> Vec<String> {
+    let prefix = format!("{name}:accept");
+    let mut names: Vec<String> = std::fs::read_dir("/proc/self/task")
+        .unwrap()
+        .filter_map(|e| std::fs::read_to_string(e.ok()?.path().join("comm")).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.starts_with(&prefix))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Returns the number of IPv4 TCP sockets listening on `port`.
+#[cfg(target_os = "linux")]
+fn listen_sockets(port: u16) -> usize {
+    let port = format!(":{port:04X}");
+    std::fs::read_to_string("/proc/net/tcp")
+        .unwrap()
+        .lines()
+        .skip(1)
+        .filter(|l| {
+            let mut fields = l.split_whitespace().skip(1);
+            let local = fields.next().unwrap_or_default();
+            // state 0A is LISTEN
+            local.ends_with(&port) && fields.nth(1) == Some("0A")
+        })
+        .count()
+}
+
+/// STATEMENT: With several acceptors, a TCP listener passed to `listen` is
+/// replicated with `SO_REUSEPORT`, every accept thread serves connections,
+/// and stopping the server closes all copies before the stop completes.
+///
+/// HOW:
+/// - Start a server with `acceptors(4)` on a pre-bound listener.
+/// - Check that four `rpa:accept*` threads run and four sockets listen on
+///   the port.
+/// - Open 32 connections, which the kernel spreads over the four sockets,
+///   and check that each one echoes within a timeout, so no copy is left
+///   without a running accept thread.
+/// - Check that the listener metrics count 32 accepted connections.
+/// - Stop the server and check that no socket listens on the port.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_acceptors_replicate_listener() {
+    let (lst, addr) = local_listener();
+    let srv = build()
+        .name("rpa")
+        .workers(2)
+        .acceptors(4)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    assert_eq!(
+        accept_threads("rpa"),
+        ["rpa:accept", "rpa:accept1", "rpa:accept2", "rpa:accept3"]
+    );
+    assert_eq!(listen_sockets(addr.port()), 4);
+
+    let mut conns = Vec::new();
+    for _ in 0..32 {
+        let io = ntex_net::tcp_connect(addr, SharedCfg::default())
+            .await
+            .unwrap();
+        ntex::time::timeout(Millis(5000), check_echo(&io))
+            .await
+            .unwrap();
+        conns.push(io);
+    }
+    assert_eq!(srv.metrics().listeners[0].accepted, 32);
+
+    srv.stop(false).await;
+    assert_eq!(listen_sockets(addr.port()), 0);
+}
+
+/// STATEMENT: Pause and resume reach every accept thread.
+///
+/// HOW:
+/// - Start a server with `acceptors(3)`, wait until it is ready and pause it.
+/// - Open 12 connections that send a message, and check that none is
+///   accepted while paused.
+/// - Resume the server and check that every connection echoes and the
+///   listener metrics count 12 accepted connections.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_acceptors_pause_resume() {
+    let (lst, addr) = local_listener();
+    let srv = build()
+        .name("prs")
+        .workers(1)
+        .acceptors(3)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    assert_eq!(accept_threads("prs").len(), 3);
+    wait_ready(&srv).await;
+
+    srv.pause().await;
+    // the accept threads handle the command asynchronously
+    sleep(Millis(100)).await;
+
+    let mut conns = Vec::new();
+    for _ in 0..12 {
+        let io = ntex_net::tcp_connect(addr, SharedCfg::default())
+            .await
+            .unwrap();
+        io.send(Bytes::from_static(b"hello"), &BytesCodec)
+            .await
+            .unwrap();
+        conns.push(io);
+    }
+    sleep(Millis(200)).await;
+    assert_eq!(srv.metrics().listeners[0].accepted, 0);
+
+    srv.resume().await;
+    for io in &conns {
+        let msg = ntex::time::timeout(Millis(5000), io.recv(&BytesCodec))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg, Bytes::from_static(b"hello"));
+    }
+    assert_eq!(srv.metrics().listeners[0].accepted, 12);
+    srv.stop(false).await;
+}
+
+/// STATEMENT: Unix domain listeners are not replicated, so a server with
+/// only Unix domain listeners runs a single accept thread.
+///
+/// HOW:
+/// - Start a server with `acceptors(3)` and a single `bind_uds` listener.
+/// - Check that only the `uds3:accept` thread runs and, once the server is
+///   ready, that the socket echoes.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_acceptors_uds_single_thread() {
+    let path = std::env::temp_dir().join(format!("ntex-acceptors-{}.sock", std::process::id()));
+    let srv = build()
+        .name("uds3")
+        .workers(1)
+        .acceptors(3)
+        .disable_signals()
+        .bind_uds("test", &path, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    assert_eq!(accept_threads("uds3"), ["uds3:accept"]);
+    wait_ready(&srv).await;
+
+    let io = ntex_net::unix_connect(&path, SharedCfg::default())
+        .await
+        .unwrap();
+    ntex::time::timeout(Millis(5000), check_echo(&io))
+        .await
+        .unwrap();
+    srv.stop(false).await;
+}

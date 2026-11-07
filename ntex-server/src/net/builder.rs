@@ -25,6 +25,7 @@ pub struct ServerBuilder<Cfg = NoConfig> {
     services: Vec<FactoryServiceType<Cfg>>,
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
+    acceptors: usize,
     pool: WorkerPool,
 }
 
@@ -50,6 +51,7 @@ where
 
         ServerBuilder {
             accept,
+            acceptors: 1,
             name: sys.name().to_string(),
             token: Token(0),
             state: Arc::new(cfg),
@@ -96,6 +98,27 @@ where
     /// passed to [`listen`](Self::listen) or `listen_uds`.
     pub fn backlog(mut self, num: i32) -> Self {
         self.backlog = num;
+        self.accept.backlog(num);
+        self
+    }
+
+    #[must_use]
+    /// Sets the number of accept threads.
+    ///
+    /// Each accept thread has its own `SO_REUSEPORT` copy of every TCP
+    /// listener, and the kernel spreads incoming connections between them.
+    /// This raises the connection rate the server can accept. Listeners
+    /// passed to [`listen`](Self::listen) get `SO_REUSEPORT` enabled as well.
+    /// Copies use the [`backlog`](Self::backlog) value. Unix domain listeners
+    /// are served by a single accept thread.
+    ///
+    /// Multiple accept threads are supported on Linux and Android. On other
+    /// platforms, a single thread is used.
+    ///
+    /// By default, the server uses a single accept thread. One thread is
+    /// usually enough, add more only if the accept thread is saturated.
+    pub fn acceptors(mut self, num: usize) -> Self {
+        self.acceptors = num;
         self
     }
 
@@ -354,11 +377,12 @@ where
     /// # Panics
     ///
     /// Panics if no listener has been registered.
-    pub fn run(self) -> Server<Connection> {
+    pub fn run(mut self) -> Server<Connection> {
         assert!(
             !self.sockets.is_empty(),
             "Server should have at least one bound socket"
         );
+        self.accept.acceptors(self.acceptors);
         let srv = StreamServer::new(self.accept.notify(), self.state, self.services);
         let svc = self.pool.run(srv);
 
@@ -389,6 +413,7 @@ impl<Cfg> fmt::Debug for ServerBuilder<Cfg> {
             .field("backlog", &self.backlog)
             .field("sockets", &self.sockets)
             .field("accept", &self.accept)
+            .field("acceptors", &self.acceptors)
             .field("worker-pool", &self.pool)
             .finish()
     }
@@ -459,5 +484,60 @@ mod tests {
     async fn test_debug() {
         let builder = ServerBuilder::default();
         assert!(format!("{builder:?}").contains("ServerBuilder"));
+    }
+
+    /// STATEMENT: A wakeup of a paused accept loop does not re-register its
+    /// listeners, so connections stay in the listen backlog until resume.
+    ///
+    /// HOW:
+    /// - Start a server, wait until it is ready, and pause it.
+    /// - Wake the paused accept loop with `AcceptorCommand::Timer`.
+    /// - Connect a client and check that the listener metrics count no
+    ///   accepted connection after 200ms.
+    /// - Resume the server and check that the connection is accepted.
+    #[ntex::test]
+    async fn test_paused_wakeup_does_not_accept() {
+        use crate::ServerStatus;
+        use crate::net::AcceptorCommand;
+        use ntex_service::{cfg::SharedCfg, fn_service};
+
+        let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = lst.local_addr().unwrap();
+        let builder = ServerBuilder::default()
+            .workers(1)
+            .acceptors(1)
+            .disable_signals()
+            .listen("test", lst, SharedCfg::default(), async |&()| {
+                fn_service(async |_: ntex_io::Io| Ok::<_, ()>(()))
+            })
+            .unwrap();
+        let notify = builder.accept.notify();
+        let srv = builder.run();
+        ntex_util::time::timeout(Millis(3000), async {
+            while srv.status() != ServerStatus::Ready {
+                srv.status_changed().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        srv.pause().await;
+        ntex_util::time::sleep(Millis(100)).await;
+        notify.send(AcceptorCommand::Timer);
+        ntex_util::time::sleep(Millis(100)).await;
+
+        let _conn = net::TcpStream::connect(addr).unwrap();
+        ntex_util::time::sleep(Millis(200)).await;
+        assert_eq!(srv.metrics().listeners[0].accepted, 0);
+
+        srv.resume().await;
+        ntex_util::time::timeout(Millis(3000), async {
+            while srv.metrics().listeners[0].accepted == 0 {
+                ntex_util::time::sleep(Millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        srv.stop(false).await;
     }
 }
