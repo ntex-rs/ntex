@@ -9,6 +9,9 @@
 * Fix lost timer wakeups on macOS. Remote wakes no longer consume the waking
   thread's `thread::park` token while waiting for the runtime registry lock
 
+* Update `parking_lot` to 0.13, which fixes the Linux futex syscall argument
+  type reported as undefined behavior by Miri
+
 ## [4.5.1] - 2026-10-28
 
 * Change `spawn_sendable()` to return `SendableJoinHandle`. Dropping the handle
