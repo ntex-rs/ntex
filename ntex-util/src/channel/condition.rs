@@ -50,6 +50,37 @@ struct Item<T> {
     waker: LocalWaker,
 }
 
+/// Delivers a result from `make` to every registered waiter.
+///
+/// `make`, value drops and waker callbacks may reenter the condition, adding
+/// or removing waiters and reallocating the slab, so they run without a
+/// borrow of `inner`. Waiters added during delivery may be skipped.
+fn deliver<T>(inner: &Cell<Inner<T>>, mut make: impl FnMut() -> ConditionResult<T>) {
+    let end = inner.get_ref().data.capacity();
+    for key in 0..end {
+        let registered = matches!(
+            inner.get_ref().data.get(key),
+            Some(Some(item)) if item.waker.is_set()
+        );
+        if !registered {
+            continue;
+        }
+
+        let val = make();
+        let delivered = match inner.get_ref().data.get(key) {
+            Some(Some(item)) => match item.waker.take_local() {
+                Some(waker) => Ok((waker, item.val.replace(val))),
+                None => Err(val),
+            },
+            _ => Err(val),
+        };
+        if let Ok((waker, prev)) = delivered {
+            drop(prev);
+            waker.wake();
+        }
+    }
+}
+
 impl Default for Condition<()> {
     fn default() -> Self {
         Self::new()
@@ -103,16 +134,8 @@ impl<T: Clone> Condition<T> {
     /// The value is cloned for each registered waiter. Unpolled waiters do not
     /// receive it, and the value is not retained for future waiters.
     pub fn notify(&self, val: T) {
-        let inner = self.inner.get_ref();
-        if inner.state != State::Normal {
-            return;
-        }
-        for (_, item) in &inner.data {
-            if let Some(item) = item
-                && item.waker.wake_checked()
-            {
-                item.val.set(ConditionResult::Value(val.clone()));
-            }
+        if self.inner.get_ref().state == State::Normal {
+            deliver(&self.inner, || ConditionResult::Value(val.clone()));
         }
     }
 
@@ -130,33 +153,24 @@ impl<T: Clone> Condition<T> {
 impl<T: Default> Condition<T> {
     /// Sends `T::default()` to every waiter that is currently being polled.
     pub fn notify_default(&self) {
-        let inner = self.inner.get_ref();
-        if inner.state != State::Normal {
-            return;
-        }
-        for (_, item) in &inner.data {
-            if let Some(item) = item
-                && item.waker.wake_checked()
-            {
-                item.val.set(ConditionResult::Value(T::default()));
-            }
+        if self.inner.get_ref().state == State::Normal {
+            deliver(&self.inner, || ConditionResult::Value(T::default()));
         }
     }
 }
 
 impl<T> Drop for Condition<T> {
     fn drop(&mut self) {
-        let inner = self.inner.get_mut();
-        inner.count -= 1;
-        if inner.count == 0 {
-            inner.state = State::Dropped;
-            for (_, item) in &inner.data {
-                if let Some(item) = item
-                    && item.waker.wake_checked()
-                {
-                    item.val.set(ConditionResult::Dropped);
-                }
+        let dropped = {
+            let inner = self.inner.get_mut();
+            inner.count -= 1;
+            if inner.count == 0 {
+                inner.state = State::Dropped;
             }
+            inner.count == 0
+        };
+        if dropped {
+            deliver(&self.inner, || ConditionResult::Dropped);
         }
     }
 }
@@ -172,27 +186,44 @@ impl<T> Waiter<T> {
     /// The first poll registers this waiter. While the condition remains
     /// unlocked, later notifications wake the registered task.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ConditionResult<T>> {
-        let parent = self.inner.get_mut();
-        let inner = unsafe { parent.data.get_unchecked_mut(self.token) };
-
-        if inner.is_none() {
-            if parent.state == State::Normal {
-                let waker = LocalWaker::default();
-                waker.register(cx.waker());
-                *inner = Some(Item {
-                    waker,
+        let new = {
+            let parent = self.inner.get_mut();
+            let slot = unsafe { parent.data.get_unchecked_mut(self.token) };
+            if slot.is_none() {
+                if parent.state != State::Normal {
+                    return self.poll_state();
+                }
+                *slot = Some(Item {
+                    waker: LocalWaker::default(),
                     val: cell::Cell::new(ConditionResult::Locked),
                 });
-                return Poll::Pending;
+                true
+            } else {
+                false
             }
-        } else {
-            let item = inner.as_mut().unwrap();
-            if !item.waker.register(cx.waker()) {
-                return Poll::Ready(item.val.replace(ConditionResult::Locked));
-            }
-        }
+        };
 
-        match parent.state {
+        // waker callbacks may reenter the condition, so the item is looked up
+        // again after each one
+        let registered = LocalWaker::register_in(|| &self.item().waker, cx.waker());
+
+        // an unset waker on a registered item means a result was delivered
+        if new || registered {
+            self.poll_state()
+        } else {
+            Poll::Ready(self.item().val.replace(ConditionResult::Locked))
+        }
+    }
+
+    fn item(&self) -> &Item<T> {
+        // the slot is occupied by `poll_ready` and freed only by `Waiter::drop`
+        unsafe { self.inner.get_ref().data.get_unchecked(self.token) }
+            .as_ref()
+            .unwrap()
+    }
+
+    fn poll_state(&self) -> Poll<ConditionResult<T>> {
+        match self.inner.get_ref().state {
             State::Normal => Poll::Pending,
             State::Locked => Poll::Ready(ConditionResult::Locked),
             State::Dropped => Poll::Ready(ConditionResult::Dropped),
@@ -226,7 +257,8 @@ impl<T> fmt::Debug for Waiter<T> {
 
 impl<T> Drop for Waiter<T> {
     fn drop(&mut self) {
-        self.inner.get_mut().data.remove(self.token);
+        let item = self.inner.get_mut().data.remove(self.token);
+        drop(item);
     }
 }
 
@@ -234,6 +266,7 @@ impl<T> Drop for Waiter<T> {
 mod tests {
     use super::*;
     use crate::future::lazy;
+    use crate::task::hooks::{ON_CLONE, ON_WAKE, hook_waker};
 
     /// STATEMENT: Condition waiters receive notifications and observe the condition's drop.
     ///
@@ -504,6 +537,60 @@ mod tests {
         assert_eq!(
             w2.poll_ready(&mut cx),
             Poll::Ready(ConditionResult::Dropped)
+        );
+    }
+
+    /// STATEMENT: `notify` delivers to a waiter whose wake callback reallocates the waiter slab.
+    ///
+    /// HOW:
+    /// - Register a waiter with `hook_waker`, then set an `ON_WAKE` hook that creates 64 waiters.
+    /// - Call `notify` and check the hook ran and the waiter is ready with the value.
+    #[test]
+    fn miri_notify_with_reentrant_wake() {
+        let cond = Condition::<usize>::new();
+        let waiter = cond.wait();
+        let waker = hook_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(waiter.poll_ready(&mut cx).is_pending());
+
+        let extra = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (c, e) = (cond.clone(), extra.clone());
+        ON_WAKE.set(Some(Box::new(move || {
+            e.borrow_mut().extend((0..64).map(|_| c.wait()));
+        })));
+        cond.notify(1);
+
+        assert_eq!(extra.borrow().len(), 64);
+        assert_eq!(
+            waiter.poll_ready(&mut cx),
+            Poll::Ready(ConditionResult::Value(1))
+        );
+    }
+
+    /// STATEMENT: The first `poll_ready` registers its waiter even when the waker clone reallocates the waiter slab.
+    ///
+    /// HOW:
+    /// - Set an `ON_CLONE` hook that creates 64 waiters, then poll a new waiter with `hook_waker`.
+    /// - Check the poll is pending, then `notify` and check the waiter is ready with the value.
+    #[test]
+    fn miri_first_poll_with_reentrant_clone() {
+        let cond = Condition::<usize>::new();
+        let waiter = cond.wait();
+        let waker = hook_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        let extra = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (c, e) = (cond.clone(), extra.clone());
+        ON_CLONE.set(Some(Box::new(move || {
+            e.borrow_mut().extend((0..64).map(|_| c.wait()));
+        })));
+        assert!(waiter.poll_ready(&mut cx).is_pending());
+        assert_eq!(extra.borrow().len(), 64);
+
+        cond.notify(1);
+        assert_eq!(
+            waiter.poll_ready(&mut cx),
+            Poll::Ready(ConditionResult::Value(1))
         );
     }
 }

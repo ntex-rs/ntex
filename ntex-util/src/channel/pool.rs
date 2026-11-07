@@ -2,7 +2,7 @@
 use slab::Slab;
 use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
-use super::{Canceled, cell::Cell};
+use super::{Canceled, cell::Cell, cell::wake};
 use crate::task::LocalWaker;
 
 /// Creates a new futures-aware pool of one-shot channels.
@@ -94,9 +94,22 @@ pub struct Receiver<T> {
     inner: Cell<Slab<Inner<T>>>,
 }
 
+// A channel's slot stays occupied while its sender or receiver is alive.
+// Slot references must not be held across user code, which may insert into
+// the slab and reallocate it, see `Cell`.
 #[allow(clippy::mut_from_ref)]
 fn get_inner<T>(inner: &Cell<Slab<Inner<T>>>, token: usize) -> &mut Inner<T> {
     unsafe { inner.get_mut().get_unchecked_mut(token) }
+}
+
+fn get_inner_ref<T>(inner: &Cell<Slab<Inner<T>>>, token: usize) -> &Inner<T> {
+    unsafe { inner.get_ref().get_unchecked(token) }
+}
+
+/// Removes the channel slot, dropping its contents after the borrow ends.
+fn remove<T>(inner: &Cell<Slab<Inner<T>>>, token: usize) {
+    let removed = inner.get_mut().remove(token);
+    drop(removed);
 }
 
 // The oneshots do not ever project Pin to the inner T
@@ -118,7 +131,8 @@ impl<T> Sender<T> {
         let inner = get_inner(&self.inner, self.token);
         if inner.flags.contains(Flags::RECEIVER) {
             inner.value = Some(val);
-            inner.rx_waker.wake();
+            let waker = inner.rx_waker.take_local();
+            wake(waker);
             Ok(())
         } else {
             Err(val)
@@ -128,20 +142,26 @@ impl<T> Sender<T> {
     /// Tests to see whether this `Sender`'s corresponding `Receiver`
     /// has gone away.
     pub fn is_canceled(&self) -> bool {
-        !get_inner(&self.inner, self.token)
+        !get_inner_ref(&self.inner, self.token)
             .flags
             .contains(Flags::RECEIVER)
     }
 
     /// Polls the channel to determine if receiving path is dropped
     pub fn poll_canceled(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let inner = get_inner(&self.inner, self.token);
+        if self.is_canceled() {
+            return Poll::Ready(());
+        }
+        LocalWaker::register_in(
+            || &get_inner_ref(&self.inner, self.token).tx_waker,
+            cx.waker(),
+        );
 
-        if inner.flags.contains(Flags::RECEIVER) {
-            inner.tx_waker.register(cx.waker());
-            Poll::Pending
-        } else {
+        // the waker callbacks may have dropped the receiver
+        if self.is_canceled() {
             Poll::Ready(())
+        } else {
+            Poll::Pending
         }
     }
 }
@@ -150,10 +170,11 @@ impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         let inner = get_inner(&self.inner, self.token);
         if inner.flags.contains(Flags::RECEIVER) {
-            inner.rx_waker.wake();
             inner.flags.remove(Flags::SENDER);
+            let waker = inner.rx_waker.take_local();
+            wake(waker);
         } else {
-            self.inner.get_mut().remove(self.token);
+            remove(&self.inner, self.token);
         }
     }
 }
@@ -163,16 +184,23 @@ impl<T> Receiver<T> {
     ///
     /// Returns [`Canceled`] if the sender is dropped without sending a value.
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Result<T, Canceled>> {
-        let inner = get_inner(&self.inner, self.token);
-
-        // If we've got a value, then skip the logic below as we're done.
-        if let Some(val) = inner.value.take() {
-            return Poll::Ready(Ok(val));
+        if let Poll::Ready(res) = self.try_recv() {
+            return Poll::Ready(res);
         }
+        LocalWaker::register_in(
+            || &get_inner_ref(&self.inner, self.token).rx_waker,
+            cx.waker(),
+        );
 
-        // Check if sender is dropped and return error if it is.
-        if inner.flags.contains(Flags::SENDER) {
-            inner.rx_waker.register(cx.waker());
+        // the waker callbacks may have sent the value or dropped the sender
+        self.try_recv()
+    }
+
+    fn try_recv(&self) -> Poll<Result<T, Canceled>> {
+        let inner = get_inner(&self.inner, self.token);
+        if let Some(val) = inner.value.take() {
+            Poll::Ready(Ok(val))
+        } else if inner.flags.contains(Flags::SENDER) {
             Poll::Pending
         } else {
             Poll::Ready(Err(Canceled))
@@ -184,10 +212,11 @@ impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
         let inner = get_inner(&self.inner, self.token);
         if inner.flags.contains(Flags::SENDER) {
-            inner.tx_waker.wake();
             inner.flags.remove(Flags::RECEIVER);
+            let waker = inner.tx_waker.take_local();
+            wake(waker);
         } else {
-            self.inner.get_mut().remove(self.token);
+            remove(&self.inner, self.token);
         }
     }
 }
@@ -204,6 +233,7 @@ impl<T> Future for Receiver<T> {
 mod tests {
     use super::*;
     use crate::future::lazy;
+    use crate::task::hooks::{ON_WAKE, hook_waker};
 
     /// STATEMENT: Pooled one-shot channels preserve delivery and cancellation behavior.
     ///
@@ -299,5 +329,35 @@ mod tests {
         drop(rx);
         assert!(format!("{pool:?}").contains("size: 0"));
         pool.shrink_to_fit();
+    }
+
+    /// STATEMENT: Dropping a sender is sound when the receiver's wake callback drops the receiver and grows the pool.
+    ///
+    /// HOW:
+    /// - Register the receiver with `hook_waker`, then move it into an `ON_WAKE` hook that drops it and creates 64 channels.
+    /// - Drop the sender and check the pool holds only the 64 new channels.
+    /// - Check a new channel still delivers a value.
+    #[test]
+    fn miri_sender_drop_with_reentrant_wake() {
+        let pool = new::<usize>();
+        let (tx, rx) = pool.channel();
+        let waker = hook_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(rx.poll_recv(&mut cx).is_pending());
+
+        let extra = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (p, e) = (pool.clone(), extra.clone());
+        ON_WAKE.set(Some(Box::new(move || {
+            drop(rx);
+            e.borrow_mut().extend((0..64).map(|_| p.channel()));
+        })));
+        drop(tx);
+
+        assert_eq!(extra.borrow().len(), 64);
+        assert!(format!("{pool:?}").contains("size: 64"));
+
+        let (tx, rx) = pool.channel();
+        tx.send(5).unwrap();
+        assert_eq!(rx.poll_recv(&mut cx), Poll::Ready(Ok(5)));
     }
 }

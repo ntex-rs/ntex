@@ -1,7 +1,7 @@
 //! A one-shot, futures-aware channel.
 use std::{future::Future, future::poll_fn, pin::Pin, task::Context, task::Poll};
 
-use super::{Canceled, cell::Cell};
+use super::{Canceled, cell::Cell, cell::wake};
 use crate::task::LocalWaker;
 
 /// Creates a new futures-aware, one-shot channel.
@@ -55,9 +55,12 @@ impl<T> Sender<T> {
     /// provided.
     pub fn send(self, val: T) -> Result<(), T> {
         if self.inner.strong_count() == 2 {
-            let inner = self.inner.get_mut();
-            inner.value = Some(val);
-            inner.rx_task.wake();
+            let waker = {
+                let inner = self.inner.get_mut();
+                inner.value = Some(val);
+                inner.rx_task.take_local()
+            };
+            wake(waker);
             Ok(())
         } else {
             Err(val)
@@ -73,7 +76,8 @@ impl<T> Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        self.inner.get_ref().rx_task.wake();
+        let waker = self.inner.get_ref().rx_task.take_local();
+        wake(waker);
     }
 }
 
@@ -89,16 +93,21 @@ impl<T> Receiver<T> {
     ///
     /// Returns [`Canceled`] if the sender is dropped without sending a value.
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Result<T, Canceled>> {
-        // If we've got a value, then skip the logic below as we're done.
-        if let Some(val) = self.inner.get_mut().value.take() {
-            return Poll::Ready(Ok(val));
+        if let Poll::Ready(res) = self.try_recv() {
+            return Poll::Ready(res);
         }
+        LocalWaker::register_in(|| &self.inner.get_ref().rx_task, cx.waker());
 
-        // Check if sender is dropped and return error if it is.
-        if self.inner.strong_count() == 1 {
+        // the waker callbacks may have sent the value or dropped the sender
+        self.try_recv()
+    }
+
+    fn try_recv(&self) -> Poll<Result<T, Canceled>> {
+        if let Some(val) = self.inner.get_mut().value.take() {
+            Poll::Ready(Ok(val))
+        } else if self.inner.strong_count() == 1 {
             Poll::Ready(Err(Canceled))
         } else {
-            self.inner.get_ref().rx_task.register(cx.waker());
             Poll::Pending
         }
     }
@@ -116,6 +125,7 @@ impl<T> Future for Receiver<T> {
 mod tests {
     use super::*;
     use crate::future::lazy;
+    use crate::task::hooks::{ON_CLONE, hook_waker};
 
     /// STATEMENT: One-shot channels deliver once and expose cancellation when either endpoint drops.
     ///
@@ -154,5 +164,20 @@ mod tests {
         assert_eq!(lazy(|cx| Pin::new(&mut rx).poll(cx)).await, Poll::Pending);
         drop(tx);
         assert!(rx.await.is_err());
+    }
+
+    /// STATEMENT: `poll_recv` returns a value sent by its waker's clone callback instead of missing it.
+    ///
+    /// HOW:
+    /// - Set an `ON_CLONE` hook that sends `1` through the sender.
+    /// - Poll the receiver with `hook_waker` and check it returns `Ready(Ok(1))`.
+    #[test]
+    fn miri_poll_recv_with_reentrant_clone() {
+        let (tx, rx) = channel();
+        ON_CLONE.set(Some(Box::new(move || tx.send(1).unwrap())));
+
+        let waker = hook_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(rx.poll_recv(&mut cx), Poll::Ready(Ok(1)));
     }
 }

@@ -4,6 +4,9 @@
 
 * Do not use deprecated bytes method
 
+* Fix aliased TLS session access when a handshake callback queries its own
+  connection; such queries now return `None` while the session is busy
+
 ## [4.7.2] - 2026-11-03
 
 * Use native CNG (`BCrypt`) hashing on Windows and drop the `symcrypt` dependency

@@ -1,5 +1,5 @@
 //! Server-side rustls session ownership and filter integration.
-use std::{any, cell::UnsafeCell, io, sync::Arc, task::Poll};
+use std::{any, cell::RefCell, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use ntex_util::time::Millis;
@@ -16,19 +16,20 @@ use crate::{Servername, rustls::Stream};
 /// when the peer has already disconnected.
 pub struct TlsServerFilter {
     /// Single-threaded session; mutable access is scoped to `stream` calls.
-    session: UnsafeCell<ServerConnection>,
+    session: RefCell<ServerConnection>,
 }
 
 impl FilterLayer for TlsServerFilter {
+    /// Returns `None` while the session is busy, for example when a
+    /// certificate resolver queries its own connection during the handshake.
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        self.stream(|s| {
-            if id == any::TypeId::of::<Servername>() {
-                let name = s.session.server_name()?;
-                Some(Box::new(Servername(name.to_string())) as Box<dyn any::Any>)
-            } else {
-                s.query(id)
-            }
-        })
+        let mut session = self.session.try_borrow_mut().ok()?;
+        if id == any::TypeId::of::<Servername>() {
+            let name = session.server_name()?;
+            Some(Box::new(Servername(name.to_string())))
+        } else {
+            Stream::new(&mut *session).query(id)
+        }
     }
 
     /// Decrypts input, releasing the session borrow before a peer-close notification can reenter.
@@ -77,7 +78,7 @@ impl TlsServerFilter {
             let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
             session.set_buffer_limit(Some(io.cfg().write_size().capacity()));
             let io = io.add_filter(TlsServerFilter {
-                session: UnsafeCell::new(session),
+                session: RefCell::new(session),
             });
 
             crate::utils::handshake(&io, || Ok(io.filter().is_handshaking())).await?;
@@ -89,13 +90,13 @@ impl TlsServerFilter {
 
     /// Observes handshake completion outside any mutable session borrow.
     fn is_handshaking(&self) -> bool {
-        unsafe { &*self.session.get() }.is_handshaking()
+        self.session.borrow().is_handshaking()
     }
 
     /// Gives `f` exclusive access to the session through the shared stream adapter.
     ///
     /// The callback must not reenter this filter or trigger a notification that
-    /// does so while the mutable session reference is live.
+    /// does so while the session is borrowed; reentrant I/O operations panic.
     pub(super) fn stream<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Stream<'_, ServerConnection>) -> R,
@@ -103,7 +104,7 @@ impl TlsServerFilter {
         #[cfg(test)]
         let _borrow = crate::utils::testing::TlsBorrow::new();
 
-        let mut s = Stream::new(unsafe { &mut *self.session.get() });
-        f(&mut s)
+        let mut session = self.session.borrow_mut();
+        f(&mut Stream::new(&mut *session))
     }
 }

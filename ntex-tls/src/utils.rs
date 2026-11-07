@@ -120,7 +120,7 @@ pub(crate) mod testing {
 
     use ntex::codec::BytesCodec;
     use ntex_bytes::Bytes;
-    use ntex_io::{Filter, Handle, IoContext, IoStream, Readiness};
+    use ntex_io::{Filter, Handle, IoContext, IoRef, IoStream, Readiness, types::HttpProtocol};
     use ntex_service::cfg::SharedCfg;
 
     use super::*;
@@ -128,6 +128,31 @@ pub(crate) mod testing {
     thread_local! {
         static TLS_BORROWS: Cell<usize> = const { Cell::new(0) };
         static ON_WAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::default();
+        static CALLBACK_IO: RefCell<Vec<IoRef>> = RefCell::default();
+        static CALLBACK_QUERIES: RefCell<Vec<(usize, bool)>> = RefCell::default();
+    }
+
+    /// Registers an io for handshake callbacks, which must be `Send + Sync`
+    /// and therefore refer to it by the returned index.
+    pub(crate) fn callback_io(io: IoRef) -> usize {
+        CALLBACK_IO.with_borrow_mut(|ios| {
+            ios.push(io);
+            ios.len() - 1
+        })
+    }
+
+    /// Queries a registered io from a handshake callback and records whether
+    /// the always-available `HttpProtocol` item was answered.
+    pub(crate) fn query_from_callback(idx: usize) {
+        let io = CALLBACK_IO.with_borrow(|ios| ios[idx].clone());
+        let answered = io.query::<HttpProtocol>().as_ref().is_some();
+        CALLBACK_QUERIES.with_borrow_mut(|queries| queries.push((idx, answered)));
+    }
+
+    /// Returns the recorded callback queries and clears the registry.
+    pub(crate) fn callback_queries() -> Vec<(usize, bool)> {
+        CALLBACK_IO.with_borrow_mut(Vec::clear);
+        CALLBACK_QUERIES.take()
     }
 
     /// Tracks TLS reference scopes so a regression fails before reentrant
