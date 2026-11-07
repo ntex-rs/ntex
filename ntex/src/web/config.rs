@@ -141,11 +141,11 @@ impl WebAppConfig {
             .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok());
         self
     }
+}
 
-    /// Get message from the pool.
-    pub(crate) fn get_request(&self) -> Option<HttpRequest> {
-        CACHE.with(|cache| cache.with(self.config.id(), |cache| cache.pop().map(HttpRequest)))
-    }
+/// Get message from the pool of the shared configuration with the given id.
+pub(crate) fn get_request(id: usize) -> Option<HttpRequest> {
+    CACHE.with(|cache| cache.with(id, |cache| cache.pop().map(HttpRequest)))
 }
 
 /// Put message from the pool.
