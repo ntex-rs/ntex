@@ -2,6 +2,9 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `web::test::TestRequest::to_request()` now keeps the configured peer address;
+  `param()`, `state()`, and `app_value()` are documented as not applying to it
+
 * Add `HttpServer::acceptors()` to set the number of accept threads
 
 * Breaking: `App::with_config()` and `WsClient::new()` no longer accept a borrowed

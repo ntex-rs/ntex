@@ -32,7 +32,7 @@ use crate::web::httprequest::HttpRequest;
 use crate::web::rmap::ResourceMap;
 use crate::web::{FromRequest, HttpResponse, Responder, State, WebRequest, WebResponse};
 
-fn set_peer_addr(head: &mut http::Message<http::RequestHead>, addr: Option<SocketAddr>) {
+fn set_peer_addr(head: &mut http::RequestHead, addr: Option<SocketAddr>) {
     #[derive(Debug)]
     struct TestIo {
         io: crate::io::Io,
@@ -472,6 +472,12 @@ impl<St> TestRequest<St> {
 
     #[must_use]
     /// Set request path pattern parameter.
+    ///
+    /// Applies to [`to_srv_request`](Self::to_srv_request),
+    /// [`to_http_request`](Self::to_http_request), and
+    /// [`to_http_parts`](Self::to_http_parts). It is ignored by
+    /// [`to_request`](Self::to_request), because the application router sets
+    /// path parameters for routed requests.
     pub fn param(mut self, name: &'static str, value: &'static str) -> Self {
         self.path.add_static(name, value);
         self
@@ -480,7 +486,8 @@ impl<St> TestRequest<St> {
     #[must_use]
     /// Set peer addr.
     ///
-    /// The address is returned by `peer_addr()` of the generated request.
+    /// The address is returned by `peer_addr()` of every generated request,
+    /// including one built with [`to_request`](Self::to_request).
     /// Requests with a peer address must be created inside the ntex runtime.
     pub fn peer_addr(mut self, addr: SocketAddr) -> Self {
         self.peer_addr = Some(addr);
@@ -520,6 +527,9 @@ impl<St> TestRequest<St> {
 
     #[must_use]
     /// Set request state.
+    ///
+    /// It is ignored by [`to_request`](Self::to_request), because the
+    /// application supplies the state for routed requests.
     pub fn state<NewSt: 'static>(self, state: NewSt) -> TestRequest<NewSt> {
         TestRequest {
             state,
@@ -536,6 +546,10 @@ impl<St> TestRequest<St> {
     ///
     /// This is equivalent of [`WebAppConfig::set_value()`] method for testing
     /// purpose. The value is available via `HttpRequest::app_value()`.
+    ///
+    /// It is ignored by [`to_request`](Self::to_request), because the
+    /// application configuration applies to routed requests; set the value with
+    /// `App::with_config()` instead.
     pub fn app_value<T: Send + Sync + 'static>(mut self, data: T) -> Self {
         self.config = self.config.set_value(data);
         self
@@ -558,8 +572,15 @@ impl<St> TestRequest<St> {
 
     #[must_use]
     /// Complete request creation and generate `Request` instance.
+    ///
+    /// The request is meant to be passed through an application service, for
+    /// example with [`call_service`]. It keeps the method, URI, version,
+    /// headers, cookies, payload, and peer address. Path parameters, state, and
+    /// application values are supplied by the application instead.
     pub fn to_request(mut self) -> Request {
-        self.req.build()
+        let mut req = self.req.build();
+        set_peer_addr(req.head_mut(), self.peer_addr);
+        req
     }
 
     #[must_use]
@@ -1220,6 +1241,40 @@ mod tests {
             .into_parts();
         let res = load_stream(pl).await.unwrap();
         assert_eq!(res, &b""[..]);
+    }
+
+    /// STATEMENT: `to_request` keeps the peer address for a routed request, while the router,
+    /// not `param`, supplies path parameters.
+    ///
+    /// HOW:
+    /// - Route `/{name}` to a handler that returns the peer address and `name` match.
+    /// - Call it via `call_service` with `peer_addr` and a conflicting `param`, and assert the
+    ///   body shows the address and the routed segment.
+    /// - Call it without `peer_addr` and assert the handler sees `None`.
+    #[crate::rt_test]
+    async fn test_to_request_peer_addr() {
+        let app = init_service(App::new().route(
+            "/{name}",
+            web::get().to(async |req: HttpRequest| {
+                HttpResponse::Ok().body(format!(
+                    "{:?} {}",
+                    req.peer_addr(),
+                    &req.match_info()["name"]
+                ))
+            }),
+        ))
+        .await;
+
+        let req = TestRequest::with_uri("/routed")
+            .peer_addr("127.0.0.1:8081".parse().unwrap())
+            .param("name", "ignored")
+            .to_request();
+        let resp = call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(read_body(resp).await, &b"Some(127.0.0.1:8081) routed"[..]);
+
+        let resp = call_service(&app, TestRequest::with_uri("/plain").to_request()).await;
+        assert_eq!(read_body(resp).await, &b"None plain"[..]);
     }
 
     /// STATEMENT: Request-builder method helpers dispatch to their corresponding application routes.
