@@ -122,7 +122,9 @@ impl<T> Drop for Sender<T> {
 
             // check is last sender is about to drop
             if shared.has_receiver && count == 2 {
-                // Wake up receiver as its stream has ended
+                // the channel is closed for good, and the receiver's
+                // stream has ended
+                shared.has_receiver = false;
                 shared.blocked_recv.take_local()
             } else {
                 None
@@ -142,6 +144,9 @@ pub struct Receiver<T> {
 
 impl<T> Receiver<T> {
     /// Creates an additional sender for this channel.
+    ///
+    /// Closing is permanent: once the channel is closed, or every sender has
+    /// been dropped, the returned sender is closed too and its `send()` fails.
     pub fn sender(&self) -> Sender<T> {
         Sender {
             shared: self.shared.clone(),
@@ -315,11 +320,13 @@ mod tests {
         assert_eq!(err.into_inner(), "test");
     }
 
-    /// STATEMENT: Explicit closure wakes receivers, while sender exhaustion can be reversed.
+    /// STATEMENT: Explicit closure wakes receivers, and closure by dropping the last
+    /// sender is permanent.
     ///
     /// HOW:
     /// - Close from each endpoint and check closed, terminated, and registered-waker state.
-    /// - Drop the last sender, then create one through the receiver and check the channel reopens.
+    /// - Drop the last sender, then create one through the receiver and check the channel
+    ///   stays closed and terminated, `send()` fails, and `recv()` returns `None`.
     #[ntex::test]
     async fn test_close() {
         let (tx, rx) = channel::<()>();
@@ -344,9 +351,12 @@ mod tests {
         drop(tx);
         assert!(rx.is_closed());
         assert!(rx.is_terminated());
-        let _tx = rx.sender();
-        assert!(!rx.is_closed());
-        assert!(!rx.is_terminated());
+        let tx = rx.sender();
+        assert!(tx.is_closed());
+        assert!(rx.is_closed());
+        assert!(rx.is_terminated());
+        assert!(tx.send(()).is_err());
+        assert_eq!(rx.recv().await, None);
     }
 
     /// STATEMENT: Sender closure waiters complete when either endpoint closes the channel.
