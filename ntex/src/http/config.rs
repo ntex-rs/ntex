@@ -8,8 +8,13 @@ use crate::{channel::oneshot, util::BytePages, util::Bytes, util::BytesMut, util
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive behavior.
+///
+/// A zero timeout always disables persistent connections. Use
+/// [`KeepAlive::Os`] for persistent connections without an idle timeout.
 pub enum KeepAlive {
     /// Close an idle connection after this timeout.
+    ///
+    /// `Timeout(Seconds::ZERO)` is equivalent to [`KeepAlive::Disabled`].
     Timeout(Seconds),
     /// Keep the connection open until the peer or operating system closes it.
     Os,
@@ -17,25 +22,38 @@ pub enum KeepAlive {
     Disabled,
 }
 
-impl From<usize> for KeepAlive {
-    fn from(keepalive: usize) -> Self {
-        KeepAlive::Timeout(Seconds(keepalive as u16))
+impl KeepAlive {
+    /// Returns the idle timeout and whether persistent connections are enabled.
+    fn state(self) -> (Seconds, bool) {
+        match self {
+            KeepAlive::Timeout(val) if !val.is_zero() => (val, true),
+            KeepAlive::Timeout(_) | KeepAlive::Disabled => (Seconds::ZERO, false),
+            KeepAlive::Os => (Seconds::ZERO, true),
+        }
     }
 }
 
+/// Converts whole seconds into a timeout.
+///
+/// Values above `u16::MAX` saturate to `u16::MAX` seconds, and zero disables
+/// persistent connections.
+impl From<usize> for KeepAlive {
+    fn from(keepalive: usize) -> Self {
+        KeepAlive::Timeout(Seconds::from(keepalive))
+    }
+}
+
+/// Converts a duration into a timeout; zero disables persistent connections.
 impl From<Seconds> for KeepAlive {
     fn from(keepalive: Seconds) -> Self {
         KeepAlive::Timeout(keepalive)
     }
 }
 
+/// Converts `None` into [`KeepAlive::Disabled`] and `Some` like `usize`.
 impl From<Option<usize>> for KeepAlive {
     fn from(keepalive: Option<usize>) -> Self {
-        if let Some(keepalive) = keepalive {
-            KeepAlive::Timeout(Seconds(keepalive as u16))
-        } else {
-            KeepAlive::Disabled
-        }
+        keepalive.map_or(KeepAlive::Disabled, KeepAlive::from)
     }
 }
 
@@ -93,12 +111,7 @@ impl HttpServiceConfig {
     }
 
     fn new_inner(keep_alive: KeepAlive, client_timeout: Seconds) -> HttpServiceConfig {
-        let (keep_alive, ka_enabled) = match keep_alive {
-            KeepAlive::Timeout(val) => (val, true),
-            KeepAlive::Os => (Seconds::ZERO, true),
-            KeepAlive::Disabled => (Seconds::ZERO, false),
-        };
-        let keep_alive = if ka_enabled { keep_alive } else { Seconds::ZERO };
+        let (keep_alive, ka_enabled) = keep_alive.state();
 
         HttpServiceConfig {
             keep_alive,
@@ -164,16 +177,12 @@ impl HttpServiceConfig {
     /// The keep-alive timeout does not apply before the first request. If
     /// request-head timing is disabled, it also bounds a partially received
     /// request head after the first request.
+    ///
+    /// A zero timeout, such as `0` or `Seconds::ZERO`, disables persistent
+    /// connections. Use [`KeepAlive::Os`] for persistent connections without
+    /// an idle timeout. Integer timeouts above `u16::MAX` seconds saturate.
     pub fn set_keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
-        let (keep_alive, ka_enabled) = match val.into() {
-            KeepAlive::Timeout(val) => (val, true),
-            KeepAlive::Os => (Seconds::ZERO, true),
-            KeepAlive::Disabled => (Seconds::ZERO, false),
-        };
-        let keep_alive = if ka_enabled { keep_alive } else { Seconds::ZERO };
-
-        self.keep_alive = keep_alive;
-        self.ka_enabled = ka_enabled;
+        (self.keep_alive, self.ka_enabled) = val.into().state();
         self
     }
 
@@ -185,8 +194,7 @@ impl HttpServiceConfig {
     /// [`set_keepalive`](Self::set_keepalive) to leave connection lifetime to
     /// the peer or operating system. The default is five seconds.
     pub fn set_keepalive_timeout(mut self, timeout: Seconds) -> Self {
-        self.keep_alive = timeout;
-        self.ka_enabled = !timeout.is_zero();
+        (self.keep_alive, self.ka_enabled) = KeepAlive::Timeout(timeout).state();
         self
     }
 
@@ -748,23 +756,35 @@ mod tests {
         assert_eq!(DateService::header_value().len(), 29);
     }
 
-    /// STATEMENT: Optional timeout values convert into disabled or timed keepalive settings.
+    /// STATEMENT: Integer conversions saturate oversized timeouts instead of wrapping them.
     ///
     /// HOW:
-    /// - Convert absent and present integer durations and compare the resulting keepalive variants.
+    /// - Convert absent, zero, normal, `u16::MAX`, and overflowing `usize` and `Option<usize>` values.
+    /// - Check `None` becomes `Disabled` and `65536` saturates to `Seconds(u16::MAX)` rather than wrapping to zero.
     #[test]
     fn keep_alive() {
         assert_eq!(KeepAlive::Disabled, Option::<usize>::None.into());
-        assert_eq!(
-            KeepAlive::Timeout(Seconds(10)),
-            Option::<usize>::Some(10).into()
-        );
+        for (val, expected) in [
+            (0, 0),
+            (10, 10),
+            (usize::from(u16::MAX), u16::MAX),
+            (usize::from(u16::MAX) + 1, u16::MAX),
+            (usize::from(u16::MAX) + 11, u16::MAX),
+        ] {
+            assert_eq!(KeepAlive::Timeout(Seconds(expected)), val.into());
+            assert_eq!(KeepAlive::Timeout(Seconds(expected)), Some(val).into());
+        }
+
+        let cfg = HttpServiceConfig::new().set_keepalive(usize::from(u16::MAX) + 1);
+        assert_eq!(cfg.keep_alive, Seconds(u16::MAX));
+        assert!(cfg.ka_enabled);
     }
 
-    /// STATEMENT: Keepalive modes distinguish OS-managed persistence, disabled persistence, and configured timeouts.
+    /// STATEMENT: Keepalive modes distinguish OS-managed persistence, disabled persistence, and configured timeouts, and every zero timeout disables persistence.
     ///
     /// HOW:
-    /// - Apply each mode, including a zero timeout, and compare timeout and enablement fields.
+    /// - Apply `Os`, `Disabled`, nonzero timeouts and zero timeouts through `set_keepalive` (`KeepAlive`, `Seconds`, `usize`, `Option<usize>`) and `set_keepalive_timeout`.
+    /// - Compare the stored timeout and enablement fields; all zero forms must match `Disabled`.
     #[test]
     fn keep_alive_settings() {
         let cfg = HttpServiceConfig::new().set_keepalive(KeepAlive::Os);
@@ -775,13 +795,24 @@ mod tests {
         assert_eq!(cfg.keep_alive, Seconds::ZERO);
         assert!(!cfg.ka_enabled);
 
+        let cfg = HttpServiceConfig::new().set_keepalive(10);
+        assert_eq!(cfg.keep_alive, Seconds(10));
+        assert!(cfg.ka_enabled);
+
         let cfg = HttpServiceConfig::new().set_keepalive_timeout(Seconds(30));
         assert_eq!(cfg.keep_alive, Seconds(30));
         assert!(cfg.ka_enabled);
 
-        let cfg = HttpServiceConfig::new().set_keepalive_timeout(Seconds::ZERO);
-        assert_eq!(cfg.keep_alive, Seconds::ZERO);
-        assert!(!cfg.ka_enabled);
+        for cfg in [
+            HttpServiceConfig::new().set_keepalive(KeepAlive::Timeout(Seconds::ZERO)),
+            HttpServiceConfig::new().set_keepalive(Seconds::ZERO),
+            HttpServiceConfig::new().set_keepalive(0),
+            HttpServiceConfig::new().set_keepalive(Some(0)),
+            HttpServiceConfig::new().set_keepalive_timeout(Seconds::ZERO),
+        ] {
+            assert_eq!(cfg.keep_alive, Seconds::ZERO);
+            assert!(!cfg.ka_enabled);
+        }
     }
 
     /// STATEMENT: Zero read-rate intervals disable header and payload rate enforcement.
