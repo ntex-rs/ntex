@@ -707,6 +707,17 @@ async fn test_server_state_bind() {
     assert_eq!(num.load(Relaxed), 1);
 }
 
+/// STATEMENT: The server builder rejects a zero worker count when it is configured.
+///
+/// HOW:
+/// - Call `ServerBuilder::workers(0)` before binding any listener.
+/// - Expect the worker-count panic rather than a later socket or startup failure.
+#[ntex::test]
+#[should_panic(expected = "at least one worker")]
+async fn test_builder_zero_workers() {
+    drop(build().workers(0));
+}
+
 #[ntex::test]
 #[should_panic(expected = "at least one bound socket")]
 async fn test_run_without_sockets() {

@@ -80,6 +80,10 @@ where
     /// Sets the number of worker threads to start.
     ///
     /// By default, the server uses the number of available logical CPUs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `num` is zero.
     pub fn workers(mut self, num: usize) -> Self {
         self.pool = self.pool.workers(num);
         self

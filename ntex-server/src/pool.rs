@@ -57,7 +57,13 @@ impl WorkerPool {
     /// Sets the number of worker threads to start.
     ///
     /// By default, the server uses the number of available logical CPUs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `num` is zero. A server without workers would never become
+    /// ready or process anything.
     pub fn workers(mut self, num: usize) -> Self {
+        assert!(num > 0, "Server should have at least one worker");
         self.num = num;
         self
     }

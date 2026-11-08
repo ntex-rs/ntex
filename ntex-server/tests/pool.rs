@@ -1037,3 +1037,15 @@ async fn pool_await_after_stop_on_failure() {
         .expect("stop is not completed");
     assert_eq!(c.stop.load(Relaxed), 1);
 }
+
+/// STATEMENT: A worker pool rejects a zero worker count instead of starting a server that
+/// never becomes ready.
+///
+/// HOW:
+/// - Call `WorkerPool::workers(0)`.
+/// - Expect a panic naming the one-worker requirement.
+#[test]
+#[should_panic(expected = "at least one worker")]
+fn zero_workers_are_rejected() {
+    let _ = WorkerPool::new().workers(0);
+}

@@ -105,6 +105,10 @@ where
     ///
     /// By default http server uses number of available logical cpu as threads
     /// count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `num` is zero.
     pub fn workers(mut self, num: usize) -> Self {
         self.builder = self.builder.workers(num);
         self
