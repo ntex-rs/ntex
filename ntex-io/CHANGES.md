@@ -1,5 +1,11 @@
 # Changes
 
+## [4.7.1] - Unreleased
+
+* `Io::poll_recv()` and `Io::poll_recv_decode()` report a clean peer EOF that leaves
+  undecodable bytes as `RecvError::PeerGone(Some(UnexpectedEof))` instead of
+  `PeerGone(None)`, matching `Io::recv()`
+
 ## [4.7.0] - 2026-11-06
 
 * Add `tokio` feature, implements tokio `AsyncRead` and `AsyncWrite` for `Io<F>` and `IoBoxed`.

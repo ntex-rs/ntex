@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+* Rely on ntex-io 4.7.1 to report frames truncated by peer EOF
+
 * Document classifying dispatcher termination with `IoRef::close_reason()`,
   since codec, I/O, and timeout failures can complete as `Ok(())`
 

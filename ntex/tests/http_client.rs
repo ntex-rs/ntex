@@ -920,6 +920,33 @@ async fn client_read_until_eof_http11() {
     assert_eq!(bytes, Bytes::from_static(b"welcome!"));
 }
 
+/// STATEMENT: A response body cut off by peer EOF inside a chunk header fails with `UnexpectedEof`.
+///
+/// HOW:
+/// - Use `raw_server` to send one complete chunk and then a partial chunk-size line before closing.
+/// - Read the body and assert `PayloadError::Incomplete` carries `io::ErrorKind::UnexpectedEof`.
+#[ntex::test]
+async fn client_payload_truncated_chunk_header() {
+    use ntex::http::error::PayloadError;
+
+    let addr = raw_server(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n5\r\nhello\r\n1");
+
+    let response = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let err = response.body().await.unwrap_err();
+    assert!(
+        matches!(
+            &**err,
+            PayloadError::Incomplete(Some(e)) if e.kind() == io::ErrorKind::UnexpectedEof
+        ),
+        "{err:?}"
+    );
+}
+
 /// STATEMENT: A completed client payload remains exhausted when polled again.
 ///
 /// HOW:

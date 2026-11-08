@@ -258,7 +258,11 @@ pub enum RecvError<U: Decoder> {
     /// may still be finishing teardown.
     ///
     /// Carries the connection error, which may originate from the transport,
-    /// a filter, or shutdown. `None` means no error was recorded.
+    /// a filter, or shutdown. A clean peer EOF that leaves undecodable bytes
+    /// in the read buffer is reported as an
+    /// [`io::ErrorKind::UnexpectedEof`](std::io::ErrorKind::UnexpectedEof)
+    /// error. `None` means the connection closed without an error and without
+    /// a truncated frame.
     PeerGone(Option<IoError>),
 }
 

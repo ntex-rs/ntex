@@ -2,6 +2,12 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* HTTP/1 server reports a peer close in the middle of a request head or body as
+  `PeerGone` with an `UnexpectedEof` error and `CloseReason::Io`, instead of a clean
+  disconnect; request and client response payloads cut off while undecodable bytes
+  remain (for example a partial chunk header) fail with
+  `PayloadError::Incomplete(Some(UnexpectedEof))`
+
 * `web::test::TestRequest::to_request()` now keeps the configured peer address;
   `param()`, `state()`, and `app_value()` are documented as not applying to it
 
