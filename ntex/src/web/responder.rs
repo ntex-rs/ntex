@@ -81,7 +81,9 @@ pub trait Responder<St: State = ()> {
 
     /// Sets a header on the response produced by this responder.
     ///
-    /// An existing value with the same header name is replaced.
+    /// An existing value with the same header name is replaced. On the
+    /// returned [`CustomResponder`], further `with_header()` calls add values
+    /// and [`CustomResponder::set_header()`] replaces them.
     ///
     /// ```rust
     /// use ntex::web::{self, HttpRequest, Responder};
@@ -257,44 +259,83 @@ impl<T: Responder<St>, St: State> CustomResponder<T, St> {
         self
     }
 
-    /// Add header to the Responder's response.
+    /// Sets a header on the Responder's response.
+    ///
+    /// Replaces values with the same name, both those produced by the inner
+    /// responder and those added by earlier `set_header()` or
+    /// [`with_header()`](Self::with_header) calls. An invalid name or value
+    /// makes the response `500 Internal Server Error`.
     ///
     /// ```rust
-    /// use ntex::web::{self, HttpRequest, Responder};
-    /// use serde::Serialize;
-    ///
-    /// #[derive(Serialize)]
-    /// struct MyObj {
-    ///     name: String,
-    /// }
+    /// use ntex::http::StatusCode;
+    /// use ntex::web::{HttpRequest, Responder};
     ///
     /// fn index(req: HttpRequest) -> impl Responder {
-    ///     web::types::Json(
-    ///         MyObj{name: "Name".to_string()}
-    ///     )
-    ///     .with_header("x-version", "1.2.3")
+    ///     "Created"
+    ///         .with_status(StatusCode::CREATED)
+    ///         .set_header("x-version", "1.2.3")
     /// }
     /// # fn main() {}
     /// ```
-    pub fn with_header<K, V>(mut self, key: K, value: V) -> Self
+    pub fn set_header<K, V>(self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
         HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
-        if self.headers.is_none() {
-            self.headers = Some(HeaderMap::new());
-        }
+        self.add_header(key, value, false)
+    }
 
-        match HeaderName::try_from(key) {
-            Ok(key) => match HeaderValue::try_from(value) {
-                Ok(value) => {
-                    self.headers.as_mut().unwrap().append(key, value);
+    /// Adds a header value to the Responder's response.
+    ///
+    /// Keeps values added by earlier `with_header()` or
+    /// [`set_header()`](Self::set_header) calls, so one name can carry
+    /// several values. Values with the same name produced by the inner
+    /// responder are still replaced. An invalid name or value makes the
+    /// response `500 Internal Server Error`.
+    ///
+    /// ```rust
+    /// use ntex::web::{HttpRequest, Responder};
+    ///
+    /// fn index(req: HttpRequest) -> impl Responder {
+    ///     "Welcome!"
+    ///         .with_header("vary", "accept")
+    ///         .with_header("vary", "accept-encoding")
+    /// }
+    /// # fn main() {}
+    /// ```
+    pub fn with_header<K, V>(self, key: K, value: V) -> Self
+    where
+        HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
+        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
+    {
+        self.add_header(key, value, true)
+    }
+
+    fn add_header<K, V>(mut self, key: K, value: V, append: bool) -> Self
+    where
+        HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
+        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
+    {
+        let header = HeaderName::try_from(key)
+            .map_err(Into::into)
+            .and_then(|key| Ok((key, HeaderValue::try_from(value).map_err(Into::into)?)));
+
+        match header {
+            Ok((key, value)) => {
+                let headers = self.headers.get_or_insert_with(HeaderMap::new);
+                if append {
+                    headers.append(key, value);
+                } else {
+                    headers.insert(key, value);
                 }
-                Err(e) => self.error = Some(e.into()),
-            },
-            Err(e) => self.error = Some(e.into()),
+            }
+            Err(e) => self.error = Some(e),
         }
         self
     }
@@ -561,11 +602,13 @@ pub(crate) mod tests {
         );
     }
 
-    /// STATEMENT: Custom headers append together, replace original values, and reject invalid syntax.
+    /// STATEMENT: `with_header` keeps every value, `set_header` replaces them, both replace original values, and invalid syntax is rejected.
     ///
     /// HOW:
-    /// - Add two `x-test` values and assert their order, then replace multiple original content types.
-    /// - Supply an invalid name and a newline-containing value and assert 500 responses.
+    /// - Add `x-test` three times with `with_header` and assert all values are kept in order.
+    /// - Add two values then `set_header`, and `set_header` then `with_header`, asserting the replaced and appended values.
+    /// - Replace multiple original content types with `with_header` and with `set_header`, asserting only the custom value remains.
+    /// - Supply an invalid name and a newline-containing value (also via `set_header`) and assert 500 responses.
     /// - Assert the invalid value is absent even when a successful status override was requested.
     #[crate::rt_test]
     async fn test_custom_responder_headers() {
@@ -573,30 +616,72 @@ pub(crate) mod tests {
         let res = responder("test".to_string())
             .with_header("x-test", "1")
             .with_header("x-test", "2")
+            .with_header("x-test", "3")
             .respond_to(&(), &req)
             .await;
         assert_eq!(res.status(), StatusCode::OK);
         let values: Vec<_> = res.headers().get_all("x-test").collect();
         assert_eq!(
             values,
-            [HeaderValue::from_static("1"), HeaderValue::from_static("2")]
+            [
+                HeaderValue::from_static("1"),
+                HeaderValue::from_static("2"),
+                HeaderValue::from_static("3")
+            ]
+        );
+
+        let res = responder("test".to_string())
+            .with_header("x-test", "1")
+            .with_header("x-test", "2")
+            .set_header("x-test", "3")
+            .respond_to(&(), &req)
+            .await;
+        let values: Vec<_> = res.headers().get_all("x-test").collect();
+        assert_eq!(values, [HeaderValue::from_static("3")]);
+
+        let res = CustomResponder::<_, ()>::new(responder("test".to_string()))
+            .set_header("x-test", "1")
+            .set_header("x-test", "2")
+            .with_header("x-test", "3")
+            .respond_to(&(), &req)
+            .await;
+        let values: Vec<_> = res.headers().get_all("x-test").collect();
+        assert_eq!(
+            values,
+            [HeaderValue::from_static("2"), HeaderValue::from_static("3")]
         );
 
         // header set by the responder is replaced
-        let res = responder(
-            HttpResponse::Ok()
-                .header(CONTENT_TYPE, "text/plain")
-                .header(CONTENT_TYPE, "text/html")
-                .build(),
-        )
-        .with_header(CONTENT_TYPE, "json")
-        .respond_to(&(), &req)
-        .await;
+        let original = || {
+            responder(
+                HttpResponse::Ok()
+                    .header(CONTENT_TYPE, "text/plain")
+                    .header(CONTENT_TYPE, "text/html")
+                    .build(),
+            )
+        };
+        let res = original()
+            .with_header(CONTENT_TYPE, "json")
+            .respond_to(&(), &req)
+            .await;
+        let values: Vec<_> = res.headers().get_all(CONTENT_TYPE).collect();
+        assert_eq!(values, [HeaderValue::from_static("json")]);
+
+        let res = CustomResponder::<_, ()>::new(original())
+            .set_header(CONTENT_TYPE, "json")
+            .respond_to(&(), &req)
+            .await;
         let values: Vec<_> = res.headers().get_all(CONTENT_TYPE).collect();
         assert_eq!(values, [HeaderValue::from_static("json")]);
 
         let res = responder("test".to_string())
             .with_header("bad header", "1")
+            .respond_to(&(), &req)
+            .await;
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let res = CustomResponder::<_, ()>::new(responder("test".to_string()))
+            .set_header("x-test", "bad\nvalue")
             .respond_to(&(), &req)
             .await;
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
