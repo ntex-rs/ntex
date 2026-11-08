@@ -220,12 +220,12 @@ impl Deadline {
 
     /// Returns `true` if `Deadline` has elapsed.
     ///
-    /// A disabled zero-duration deadline is reported as elapsed here even
-    /// though polling it remains pending. Use this method to determine whether
-    /// there is an active future deadline to wait for.
+    /// This agrees with polling: it returns `true` exactly when polling the
+    /// deadline completes. A disabled zero-duration deadline never elapses,
+    /// so it returns `false`.
     #[inline]
     pub fn is_elapsed(&self) -> bool {
-        self.hnd.as_ref().is_none_or(TimerHandle::is_elapsed)
+        self.hnd.as_ref().is_some_and(TimerHandle::is_elapsed)
     }
 
     #[inline]
@@ -519,6 +519,43 @@ mod tests {
         assert!(second_time - first_time < time::Duration::from_millis(50));
     }
 
+    /// STATEMENT: `Deadline::is_elapsed()` agrees with polling for disabled, active, reset and
+    /// expired deadlines.
+    ///
+    /// HOW:
+    /// - Create a zero deadline and assert `is_elapsed()` is `false`, polling stays pending, and
+    ///   `timeout()` around it times out.
+    /// - Create a 50 ms deadline and assert neither the predicate nor polling reports elapsed.
+    /// - Await a 1 ms deadline and assert the predicate is `true` and polling is ready.
+    /// - Reset the expired deadline to 50 ms and assert both report not elapsed again, then reset
+    ///   it to zero and assert both still report not elapsed after 20 ms.
+    #[ntex::test]
+    async fn test_deadline_is_elapsed_matches_polling() {
+        let dl = deadline(Millis::ZERO);
+        assert!(!dl.is_elapsed());
+        assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
+        assert!(timeout(Millis(20), dl.wait()).await.is_err());
+        assert!(!dl.is_elapsed());
+
+        let dl = deadline(Millis(50));
+        assert!(!dl.is_elapsed());
+        assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
+
+        let mut dl = deadline(Millis(1));
+        dl.wait().await;
+        assert!(dl.is_elapsed());
+        assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_ready());
+
+        dl.reset(Millis(50));
+        assert!(!dl.is_elapsed());
+        assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
+
+        dl.reset(Millis::ZERO);
+        sleep(Millis(20)).await;
+        assert!(!dl.is_elapsed());
+        assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
+    }
+
     /// STATEMENT: Deadlines can be extended, disabled with zero, and re-enabled by reset.
     ///
     /// HOW:
@@ -547,7 +584,6 @@ mod tests {
         assert!(second_time - first_time >= time::Duration::from_millis(100));
 
         let mut dl = deadline(Millis(0));
-        assert!(dl.is_elapsed());
         dl.reset(Millis(1));
         assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
 

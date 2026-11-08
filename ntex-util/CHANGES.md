@@ -1,6 +1,10 @@
 # Changes
 
-## [4.8.1] - Unreleased
+## [4.9.0] - Unreleased
+
+* `Deadline::is_elapsed()` returns `false` for a disabled
+  zero-duration deadline, matching polling, which never completes. It
+  previously returned `true`
 
 * `Millis::from(Duration)` rounds sub-millisecond parts up, so a positive duration
   never becomes zero (disabled)
