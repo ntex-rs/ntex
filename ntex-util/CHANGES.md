@@ -2,6 +2,11 @@
 
 ## [4.9.0] - Unreleased
 
+* Channel EOF is terminal: `mpsc::Receiver::sender()` returns a closed sender
+  once the channel is closed or every sender was dropped, instead of reopening
+  it; `bstream::Sender::feed_data()` drops chunks after EOF or an error, and
+  `set_error()` is ignored after EOF
+
 * Document that `services::Timeout` and `TimeoutService` bound only request
   execution, not the wait for readiness; wrap `Pipeline::call` with
   `time::timeout` to bound the whole operation

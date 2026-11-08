@@ -205,6 +205,9 @@ impl<E> Sender<E> {
     }
 
     /// Stores a terminal stream error and wakes both sides.
+    ///
+    /// The error is ignored once EOF has been marked, including after an
+    /// earlier error was read.
     pub fn set_error(&self, err: E) {
         if let Some(shared) = self.inner.upgrade() {
             shared.set_error(err);
@@ -221,6 +224,7 @@ impl<E> Sender<E> {
     /// Adds a chunk to the stream.
     ///
     /// This method does not enforce the configured backpressure threshold.
+    /// The chunk is dropped once EOF has been marked or an error was set.
     pub fn feed_data(&self, data: Bytes) {
         if let Some(shared) = self.inner.upgrade() {
             shared.feed_data(data);
@@ -353,6 +357,9 @@ impl<E> Inner<E> {
 
     fn set_error(&self, err: E) {
         let flags = self.flags.get();
+        if flags.contains(Flags::EOF) {
+            return;
+        }
         self.err.set(Some(err));
         self.insert_flag(Flags::ERROR);
         self.notify(flags, true, true);
@@ -366,6 +373,9 @@ impl<E> Inner<E> {
 
     fn feed_data(&self, data: Bytes) {
         let flags = self.flags.get();
+        if flags.intersects(Flags::EOF | Flags::ERROR) {
+            return;
+        }
         let len = self.len.get() + data.len();
         self.len.set(len);
         self.items.borrow_mut().push_back(data);
@@ -800,6 +810,36 @@ mod tests {
         );
         assert_eq!(rx.read().await.unwrap().unwrap_err(), "err");
         assert!(rx.is_eof());
+        assert!(rx.read().await.is_none());
+    }
+
+    /// STATEMENT: EOF and errors are terminal, later data and errors are ignored.
+    ///
+    /// HOW:
+    /// - Feed a chunk and EOF, then feed more data and set an error.
+    /// - Read the first chunk followed by repeated `None`, and check `ready()` still reports `Eof`.
+    /// - Set an error, then feed data and set another error; read the first error, then `None`.
+    #[ntex::test]
+    async fn eof_and_error_are_terminal() {
+        let (tx, rx) = channel::<&'static str>();
+        tx.feed_data(Bytes::from_static(b"data"));
+        tx.feed_eof();
+        tx.feed_data(Bytes::from_static(b"late"));
+        tx.set_error("late");
+        assert_eq!(tx.ready().await, Status::Eof);
+        assert_eq!(
+            rx.read().await.unwrap().unwrap(),
+            Bytes::from_static(b"data")
+        );
+        assert!(rx.read().await.is_none());
+        tx.feed_data(Bytes::from_static(b"later"));
+        assert!(rx.read().await.is_none());
+
+        let (tx, rx) = channel::<&'static str>();
+        tx.set_error("err");
+        tx.feed_data(Bytes::from_static(b"late"));
+        assert_eq!(rx.read().await.unwrap().unwrap_err(), "err");
+        tx.set_error("late");
         assert!(rx.read().await.is_none());
     }
 }
