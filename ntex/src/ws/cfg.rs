@@ -19,6 +19,8 @@ use crate::time::Millis;
 pub struct WsClientConfig {
     pub(super) addr: Option<net::SocketAddr>,
     pub(super) max_size: usize,
+    pub(super) max_message_size: usize,
+    pub(super) validate_utf8: bool,
     pub(super) timeout: Millis,
     pub(super) close_timeout: Millis,
     pub(super) headers: HeaderMap,
@@ -64,6 +66,8 @@ impl WsClientConfig {
             headers,
             addr: None,
             max_size: 65_536,
+            max_message_size: 4 * 1024 * 1024,
+            validate_utf8: true,
             server_mode: false,
             timeout: Millis(5_000),
             close_timeout: Millis(5_000),
@@ -150,9 +154,30 @@ impl WsClientConfig {
     #[must_use]
     /// Sets the maximum accepted frame payload size.
     ///
-    /// The default is 64 KiB.
+    /// The default is 64 KiB. The total size of a fragmented message is
+    /// limited separately, see [`WsClientConfig::set_max_message_size()`].
     pub fn set_max_frame_size(mut self, size: usize) -> Self {
         self.max_size = size;
+        self
+    }
+
+    #[must_use]
+    /// Sets the maximum accepted payload size of an incoming message.
+    ///
+    /// The limit applies to the total payload of all frames of a message.
+    /// The default is 4 MiB, see [`Codec::max_message_size()`](super::Codec::max_message_size).
+    pub fn set_max_message_size(mut self, size: usize) -> Self {
+        self.max_message_size = size;
+        self
+    }
+
+    #[must_use]
+    /// Enables or disables UTF-8 validation of incoming text messages.
+    ///
+    /// Validation is enabled by default, see
+    /// [`Codec::validate_utf8()`](super::Codec::validate_utf8).
+    pub fn set_validate_utf8(mut self, enabled: bool) -> Self {
+        self.validate_utf8 = enabled;
         self
     }
 

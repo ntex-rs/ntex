@@ -283,7 +283,10 @@ where
 
     /// Validates the accepted extensions, creates the connection's codec.
     fn negotiate_extensions(&self, response: &HeaderMap) -> Result<ws::Codec, WsClientError> {
-        let mut codec = ws::Codec::new().max_size(self.cfg.max_size);
+        let mut codec = ws::Codec::new()
+            .max_size(self.cfg.max_size)
+            .max_message_size(self.cfg.max_message_size)
+            .validate_utf8(self.cfg.validate_utf8);
         if !self.cfg.server_mode {
             codec = codec.set_client_mode();
         }
@@ -743,6 +746,43 @@ mod tests {
         assert!(matches!(
             client.negotiate_extensions(&response),
             Err(WsClientError::UnexpectedWebSocketExtensions(_))
+        ));
+    }
+
+    /// STATEMENT: The negotiated codec uses the configured message size limit and UTF-8 validation setting.
+    ///
+    /// HOW:
+    /// - Negotiate with `set_max_message_size(2)` and expect `Overflow` when a second fragment takes the message to 3 bytes.
+    /// - Expect the default configuration to reject a text frame holding `0xff`, and `set_validate_utf8(false)` to return it.
+    #[crate::rt_test]
+    async fn message_limits_apply_to_codec() {
+        use crate::codec::Decoder;
+        use crate::util::BytesMut;
+
+        let response = HeaderMap::new();
+        let codec = |cfg: WsClientConfig| {
+            WsClient::new("ws://localhost", SharedCfg::new("T").add(cfg))
+                .negotiate_extensions(&response)
+                .unwrap()
+        };
+
+        let limited = codec(WsClientConfig::new().set_max_message_size(2));
+        let mut src = BytesMut::from(&b"\x02\x02ab\x80\x01c"[..]);
+        assert!(limited.decode(&mut src).unwrap().is_some());
+        assert!(matches!(
+            limited.decode(&mut src),
+            Err(ws::error::ProtocolError::Overflow)
+        ));
+
+        let text = || BytesMut::from(&b"\x81\x01\xff"[..]);
+        assert!(matches!(
+            codec(WsClientConfig::new()).decode(&mut text()),
+            Err(ws::error::ProtocolError::InvalidUtf8)
+        ));
+        let unchecked = codec(WsClientConfig::new().set_validate_utf8(false));
+        assert!(matches!(
+            unchecked.decode(&mut text()),
+            Ok(Some(ws::Frame::Text(_)))
         ));
     }
 

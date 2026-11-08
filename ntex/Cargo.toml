@@ -92,6 +92,7 @@ log = { workspace = true }
 pin-project-lite = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
+simdutf8 = { workspace = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
 fastrand = { workspace = true }
