@@ -61,14 +61,23 @@ impl<St: State, In: 'static> Route<St, In> {
         }
     }
 
+    /// Moves the route's guards out for promotion to a resource.
+    ///
+    /// Custom guards stay conjunctive, while the configured methods are
+    /// alternatives and become a single method guard.
     pub(super) fn take_guards(&mut self) -> Vec<Box<dyn Guard>> {
-        for m in &self.methods {
-            Rc::get_mut(&mut self.guards)
-                .unwrap()
-                .add(guard::Method(m.clone()));
+        let mut guards = mem::take(&mut Rc::get_mut(&mut self.guards).unwrap().0);
+        match self.methods.as_slice() {
+            [] => (),
+            [method] => guards.push(Box::new(guard::Method(method.clone()))),
+            methods => guards.push(Box::new(guard::AnyGuard(
+                methods
+                    .iter()
+                    .map(|m| Box::new(guard::Method(m.clone())) as Box<dyn Guard>)
+                    .collect(),
+            ))),
         }
-
-        mem::take(&mut Rc::get_mut(&mut self.guards).unwrap().0)
+        guards
     }
 
     pub(super) fn service(&self) -> RouteService<St, In> {
@@ -519,5 +528,57 @@ mod tests {
             web::Route::<(), ()>::new().to_with_state(async |(): &(), (): ()| HttpResponse::Ok());
         let s = format!("{route:?}");
         assert!(s.contains("HandlerSt("), "{s}");
+    }
+
+    /// STATEMENT: Path-based route helpers keep a route's methods as alternatives and its custom guards as requirements.
+    ///
+    /// HOW:
+    /// - Register a GET-or-POST route requiring an `x-ok` header through `App::route`, continued `AppServices::route`, `Scope::route`, continued `ScopeServices::route`, and `ServiceConfig::route`.
+    /// - For every path, assert GET and POST with the header reach the handler, while PUT and GET without the header return `404 Not Found`.
+    /// - Register a PUT route on the `App::route` path and assert PUT falls through to that separate resource.
+    #[crate::rt_test]
+    async fn test_route_helpers_promote_method_alternatives() {
+        fn multi() -> web::Route<()> {
+            web::route()
+                .method(Method::GET)
+                .method(Method::POST)
+                .guard(guard::Header("x-ok", "1"))
+                .to(async || HttpResponse::Ok())
+        }
+
+        let srv = init_service(
+            App::new()
+                .route("/a", multi())
+                .route("/b", multi())
+                .route("/a", web::put().to(async || HttpResponse::Created()))
+                .service(web::scope("/s").route("/a", multi()).route("/b", multi()))
+                .service(web::scope("/c").configure(|cfg| {
+                    cfg.route("/a", multi());
+                })),
+        )
+        .await;
+
+        for path in ["/a", "/b", "/s/a", "/s/b", "/c/a"] {
+            let call = async |method: Method, header: bool| {
+                let mut req = TestRequest::with_uri(path).method(method);
+                if header {
+                    req = req.header("x-ok", "1");
+                }
+                call_service(&srv, req.to_request()).await.status()
+            };
+            assert_eq!(call(Method::GET, true).await, StatusCode::OK, "{path}");
+            assert_eq!(call(Method::POST, true).await, StatusCode::OK, "{path}");
+            assert_eq!(
+                call(Method::GET, false).await,
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+            let put = if path == "/a" {
+                StatusCode::CREATED
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            assert_eq!(call(Method::PUT, true).await, put, "{path}");
+        }
     }
 }
