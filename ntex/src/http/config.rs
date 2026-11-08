@@ -46,13 +46,15 @@ impl From<Option<usize>> for KeepAlive {
 /// The default configuration enables persistent HTTP/1 connections with a
 /// five-second idle timeout, allows 96 headers, limits the request or status
 /// line to 16 KiB and the message-head buffer to 64 KiB, and applies a
-/// one-second initial request-header timeout. Request-target validation and
-/// normalization, and HTTP/1 Host-header validation, are disabled by default.
+/// one-second initial request-header timeout. Request-target validation,
+/// request-target normalization and HTTP/1 Host-header validation are disabled
+/// by default.
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) headers_vec: bool,
     pub(super) validate_host: bool,
+    pub(super) validate_target: bool,
     pub(super) normalize_target: bool,
     pub(super) max_headers: u16,
     pub(super) max_buf_size: usize,
@@ -111,6 +113,7 @@ impl HttpServiceConfig {
             max_start_line_size: 16 * 1024,
             headers_vec: false,
             validate_host: false,
+            validate_target: false,
             normalize_target: false,
             payload_read_rate: None,
             write_timeout: Seconds::ZERO,
@@ -295,12 +298,51 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
+    /// Enables request-target validation, without normalization, during HTTP
+    /// decoding.
+    ///
+    /// Disabled by default. When enabled, HTTP/1 and HTTP/2 reject malformed
+    /// targets and method-inappropriate forms with `400 Bad Request`, the same
+    /// checks [`Self::set_request_target_normalization`] performs, but pass
+    /// valid targets on with their exact spelling. For example `/%ZZ` is
+    /// rejected while `/%41/../b` reaches the application unchanged. Use it for
+    /// proxies and for applications that verify signatures over the raw target.
+    ///
+    /// Normalization always validates first, so this setting has no effect
+    /// while normalization is enabled.
+    ///
+    /// ```
+    /// use ntex::{SharedCfg, http::HttpServiceConfig};
+    ///
+    /// let config = SharedCfg::new("HTTP")
+    ///     .add(HttpServiceConfig::new().set_request_target_validation(true));
+    /// ```
+    pub fn set_request_target_validation(mut self, enabled: bool) -> Self {
+        self.validate_target = enabled;
+        self
+    }
+
+    pub(super) fn target_policy(&self) -> super::helpers::TargetPolicy {
+        use super::helpers::TargetPolicy;
+
+        if self.normalize_target {
+            TargetPolicy::Normalize
+        } else if self.validate_target {
+            TargetPolicy::Validate
+        } else {
+            TargetPolicy::Raw
+        }
+    }
+
+    #[must_use]
     /// Enables request-target validation and normalization during HTTP decoding.
     ///
     /// Both are disabled by default. When enabled, HTTP/1 and HTTP/2 reject
     /// malformed targets and method-inappropriate forms with `400 Bad Request`,
     /// then normalize valid targets using [`urly::Url::normalize`].
-    /// Normalization failures also produce `400 Bad Request`.
+    /// Normalization failures also produce `400 Bad Request`. Disabling
+    /// normalization does not disable validation enabled with
+    /// [`Self::set_request_target_validation`].
     ///
     /// Processing happens before application middleware, filters, routing and
     /// lower-level HTTP service handlers. They all receive the normalized URI.

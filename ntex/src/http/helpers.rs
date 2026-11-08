@@ -25,16 +25,34 @@ pub(crate) fn is_valid_target(
     }
 }
 
-/// Validates the HTTP target form before normalizing its components.
-pub(crate) fn normalize_request_target(
+/// How request targets are processed while decoding.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TargetPolicy {
+    /// Targets are passed on as received.
+    Raw,
+    /// Malformed targets are rejected, valid ones are passed on unchanged.
+    Validate,
+    /// Malformed targets are rejected, valid ones are normalized.
+    Normalize,
+}
+
+/// Validates and optionally normalizes the HTTP target according to `policy`.
+pub(crate) fn process_request_target(
+    policy: TargetPolicy,
     method: &super::Method,
     version: super::Version,
     uri: &mut urly::Url,
 ) -> Result<(), super::error::DecodeError> {
+    if policy == TargetPolicy::Raw {
+        return Ok(());
+    }
     if !is_valid_target(method, version, uri) {
         return Err(super::error::DecodeError::InvalidInput(
             "invalid request-target",
         ));
+    }
+    if policy == TargetPolicy::Validate {
+        return Ok(());
     }
     if version == super::Version::HTTP_2 && uri.path() == "*" {
         *uri = urly::Url::from_static("*");
