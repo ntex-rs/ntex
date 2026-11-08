@@ -240,6 +240,7 @@ where
     /// This is shorthand for creating a [`Resource`] with one route and
     /// registering it with [`Scope::service()`]. The route's method and custom
     /// guards are promoted to resource guards.
+    /// A request must match one of the route's methods and every custom guard.
     ///
     /// If those guards reject a request, the generated resource does not match
     /// and the scope router continues searching. If nothing else in the scope
@@ -446,6 +447,7 @@ where
     /// This is shorthand for creating a [`Resource`] with one route and
     /// registering it with [`ScopeServices::service()`]. The route's method and
     /// custom guards are promoted to resource guards.
+    /// A request must match one of the route's methods and every custom guard.
     ///
     /// Each call creates a separate resource, so the same relative path can be
     /// registered more than once with different guards.

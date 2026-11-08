@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* web: Fix `App::route()`, `Scope::route()` and `ServiceConfig::route()` for
+  routes with several methods; they were promoted as conjunctive resource
+  guards, so a GET-or-POST route never matched
+
 * web: Document that `Responder::with_status()` and `(T, StatusCode)` also
   override error statuses of a `Result`; map the `Ok` value to set a success
   status only

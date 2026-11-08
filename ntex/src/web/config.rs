@@ -230,7 +230,8 @@ impl<St: State, In: 'static> ServiceConfig<St, In> {
     ///
     /// This has the same behavior as [`App::route()`]: it creates a separate
     /// resource containing the route and promotes the route's method and custom
-    /// guards to resource guards.
+    /// guards to resource guards. A request must match one of the
+    /// route's methods and every custom guard.
     ///
     /// [`App::route()`]: super::App::route
     pub fn route(&mut self, path: &str, mut route: Route<St, In>) -> &mut Self {
