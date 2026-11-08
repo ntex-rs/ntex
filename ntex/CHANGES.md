@@ -1,6 +1,9 @@
 # Changes
 
-## [4.6.2] - 2026-11-08
+## [4.7.0] - 2026-11-08
+
+* http: Add `HttpServiceConfig::set_request_target_validation()` to reject
+  malformed request targets without normalizing valid ones
 
 * client: Return an error from `send` instead of panicking when
   `ClientRequest::query` makes the URI longer than 65535 bytes

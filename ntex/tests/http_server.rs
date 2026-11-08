@@ -113,33 +113,53 @@ async fn test_h1_shuts_down_connection_services() {
         .unwrap();
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetMode {
+    Raw,
+    Validate,
+    Normalize,
+}
+
+fn target_config(mode: TargetMode) -> HttpServiceConfig {
+    match mode {
+        TargetMode::Raw => HttpServiceConfig::new(),
+        TargetMode::Validate => HttpServiceConfig::new().set_request_target_validation(true),
+        TargetMode::Normalize => HttpServiceConfig::new().set_request_target_normalization(true),
+    }
+}
+
 /// STATEMENT: Opt-in HTTP/1 decoding normalizes targets before application filters and routing.
 ///
 /// HOW:
-/// - Send raw, absolute and double-slash targets with transport normalization disabled or enabled.
+/// - Send raw, absolute and double-slash targets with target processing disabled,
+///   validation-only or normalization enabled.
 /// - Check filters, guards and handlers agree on the expected target and routing path.
 #[ntex::test]
 async fn test_h1_request_target_normalization() {
     use ntex::web::{self, App, HttpRequest, WebRequest};
 
-    for (target, enabled, expected) in [
-        ("/old/../%74est?q=%7e", false, "/old/../%74est?q=%7e"),
-        ("/old/../%74est?q=%7e", true, "/test?q=~"),
-        ("//test", true, "//test"),
-        ("/.//test", true, "//test"),
-        ("/.//%74est", true, "//test"),
+    for (target, mode, expected) in [
+        (
+            "/old/../%74est?q=%7e",
+            TargetMode::Raw,
+            "/old/../%74est?q=%7e",
+        ),
+        (
+            "/old/../%74est?q=%7e",
+            TargetMode::Validate,
+            "/old/../%74est?q=%7e",
+        ),
+        ("/old/../%74est?q=%7e", TargetMode::Normalize, "/test?q=~"),
+        ("//test", TargetMode::Normalize, "//test"),
+        ("/.//test", TargetMode::Normalize, "//test"),
+        ("/.//%74est", TargetMode::Normalize, "//test"),
         (
             "HTTPS://Example.COM:00443/old/../%74est?q=%7e",
-            true,
+            TargetMode::Normalize,
             "/test?q=~",
         ),
     ] {
-        let cfg = HttpServiceConfig::new();
-        let cfg = if enabled {
-            cfg.set_request_target_normalization(true)
-        } else {
-            cfg
-        };
+        let cfg = target_config(mode);
         let srv = test::server_with_config(
             async move |_| {
                 HttpService::h1(
@@ -185,7 +205,8 @@ async fn test_h1_request_target_normalization() {
 ///
 /// HOW:
 /// - Send malformed escapes, fragments, authorities and asterisk forms over raw TCP.
-/// - Require successful fallback responses by default and `400` with normalization enabled.
+/// - Require successful fallback responses by default and `400` with validation-only
+///   or normalization enabled.
 /// - Check rejected requests never enter application middleware.
 /// - Send an invalid Host header with either target setting and require `400` only
 ///   when transport Host validation is enabled.
@@ -193,13 +214,15 @@ async fn test_h1_request_target_normalization() {
 async fn test_h1_request_target_validation() {
     use ntex::web::{App, WebRequest, middleware::DefaultHeaders};
 
-    for (enabled, validate_host) in [(false, false), (false, true), (true, false), (true, true)] {
-        let cfg = HttpServiceConfig::new();
-        let cfg = if enabled {
-            cfg.set_request_target_normalization(true)
-        } else {
-            cfg
-        };
+    for (mode, validate_host) in [
+        (TargetMode::Raw, false),
+        (TargetMode::Raw, true),
+        (TargetMode::Validate, false),
+        (TargetMode::Validate, true),
+        (TargetMode::Normalize, false),
+        (TargetMode::Normalize, true),
+    ] {
+        let cfg = target_config(mode);
         let cfg = if validate_host {
             cfg.set_host_validation(true)
         } else {
@@ -233,11 +256,18 @@ async fn test_h1_request_target_validation() {
             )
             .unwrap();
             let mut response = String::new();
-            stream.read_to_string(&mut response).unwrap();
+            // a rejected request is closed with its headers unread, so the
+            // peer may reset the connection after sending the response
+            if let Err(e) = stream.read_to_string(&mut response) {
+                assert!(
+                    e.kind() == io::ErrorKind::ConnectionReset && response.contains("\r\n\r\n"),
+                    "{target}: {e}"
+                );
+            }
             let rejected = if host == "invalid/host" {
                 validate_host
             } else {
-                enabled
+                mode != TargetMode::Raw
             };
             let status = if rejected { 400 } else { 200 };
             assert!(
@@ -256,7 +286,8 @@ async fn test_h1_request_target_validation() {
 /// STATEMENT: Opt-in HTTP/2 decoding normalizes targets before application filters and routing.
 ///
 /// HOW:
-/// - Send unnormalized `:path` values with transport normalization disabled or enabled.
+/// - Send unnormalized `:path` values with target processing disabled, validation-only
+///   or normalization enabled.
 /// - Check that application filters and handlers receive the raw or canonical path/query.
 #[ntex::test]
 async fn test_h2_request_target_normalization() {
@@ -265,17 +296,21 @@ async fn test_h2_request_target_normalization() {
     use ntex::web::{self, App, HttpRequest, WebRequest};
     use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
 
-    for (target, enabled, expected) in [
-        ("/old/../%74est?q=%7e", false, "/old/../%74est?q=%7e"),
-        ("/old/../%74est?q=%7e", true, "/test?q=~"),
-        ("/.//%74est", true, "//test"),
+    for (target, mode, expected) in [
+        (
+            "/old/../%74est?q=%7e",
+            TargetMode::Raw,
+            "/old/../%74est?q=%7e",
+        ),
+        (
+            "/old/../%74est?q=%7e",
+            TargetMode::Validate,
+            "/old/../%74est?q=%7e",
+        ),
+        ("/old/../%74est?q=%7e", TargetMode::Normalize, "/test?q=~"),
+        ("/.//%74est", TargetMode::Normalize, "//test"),
     ] {
-        let cfg = HttpServiceConfig::new();
-        let cfg = if enabled {
-            cfg.set_request_target_normalization(true)
-        } else {
-            cfg
-        };
+        let cfg = target_config(mode);
         let srv = test::server_with_config(
             async move |_| {
                 HttpService::h2(
@@ -2161,7 +2196,8 @@ async fn test_h2_request_payload_ends_after_error() {
 ///
 /// HOW:
 /// - Send malformed paths and authorities to a lower-level HTTP service with open/closed bodies.
-/// - Require `400` only when validation is enabled, including for delimiters inside an authority.
+/// - Require `400` only with validation-only or normalization enabled, including for
+///   delimiters inside an authority.
 /// - Check OPTIONS retains its asterisk path and valid requests still succeed on the same connection.
 #[ntex::test]
 async fn test_h2_malformed_request_uri() {
@@ -2169,13 +2205,8 @@ async fn test_h2_malformed_request_uri() {
     use ntex::time::timeout;
     use ntex_h2::{MessageKind, client::SimpleClient};
 
-    for enabled in [false, true] {
-        let cfg = HttpServiceConfig::new();
-        let cfg = if enabled {
-            cfg.set_request_target_normalization(true)
-        } else {
-            cfg
-        };
+    for mode in [TargetMode::Raw, TargetMode::Validate, TargetMode::Normalize] {
+        let cfg = target_config(mode);
         let srv = test::server_with_config(
             async |_| {
                 HttpService::h2(async |req: Request| {
@@ -2206,7 +2237,7 @@ async fn test_h2_malformed_request_uri() {
                     panic!("unexpected message: {msg:?}")
                 };
                 let valid = authority == "localhost" && matches!(path, "/" | "*");
-                let expected = if enabled && !valid {
+                let expected = if mode != TargetMode::Raw && !valid {
                     StatusCode::BAD_REQUEST
                 } else {
                     StatusCode::OK

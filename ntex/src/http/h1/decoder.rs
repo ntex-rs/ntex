@@ -559,9 +559,12 @@ impl MessageType for Request {
                 } else {
                     Version::HTTP_10
                 };
-                if cfg.normalize_target {
-                    crate::http::helpers::normalize_request_target(&method, version, &mut uri)?;
-                }
+                crate::http::helpers::process_request_target(
+                    cfg.target_policy(),
+                    &method,
+                    version,
+                    &mut uri,
+                )?;
 
                 let mut msg = Request::new();
                 let head = msg.head_mut();
@@ -1514,6 +1517,62 @@ mod tests {
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.path(), "//test");
         assert!(req.uri().authority().is_none());
+    }
+
+    /// STATEMENT: Validation-only target processing rejects malformed targets without rewriting valid ones.
+    ///
+    /// HOW:
+    /// - Enable `set_request_target_validation` and decode unnormalized origin and absolute targets.
+    /// - Check the decoded URI keeps the exact spelling, including escapes, dot segments and case.
+    /// - Check malformed escapes, fragments, misplaced asterisk-form and userinfo are rejected.
+    /// - Check validation stays enabled when normalization is explicitly disabled and
+    ///   normalization still rewrites when both options are enabled.
+    #[test]
+    fn test_request_target_validation_only() {
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(
+                HttpServiceConfig::new()
+                    .set_request_target_validation(true)
+                    .set_request_target_normalization(false),
+            )
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        for target in [
+            "/%41/../b?x=%7e",
+            "/a/./b//c",
+            "HTTPS://Example.COM:00443/a/../%7e",
+        ] {
+            let mut buf =
+                BytesMut::from(format!("GET {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(req.uri().to_string(), target);
+        }
+        let mut buf = BytesMut::from("OPTIONS * HTTP/1.1\r\nhost: a\r\n\r\n");
+        assert_eq!(reader.decode(&mut buf).unwrap().unwrap().0.path(), "*");
+
+        for (method, target) in [
+            ("GET", "/a%zz"),
+            ("GET", "/a#frag"),
+            ("GET", "*"),
+            ("GET", "http://u@example.com/"),
+            ("GET", "example.com:443"),
+        ] {
+            let mut buf =
+                BytesMut::from(format!("{method} {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            assert!(reader.decode(&mut buf).is_err(), "{target}");
+        }
+
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(
+                HttpServiceConfig::new()
+                    .set_request_target_validation(true)
+                    .set_request_target_normalization(true),
+            )
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from("GET /%41/../b?x=%7e HTTP/1.1\r\nhost: a\r\n\r\n");
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.uri().path_and_query(), "/b?x=~");
     }
 
     /// STATEMENT: Incremental parsing rejects a header name exceeding its representable length.
