@@ -64,17 +64,7 @@ impl<F> Io<F> {
                 }
                 Err(RecvError::Decoder(err)) => Err(Either::Left(err)),
                 Err(RecvError::PeerGone(Some(err))) => Err(Either::Right(err)),
-                Err(RecvError::PeerGone(None)) => {
-                    let st = self.st();
-                    if st.flags.is_read_eof() && st.buffer.read_dst_size() != 0 {
-                        Err(Either::Right(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "bytes remaining on stream",
-                        )))
-                    } else {
-                        Ok(None)
-                    }
-                }
+                Err(RecvError::PeerGone(None)) => Ok(None),
             };
         }
     }
@@ -316,7 +306,10 @@ impl<F> Io<F> {
     /// through [`poll_read_more`](Self::poll_read_more), which wakes the read
     /// task and releases read backpressure unconditionally.
     ///
-    /// An error return does not register the waker.
+    /// An error return does not register the waker. A clean peer EOF that
+    /// leaves undecodable bytes is reported as `RecvError::PeerGone` with an
+    /// [`io::ErrorKind::UnexpectedEof`] error, see
+    /// [`poll_recv_decode`](Self::poll_recv_decode).
     pub fn poll_recv<U>(
         &self,
         codec: &U,
@@ -352,6 +345,11 @@ impl<F> Io<F> {
     /// is closing neither is reported, the buffered input is decoded and
     /// `RecvError::PeerGone` is returned when no item is left.
     ///
+    /// If the peer closed its write half cleanly while undecodable bytes
+    /// remain in the read buffer, the stream was truncated mid-frame and
+    /// `RecvError::PeerGone` carries an [`io::ErrorKind::UnexpectedEof`] error
+    /// instead of `None`. A recorded connection error takes precedence.
+    ///
     /// When the codec needs more input this goes through
     /// [`poll_read_more`](Self::poll_read_more), which releases read
     /// backpressure unconditionally.
@@ -382,7 +380,7 @@ impl<F> Io<F> {
         if decoded.item.is_some() {
             Ok(decoded)
         } else if st.flags.is_stopping() || st.flags.is_terminating() {
-            Err(RecvError::PeerGone(st.error()))
+            Err(RecvError::PeerGone(st.error().or_else(|| self.truncated())))
         } else {
             match self.poll_read_more(cx) {
                 Poll::Pending | Poll::Ready(Ok(Some(()))) => {
@@ -393,8 +391,21 @@ impl<F> Io<F> {
                     Ok(decoded)
                 }
                 Poll::Ready(Err(e)) => Err(RecvError::PeerGone(Some(e))),
-                Poll::Ready(Ok(None)) => Err(RecvError::PeerGone(None)),
+                Poll::Ready(Ok(None)) => Err(RecvError::PeerGone(self.truncated())),
             }
+        }
+    }
+
+    /// Reports a stream the peer closed cleanly in the middle of a frame.
+    fn truncated(&self) -> Option<io::Error> {
+        let st = self.st();
+        if st.flags.is_read_eof() && st.buffer.read_dst_size() != 0 {
+            Some(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "bytes remaining on stream",
+            ))
+        } else {
+            None
         }
     }
 

@@ -545,6 +545,10 @@ impl ProtocolError {
 }
 
 /// Notification that the peer closed the connection.
+///
+/// A clean peer close in the middle of a request head or body carries an
+/// [`io::ErrorKind::UnexpectedEof`] error, so a truncated request is not
+/// reported as a clean disconnect.
 #[derive(Debug)]
 pub struct PeerGone(Option<io::Error>);
 

@@ -245,18 +245,6 @@ pub enum Reason<U: Encoder + Decoder> {
     WriteTimeout,
 }
 
-/// Reports a truncated stream, the peer closed cleanly in the middle of a frame.
-fn truncated(io: &IoBoxed) -> Option<io::Error> {
-    if io.is_read_eof() && io.read_dst_size() != 0 {
-        Some(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "bytes remaining on stream",
-        ))
-    } else {
-        None
-    }
-}
-
 /// Future that dispatches decoded transport frames to a service.
 ///
 /// Owns the transport, codec, and service pipeline supplied to [`Self::new`].
@@ -617,7 +605,6 @@ where
                                     continue;
                                 }
                                 Err(RecvError::PeerGone(err)) => {
-                                    let err = err.or_else(|| truncated(&inner.shared.io));
                                     log::trace!(
                                         "{}: Peer is gone, stopping dispatcher: {:?}",
                                         inner.shared.io.tag(),

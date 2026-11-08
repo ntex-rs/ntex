@@ -1,3 +1,4 @@
+use std::future::poll_fn;
 use std::task::{Context, Poll, Waker};
 use std::{cell::Cell, cell::RefCell, pin::Pin, rc::Rc, time::Duration};
 
@@ -4424,6 +4425,60 @@ async fn recv_reports_truncated_stream() {
 
     // the partial item is still buffered, it is not discarded
     assert_eq!(io.with_read_dst(|b| b.len()), 3);
+}
+
+/// STATEMENT: The polling receive API reports peer EOF inside a frame as `UnexpectedEof`, not as a clean `PeerGone(None)`.
+///
+/// HOW:
+/// - Send three bytes for an eight-byte decoder and close peer input.
+/// - Poll `poll_recv` to completion and verify `RecvError::PeerGone` carries `UnexpectedEof`.
+/// - Start a local `close()` and verify `poll_recv_decode` on the closing path still reports `UnexpectedEof`.
+#[ntex::test]
+async fn poll_recv_reports_truncated_stream() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+
+    client.write("123");
+    sleep(Millis(25)).await;
+    client.close().await;
+
+    let res = poll_fn(|cx| io.poll_recv(&FixedSize(8), cx)).await;
+    let Err(RecvError::PeerGone(Some(err))) = res else {
+        panic!("expected truncation error")
+    };
+    assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(io.with_read_dst(|b| b.len()), 3);
+
+    io.close();
+    sleep(Millis(25)).await;
+    assert!(io.st().flags.is_stopping() || io.st().flags.is_terminating());
+    let res = lazy(|cx| io.poll_recv_decode(&FixedSize(8), cx)).await;
+    let Err(RecvError::PeerGone(Some(err))) = res else {
+        panic!("expected truncation error while closing")
+    };
+    assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+}
+
+/// STATEMENT: Clean peer EOF with an empty read buffer is reported as `PeerGone(None)`.
+///
+/// HOW:
+/// - Send one complete four-byte frame and close peer input.
+/// - Receive the frame with `poll_recv`, then verify the next poll reports `PeerGone(None)`.
+#[ntex::test]
+async fn poll_recv_reports_clean_eof_without_error() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+
+    client.write("1234");
+    sleep(Millis(25)).await;
+    client.close().await;
+
+    let item = poll_fn(|cx| io.poll_recv(&FixedSize(4), cx)).await;
+    assert_eq!(item.ok().unwrap(), "1234");
+    let res = poll_fn(|cx| io.poll_recv(&FixedSize(4), cx)).await;
+    assert!(matches!(res, Err(RecvError::PeerGone(None))));
 }
 
 /// STATEMENT: A complete final frame is delivered before clean EOF.

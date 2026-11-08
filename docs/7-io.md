@@ -582,7 +582,10 @@ resumes reads. This makes it suitable for a dispatcher waiting on readiness,
 not for permanently disabling the read half.
 
 The same conditions reach a codec-driven service as [`RecvError`] from
-[`Io::poll_recv`], which additionally reports decoder failures. Code that only
+[`Io::poll_recv`], which additionally reports decoder failures. Unlike the
+status update, `RecvError::PeerGone` also reports a stream truncated mid-frame:
+a clean peer EOF that leaves undecodable bytes carries an
+`io::ErrorKind::UnexpectedEof` error instead of `None`. Code that only
 needs to be woken when the connection goes away can await the [`Waiter`]
 future returned by [`IoRef::on_disconnect`]. [`IoRef::is_active`] becomes
 false as soon as closing starts; [`IoRef::is_closed`] becomes true only after

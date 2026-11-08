@@ -3371,11 +3371,11 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
     }
 
-    /// STATEMENT: Clean peer closure during a partial request head emits one disconnect without dispatching a request.
+    /// STATEMENT: Clean peer closure during a partial request head is reported once as a truncated stream without dispatching a request.
     ///
     /// HOW:
     /// - Close the peer after an incomplete header and record request/control calls.
-    /// - Verify one error-free peer-loss notification, no application calls, and no response bytes.
+    /// - Verify one peer-loss notification carrying `UnexpectedEof`, close reason `CloseReason::Io`, no application calls, and no response bytes.
     #[crate::rt_test]
     async fn test_partial_request_headers_clean_disconnect() {
         let requests = Arc::new(AtomicUsize::new(0));
@@ -3402,7 +3402,10 @@ mod tests {
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
-                        assert!(err.get_ref().is_none());
+                        assert_eq!(
+                            err.get_ref().map(io::Error::kind),
+                            Some(io::ErrorKind::UnexpectedEof)
+                        );
                         disconnects2.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok::<_, DispatchError>(msg.ack())
@@ -3417,6 +3420,7 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(h1.inner.io.close_reason(), Some(CloseReason::Io));
         assert_eq!(requests.load(Ordering::Relaxed), 0);
         assert_eq!(disconnects.load(Ordering::Relaxed), 1);
         assert!(client.read_any().is_empty());
