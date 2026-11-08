@@ -2,6 +2,11 @@
 
 ## [4.9.0] - Unreleased
 
+* Add `Counter::acquire()` and `Counter::try_get()`, which take a slot only
+  when capacity is free; `Counter::available()` is documented as advisory, and
+  `InFlight` now acquires slots atomically so concurrent callers cannot exceed
+  the limit
+
 * Channel EOF is terminal: `mpsc::Receiver::sender()` returns a closed sender
   once the channel is closed or every sender was dropped, instead of reopening
   it; `bstream::Sender::feed_data()` drops chunks after EOF or an error, and

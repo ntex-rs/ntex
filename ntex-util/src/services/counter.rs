@@ -40,10 +40,37 @@ impl Counter {
 
     /// Acquires one count and returns a guard that releases it on drop.
     ///
-    /// This does not wait for capacity; call [`available`](Self::available)
-    /// first when exceeding the configured capacity is not acceptable.
+    /// This does not check the capacity, so the count may exceed it. Use
+    /// [`acquire`](Self::acquire) or [`try_get`](Self::try_get) when the
+    /// capacity must not be exceeded.
     pub fn get(&self) -> CounterGuard {
         CounterGuard::new(self.1.clone())
+    }
+
+    /// Acquires one count if the counter has free capacity.
+    pub fn try_get(&self) -> Option<CounterGuard> {
+        if self.is_available() {
+            Some(self.get())
+        } else {
+            None
+        }
+    }
+
+    /// Waits until the counter has free capacity and acquires one count.
+    ///
+    /// The count is taken in the same poll that observes free capacity, so
+    /// tasks acquiring concurrently never exceed the capacity. Concurrent
+    /// waiters must use separate clones, each clone wakes only its most recent
+    /// waiting task. Cancelling the future acquires nothing.
+    pub async fn acquire(&self) -> CounterGuard {
+        poll_fn(|cx| {
+            if self.poll_available(cx) {
+                Poll::Ready(self.get())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
     }
 
     /// Changes the capacity and wakes waiting tasks.
@@ -61,6 +88,10 @@ impl Counter {
     ///
     /// Returns immediately if there is capacity available. Otherwise,
     /// registers the current task for wakeup and waits until a slot is freed.
+    ///
+    /// This does not reserve the slot: another task may take it before a
+    /// later [`get`](Self::get), unless `get` is called without awaiting in
+    /// between. Use [`acquire`](Self::acquire) to wait and take a slot at once.
     pub async fn available(&self) {
         poll_fn(|cx| {
             if self.poll_available(cx) {
@@ -260,6 +291,50 @@ mod tests {
             .unwrap()
             .unwrap();
 
+        drop(guard);
+        assert_eq!(counter.total(), 0);
+    }
+
+    /// STATEMENT: Concurrent `acquire` calls never exceed the capacity, even when
+    /// the acquiring tasks yield while holding their guards.
+    ///
+    /// HOW:
+    /// - Hold the only slot of a capacity-one counter and spawn two tasks that `acquire`
+    ///   through their own clones, record `total()`, sleep, then release.
+    /// - Check `try_get` returns `None` while full, release the slot, and check both tasks
+    ///   acquired with a recorded maximum `total()` of one, and `try_get` succeeds afterwards.
+    #[ntex::test]
+    async fn acquire_reserves_slot() {
+        let counter = Counter::new(1);
+        let guard = counter.get();
+        assert!(counter.try_get().is_none());
+        assert_eq!(counter.total(), 1);
+
+        let max = Rc::new(Cell::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let (c, max) = (counter.clone(), max.clone());
+            handles.push(crate::spawn(async move {
+                let _guard = c.acquire().await;
+                max.set(max.get().max(c.total()));
+                sleep(Duration::from_millis(10)).await;
+            }));
+        }
+        sleep(Duration::from_millis(10)).await;
+        assert_eq!(max.get(), 0);
+
+        drop(guard);
+        for hnd in handles {
+            crate::time::timeout(Duration::from_secs(1), hnd)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert_eq!(max.get(), 1);
+        assert_eq!(counter.total(), 0);
+
+        let guard = counter.try_get().unwrap();
+        assert_eq!(counter.total(), 1);
         drop(guard);
         assert_eq!(counter.total(), 0);
     }
