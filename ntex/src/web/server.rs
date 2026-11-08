@@ -130,8 +130,8 @@ where
     #[must_use]
     /// Sets the maximum per-worker number of concurrent connections.
     ///
-    /// All socket listeners will stop accepting connections when this limit is reached
-    /// for each worker.
+    /// All socket listeners of this server stop accepting connections when
+    /// every worker reaches this limit. The limit applies only to this server.
     ///
     /// By default max connections is set to a 25k.
     pub fn max_connections(mut self, num: usize) -> Self {

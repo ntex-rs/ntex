@@ -26,6 +26,7 @@ pub struct ServerBuilder<Cfg = NoConfig> {
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     acceptors: usize,
+    max_conns: usize,
     pool: WorkerPool,
 }
 
@@ -52,6 +53,7 @@ where
         ServerBuilder {
             accept,
             acceptors: 1,
+            max_conns: super::DEFAULT_MAX_CONNS,
             name: sys.name().to_string(),
             token: Token(0),
             state: Arc::new(cfg),
@@ -128,13 +130,13 @@ where
     /// A worker stops taking new connections while it is at this limit. When
     /// no worker can take a connection, the listeners stop accepting.
     ///
-    /// The limit is a process-wide setting shared by every server in the
-    /// process. Set it before the server starts, because each worker reads
-    /// it when its first service is created.
+    /// The limit belongs to this server: each of its workers counts only
+    /// connections for this server, and other servers in the process are not
+    /// affected.
     ///
     /// The default is 25,600 connections per worker.
-    pub fn max_connections(self, num: usize) -> Self {
-        super::max_concurrent_connections(num);
+    pub fn max_connections(mut self, num: usize) -> Self {
+        self.max_conns = num;
         self
     }
 
@@ -383,7 +385,12 @@ where
             "Server should have at least one bound socket"
         );
         self.accept.acceptors(self.acceptors);
-        let srv = StreamServer::new(self.accept.notify(), self.state, self.services);
+        let srv = StreamServer::new(
+            self.accept.notify(),
+            self.state,
+            self.services,
+            self.max_conns,
+        );
         let svc = self.pool.run(srv);
 
         svc.metrics_ref().listeners(
@@ -414,6 +421,7 @@ impl<Cfg> fmt::Debug for ServerBuilder<Cfg> {
             .field("sockets", &self.sockets)
             .field("accept", &self.accept)
             .field("acceptors", &self.acceptors)
+            .field("max_conns", &self.max_conns)
             .field("worker-pool", &self.pool)
             .finish()
     }

@@ -3,10 +3,6 @@
 //! Use [`build()`] or [`ServerBuilder`] to register TCP or Unix domain socket
 //! services. Each worker receives its own service instance and processes
 //! connections on a single-threaded runtime.
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-use ntex_util::services::Counter;
-
 mod accept;
 mod builder;
 mod config;
@@ -58,23 +54,8 @@ where
     ServerBuilder::new(state)
 }
 
-static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);
-
-thread_local! {
-    static MAX_CONNS_COUNTER: Counter = Counter::new(MAX_CONNS.load(Ordering::Relaxed));
-}
-
-/// Sets the maximum per-worker number of concurrent connections.
-///
-/// By default, the limit is 25,600 connections per worker.
-pub(super) fn max_concurrent_connections(num: usize) {
-    MAX_CONNS.store(num, Ordering::Relaxed);
-    MAX_CONNS_COUNTER.with(|conns| conns.set_capacity(num));
-}
-
-pub(super) fn num_connections() -> usize {
-    MAX_CONNS_COUNTER.with(Counter::total)
-}
+/// Default per-worker connection limit.
+const DEFAULT_MAX_CONNS: usize = 25600;
 
 #[cfg(test)]
 mod tests {
@@ -112,8 +93,12 @@ mod tests {
             accept.notify(),
             std::sync::Arc::new(NoConfig),
             vec![factory],
+            DEFAULT_MAX_CONNS,
         );
-        assert_eq!(format!("{server:?}"), "StreamServer { services: 1 }");
+        assert_eq!(
+            format!("{server:?}"),
+            "StreamServer { services: 1, max_conns: 25600 }"
+        );
         let service = server.create().await.unwrap();
         let debug = format!("{service:?}");
         assert!(debug.starts_with("StreamService { tokens: {Token(7): (0, "));

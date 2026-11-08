@@ -8,7 +8,7 @@ use crate::{ServerAppConfig, ServerConfiguration, metrics::WorkerSlot};
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService};
-use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
+use super::{Token, socket::Connection};
 
 /// Worker configuration for network servers.
 ///
@@ -19,6 +19,7 @@ pub struct StreamServer<Cfg> {
     accept: AcceptNotify,
     state: Arc<Cfg>,
     services: Vec<FactoryServiceType<Cfg>>,
+    max_conns: usize,
 }
 
 impl<Cfg: ServerAppConfig> StreamServer<Cfg> {
@@ -26,11 +27,13 @@ impl<Cfg: ServerAppConfig> StreamServer<Cfg> {
         accept: AcceptNotify,
         state: Arc<Cfg>,
         services: Vec<FactoryServiceType<Cfg>>,
+        max_conns: usize,
     ) -> Self {
         Self {
             accept,
             state,
             services,
+            max_conns,
         }
     }
 }
@@ -39,6 +42,7 @@ impl<Cfg> fmt::Debug for StreamServer<Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StreamServer")
             .field("services", &self.services.len())
+            .field("max_conns", &self.max_conns)
             .finish()
     }
 }
@@ -73,7 +77,7 @@ impl<Cfg: ServerAppConfig> ServerConfiguration for StreamServer<Cfg> {
         Ok(StreamService {
             services,
             tokens,
-            conns: MAX_CONNS_COUNTER.with(Clone::clone),
+            conns: Counter::new(self.max_conns),
             metrics: WorkerSlot::current(),
         })
     }
@@ -111,6 +115,7 @@ impl<Cfg: ServerAppConfig> Clone for StreamServer<Cfg> {
             state: self.state.clone(),
             accept: self.accept.clone(),
             services: self.services.iter().map(|s| s.clo()).collect(),
+            max_conns: self.max_conns,
         }
     }
 }
@@ -192,7 +197,7 @@ impl Service<(), Connection> for StreamService {
         let _ = join_all(self.services.iter().map(|s| s.shutdown())).await;
         log::info!(
             "Worker service shutdown, {} connections",
-            super::num_connections()
+            self.conns.total()
         );
     }
 

@@ -1,5 +1,11 @@
 # Changes
 
+## [4.5.1] - Unreleased
+
+* `ServerBuilder::max_connections()` now configures only the server being built;
+  previously it set a process-wide limit immediately, so a dropped builder or
+  another server changed the limit for every server started later
+
 ## [4.5.0] - 2026-11-07
 
 * Delete listeners from the accept poller before closing them, as the poller
