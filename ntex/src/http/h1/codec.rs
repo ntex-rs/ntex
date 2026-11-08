@@ -239,6 +239,7 @@ mod tests {
     use crate::{
         SharedCfg,
         http::{HttpMessage, KeepAlive, h1::PayloadItem},
+        time::Seconds,
         util::Bytes,
     };
 
@@ -586,5 +587,33 @@ mod tests {
             .into();
         let codec = Codec::new(0, cfg.get());
         assert!(!codec.keepalive());
+    }
+
+    /// STATEMENT: Zero keep-alive timeouts make HTTP/1 connections non-persistent, while `Os` and nonzero timeouts stay persistent.
+    ///
+    /// HOW:
+    /// - Build codecs from `KeepAlive::Os`, a 10-second timeout, and zero timeouts given as `usize`, `Seconds`, and `set_keepalive_timeout`.
+    /// - Decode an HTTP/1.1 request without a `Connection` header and compare `Codec::keepalive` before and after decoding.
+    #[test]
+    fn keepalive_zero_policy() {
+        let cases = [
+            (HttpServiceConfig::new().set_keepalive(KeepAlive::Os), true),
+            (HttpServiceConfig::new().set_keepalive(10), true),
+            (HttpServiceConfig::new().set_keepalive(0), false),
+            (HttpServiceConfig::new().set_keepalive(Seconds::ZERO), false),
+            (
+                HttpServiceConfig::new().set_keepalive_timeout(Seconds::ZERO),
+                false,
+            ),
+        ];
+        for (cfg, persistent) in cases {
+            let cfg: SharedCfg = SharedCfg::new("DBG").add(cfg).into();
+            let codec = Codec::new(0, cfg.get());
+            assert_eq!(codec.keepalive(), persistent);
+
+            let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+            codec.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(codec.keepalive(), persistent);
+        }
     }
 }
