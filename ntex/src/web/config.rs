@@ -91,11 +91,19 @@ impl WebAppConfig {
         self.addr
     }
 
-    /// Get an application state object stored with `.set_state()` method.
-    pub fn state<T: 'static>(&self) -> Option<&T> {
+    /// Get a configuration value stored with [`WebAppConfig::set_value()`].
+    ///
+    /// Returns `None` if no value of type `T` is stored.
+    pub fn value<T: 'static>(&self) -> Option<&T> {
         self.state
             .get(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast_ref())
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "4.7.0", note = "use `WebAppConfig::value()` instead")]
+    pub fn state<T: 'static>(&self) -> Option<&T> {
+        self.value()
     }
 
     #[must_use]
@@ -131,15 +139,28 @@ impl WebAppConfig {
     }
 
     #[must_use]
-    /// Set application level arbitrary state item.
+    /// Store a typed configuration value, replacing any value of the same type.
     ///
-    /// Application state stored with `.set_state()` method is available
-    /// via `HttpRequest::app_state()` method at runtime.
-    pub fn set_state<T: Send + Sync + 'static>(mut self, val: T) -> Self {
-        self.state
-            .insert(TypeId::of::<T>(), Box::new(val))
-            .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok());
+    /// Values are available at runtime via [`HttpRequest::app_value()`].
+    /// Built-in extractors read their configuration, such as
+    /// [`JsonConfig`](super::types::JsonConfig),
+    /// [`FormConfig`](super::types::FormConfig) and
+    /// [`PayloadConfig`](super::types::PayloadConfig), only from here.
+    ///
+    /// This store is separate from the application state `St`
+    /// (for example [`AppState<T>`](super::AppState)) passed to handlers
+    /// registered with [`Route::to_with_state()`](super::Route::to_with_state);
+    /// extractor configuration placed in the application state is ignored.
+    pub fn set_value<T: Send + Sync + 'static>(mut self, val: T) -> Self {
+        self.state.insert(TypeId::of::<T>(), Box::new(val));
         self
+    }
+
+    #[must_use]
+    #[doc(hidden)]
+    #[deprecated(since = "4.7.0", note = "use `WebAppConfig::set_value()` instead")]
+    pub fn set_state<T: Send + Sync + 'static>(self, val: T) -> Self {
+        self.set_value(val)
     }
 }
 

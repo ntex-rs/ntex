@@ -532,13 +532,20 @@ impl<St> TestRequest<St> {
     }
 
     #[must_use]
-    /// Set application state.
+    /// Store a typed configuration value.
     ///
-    /// This is equivalent of [`WebAppConfig::set_state()`] method for testing
-    /// purpose. The value is available via `HttpRequest::app_state()`.
-    pub fn app_state<T: Send + Sync + 'static>(mut self, data: T) -> Self {
-        self.config = self.config.set_state(data);
+    /// This is equivalent of [`WebAppConfig::set_value()`] method for testing
+    /// purpose. The value is available via `HttpRequest::app_value()`.
+    pub fn app_value<T: Send + Sync + 'static>(mut self, data: T) -> Self {
+        self.config = self.config.set_value(data);
         self
+    }
+
+    #[must_use]
+    #[doc(hidden)]
+    #[deprecated(since = "4.7.0", note = "use `TestRequest::app_value()` instead")]
+    pub fn app_state<T: Send + Sync + 'static>(self, data: T) -> Self {
+        self.app_value(data)
     }
 
     #[must_use]
@@ -1196,7 +1203,7 @@ mod tests {
             .version(Version::HTTP_2)
             .header(header::DATE, "some date")
             .param("test", "123")
-            .app_state(20u64)
+            .app_value(20u64)
             .peer_addr("127.0.0.1:8081".parse().unwrap())
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
@@ -1204,7 +1211,7 @@ mod tests {
         assert_eq!(req.peer_addr(), Some("127.0.0.1:8081".parse().unwrap()));
         assert_eq!(&req.match_info()["test"], "123");
         assert_eq!(req.version(), Version::HTTP_2);
-        let data = req.app_state::<u64>().unwrap();
+        let data = req.app_value::<u64>().unwrap();
         assert_eq!(*data, 20);
         assert_eq!(format!("{:?}", StreamType::Tcp), "StreamType::Tcp");
 

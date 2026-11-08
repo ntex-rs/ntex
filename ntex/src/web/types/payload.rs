@@ -156,7 +156,7 @@ impl<St: State> FromRequest<St> for Bytes {
         payload: &mut crate::http::Payload,
     ) -> Result<Bytes, Self::Error> {
         let tmp;
-        let cfg = if let Some(cfg) = req.app_state::<PayloadConfig>() {
+        let cfg = if let Some(cfg) = req.app_value::<PayloadConfig>() {
             cfg
         } else {
             tmp = PayloadConfig::default();
@@ -191,7 +191,7 @@ impl<St: State> FromRequest<St> for Bytes {
 ///
 /// fn main() {
 ///     let cfg = WebAppConfig::new()
-///         .set_state(web::types::PayloadConfig::new(4096)); // <- limit size of the payload
+///         .set_value(web::types::PayloadConfig::new(4096)); // <- limit size of the payload
 ///
 ///     let app = App::default()
 ///         .with_config(cfg)
@@ -210,7 +210,7 @@ impl<St: State> FromRequest<St> for String {
         payload: &mut crate::http::Payload,
     ) -> Result<String, Self::Error> {
         let tmp;
-        let cfg = if let Some(cfg) = req.app_state::<PayloadConfig>() {
+        let cfg = if let Some(cfg) = req.app_value::<PayloadConfig>() {
             cfg
         } else {
             tmp = PayloadConfig::default();
@@ -242,6 +242,11 @@ impl<St: State> FromRequest<St> for String {
 }
 
 /// Payload configuration for request's payload.
+///
+/// Register it with [`WebAppConfig::set_value()`](crate::web::WebAppConfig::set_value)
+/// and [`App::with_config()`](crate::web::App::with_config). The extractor
+/// does not read the application state, so a config stored in
+/// [`AppState`](crate::web::AppState) has no effect.
 #[derive(Clone)]
 pub struct PayloadConfig {
     limit: usize,
@@ -499,7 +504,7 @@ mod tests {
 
         let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .payload(Bytes::from_static(b"hello=world"))
-            .app_state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+            .app_value(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
             .to_http_parts();
         assert!(from_request::<_, Bytes>(&(), &req, &mut pl).await.is_err());
     }
@@ -527,7 +532,7 @@ mod tests {
 
         let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .payload(Bytes::from_static(b"hello=world"))
-            .app_state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+            .app_value(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
             .to_http_parts();
         assert!(from_request::<_, String>(&(), &req, &mut pl).await.is_err());
     }

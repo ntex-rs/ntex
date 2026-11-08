@@ -198,10 +198,17 @@ impl<St> WebRequest<St> {
         self.req.app_config()
     }
 
-    /// Get an application state.
+    /// Get a configuration value stored with [`WebAppConfig::set_value()`].
     #[inline]
+    pub fn app_value<T: 'static>(&self) -> Option<&T> {
+        self.req.app_value()
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    #[deprecated(since = "4.7.0", note = "use `WebRequest::app_value()` instead")]
     pub fn app_state<T: 'static>(&self) -> Option<&T> {
-        (self.req).app_config().state()
+        self.app_value()
     }
 
     /// Request extensions

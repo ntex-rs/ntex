@@ -167,7 +167,7 @@ where
     ) -> Result<Self, Self::Error> {
         let req2 = req.clone();
         let (limit, ctype) = req
-            .app_state::<JsonConfig>()
+            .app_value::<JsonConfig>()
             .map_or((32768, None), |c| (c.limit, c.content_type.as_ref()));
 
         match JsonBody::new(req, payload, ctype).limit(limit).await {
@@ -186,6 +186,11 @@ where
 
 /// Json extractor configuration
 ///
+/// Register it with [`WebAppConfig::set_value()`](crate::web::WebAppConfig::set_value)
+/// and [`App::with_config()`](crate::web::App::with_config). The extractor
+/// does not read the application state, so a config stored in
+/// [`AppState`](crate::web::AppState) has no effect.
+///
 /// ```rust
 /// use ntex::http::error;
 /// use ntex::web::{self, App, FromRequest, HttpResponse, WebAppConfig};
@@ -202,7 +207,7 @@ where
 ///
 /// fn main() {
 ///     let cfg = WebAppConfig::new()
-///         .set_state(
+///         .set_value(
 ///             // change json extractor configuration
 ///             web::types::JsonConfig::default()
 ///                 .limit(4096)
@@ -504,7 +509,7 @@ mod tests {
                 header::HeaderValue::from_static("16"),
             )
             .payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-            .app_state(JsonConfig::default().limit(10))
+            .app_value(JsonConfig::default().limit(10))
             .to_http_parts();
 
         let s = from_request::<_, Json<MyObject>>(&(), &req, &mut pl).await;
@@ -525,6 +530,43 @@ mod tests {
             .to_http_parts();
         let s = from_request::<_, Json<serde_json::Value>>(&(), &req, &mut pl).await;
         assert!(format!("{:?}", s.err().unwrap()).contains("Deserialize(Error("));
+    }
+
+    /// STATEMENT: `Json` reads its config from the `WebAppConfig` value store, never from application state.
+    ///
+    /// HOW:
+    /// - Put a 10-byte `JsonConfig` in `AppState` only and assert a 16-byte body still decodes.
+    /// - Store the same config through the deprecated `TestRequest::app_state()` alias and
+    ///   assert the size-limit error, showing the alias writes the extractor value store.
+    #[crate::rt_test]
+    async fn test_config_not_read_from_state() {
+        let req = || {
+            TestRequest::default()
+                .header(
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static("application/json"),
+                )
+                .header(
+                    header::CONTENT_LENGTH,
+                    header::HeaderValue::from_static("16"),
+                )
+                .payload(Bytes::from_static(b"{\"name\": \"test\"}"))
+        };
+
+        let (http_req, mut pl, st) = req()
+            .state(crate::web::AppState::new(JsonConfig::default().limit(10)))
+            .to_http_parts();
+        let s = from_request::<_, Json<MyObject>>(&st, &http_req, &mut pl).await;
+        assert_eq!(s.unwrap().name, "test");
+
+        #[allow(deprecated)]
+        let (http_req, mut pl, ()) = req()
+            .app_state(JsonConfig::default().limit(10))
+            .to_http_parts();
+        let s = from_request::<_, Json<MyObject>>(&(), &http_req, &mut pl).await;
+        assert!(
+            format!("{}", s.err().unwrap()).contains("Json payload size is bigger than allowed")
+        );
     }
 
     /// STATEMENT: `JsonBody` validates media types and lengths before decoding valid JSON.
@@ -625,7 +667,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .app_state(JsonConfig::default().limit(4096))
+        .app_value(JsonConfig::default().limit(4096))
         .to_http_parts();
 
         let s = from_request::<_, Json<MyObject>>(&(), &req, &mut pl).await;
@@ -648,7 +690,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .app_state(JsonConfig::default().content_type(|mime: mime::Mime| {
+        .app_value(JsonConfig::default().content_type(|mime: mime::Mime| {
             mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
         }))
         .to_http_parts();
@@ -673,7 +715,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .app_state(JsonConfig::default().content_type(|mime: mime::Mime| {
+        .app_value(JsonConfig::default().content_type(|mime: mime::Mime| {
             mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
         }))
         .to_http_parts();

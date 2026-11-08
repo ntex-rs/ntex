@@ -48,6 +48,11 @@ impl State for () {
 /// `State` implementation is not needed. It dereferences to the wrapped value
 /// and implements `Clone` and `Default` when `T` does.
 ///
+/// Extractor configuration such as
+/// [`JsonConfig`](super::types::JsonConfig) is not read from application
+/// state; store it with
+/// [`WebAppConfig::set_value()`](super::WebAppConfig::set_value) instead.
+///
 /// ```rust
 /// use ntex::web;
 ///

@@ -106,7 +106,7 @@ where
         req: &HttpRequest,
         payload: &mut Payload,
     ) -> Result<Self, Self::Error> {
-        let limit = req.app_state::<FormConfig>().map_or(16384, |c| c.limit);
+        let limit = req.app_value::<FormConfig>().map_or(16384, |c| c.limit);
 
         match UrlEncoded::new(req, payload).limit(limit).await {
             Err(e) => Err(e),
@@ -146,6 +146,11 @@ where
 
 /// Form extractor configuration
 ///
+/// Register it with [`WebAppConfig::set_value()`](crate::web::WebAppConfig::set_value)
+/// and [`App::with_config()`](crate::web::App::with_config). The extractor
+/// does not read the application state, so a config stored in
+/// [`AppState`](crate::web::AppState) has no effect.
+///
 /// ```rust
 /// use std::convert::Infallible;
 /// use ntex::web::{self, App, WebError, FromRequest, WebAppConfig};
@@ -164,7 +169,7 @@ where
 /// fn main() {
 ///     let cfg = WebAppConfig::new()
 ///         // change `Form` extractor configuration
-///         .set_state(web::types::FormConfig::default().limit(4097));
+///         .set_value(web::types::FormConfig::default().limit(4097));
 ///
 ///     let app = App::default()
 ///         .with_config(cfg)

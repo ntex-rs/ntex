@@ -265,7 +265,7 @@ mod tests {
     async fn test_option() {
         let (req, mut pl, ()) =
             TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .app_state(FormConfig::default().limit(4096))
+                .app_value(FormConfig::default().limit(4096))
                 .to_http_parts();
 
         let r = from_request::<_, Option<Form<Info>>>(&(), &req, &mut pl)
