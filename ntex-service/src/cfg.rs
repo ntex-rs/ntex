@@ -270,17 +270,15 @@ impl<T: Configuration> Clone for Cfg<T> {
     }
 }
 
+/// Wraps a standalone value in a new shared configuration tagged `--`.
+///
+/// There is no conversion from `&T`: a borrowed value cannot be moved into a
+/// configuration. Pass the value by value, clone an existing [`Cfg`] handle,
+/// or look up the registered value with `value.ctx().get::<T>()`.
 impl<T: Configuration> From<T> for Cfg<T> {
     #[inline]
     fn from(cfg: T) -> Self {
         SharedCfg::new("--").add(cfg).build().get()
-    }
-}
-
-impl<'a, T: Configuration> From<&'a T> for Cfg<T> {
-    #[inline]
-    fn from(cfg: &'a T) -> Self {
-        cfg.ctx().get()
     }
 }
 

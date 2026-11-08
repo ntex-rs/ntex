@@ -106,7 +106,6 @@ fn shared_cfg() {
     assert_eq!(t2.tag(), "TEST4");
 
     let t3 = t.ctx().get::<TestCfg>();
-    let t3 = Cfg::from(t3.get_ref());
     let t3 = t3.get_shared::<TestCfg>();
     assert_eq!(t3.id(), cfg.id());
     assert_eq!(t3.tag(), "TEST4");
@@ -258,4 +257,50 @@ fn missing_cfg_defaults_per_thread() {
     .join()
     .unwrap();
     assert_eq!(local_addr, remote_addr);
+}
+
+/// STATEMENT: An owned value converts into a `Cfg` that keeps its settings, and a registered
+/// value is reached through its context rather than a borrowed conversion.
+///
+/// HOW:
+/// - Convert a standalone `TestCfg` with a non-default `val` into `Cfg` and check `val` and
+///   the `--` tag survive.
+/// - Register a non-default value in a `SharedCfg`, look it up again through
+///   `value.ctx().get()`, and check it is the same instance with the same `val` and tag.
+#[test]
+fn owned_and_registered_cfg_keep_values() {
+    #[derive(Default, Debug)]
+    struct TestCfg {
+        config: CfgContext,
+        val: usize,
+    }
+    impl Configuration for TestCfg {
+        const NAME: &str = "TEST";
+        fn ctx(&self) -> &CfgContext {
+            &self.config
+        }
+        fn set_ctx(&mut self, ctx: CfgContext) {
+            self.config = ctx;
+        }
+    }
+
+    let owned = Cfg::from(TestCfg {
+        val: 42,
+        ..Default::default()
+    });
+    assert_eq!(owned.val, 42);
+    assert_eq!(owned.tag(), "--");
+
+    let shared = SharedCfg::new("REGISTERED")
+        .add(TestCfg {
+            val: 7,
+            ..Default::default()
+        })
+        .build();
+    let registered = shared.get::<TestCfg>();
+    let value: &TestCfg = &registered;
+    let again = value.ctx().get::<TestCfg>();
+    assert!(ptr::eq(ptr::from_ref(value), ptr::from_ref(&*again)));
+    assert_eq!(again.val, 7);
+    assert_eq!(again.tag(), "REGISTERED");
 }

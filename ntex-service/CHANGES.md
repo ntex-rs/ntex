@@ -1,5 +1,12 @@
 # Changes
 
+## [5.8.0] - Unreleased
+
+* Remove `From<&T> for Cfg<T>`. The conversion looked up `T` in the
+  value's context and, for a standalone value, returned a default and silently
+  dropped the passed settings. Pass the value by value or as a `SharedCfg`,
+  clone an existing `Cfg`, or use `value.ctx().get::<T>()` for a registered value.
+
 ## [5.7.1] - 2026-11-05
 
 * Prune `ReadyNotifier` subscriptions and pipeline links of dropped scopes,

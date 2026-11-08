@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* Breaking: `App::with_config()` and `WsClient::new()` no longer accept a borrowed
+  config (`&WebAppConfig`, `&WsClientConfig`), which silently discarded its settings;
+  pass it by value or as a `SharedCfg` (ntex-service 5.8.0).
+
 * web: Document that `Option<T>` extractors turn malformed and oversized input
   into `None` and run the handler, and show how `Result<T, T::Error>` can
   accept missing input while still rejecting invalid input
