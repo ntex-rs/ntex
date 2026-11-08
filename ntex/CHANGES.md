@@ -16,6 +16,9 @@
 * http: Saturate `usize` keep-alive conversions at `u16::MAX` seconds instead
   of wrapping
 
+* web: Add `CustomResponder::set_header()` to replace header values; repeated
+  `with_header()` calls keep adding values
+
 ## [4.6.1] - 2026-11-07
 
 * http: Fix HTTP/1 not shutting down per-connection application and control services
