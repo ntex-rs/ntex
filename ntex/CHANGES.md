@@ -2,6 +2,8 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* Add `HttpServer::acceptors()` to set the number of accept threads
+
 * Breaking: `App::with_config()` and `WsClient::new()` no longer accept a borrowed
   config (`&WebAppConfig`, `&WsClientConfig`), which silently discarded its settings;
   pass it by value or as a `SharedCfg` (ntex-service 5.8.0).

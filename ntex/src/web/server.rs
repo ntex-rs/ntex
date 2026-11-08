@@ -132,6 +132,24 @@ where
     }
 
     #[must_use]
+    /// Sets the number of accept threads.
+    ///
+    /// Each accept thread has its own `SO_REUSEPORT` copy of every TCP
+    /// listener, and the kernel spreads incoming connections between them.
+    /// This raises the connection rate the server can accept. Unix domain
+    /// listeners are served by a single accept thread.
+    ///
+    /// Multiple accept threads are supported on Linux and Android. On other
+    /// platforms, a single thread is used.
+    ///
+    /// By default, the server uses a single accept thread. One thread is
+    /// usually enough, add more only if the accept thread is saturated.
+    pub fn acceptors(mut self, num: usize) -> Self {
+        self.builder = self.builder.acceptors(num);
+        self
+    }
+
+    #[must_use]
     /// Sets the maximum per-worker number of concurrent connections.
     ///
     /// All socket listeners of this server stop accepting connections when

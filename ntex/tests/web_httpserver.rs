@@ -271,6 +271,72 @@ async fn test_bind_uds() {
     sys.stop();
 }
 
+/// Returns the sorted names of this process's accept threads for server `name`.
+#[cfg(target_os = "linux")]
+fn accept_threads(name: &str) -> Vec<String> {
+    let prefix = format!("{name}:accept");
+    let mut names: Vec<String> = std::fs::read_dir("/proc/self/task")
+        .unwrap()
+        .filter_map(|e| std::fs::read_to_string(e.ok()?.path().join("comm")).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.starts_with(&prefix))
+        .collect();
+    names.sort();
+    names
+}
+
+/// STATEMENT: `HttpServer::acceptors` sets the number of accept threads of the underlying
+/// server, and the server keeps serving HTTP with several of them.
+///
+/// HOW:
+/// - Start a one-worker `HttpServer` with `acceptors(3)` in a system named `wacc`.
+/// - On Linux, check that three `wacc:accept*` threads run.
+/// - Send several GET requests, assert each succeeds, then stop the server and system.
+#[ntex::test]
+async fn test_acceptors() {
+    let addr = TestServer::unused_addr();
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let sys = ntex::rt::System::new("wacc", ntex::rt::DefaultRuntime);
+
+        sys.run(move || {
+            let srv = HttpServer::new(async |_| {
+                App::new().service(
+                    web::resource("/").route(web::to(async || HttpResponse::Ok().body("test"))),
+                )
+            })
+            .workers(1)
+            .acceptors(3)
+            .disable_signals()
+            .bind(format!("{addr}"), SharedCfg::new("WEB"))
+            .unwrap()
+            .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
+    });
+    let (srv, sys) = rx.recv().unwrap();
+
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        accept_threads("wacc"),
+        ["wacc:accept", "wacc:accept1", "wacc:accept2"]
+    );
+
+    let client = ntex::client::Client::with_config(
+        SharedCfg::new("DBG").add(IoConfig::new().set_connect_timeout(30)),
+    );
+    for _ in 0..8 {
+        let response = client.get(format!("http://{addr}")).send().await.unwrap();
+        assert!(response.status().is_success());
+    }
+
+    srv.stop(false).await;
+    thread::sleep(Duration::from_millis(25));
+    sys.stop();
+}
+
 /// STATEMENT: `HttpServer::listen_uds` serves HTTP from a supplied Unix listener.
 ///
 /// HOW:
