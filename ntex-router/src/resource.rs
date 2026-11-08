@@ -257,12 +257,7 @@ impl ResourceDef {
         F: FnMut(&mut String, &str),
     {
         let mut elements = elements.into_iter();
-        self.build_path_with(
-            path,
-            |_| elements.next(),
-            VarPattern::is_match,
-            encode,
-        )
+        self.build_path_with(path, |_| elements.next(), VarPattern::is_match, encode)
     }
 
     /// Build resource path from named elements, using the primary pattern.

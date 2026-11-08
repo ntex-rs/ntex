@@ -1,6 +1,8 @@
 //! `Middleware` for compressing response body.
 use crate::http::encoding::Encoder;
-use crate::http::header::{ACCEPT_ENCODING, ContentEncoding};
+use crate::http::header::{
+    ACCEPT_ENCODING, CONTENT_ENCODING, ContentEncoding, HeaderMap, HeaderValue, VARY,
+};
 use crate::service::{Ctx, Middleware, Service};
 use crate::web::{BodyEncoding, State, WebRequest, WebResponse};
 
@@ -10,6 +12,14 @@ use crate::web::{BodyEncoding, State, WebRequest, WebResponse};
 /// Bodies with a known size below 1KiB are sent uncompressed.
 /// Use `BodyEncoding` trait for overriding response compression.
 /// To disable compression set encoding to `ContentEncoding::Identity` value.
+///
+/// The encoding is negotiated from the request's `Accept-Encoding` header.
+/// `identity` is used instead of compression only if the client gives it a
+/// strictly higher weight, explicitly or via `*`. Responses whose encoding is
+/// negotiated get `Vary: Accept-Encoding`, so caches keep one copy per
+/// encoding. The header is not added if compression is disabled, if the
+/// response selects its encoding with `BodyEncoding` or already has a
+/// `Content-Encoding` header.
 ///
 /// Each compressed response keeps its encoder until the body ends, up to
 /// 1.5MiB for `zstd`, see [`crate::http::encoding`].
@@ -86,15 +96,33 @@ where
             .filter_map(|val| val.to_str().ok());
         let encoding = AcceptEncoding::parse(values, self.encoding);
 
-        let resp = ctx.call(&self.service, req).await?;
+        let mut resp = ctx.call(&self.service, req).await?;
 
         let enc = if let Some(enc) = resp.response().get_encoding() {
             enc
         } else {
+            if self.encoding != ContentEncoding::Identity
+                && !resp.headers().contains_key(CONTENT_ENCODING)
+            {
+                add_vary(resp.headers_mut());
+            }
             encoding
         };
 
         Ok(resp.map_body(move |head, body| Encoder::response(enc, head, body)))
+    }
+}
+
+/// Add `accept-encoding` to the `Vary` header unless it is already covered.
+fn add_vary(headers: &mut HeaderMap) {
+    let covered = headers
+        .get_all(VARY)
+        .filter_map(|val| val.to_str().ok())
+        .flat_map(|val| val.split(','))
+        .map(str::trim)
+        .any(|name| name == "*" || name.eq_ignore_ascii_case("accept-encoding"));
+    if !covered {
+        headers.append(VARY, HeaderValue::from_static("accept-encoding"));
     }
 }
 
@@ -139,7 +167,8 @@ impl AcceptEncoding {
     ///
     /// Entries are ranked by the client's `q` value, ties go to the
     /// server's preference. `q=0` means "not acceptable" and `*` covers
-    /// every encoding the client did not list.
+    /// every encoding the client did not list. `identity` wins only if its
+    /// explicit or `*` weight is strictly higher than the best compression.
     fn parse<'a, I>(values: I, encoding: ContentEncoding) -> ContentEncoding
     where
         I: Iterator<Item = &'a str>,
@@ -166,9 +195,11 @@ impl AcceptEncoding {
                 .or(wildcard)
                 .unwrap_or(0)
         };
+        let identity = weight(ContentEncoding::Identity);
 
         if encoding != ContentEncoding::Auto {
-            return if weight(encoding) > 0 {
+            let q = weight(encoding);
+            return if q > 0 && q >= identity {
                 encoding
             } else {
                 ContentEncoding::Identity
@@ -187,7 +218,10 @@ impl AcceptEncoding {
                 best = Some((enc, q));
             }
         }
-        best.map_or(ContentEncoding::Identity, |(enc, _)| enc)
+        match best {
+            Some((enc, q)) if q >= identity => enc,
+            _ => ContentEncoding::Identity,
+        }
     }
 }
 
@@ -368,6 +402,31 @@ mod tests {
         assert_eq!(parse("*;q=0, gzip", gzip), gzip);
     }
 
+    /// STATEMENT: `identity` is chosen over compression only when the client weights it
+    /// strictly higher.
+    ///
+    /// HOW:
+    /// - Parse headers that weight `identity`, explicitly or via `*`, above, equal to and
+    ///   below the best compression, for both automatic and fixed gzip encoding.
+    /// - Assert `Identity` is selected only for a strictly higher weight, and an
+    ///   unlisted `identity` does not compete.
+    #[test]
+    fn test_identity_preference() {
+        let auto = ContentEncoding::Auto;
+        let gzip = ContentEncoding::Gzip;
+        let id = ContentEncoding::Identity;
+        assert_eq!(parse("identity;q=1, gzip;q=0.1", auto), id);
+        assert_eq!(parse("identity;q=0.5, gzip;q=0.5", auto), gzip);
+        assert_eq!(parse("identity;q=0.4, gzip;q=0.5", auto), gzip);
+        assert_eq!(parse("*, gzip;q=0.1", auto), ContentEncoding::Zstd);
+        assert_eq!(parse("*, zstd;q=0.1, gzip;q=0.1, deflate;q=0.1", auto), id);
+        assert_eq!(parse("gzip;q=0.1", auto), gzip);
+        assert_eq!(parse("identity;q=1, gzip;q=0.1", gzip), id);
+        assert_eq!(parse("identity;q=0.1, gzip;q=0.1", gzip), gzip);
+        assert_eq!(parse("*, gzip;q=0.5", gzip), id);
+        assert_eq!(parse("identity;q=0, *;q=0.5, gzip;q=0.1", gzip), gzip);
+    }
+
     /// STATEMENT: Encoding negotiation considers values from repeated request headers together.
     ///
     /// HOW:
@@ -436,6 +495,92 @@ mod tests {
             .header(ACCEPT_ENCODING, "gzip;q=0")
             .to_request();
         let resp = call_service(&srv, req).await;
+        assert!(resp.headers().get(CONTENT_ENCODING).is_none());
+    }
+
+    /// STATEMENT: Negotiated responses get `Vary: Accept-Encoding` exactly once, and
+    /// responses whose encoding is not negotiated do not.
+    ///
+    /// HOW:
+    /// - Serve compressed, uncompressed and existing-`Vary` responses through
+    ///   `Compress::default()` and assert a single `accept-encoding` entry next to other
+    ///   `Vary` values, and none added when `Vary: *` or `Vary: Accept-Encoding` is set.
+    /// - Assert no `Vary` is added with `ContentEncoding::Identity`, for a
+    ///   `BodyEncoding` override, or when the handler sets `Content-Encoding`.
+    #[crate::rt_test]
+    async fn test_compress_vary() {
+        use crate::http::header::{CONTENT_ENCODING, VARY};
+        use crate::web::test::{TestRequest, call_service, init_service};
+        use crate::web::{self, App, HttpResponse};
+
+        fn body() -> String {
+            "a".repeat(1024)
+        }
+        let srv = init_service(
+            App::new()
+                .middleware(Compress::default())
+                .route("/", web::get().to(async || HttpResponse::Ok().body(body())))
+                .route(
+                    "/vary",
+                    web::get().to(async || HttpResponse::Ok().header(VARY, "origin").body(body())),
+                )
+                .route(
+                    "/star",
+                    web::get().to(async || HttpResponse::Ok().header(VARY, "*").body(body())),
+                )
+                .route(
+                    "/has",
+                    web::get().to(async || {
+                        HttpResponse::Ok()
+                            .header(VARY, "Origin, Accept-Encoding")
+                            .body(body())
+                    }),
+                )
+                .route(
+                    "/override",
+                    web::get().to(async || {
+                        HttpResponse::Ok()
+                            .encoding(ContentEncoding::Identity)
+                            .body("a".repeat(1024))
+                    }),
+                )
+                .route(
+                    "/encoded",
+                    web::get()
+                        .to(async || HttpResponse::Ok().header(CONTENT_ENCODING, "br").body("a")),
+                ),
+        )
+        .await;
+        let vary = async |path: &str, accept: &str| {
+            let req = TestRequest::with_uri(path)
+                .header(ACCEPT_ENCODING, accept)
+                .to_request();
+            let resp = call_service(&srv, req).await;
+            resp.headers()
+                .get_all(VARY)
+                .map(|v| v.to_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(vary("/", "gzip").await, ["accept-encoding"]);
+        assert_eq!(vary("/", "identity").await, ["accept-encoding"]);
+        assert_eq!(vary("/vary", "gzip").await, ["origin", "accept-encoding"]);
+        assert_eq!(vary("/star", "gzip").await, ["*"]);
+        assert_eq!(vary("/has", "gzip").await, ["Origin, Accept-Encoding"]);
+        assert_eq!(vary("/override", "gzip").await, Vec::<String>::new());
+        assert_eq!(vary("/encoded", "gzip").await, Vec::<String>::new());
+
+        let srv = init_service(
+            App::new()
+                .middleware(Compress::new(ContentEncoding::Identity))
+                .route("/", web::get().to(async || HttpResponse::Ok().body(body()))),
+        )
+        .await;
+        let req = TestRequest::default()
+            .header(ACCEPT_ENCODING, "gzip")
+            .to_request();
+        let resp = call_service(&srv, req).await;
+        assert!(resp.headers().get(VARY).is_none());
         assert!(resp.headers().get(CONTENT_ENCODING).is_none());
     }
 }
