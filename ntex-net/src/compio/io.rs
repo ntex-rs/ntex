@@ -148,20 +148,24 @@ async fn read<T>(io: T, ctx: &IoContext)
 where
     T: AsyncRead + AsyncWrite + Clone + Unpin,
 {
-    let mut read_fut = Some(Box::pin(read_buf(&io, ctx.take_read_buf())));
+    let mut read_fut = None;
 
     loop {
         if read_ready(ctx).await {
             break;
         }
 
-        match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
+        // The read buffer is taken only once reads are allowed: a read issued
+        // while paused, e.g. after eof, would hold buffered input the
+        // dispatcher still has to see.
+        let fut = read_fut.get_or_insert_with(|| Box::pin(read_buf(&io, ctx.take_read_buf())));
+        match select(fut, not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
+                read_fut = None;
                 let result = result.map_err(map_socket_error);
                 if ctx.release_read_buf(cbuf.0, Poll::Ready(result)) == IoTaskStatus::Stop {
                     break;
                 }
-                read_fut = Some(Box::pin(read_buf(&io, ctx.take_read_buf())));
             }
             Either::Right(true) => break,
             Either::Right(false) => (),
