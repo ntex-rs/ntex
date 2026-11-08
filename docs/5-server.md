@@ -133,7 +133,8 @@ The commonly useful `ServerBuilder` settings are:
 * `workers()` sets the worker count. It defaults to the number of logical CPUs
   the process may use, across all processor groups on Windows.
 * `backlog()` sets the listen backlog for listeners created afterward.
-* `max_connections()` sets the process-wide per-worker connection limit.
+* `max_connections()` sets this server's per-worker connection limit. Other
+  servers in the process keep their own limits.
 * `affinity()` sets the CPU placement of workers, see
   [Worker placement](#worker-placement). The default is `Affinity::Soft` on
   Windows and `Affinity::Core` elsewhere.

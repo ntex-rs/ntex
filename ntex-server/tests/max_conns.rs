@@ -1,12 +1,11 @@
-//! Connection limit test, in a separate binary because the limit is
-//! process-wide.
+//! Connection limit tests.
 use std::{net, time::Duration};
 
 use ntex::codec::BytesCodec;
 use ntex::time::{Millis, sleep, timeout};
 use ntex::util::Bytes;
 use ntex_io::Io;
-use ntex_server::net::build_test_server;
+use ntex_server::net::{TestServer, build_test_server};
 use ntex_service::{cfg::SharedCfg, fn_service};
 
 async fn echo(io: Io) -> Result<(), ()> {
@@ -18,6 +17,68 @@ async fn echo(io: Io) -> Result<(), ()> {
     Ok(())
 }
 
+/// Starts a single-worker echo server, optionally with a connection limit.
+fn echo_server(max_conns: Option<usize>) -> TestServer {
+    let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = lst.local_addr().unwrap();
+    build_test_server(ntex_server::NoConfig, async move |builder| {
+        let builder = if let Some(num) = max_conns {
+            builder.max_connections(num)
+        } else {
+            builder
+        };
+        builder
+            .listen("test", lst, SharedCfg::default(), async |_: &()| {
+                fn_service(echo)
+            })
+            .unwrap()
+    })
+    .set_addr(addr)
+}
+
+/// Sends `msg` and returns whether it is echoed back within `wait`.
+async fn echoes(io: &Io, msg: &'static [u8], wait: Millis) -> bool {
+    io.send(Bytes::from_static(msg), &BytesCodec).await.unwrap();
+    matches!(timeout(wait, io.recv(&BytesCodec)).await, Ok(Ok(Some(m))) if m == msg)
+}
+
+/// STATEMENT: Connection limits belong to the server that configured them.
+///
+/// HOW:
+/// - Create and drop a builder with `max_connections(0)` without running it.
+/// - Start one server limited to one connection and one with the default limit.
+/// - Open two connections to each server; the limited server echoes only the
+///   first, while the default server echoes both.
+#[ntex::test]
+async fn test_max_connections_per_server() {
+    drop(ntex_server::net::build().max_connections(0));
+
+    let limited = echo_server(Some(1));
+    let unlimited = echo_server(None);
+
+    let l1 = limited.connect().await.unwrap();
+    assert!(echoes(&l1, b"l1", Millis(3000)).await);
+    let l2 = limited.connect().await.unwrap();
+    assert!(!echoes(&l2, b"l2", Millis(300)).await);
+
+    let u1 = unlimited.connect().await.unwrap();
+    assert!(echoes(&u1, b"u1", Millis(3000)).await);
+    let u2 = unlimited.connect().await.unwrap();
+    assert!(echoes(&u2, b"u2", Millis(3000)).await);
+
+    assert_eq!(limited.server().metrics().workers[0].active_connections, 1);
+    assert_eq!(
+        unlimited.server().metrics().workers[0].active_connections,
+        2
+    );
+}
+
+/// STATEMENT: A worker at its connection limit stops taking connections and resumes when one closes.
+///
+/// HOW:
+/// - Start a one-worker echo server with `max_connections(1)` and open two connections.
+/// - Check the second is not served, and worker and listener metrics show the pause.
+/// - Close the first connection and check the second is then served and metrics recover.
 #[ntex::test]
 async fn test_max_connections() {
     let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();

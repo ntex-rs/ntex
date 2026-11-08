@@ -1,6 +1,6 @@
 # Changes
 
-## [4.7.0] - 2026-11-08
+## [4.7.0] - 2026-11-xx
 
 * http: Add `HttpServiceConfig::set_request_target_validation()` to reject
   malformed request targets without normalizing valid ones
