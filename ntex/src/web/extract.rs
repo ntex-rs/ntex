@@ -18,6 +18,15 @@ use crate::http::Payload;
 /// for the next one. For that reason, a handler should normally have only one
 /// body-reading extractor.
 ///
+/// A failed body extractor may also have consumed the body, depending on where
+/// it failed. For example, `Json<T>` rejects an unsupported content type before
+/// reading anything, but it has already read the body when deserialization
+/// fails. Wrapping it in `Option<T>` or `Result<T, E>` therefore does not make
+/// `(Option<Json<T>>, Bytes)` a reliable "JSON or raw body" fallback. To fall
+/// back to the raw body, extract `Bytes` once and parse the retained bytes, for
+/// example with `serde_json::from_slice()`.
+/// [`PayloadConfig`](super::types::PayloadConfig) limits that buffer.
+///
 /// When an extractor returns an error, ntex turns it into an HTTP response and
 /// skips the handler. The error must implement [`WebResponseError`] for the
 /// application. If the handler should still run, use `Option<T>` to receive
@@ -75,6 +84,10 @@ pub trait FromRequest<St>: Sized {
 /// Optionally extract a field from the request
 ///
 /// If the `FromRequest` for T fails, return None rather than returning an error response
+///
+/// The request body is not rewound. If `T` reads the body before failing, later
+/// extractors see only what remains. See [`FromRequest`] for a single-read
+/// fallback pattern.
 ///
 /// ## Example
 ///
@@ -143,6 +156,8 @@ where
 /// Optionally extract a field from the request or extract the Error if unsuccessful
 ///
 /// If the `FromRequest` for T fails, inject Err into handler rather than returning an error response
+///
+/// As with `Option<T>`, the request body is not rewound after a failure.
 ///
 /// ## Example
 ///
@@ -247,9 +262,9 @@ mod m {
 mod tests {
     use crate::http::header;
     use crate::util::Bytes;
-    use crate::web::error::UrlencodedError;
+    use crate::web::error::{PayloadError, UrlencodedError};
     use crate::web::test::{TestRequest, from_request};
-    use crate::web::types::{Form, FormConfig};
+    use crate::web::types::{Form, FormConfig, Json, PayloadConfig};
 
     #[derive(serde::Deserialize, Debug, PartialEq)]
     struct Info {
@@ -334,5 +349,88 @@ mod tests {
             .await
             .unwrap();
         assert!(r.is_err());
+    }
+
+    fn body_parts(
+        ctype: &'static str,
+        body: &'static [u8],
+    ) -> (crate::web::HttpRequest, crate::http::Payload, ()) {
+        TestRequest::with_header(header::CONTENT_TYPE, ctype)
+            .header(header::CONTENT_LENGTH, body.len().to_string())
+            .payload(Bytes::from_static(body))
+            .to_http_parts()
+    }
+
+    /// STATEMENT: An optional body extractor followed by `Bytes` is not a reliable fallback;
+    /// what `Bytes` receives depends on where the optional extractor stopped.
+    ///
+    /// HOW:
+    /// - Extract `(Option<Json<Value>>, Bytes)` from a `text/plain` JSON body and assert
+    ///   `None` with the whole body left for `Bytes`, because the media-type check fails
+    ///   before reading.
+    /// - Repeat with malformed `application/json` and assert `None` with an empty `Bytes`,
+    ///   because deserialization fails after reading the body.
+    /// - Repeat with valid `application/json` and assert the parsed value with an empty `Bytes`.
+    #[crate::rt_test]
+    async fn test_optional_body_fallback_depends_on_failure_phase() {
+        type Args = (Option<Json<serde_json::Value>>, Bytes);
+
+        let (req, mut pl, ()) = body_parts("text/plain", b"{\"a\":1}");
+        let (json, rest) = from_request::<_, Args>(&(), &req, &mut pl).await.unwrap();
+        assert!(json.is_none());
+        assert_eq!(rest, Bytes::from_static(b"{\"a\":1}"));
+
+        let (req, mut pl, ()) = body_parts("application/json", b"{\"a\":");
+        let (json, rest) = from_request::<_, Args>(&(), &req, &mut pl).await.unwrap();
+        assert!(json.is_none());
+        assert!(rest.is_empty());
+
+        let (req, mut pl, ()) = body_parts("application/json", b"{\"a\":1}");
+        let (json, rest) = from_request::<_, Args>(&(), &req, &mut pl).await.unwrap();
+        assert_eq!(json.unwrap().into_inner(), serde_json::json!({"a": 1}));
+        assert!(rest.is_empty());
+    }
+
+    /// STATEMENT: Reading the body once as `Bytes` and parsing the retained bytes gives a
+    /// fallback that keeps the whole body, within the `PayloadConfig` limit.
+    ///
+    /// HOW:
+    /// - Extract `Bytes` from valid JSON, malformed JSON, and a non-JSON content type.
+    /// - Assert `serde_json::from_slice()` parses the valid body, fails on the malformed one,
+    ///   and the retained `Bytes` equals the full request body in every case.
+    /// - Set `PayloadConfig::new(4)` and assert a 7-byte body fails with
+    ///   `PayloadError::Overflow` instead of being buffered.
+    #[crate::rt_test]
+    async fn test_single_read_body_fallback() {
+        for (ctype, body, parsed) in [
+            ("application/json", &b"{\"a\":1}"[..], true),
+            ("application/json", &b"{\"a\":"[..], false),
+            ("text/plain", &b"{\"a\":1}"[..], true),
+        ] {
+            let (req, mut pl, ()) = body_parts(ctype, body);
+            let raw = from_request::<_, Bytes>(&(), &req, &mut pl).await.unwrap();
+            assert_eq!(raw, Bytes::copy_from_slice(body));
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&raw).is_ok(),
+                parsed,
+                "{ctype} {body:?}"
+            );
+        }
+
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, "7")
+            .payload(Bytes::from_static(b"{\"a\":1}"))
+            .app_value(PayloadConfig::new(4))
+            .to_http_parts();
+        let err = from_request::<_, Bytes>(&(), &req, &mut pl)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PayloadError::Payload(crate::http::error::PayloadError::Overflow)
+            ),
+            "{err:?}"
+        );
     }
 }
