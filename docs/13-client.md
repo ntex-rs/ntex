@@ -138,9 +138,9 @@ Here is the full list, with defaults:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `set_response_timeout` | 5 s | Time to wait for the response head after the request is sent |
+| `set_response_timeout` | 5 s | Time to wait for the response head after the request is sent; `disable_timeout()` sets it to zero |
 | `set_response_payload_limit` | 256 KiB | Largest body that `body()` and `json()` will buffer; 0 means no limit |
-| `set_response_payload_timeout` | 10 s | Time allowed for `body()` and `json()` to read the whole body |
+| `set_response_payload_timeout` | 10 s | Time allowed for `body()` and `json()` to read the whole body; independent of the response timeout |
 | `set_h1_connection_limit` | 8 | HTTP/1.1 connections per pool, shared by all hosts |
 | `set_h1_keepalive` | 15 s | How long an idle HTTP/1.1 connection may wait in the pool |
 | `set_h1_lifetime` | 75 s | Maximum age of a pooled HTTP/1.1 connection |
@@ -179,17 +179,28 @@ fn client() -> Client {
 }
 ```
 
-With that, every stage of a request is covered by a timeout. A request moves
-through four stages, and each one has its own limit:
+A request moves through several stages. Each timeout covers exactly one of
+them, and turning one off leaves the others in place:
 
-1. **Connecting**, including the DNS lookup:
+1. **Waiting for a pooled connection** when the connection limit is reached:
+   no timeout. Wrap `send()` in `ntex::time::timeout` if you need one.
+2. **Connecting**, including the DNS lookup:
    `IoConfig::set_connect_timeout`, off by default.
-2. **The TLS handshake**: `TlsConfig::set_handshake_timeout`, 5 seconds.
-3. **Waiting for the response head**: `ClientConfig::set_response_timeout`,
+3. **The TLS handshake**: `TlsConfig::set_handshake_timeout`, 5 seconds.
+4. **Sending the request body**: no client timeout. For HTTP/1.1,
+   `IoConfig::set_write_timeout`, off by default, bounds each wait for the
+   socket to accept more data, but not a slow body stream.
+5. **Waiting for the response head**: `ClientConfig::set_response_timeout`,
    5 seconds, or `timeout()` on an individual request.
-4. **Reading the body** with `body()` or `json()`:
+6. **Reading the body** with `body()` or `json()`:
    `ClientConfig::set_response_payload_timeout`, 10 seconds, or `timeout()`
-   on the body future.
+   on the body future. Reading the response as a stream has no timeout.
+
+So `ClientConfig::disable_timeout()` and `timeout(Millis::ZERO)` only lift
+the limit on waiting for the response head. A slow body still fails after the payload
+timeout unless you also set `set_response_payload_timeout(Millis::ZERO)`.
+There is no single deadline for the whole request; for that, wrap the whole
+exchange, `send()` plus reading the body, in `ntex::time::timeout`.
 
 ### Secure connections
 
@@ -302,8 +313,8 @@ replacing whatever was there. `if_some()` applies a change only when an
 `Option` has a value, here adding a token only when there is one. Its sibling
 `if_true()` does the same for a `bool`. Both let you make a request
 conditional without breaking up the chain. `timeout()` overrides the
-client's response timeout for this one request; a zero duration turns the
-timeout off.
+client's response-head timeout for this one request; a zero duration turns
+that timeout off, but not the payload timeout or any connect timeout.
 
 For headers you have three choices. `header()` appends a value,
 `set_header()` replaces any existing value, and `set_header_if_none()` sets

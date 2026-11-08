@@ -181,6 +181,61 @@ async fn test_timeout_disable_override() {
     assert!(res.status().is_success());
 }
 
+/// STATEMENT: The response-header and response-payload timeouts are independent phases:
+/// disabling the header timeout leaves the payload timeout active, and the header timeout never
+/// bounds reading the body.
+///
+/// HOW:
+/// - Serve a response whose head is delayed 300 ms and whose single body chunk is delayed
+///   another 300 ms.
+/// - With a 100 ms header timeout, assert `send()` fails with `ClientError::Timeout`.
+/// - After `disable_timeout()` with a 100 ms payload timeout, assert `send()` succeeds but
+///   `body()` fails with a `TimedOut` payload error.
+/// - With a 2 s header timeout and a zero payload timeout, assert `body()` returns the data
+///   although reading it outlasts the header timeout.
+#[ntex::test]
+async fn test_timeout_phases_are_independent() {
+    use futures_util::stream;
+    use ntex::http::error::PayloadError;
+
+    let srv = test::server(async |_| {
+        App::new().service(web::resource("/").route(web::to(async || {
+            sleep(Millis(300)).await;
+            HttpResponse::Ok().streaming(stream::once(Box::pin(async {
+                sleep(Millis(300)).await;
+                Ok::<_, io::Error>(Bytes::from_static(b"data"))
+            })))
+        })))
+    });
+
+    let cfg = || {
+        ClientConfig::new()
+            .set_response_timeout(Millis(100))
+            .set_response_payload_timeout(Millis(100))
+    };
+
+    let client = Client::with_config(cfg());
+    let err = client.get(srv.url("/")).send().await.unwrap_err();
+    assert!(matches!(err.into_error(), ClientError::Timeout));
+
+    let client = Client::with_config(cfg().disable_timeout());
+    let res = client.get(srv.url("/")).send().await.unwrap();
+    assert!(res.status().is_success());
+    let err = res.body().await.unwrap_err();
+    assert!(matches!(
+        &**err,
+        PayloadError::Incomplete(Some(e)) if e.kind() == io::ErrorKind::TimedOut
+    ));
+
+    let client = Client::with_config(
+        cfg()
+            .set_response_timeout(Seconds(2))
+            .set_response_payload_timeout(Millis::ZERO),
+    );
+    let res = client.get(srv.url("/")).send().await.unwrap();
+    assert_eq!(res.body().await.unwrap(), "data");
+}
+
 /// STATEMENT: Sequential GET and POST requests reuse an HTTP/1 connection.
 ///
 /// HOW:

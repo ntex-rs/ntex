@@ -2,6 +2,11 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* client: Document the phase each timeout covers. `disable_timeout()` and
+  `ClientRequest::timeout()` bound only the wait for the response head, the
+  payload timeout stays active, and waiting for a pooled connection and
+  sending the request body have no client timeout
+
 * add `http::error::PayloadError::AlreadyTaken`. Client
   `ClientResponse::body()`, `json()` and the response stream now report it
   when the payload was already taken, including by a dropped, unpolled body

@@ -359,8 +359,12 @@ impl ClientRequest {
     /// Sets the response-header timeout for this request.
     ///
     /// This overrides the client-wide timeout. The timeout covers receiving the
-    /// response head after the request has been sent. A zero duration disables
-    /// the timeout for this request.
+    /// response head after the request has been sent. It does not cover waiting
+    /// for a pooled connection, connecting, sending the request body, or
+    /// reading the response body; use
+    /// [`MessageBody::timeout`](super::MessageBody::timeout) or
+    /// [`JsonBody::timeout`](super::JsonBody::timeout) for the body.
+    /// A zero duration disables only this timeout for this request.
     ///
     /// The client-wide default is 5 seconds.
     pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
