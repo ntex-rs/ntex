@@ -53,8 +53,6 @@ impl<A: Address> Connector<A> {
 
             if let Some(addr) = addr {
                 connect(req, port, addr, cfg).await
-            } else if let Some(addr) = req.addr() {
-                connect(req, addr.port(), Either::Left(addr), cfg).await
             } else {
                 Err(Error::from(ConnectError::Unresolved))
             }

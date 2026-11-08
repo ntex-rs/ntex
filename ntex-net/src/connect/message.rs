@@ -13,6 +13,9 @@ pub trait Address: Unpin + 'static {
     fn port(&self) -> Option<u16>;
 
     /// Returns a pre-resolved socket address, if available.
+    ///
+    /// [`Connect::new()`] uses it as the request's initial pre-resolved
+    /// address; afterwards the request's own addresses are authoritative.
     fn addr(&self) -> Option<SocketAddr> {
         None
     }
@@ -63,6 +66,13 @@ impl Address for SocketAddr {
 }
 
 /// Request to resolve and connect to a remote address.
+///
+/// A request owns one list of pre-resolved addresses. It starts with
+/// [`Address::addr()`] of the original value, if any, and is replaced by
+/// [`set_addr()`](Self::set_addr) or [`set_addrs()`](Self::set_addrs), emptied by
+/// [`clear_addrs()`](Self::clear_addrs) or [`take_addrs()`](Self::take_addrs), and
+/// filled by the resolver when empty. The connector connects to exactly the
+/// addresses reported by [`addrs()`](Self::addrs).
 #[derive(Eq, PartialEq, Debug, Hash)]
 pub struct Connect<T> {
     pub(super) req: T,
@@ -72,19 +82,24 @@ pub struct Connect<T> {
 
 impl<T: Address> Connect<T> {
     /// Creates a connection request and derives a port from the host when present.
+    ///
+    /// A pre-resolved [`Address::addr()`] becomes the request's initial
+    /// address, and provides the port if the host has none.
     #[must_use]
     pub fn new(req: T) -> Connect<T> {
         let (_, port) = parse(req.host());
+        let addr = req.addr();
         Connect {
+            port: port.or(addr.map(|a| a.port())).unwrap_or(0),
+            addr: addr.map(Either::Left),
             req,
-            port: port.unwrap_or(0),
-            addr: None,
         }
     }
 
     /// Creates a request with a pre-resolved socket address.
     ///
-    /// The connector skips DNS resolution for this request.
+    /// The address replaces any [`Address::addr()`] of `req`, and the connector
+    /// skips DNS resolution for this request.
     #[must_use]
     pub fn with(req: T, addr: SocketAddr) -> Connect<T> {
         Connect {
@@ -104,7 +119,10 @@ impl<T: Address> Connect<T> {
         self
     }
 
-    /// Sets one pre-resolved socket address.
+    /// Replaces the pre-resolved addresses with `addr`.
+    ///
+    /// `None` keeps the current addresses, use
+    /// [`clear_addrs()`](Self::clear_addrs) to remove them.
     #[must_use]
     pub fn set_addr(mut self, addr: Option<SocketAddr>) -> Self {
         if let Some(addr) = addr {
@@ -113,7 +131,10 @@ impl<T: Address> Connect<T> {
         self
     }
 
-    /// Sets multiple pre-resolved socket addresses.
+    /// Replaces the pre-resolved addresses with `addrs`.
+    ///
+    /// An empty iterator removes all addresses, like
+    /// [`clear_addrs()`](Self::clear_addrs).
     #[must_use]
     pub fn set_addrs<I>(mut self, addrs: I) -> Self
     where
@@ -125,6 +146,16 @@ impl<T: Address> Connect<T> {
         } else {
             Some(Either::Right(addrs))
         };
+        self
+    }
+
+    /// Removes all pre-resolved addresses, including the initial
+    /// [`Address::addr()`].
+    ///
+    /// The connector then resolves [`host()`](Self::host) instead.
+    #[must_use]
+    pub fn clear_addrs(mut self) -> Self {
+        self.addr = None;
         self
     }
 
@@ -141,36 +172,25 @@ impl<T: Address> Connect<T> {
 
     /// Iterates over the request's pre-resolved addresses.
     pub fn addrs(&self) -> ConnectAddrsIter<'_> {
-        if let Some(addr) = self.req.addr() {
-            ConnectAddrsIter {
-                inner: Either::Left(Some(addr)),
-            }
-        } else {
-            let inner = match self.addr {
-                None => Either::Left(None),
-                Some(Either::Left(addr)) => Either::Left(Some(addr)),
-                Some(Either::Right(ref addrs)) => Either::Right(addrs.iter()),
-            };
-
-            ConnectAddrsIter { inner }
-        }
+        let inner = match self.addr {
+            None => Either::Left(None),
+            Some(Either::Left(addr)) => Either::Left(Some(addr)),
+            Some(Either::Right(ref addrs)) => Either::Right(addrs.iter()),
+        };
+        ConnectAddrsIter { inner }
     }
 
     /// Removes and returns the request's pre-resolved addresses.
+    ///
+    /// The request has no addresses afterwards, so a second call returns an
+    /// empty iterator.
     pub fn take_addrs(&mut self) -> ConnectTakeAddrsIter {
-        if let Some(addr) = self.req.addr() {
-            ConnectTakeAddrsIter {
-                inner: Either::Left(Some(addr)),
-            }
-        } else {
-            let inner = match self.addr.take() {
-                None => Either::Left(None),
-                Some(Either::Left(addr)) => Either::Left(Some(addr)),
-                Some(Either::Right(addrs)) => Either::Right(addrs.into_iter()),
-            };
-
-            ConnectTakeAddrsIter { inner }
-        }
+        let inner = match self.addr.take() {
+            None => Either::Left(None),
+            Some(Either::Left(addr)) => Either::Left(Some(addr)),
+            Some(Either::Right(addrs)) => Either::Right(addrs.into_iter()),
+        };
+        ConnectTakeAddrsIter { inner }
     }
 
     /// Returns the original address value.
@@ -179,6 +199,8 @@ impl<T: Address> Connect<T> {
     }
 
     /// Maps the original address value while preserving port and resolved addresses.
+    ///
+    /// [`Address::addr()`] of the new value is not used.
     pub fn map_addr<F, R>(self, f: F) -> Connect<R>
     where
         F: FnOnce(T) -> R,
@@ -404,7 +426,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         let mut connect = Connect::new(addr);
         assert_eq!(connect.host(), "");
-        assert_eq!(connect.port(), 0);
+        assert_eq!(connect.port(), 8080);
         let addrs: Vec<_> = connect.addrs().collect();
         assert_eq!(addrs.len(), 1);
         assert!(addrs.contains(&addr));
@@ -449,5 +471,58 @@ mod tests {
         it.next();
         assert_eq!(it.len(), 1);
         assert!(format!("{it:?}").contains("8081"));
+    }
+
+    /// STATEMENT: A request owns one address list that every accessor agrees on.
+    ///
+    /// HOW:
+    /// - Start from a `SocketAddr`-backed request and check its intrinsic address
+    ///   and port seed `addrs()`, and that `set_addr` and `set_addrs` override it.
+    /// - Take the addresses twice and check the second `take_addrs()` is empty.
+    /// - Clear with `clear_addrs()` and with an empty `set_addrs`, check
+    ///   `set_addr(None)` keeps addresses, and repeat for a hostname-backed request.
+    /// - Check `map_addr` keeps the list rather than using the new intrinsic address.
+    #[test]
+    #[allow(clippy::similar_names)]
+    fn address_ownership() {
+        let a: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let b: SocketAddr = "127.0.0.1:8081".parse().unwrap();
+        let c: SocketAddr = "127.0.0.1:8082".parse().unwrap();
+
+        let connect = Connect::new(a);
+        assert_eq!(connect.port(), 8080);
+        assert_eq!(connect.addrs().collect::<Vec<_>>(), vec![a]);
+        let connect = connect.set_addr(Some(b));
+        assert_eq!(connect.addrs().collect::<Vec<_>>(), vec![b]);
+        let mut connect = connect.set_addrs([b, c]);
+        assert_eq!(connect.addrs().collect::<Vec<_>>(), vec![b, c]);
+        assert_eq!(connect.take_addrs().collect::<Vec<_>>(), vec![b, c]);
+        assert_eq!(connect.addrs().len(), 0);
+
+        let mut connect = Connect::new(a);
+        assert_eq!(connect.take_addrs().collect::<Vec<_>>(), vec![a]);
+        assert_eq!(connect.take_addrs().len(), 0);
+        assert_eq!(connect.addrs().len(), 0);
+        assert_eq!(Connect::new(a).clear_addrs().addrs().len(), 0);
+        assert_eq!(Connect::new(a).set_addrs([]).addrs().len(), 0);
+        assert_eq!(Connect::new(a).set_addr(None).addrs().len(), 1);
+        assert_eq!(Connect::with(b, a).addrs().collect::<Vec<_>>(), vec![a]);
+
+        for connect in [
+            Connect::new("example.com").set_addr(Some(a)),
+            Connect::new("example.com").set_addrs([a, b]),
+        ] {
+            let mut taken = connect.clone();
+            assert!(taken.take_addrs().len() > 0);
+            assert_eq!(taken.take_addrs().len(), 0);
+            assert_eq!(connect.clone().clear_addrs().addrs().len(), 0);
+            assert_eq!(connect.clone().set_addrs([]).addrs().len(), 0);
+            assert_eq!(connect.clone().set_addr(None), connect);
+        }
+
+        let connect = Connect::new("example.com").map_addr(|_| a);
+        assert_eq!(connect.addrs().len(), 0);
+        let connect = Connect::new(a).clear_addrs().map_addr(|_| b);
+        assert_eq!(connect.addrs().len(), 0);
     }
 }
