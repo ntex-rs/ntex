@@ -160,3 +160,102 @@ fn cfg_conversions() {
     assert_eq!(hasher.hash_one(&shared), hasher.hash_one(shared.clone()));
     assert_eq!(hasher.hash_one(&shared), hasher.hash_one(shared.id()));
 }
+
+/// STATEMENT: A missing configuration falls back to a default cached per shared configuration
+/// and thread, while an added value is the same instance on every thread.
+///
+/// HOW:
+/// - Number each `TestCfg::default()` from a counter, so every generated default is distinct.
+/// - Look up a missing `TestCfg` twice, through `SharedCfg::get` and `Cfg::get_shared`, and
+///   check both return the first cached default.
+/// - Look it up on another thread and in another `SharedCfg`, and check each creates a new
+///   default.
+/// - Add `TestCfg` explicitly and check another thread sees the added instance.
+#[test]
+fn missing_cfg_defaults_per_thread() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static SEQ: AtomicUsize = AtomicUsize::new(1);
+
+    #[derive(Debug)]
+    struct TestCfg {
+        config: CfgContext,
+        val: usize,
+    }
+    impl Default for TestCfg {
+        fn default() -> Self {
+            Self {
+                config: CfgContext::default(),
+                val: SEQ.fetch_add(1, Ordering::SeqCst),
+            }
+        }
+    }
+    impl Configuration for TestCfg {
+        const NAME: &str = "TEST";
+        fn ctx(&self) -> &CfgContext {
+            &self.config
+        }
+        fn set_ctx(&mut self, ctx: CfgContext) {
+            self.config = ctx;
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct OtherCfg {
+        config: CfgContext,
+    }
+    impl Configuration for OtherCfg {
+        const NAME: &str = "OTHER";
+        fn ctx(&self) -> &CfgContext {
+            &self.config
+        }
+        fn set_ctx(&mut self, ctx: CfgContext) {
+            self.config = ctx;
+        }
+    }
+
+    // missing value: a default is created and cached on this thread
+    let shared = SharedCfg::new("MISSING").add(OtherCfg::default()).build();
+    let first = shared.get::<TestCfg>();
+    assert_eq!(first.tag(), "MISSING");
+    let cached = shared.get::<OtherCfg>().get_shared::<TestCfg>();
+    assert!(ptr::eq(ptr::from_ref(&*first), ptr::from_ref(&*cached)));
+    assert_eq!(cached.val, first.val);
+
+    // another thread creates its own default
+    let shared2 = shared.clone();
+    let other = std::thread::spawn(move || {
+        let a = shared2.get::<TestCfg>().val;
+        let b = shared2.get::<TestCfg>().val;
+        assert_eq!(a, b);
+        a
+    })
+    .join()
+    .unwrap();
+    assert_ne!(other, first.val);
+    assert_eq!(shared.get::<TestCfg>().val, first.val);
+
+    // another shared configuration has its own cached default
+    let separate = SharedCfg::new("SEPARATE").build();
+    assert_ne!(separate.get::<TestCfg>().val, first.val);
+
+    // explicit value: the same instance on every thread
+    let explicit = SharedCfg::new("EXPLICIT")
+        .add(TestCfg {
+            config: CfgContext::default(),
+            val: 0,
+        })
+        .build();
+    let local = explicit.get::<TestCfg>();
+    assert_eq!(local.val, 0);
+    let local_addr = ptr::from_ref(&*local) as usize;
+    let explicit2 = explicit.clone();
+    let remote_addr = std::thread::spawn(move || {
+        let cfg = explicit2.get::<TestCfg>();
+        assert_eq!(cfg.val, 0);
+        ptr::from_ref(&*cfg) as usize
+    })
+    .join()
+    .unwrap();
+    assert_eq!(local_addr, remote_addr);
+}

@@ -83,6 +83,11 @@ const KIND_ARC: usize = 1;
 const KIND_UNMASK: usize = !KIND_ARC;
 
 /// A value that can be stored in [`SharedCfg`].
+///
+/// [`Default`] supplies the value returned when a shared configuration does
+/// not contain this type; see [`SharedCfg::get`]. Each thread creates its own
+/// default, so it should be deterministic and must not stand in for a value
+/// the application is required to provide.
 pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
     /// Human-readable configuration name used in diagnostics.
     const NAME: &'static str;
@@ -147,6 +152,9 @@ impl CfgContext {
     }
 
     /// Returns a typed configuration value from the same shared configuration.
+    ///
+    /// A missing value falls back to a per-thread default, as described in
+    /// [`SharedCfg::get`].
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
@@ -209,6 +217,9 @@ impl<T: Configuration> Cfg<T> {
     }
 
     /// Returns another typed value from the same shared configuration.
+    ///
+    /// A missing value falls back to a per-thread default, as described in
+    /// [`SharedCfg::get`].
     pub fn get_shared<U>(&self) -> Cfg<U>
     where
         U: Configuration,
@@ -337,7 +348,20 @@ impl SharedCfg {
         self.0.service
     }
 
-    /// Returns the configuration value of type `T`.
+    /// Returns the configuration value of type `T`, or its default.
+    ///
+    /// A value added with [`SharedCfgBuilder::add`] is the same instance on
+    /// every thread. When `T` was not added, the first lookup on a thread
+    /// creates `T::default()`, logs it at `info` level, and caches it for this
+    /// shared configuration on that thread. Later lookups on the same thread,
+    /// including through [`CfgContext::get`] and [`Cfg::get_shared`], return
+    /// the cached value; other threads create their own.
+    ///
+    /// A missing value is not an error, and the returned handle does not show
+    /// whether the value was added or defaulted. Framework components rely on
+    /// this to fall back to their defaults. Add configuration your application
+    /// requires explicitly, and validate it where you build the
+    /// [`SharedCfg`].
     ///
     /// # Panics
     ///
