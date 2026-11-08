@@ -2,6 +2,10 @@
 
 ## [4.9.0] - Unreleased
 
+* Document that `services::Timeout` and `TimeoutService` bound only request
+  execution, not the wait for readiness; wrap `Pipeline::call` with
+  `time::timeout` to bound the whole operation
+
 * `Deadline::is_elapsed()` returns `false` for a disabled
   zero-duration deadline, matching polling, which never completes. It
   previously returned `true`

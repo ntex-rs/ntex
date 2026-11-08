@@ -1,17 +1,37 @@
-//! Service that applies a timeout to requests.
+//! Service that applies a timeout to request execution.
 //!
 //! If a service call does not complete within the configured timeout, its
 //! future is dropped and [`TimeoutError::Timeout`] is returned.
 //! If both complete during the same poll, the service result wins.
+//!
+//! The timeout covers execution only. The clock starts when the wrapped service
+//! is called, after the pipeline has waited for readiness. Waiting for a busy or
+//! never-ready service is not bounded by this timeout, because readiness is a
+//! gate shared by all callers rather than part of one request. To bound the
+//! whole operation, including the readiness wait, wrap the pipeline call:
+//!
+//! ```rust
+//! use ntex_service::Pipeline;
+//! use ntex_util::time::{Millis, timeout};
+//!
+//! async fn call_with_deadline(
+//!     pl: &Pipeline<u32, u32, std::io::Error>,
+//! ) -> Option<Result<u32, std::io::Error>> {
+//!     // `Err(())` from `timeout` means the deadline elapsed
+//!     timeout(Millis(500), pl.call(1)).await.ok()
+//! }
+//! ```
 use std::{fmt, marker::PhantomData};
 
 use ntex_service::{Ctx, IntoService, Middleware, Service};
 
 use crate::time::{Millis, timeout};
 
-/// Applies a timeout to requests.
+/// Applies a timeout to the execution of each request.
 ///
-/// A zero timeout disables the middleware.
+/// The timeout starts when the wrapped service is called and does not include
+/// the wait for readiness; see the [module docs](self) for bounding the whole
+/// operation. A zero timeout disables the middleware.
 #[derive(Debug)]
 pub struct Timeout<St> {
     timeout: Millis,
@@ -23,6 +43,8 @@ pub enum TimeoutError<E> {
     /// Error returned by the wrapped service.
     Service(E),
     /// The service call exceeded its timeout.
+    ///
+    /// Time spent waiting for readiness before the call does not count.
     Timeout,
 }
 
@@ -98,7 +120,11 @@ impl<S, St> Middleware<S, St> for Timeout<St> {
     }
 }
 
-/// A service that applies a timeout to each request.
+/// A service that applies a timeout to the execution of each request.
+///
+/// Readiness is forwarded to the wrapped service without a deadline, so a
+/// request waiting for readiness is not timed out; see the
+/// [module docs](self) for bounding the whole operation.
 #[derive(Debug, Clone)]
 pub struct TimeoutService<S, St> {
     service: S,
@@ -107,7 +133,7 @@ pub struct TimeoutService<S, St> {
 }
 
 impl<S, St> TimeoutService<S, St> {
-    /// Wraps a service with the specified per-request timeout.
+    /// Wraps a service with the specified per-request execution timeout.
     pub fn new<T, Req>(timeout: T, service: impl IntoService<S, St, Req>) -> Self
     where
         T: Into<Millis>,
@@ -146,7 +172,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{cell::Cell, future::pending, rc::Rc, time::Duration};
 
     use ntex_service::{Pipeline, apply, fn_factory};
 
@@ -207,10 +233,10 @@ mod tests {
         assert_eq!(timeout.ready().await, Ok(()));
     }
 
-    /// STATEMENT: Calls exceeding their deadline return `TimeoutError::Timeout`.
+    /// STATEMENT: Calls of a ready service exceeding their deadline return `TimeoutError::Timeout`.
     ///
     /// HOW:
-    /// - Give a sleeping service a shorter timeout and compare the returned error.
+    /// - Give an always-ready sleeping service a shorter timeout and compare the returned error.
     #[ntex::test]
     async fn test_timeout() {
         let resolution = Duration::from_millis(100);
@@ -218,6 +244,69 @@ mod tests {
 
         let timeout = Pipeline::new((), TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
+    }
+
+    struct GatedService {
+        ready_delay: Option<Duration>,
+        calls: Rc<Cell<usize>>,
+    }
+
+    impl Service<(), ()> for GatedService {
+        type Res = ();
+        type Error = SrvError;
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), SrvError> {
+            match self.ready_delay {
+                Some(delay) => crate::time::sleep(delay).await,
+                None => pending().await,
+            }
+            Ok(())
+        }
+
+        async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<(), SrvError> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(())
+        }
+    }
+
+    /// STATEMENT: The execution timeout does not include the wait for readiness.
+    ///
+    /// HOW:
+    /// - Wrap a service that becomes ready after 100 ms and answers immediately with a 10 ms timeout.
+    /// - Verify the pipeline call succeeds instead of returning `TimeoutError::Timeout`.
+    /// - Check the wrapped service was called once and at least 100 ms elapsed.
+    #[ntex::test]
+    async fn test_timeout_excludes_readiness() {
+        let calls = Rc::new(Cell::new(0));
+        let srv = GatedService {
+            ready_delay: Some(Duration::from_millis(100)),
+            calls: calls.clone(),
+        };
+        let pl = Pipeline::new((), TimeoutService::new(Millis(10), srv));
+
+        let start = std::time::Instant::now();
+        assert_eq!(pl.call(()).await, Ok(()));
+        assert_eq!(calls.get(), 1);
+        assert!(start.elapsed() >= Duration::from_millis(100));
+    }
+
+    /// STATEMENT: An outer `time::timeout` bounds a pipeline call whose service never becomes ready.
+    ///
+    /// HOW:
+    /// - Wrap a never-ready service with a 1 ms execution timeout.
+    /// - Bound `Pipeline::call` with a 100 ms `time::timeout` and verify it elapses with `Err(())`.
+    /// - Check the wrapped service was never called.
+    #[ntex::test]
+    async fn test_outer_timeout_bounds_readiness() {
+        let calls = Rc::new(Cell::new(0));
+        let srv = GatedService {
+            ready_delay: None,
+            calls: calls.clone(),
+        };
+        let pl = Pipeline::new((), TimeoutService::new(Millis(1), srv));
+
+        assert_eq!(timeout(Millis(100), pl.call(())).await, Err(()));
+        assert_eq!(calls.get(), 0);
     }
 
     /// STATEMENT: Factory-applied timeout middleware enforces its configured deadline.
