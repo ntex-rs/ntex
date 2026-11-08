@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* web: `Compress` adds `Vary: Accept-Encoding` to responses whose encoding it
+  negotiates, and picks `identity` when the client weights it (explicitly or
+  via `*`) strictly above every supported compression
+
 * `HttpRequest::url_for()` validates elements against their path segment patterns
   (`{id:[0-9]+}`, non-empty for `{id}`) and fails with
   `UrlGenerationError::InvalidElement`, and rejects unused elements with
