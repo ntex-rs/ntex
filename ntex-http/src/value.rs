@@ -182,7 +182,10 @@ impl HeaderValue {
 
     /// Yields a `&str` slice if the `HeaderValue` is valid UTF-8.
     ///
-    /// This function validates the whole header value as UTF-8.
+    /// This function validates the whole header value as UTF-8. Unlike the
+    /// `http` crate, which accepts only visible ASCII, non-ASCII UTF-8 such as
+    /// `café` succeeds. Check [`str::is_ascii`] on the result if a value must be
+    /// ASCII.
     ///
     /// # Examples
     ///

@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `guard::Host(..).scheme(..)` fails closed. A request that carries no
+  scheme (origin-form target without a scheme in `Host`, or a `CONNECT` authority)
+  no longer matches a guard that requires one.
+
 * HTTP/1 server reports a peer close in the middle of a request head or body as
   `PeerGone` with an `UnexpectedEof` error and `CloseReason::Io`, instead of a clean
   disconnect; request and client response payloads cut off while undecodable bytes
@@ -70,6 +74,8 @@
 
 * web: Add `CustomResponder::set_header()` to replace header values; repeated
   `with_header()` calls keep adding values
+
+* web: Re-export `CustomResponder` as `web::CustomResponder`
 
 ## [4.6.1] - 2026-11-07
 

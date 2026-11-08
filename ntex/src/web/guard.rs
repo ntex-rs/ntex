@@ -391,9 +391,12 @@ impl HostGuard {
     /// Set request scheme to match.
     ///
     /// The scheme is taken from the request uri if it is in absolute-form, or
-    /// from the `Host` header value otherwise. A `Host` header normally contains no
-    /// scheme; in that case the scheme is not checked and the guard matches on
-    /// the host name alone. Do not rely on this check for security decisions.
+    /// from the `Host` header value otherwise. The guard fails closed: a request
+    /// that carries no scheme does not match. Ordinary origin-form requests
+    /// (`GET /path` with `Host: example.com`) and authority-form `CONNECT`
+    /// requests carry no scheme, so a guard with a scheme rejects them. The
+    /// scheme is not derived from the connection, so this does not tell whether
+    /// the request arrived over TLS; do not rely on it for security decisions.
     pub fn scheme<H: AsRef<str>>(mut self, scheme: H) -> HostGuard {
         self.1 = Some(scheme.as_ref().to_string());
         self
@@ -414,10 +417,10 @@ impl Guard for HostGuard {
             return false;
         }
 
-        if let Some(ref scheme) = self.1
-            && let Some(req_host_uri_scheme) = req_host_uri.scheme_str()
-        {
-            return scheme.eq_ignore_ascii_case(req_host_uri_scheme);
+        if let Some(ref scheme) = self.1 {
+            return req_host_uri
+                .scheme_str()
+                .is_some_and(|s| scheme.eq_ignore_ascii_case(s));
         }
 
         true
@@ -455,11 +458,11 @@ mod tests {
         assert!(format!("{pred:?}").contains("Header"));
     }
 
-    /// STATEMENT: Host guards match a bare host without requiring a request scheme.
+    /// STATEMENT: Host guards match a bare host, but a required scheme fails closed when the request carries none.
     ///
     /// HOW:
     /// - Supply `www.rust-lang.org` in `Host` and check guards with and without a scheme.
-    /// - Assert the matching host passes and unrelated hosts fail.
+    /// - Assert the matching host passes without a scheme, `.scheme("https")` rejects it, and unrelated hosts fail.
     #[test]
     fn test_host() {
         let req = TestRequest::default()
@@ -472,8 +475,9 @@ mod tests {
         let pred = Host("www.rust-lang.org");
         assert!(pred.check(req.head()));
 
+        // the request carries no scheme, so a scheme check fails closed
         let pred = Host("www.rust-lang.org").scheme("https");
-        assert!(pred.check(req.head()));
+        assert!(!pred.check(req.head()));
 
         let pred = Host("blog.rust-lang.org");
         assert!(!pred.check(req.head()));
@@ -530,7 +534,8 @@ mod tests {
     ///
     /// HOW:
     /// - Match an authority-form CONNECT request without a `Host` header.
-    /// - Check matching/nonmatching hosts and confirm an origin path does not supply a host.
+    /// - Check matching/nonmatching hosts, that a scheme check fails because the target carries no scheme,
+    ///   and confirm an origin path does not supply a host.
     #[test]
     fn test_host_without_header() {
         let req = TestRequest::default()
@@ -542,7 +547,7 @@ mod tests {
         assert!(pred.check(req.head()));
 
         let pred = Host("www.rust-lang.org").scheme("https");
-        assert!(pred.check(req.head()));
+        assert!(!pred.check(req.head()));
 
         let pred = Host("blog.rust-lang.org");
         assert!(!pred.check(req.head()));

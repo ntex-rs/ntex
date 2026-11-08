@@ -334,6 +334,10 @@ impl BytePages {
     /// Afterwards, `self` contains elements `[at, len)`, and the returned [`BytePages`]
     /// contains elements `[0, at)`. If `at > len`, all data is moved.
     ///
+    /// Unlike [`Bytes::split_to`] and [`BytesMut::split_to`](crate::BytesMut::split_to),
+    /// which panic when `at` is out of bounds, this clamps `at` to the length.
+    /// Check `len()` first if a short split is an error.
+    ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
     #[must_use]
@@ -347,6 +351,9 @@ impl BytePages {
     ///
     /// Afterwards, `self` contains elements `[at, len)`, and elements `[0, at)`
     /// are appended to `to`. If `at > len`, all data is moved.
+    ///
+    /// Like [`split_to`](Self::split_to), this clamps `at` to the length instead
+    /// of panicking.
     ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
@@ -682,6 +689,10 @@ impl BytePage {
     ///
     /// Afterwards, `self` contains elements `[at, len)`, and the returned `BytePage`
     /// contains elements `[0, at)`. If `at > len`, all data is moved.
+    ///
+    /// Unlike [`Bytes::split_to`] and [`BytesMut::split_to`](crate::BytesMut::split_to),
+    /// which panic when `at` is out of bounds, this clamps `at` to the length.
+    /// Check `len()` first if a short split is an error.
     ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.

@@ -20,6 +20,10 @@ use crate::{http::Payload, router::PathDeserializer};
 /// `../../etc`. Validate such values before using them, e.g. as a file system
 /// path.
 ///
+/// Remainder captures such as `/files/{tail}*` are the exception: their values
+/// are not percent-decoded. A request for `/files/my%20file.txt` yields
+/// `my%20file.txt`. Decode and validate the value yourself before using it.
+///
 /// ## Example
 ///
 /// ```rust

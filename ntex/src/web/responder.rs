@@ -285,6 +285,7 @@ impl<T: Responder<St>, St: State> CustomResponder<T, St> {
     /// }
     /// # fn main() {}
     /// ```
+    #[must_use]
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = Some(status);
         self
@@ -308,6 +309,7 @@ impl<T: Responder<St>, St: State> CustomResponder<T, St> {
     /// }
     /// # fn main() {}
     /// ```
+    #[must_use]
     pub fn set_header<K, V>(self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -336,6 +338,7 @@ impl<T: Responder<St>, St: State> CustomResponder<T, St> {
     /// }
     /// # fn main() {}
     /// ```
+    #[must_use]
     pub fn with_header<K, V>(self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
