@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* web: Document that a failed body extractor wrapped in `Option<T>` or
+  `Result<T, E>` may have consumed the body, and the single-read `Bytes`
+  fallback pattern
+
 * web: Fix `App::route()`, `Scope::route()` and `ServiceConfig::route()` for
   routes with several methods; they were promoted as conjunctive resource
   guards, so a GET-or-POST route never matched
