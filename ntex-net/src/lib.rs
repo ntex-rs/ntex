@@ -72,12 +72,24 @@ pub trait Reactor: Driver {
 
 #[inline]
 /// Opens a TCP connection to a remote host.
+///
+/// # Panics
+///
+/// Panics if called outside an ntex runtime, for example from a plain thread
+/// or a runtime from another crate. Call it from code running under
+/// `#[ntex::main]`, `#[ntex::test]`, or an ntex `System`.
 pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> io::Result<Io> {
     with_current(|driver| driver.tcp_connect(addr, cfg)).await
 }
 
 #[inline]
 /// Opens a Unix domain socket connection.
+///
+/// # Panics
+///
+/// Panics if called outside an ntex runtime, for example from a plain thread
+/// or a runtime from another crate. Call it from code running under
+/// `#[ntex::main]`, `#[ntex::test]`, or an ntex `System`.
 pub async fn unix_connect<'a, P>(addr: P, cfg: SharedCfg) -> io::Result<Io>
 where
     P: AsRef<std::path::Path> + 'a,
@@ -87,6 +99,12 @@ where
 
 #[inline]
 /// Converts a standard-library TCP stream into an [`Io`] value.
+///
+/// # Panics
+///
+/// Panics if called outside an ntex runtime, for example from a plain thread
+/// or a runtime from another crate. Call it from code running under
+/// `#[ntex::main]`, `#[ntex::test]`, or an ntex `System`.
 pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
     with_current(|driver| driver.from_tcp_stream(stream, cfg))
 }
@@ -94,6 +112,12 @@ pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io>
 #[cfg(unix)]
 #[inline]
 /// Converts a standard-library Unix stream into an [`Io`] value.
+///
+/// # Panics
+///
+/// Panics if called outside an ntex runtime, for example from a plain thread
+/// or a runtime from another crate. Call it from code running under
+/// `#[ntex::main]`, `#[ntex::test]`, or an ntex `System`.
 pub fn from_unix_stream(stream: std::os::unix::net::UnixStream, cfg: SharedCfg) -> io::Result<Io> {
     with_current(|driver| driver.from_unix_stream(stream, cfg))
 }

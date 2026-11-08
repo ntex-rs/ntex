@@ -74,6 +74,10 @@ pub fn default_service<St: State, In>(
 /// This method accepts application builder instance, and constructs
 /// service.
 ///
+/// Success does not mean every route can be built: registered services are
+/// created on their first request. A failing service factory shows up as a
+/// `500 Internal Server Error` response, so assert response statuses.
+///
 /// ```rust
 /// use ntex::service::Service;
 /// use ntex::http::StatusCode;
@@ -106,6 +110,9 @@ where
 
 /// This method accepts application builder instance, and constructs
 /// service with specified state.
+///
+/// As with [`init_service`], service factories run on their first request, and
+/// a failing one shows up as a `500 Internal Server Error` response.
 ///
 /// ```rust
 /// use ntex::service::Service;

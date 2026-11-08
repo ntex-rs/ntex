@@ -31,6 +31,13 @@ Rules for generated code:
 - Read peer certificates with `PeerCertDer` / `PeerCertChainDer`, then parse with `x509::PeerCerts`. Certificate presence or parsing is not trust verification or authorization. Schannel's `request_client_cert(true)` neither requires a certificate nor validates its trust; reject missing/untrusted identities before protected handling.
 - See the [TLS guide](https://docs.ntex.rs/10-tls.html) and [runnable TLS examples](https://github.com/ntex-rs/examples/tree/main/tls) for backend, component, identity, and mutual-authentication configuration.
 
+## Web request rules
+
+- `guard::Host(..).scheme(..)` matches only when the request carries a scheme (absolute-form target or a `Host` value with a scheme). Ordinary requests have none and are rejected. It does not detect TLS; enforce HTTPS at the listener.
+- `Path` percent-decodes normal segments, but remainder captures such as `/files/{tail}*` stay percent-encoded. Decode and validate them before using them as file system paths.
+- App services are created on their first request. A failing factory does not fail startup or `test::init_service`; that request gets `500 Internal Server Error`. Assert response statuses in tests.
+- `HeaderMap::len()` counts distinct header names, not values; use `get_all(name)` for repeated headers. `HeaderValue::to_str()` accepts any UTF-8, including non-ASCII; check `is_ascii()` when ASCII is required.
+
 ## Testing rules
 
 - Test the application the server runs. Register routes in `fn config(cfg: &mut web::ServiceConfig)` (or `&mut web::ServiceConfig<St>`), call `App::new().configure(config)` in both `main` and the tests, and keep tests in `#[cfg(test)] mod tests` at the bottom of the file.

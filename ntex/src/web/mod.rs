@@ -106,7 +106,7 @@ pub use self::handler::{Handler, HandlerSt};
 pub use self::httprequest::HttpRequest;
 pub use self::request::WebRequest;
 pub use self::resource::{Resource, ResourceServices};
-pub use self::responder::Responder;
+pub use self::responder::{CustomResponder, Responder};
 pub use self::response::WebResponse;
 pub use self::route::Route;
 pub use self::scope::{Scope, ScopeServices};

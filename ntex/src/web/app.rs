@@ -204,6 +204,11 @@ where
     /// If no registered service matches the request path and guards, the
     /// application's default service is used.
     ///
+    /// Registered services and the default service are created lazily, on the
+    /// first request that reaches them, not when the application starts. If a
+    /// factory fails, application startup still succeeds; that request gets
+    /// `500 Internal Server Error` and creation is retried on the next one.
+    ///
     /// ```rust
     /// use ntex::web::{self, App, HttpResponse};
     ///
