@@ -492,6 +492,37 @@ you gigabytes, and you'd buffer every byte. If the response declares a
 `Content-Length` above the limit, the read fails right away without reading
 any of the body.
 
+The body can be read only once. `body()` and `json()` take the payload as
+soon as you call them, not when the future first runs, so dropping the future
+also drops the body. Any later `body()`, `json()` or stream read fails with
+`PayloadError::AlreadyTaken` instead of silently returning nothing. A
+response that never had a body still reads as empty bytes.
+
+`json()` checks the content type before taking the payload, so after a
+`ContentType` error you can still read the body. Once the JSON fails to
+parse, though, the bytes are gone. If you need the raw body on failure, for
+example to log an error page, buffer it once and parse it yourself:
+
+```rust,no_run
+use serde::Deserialize;
+use ntex::client::Client;
+
+#[derive(Deserialize)]
+struct User {
+    id: u64,
+}
+
+async fn read(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    let response = client.get("http://127.0.0.1:8080/users/1").send().await?;
+    let body = response.body().await?;
+    match serde_json::from_slice::<User>(&body) {
+        Ok(user) => println!("user {}", user.id),
+        Err(e) => println!("bad response ({e}): {}", String::from_utf8_lossy(&body)),
+    }
+    Ok(())
+}
+```
+
 ### Streaming the body
 
 For large downloads, or bodies with no fixed end, read the response chunk by
@@ -516,7 +547,9 @@ async fn download(client: &Client) -> Result<usize, Box<dyn std::error::Error>> 
 Since you only hold one chunk at a time, the payload limit and payload
 timeout don't apply here. If you need them, enforce them in the loop. To pass
 the body on to something else, such as a response in a proxy, take it with
-`take_payload()`.
+`take_payload()`. If the body was already taken, the stream yields a single
+`PayloadError::AlreadyTaken` error and then ends; `set_payload()` installs a
+new body and makes the response readable again.
 
 ## Middleware
 

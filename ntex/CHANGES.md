@@ -2,6 +2,12 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* add `http::error::PayloadError::AlreadyTaken`. Client
+  `ClientResponse::body()`, `json()` and the response stream now report it
+  when the payload was already taken, including by a dropped, unpolled body
+  future, instead of returning an empty body. Responses without a body still
+  read as empty bytes
+
 * web: Document that a failed body extractor wrapped in `Option<T>` or
   `Result<T, E>` may have consumed the body, and the single-read `Bytes`
   fallback pattern

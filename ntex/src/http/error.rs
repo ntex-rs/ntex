@@ -172,6 +172,12 @@ pub enum PayloadError {
     /// A payload length is unknown.
     #[error("A payload length is unknown.")]
     UnknownLength,
+    /// The payload was already taken by an earlier reader.
+    ///
+    /// Returned by HTTP client response readers instead of an empty body
+    /// when the response payload has already been taken.
+    #[error("The payload has already been taken.")]
+    AlreadyTaken,
     /// Http2 payload error
     #[error("")]
     Http2Payload(
@@ -204,6 +210,7 @@ impl Clone for PayloadError {
             PayloadError::EncodingCorrupted => PayloadError::EncodingCorrupted,
             PayloadError::Overflow => PayloadError::Overflow,
             PayloadError::UnknownLength => PayloadError::UnknownLength,
+            PayloadError::AlreadyTaken => PayloadError::AlreadyTaken,
             PayloadError::Http2Payload(err) => PayloadError::Http2Payload(*err),
             PayloadError::Decode(err) => PayloadError::Decode(*err),
             PayloadError::Io(err) => PayloadError::Io(clone_io_error(err)),
@@ -406,7 +413,8 @@ mod tests {
     /// STATEMENT: Cloned payload errors retain their display information across all exercised variants.
     ///
     /// HOW:
-    /// - Clone incomplete, encoding, size, HTTP/2, decode, and I/O failures and compare formatted messages.
+    /// - Clone incomplete, encoding, size, unknown-length, already-taken, HTTP/2, decode, and I/O failures
+    ///   and compare formatted messages.
     #[test]
     fn test_payload_error_clone() {
         let errs = [
@@ -415,6 +423,7 @@ mod tests {
             PayloadError::EncodingCorrupted,
             PayloadError::Overflow,
             PayloadError::UnknownLength,
+            PayloadError::AlreadyTaken,
             PayloadError::Http2Payload(ntex_h2::StreamError::Closed),
             PayloadError::Decode(DecodeError::Method),
             PayloadError::Io(io::Error::other("io")),

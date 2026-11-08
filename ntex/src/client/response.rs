@@ -22,6 +22,8 @@ use super::{ClientConfig, ServiceResponse};
 pub struct ClientResponse {
     pub(crate) head: ResponseHead,
     pub(crate) payload: Cell<Option<Payload>>,
+    /// Set once the stream has reported `PayloadError::AlreadyTaken`.
+    taken_reported: Cell<bool>,
     pub(crate) config: Cfg<ClientConfig>,
 }
 
@@ -67,6 +69,7 @@ impl ClientResponse {
             head,
             config,
             payload: Cell::new(Some(payload)),
+            taken_reported: Cell::new(false),
         }
     }
 
@@ -117,15 +120,19 @@ impl ClientResponse {
 
     /// Replaces the response payload.
     ///
-    /// Any unread previous payload is dropped.
+    /// Any unread previous payload is dropped. The response can be read again
+    /// even if its previous payload was already taken.
     pub fn set_payload(&self, payload: Payload) {
         self.payload.set(Some(payload));
+        self.taken_reported.set(false);
     }
 
     #[must_use]
     /// Takes the response payload.
     ///
-    /// Subsequent calls return an empty payload.
+    /// Subsequent calls return an empty payload. After the payload is taken,
+    /// [`body()`](Self::body), [`json()`](Self::json) and the response stream
+    /// report [`PayloadError::AlreadyTaken`] instead of an empty body.
     pub fn take_payload(&self) -> Payload {
         if let Some(pl) = self.payload.take() {
             pl
@@ -149,6 +156,28 @@ impl ClientResponse {
 
 impl ClientResponse {
     /// Returns a future that buffers the response body.
+    ///
+    /// The response payload is taken when this method is called, not when the
+    /// future is first polled. Dropping the future without awaiting it
+    /// discards the body. Once the payload has been taken, by this method,
+    /// [`json()`](Self::json), [`take_payload()`](Self::take_payload) or the
+    /// response stream, a later `body()` fails with
+    /// [`PayloadError::AlreadyTaken`]. A response without a body still yields
+    /// empty bytes.
+    ///
+    /// To keep the raw body when JSON parsing fails, buffer it once and parse
+    /// the retained bytes:
+    ///
+    /// ```rust,no_run
+    /// # async fn read(res: ntex::client::ClientResponse) -> Result<(), Box<dyn std::error::Error>> {
+    /// let body = res.body().await?;
+    /// match serde_json::from_slice::<serde_json::Value>(&body) {
+    ///     Ok(value) => println!("json: {value}"),
+    ///     Err(_) => println!("raw: {} bytes", body.len()),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn body(&self) -> MessageBody {
         MessageBody::new(self)
     }
@@ -160,6 +189,13 @@ impl ClientResponse {
     /// * the content type is not JSON;
     /// * the body exceeds the configured response payload limit; or
     /// * reading or deserializing the body fails.
+    ///
+    /// A JSON content type is checked before the payload is taken, so a
+    /// content-type error leaves the body available. Otherwise the payload is
+    /// taken when this method is called, as with [`body()`](Self::body): a
+    /// dropped future or a deserialization failure leaves no body, and later
+    /// reads fail with [`PayloadError::AlreadyTaken`]. Use `body()` and
+    /// `serde_json::from_slice()` to keep the raw bytes.
     pub fn json<T: DeserializeOwned>(&self) -> JsonBody<T> {
         JsonBody::new(self)
     }
@@ -175,8 +211,12 @@ impl Stream for ClientResponse {
             Poll::Ready(
                 ready!(result).map(|item| item.map_err(|e| Error::from(ClientPayloadError(e)))),
             )
-        } else {
+        } else if self.taken_reported.replace(true) {
             Poll::Ready(None)
+        } else {
+            Poll::Ready(Some(Err(Error::from(ClientPayloadError(
+                PayloadError::AlreadyTaken,
+            )))))
         }
     }
 }
@@ -186,6 +226,7 @@ impl From<ServiceResponse> for ClientResponse {
         Self {
             head: res.head,
             payload: Cell::new(Some(res.payload)),
+            taken_reported: Cell::new(false),
             config: res.config,
         }
     }
@@ -214,8 +255,8 @@ pub struct MessageBody {
 impl MessageBody {
     /// Creates a body future for `res`.
     ///
-    /// This takes the response payload. Creating another body future from the
-    /// same response produces an empty body.
+    /// This takes the response payload. If the payload was already taken, the
+    /// future fails with [`PayloadError::AlreadyTaken`].
     pub fn new(res: &ClientResponse) -> MessageBody {
         let config = res.config.clone();
 
@@ -224,12 +265,20 @@ impl MessageBody {
             Err(e) => return Self::err(Error::from(e).with_service(config.service()), config),
         };
 
+        let Some(payload) = res.payload.take() else {
+            return Self::err(
+                Error::from(ClientPayloadError(PayloadError::AlreadyTaken))
+                    .with_service(config.service()),
+                config,
+            );
+        };
+
         MessageBody {
             config,
             length: len,
             err: None,
             fut: Some(ReadBody::new(
-                res.take_payload(),
+                payload,
                 res.config.response_payload_limit(),
                 res.config.response_payload_timeout(),
                 res.config.clone(),
@@ -316,8 +365,9 @@ where
     #[must_use]
     /// Creates a JSON body future for `res`.
     ///
-    /// This takes the response payload. Creating another body future from the
-    /// same response produces an empty body.
+    /// This takes the response payload unless the content type is not JSON. If
+    /// the payload was already taken, the future fails with
+    /// [`PayloadError::AlreadyTaken`].
     pub fn new(res: &ClientResponse) -> Self {
         let config = res.config.clone();
 
@@ -354,12 +404,27 @@ where
             }
         };
 
+        let Some(payload) = res.payload.take() else {
+            return JsonBody {
+                err: Some(
+                    Error::from(JsonPayloadError::Payload(ClientPayloadError(
+                        PayloadError::AlreadyTaken,
+                    )))
+                    .with_service(config.service()),
+                ),
+                config,
+                length: None,
+                fut: None,
+                _t: PhantomData,
+            };
+        };
+
         JsonBody {
             config,
             length: len,
             err: None,
             fut: Some(ReadBody::new(
-                res.take_payload(),
+                payload,
                 res.config.response_payload_limit(),
                 res.config.response_payload_timeout(),
                 res.config.clone(),
@@ -667,7 +732,8 @@ mod tests {
     ///
     /// HOW:
     /// - Collect pending and failing streams, then create two body futures for one response.
-    /// - Check the errors and verify only the first future receives the original bytes.
+    /// - Check the errors, verify the second future fails with `PayloadError::AlreadyTaken`, and
+    ///   verify the first future still receives the original bytes.
     #[crate::rt_test]
     async fn test_body_timeout_and_error() {
         let res = TestResponse::builder().build();
@@ -685,7 +751,8 @@ mod tests {
             .set_payload(b"data".as_ref())
             .build();
         let body = res.body();
-        assert_eq!(res.body().await.unwrap(), Bytes::new());
+        let err = res.body().await.unwrap_err();
+        assert!(matches!(err.into_error().0, PayloadError::AlreadyTaken));
         assert_eq!(body.await.unwrap(), Bytes::from_static(b"data"));
     }
 
@@ -725,11 +792,13 @@ mod tests {
         assert_eq!(res.json::<MyObject>().await.unwrap().name, "test");
     }
 
-    /// STATEMENT: Response streaming yields payload chunks and errors and ends after its payload is taken.
+    /// STATEMENT: Response streaming yields payload chunks and errors, and reports a taken payload once
+    /// before ending.
     ///
     /// HOW:
     /// - Poll successful and failing response streams and inspect their items.
-    /// - Take a payload twice and verify the second take and subsequent stream are empty.
+    /// - Take a payload twice and verify the second take is empty, then verify the stream yields one
+    ///   `PayloadError::AlreadyTaken` error followed by `None`.
     #[crate::rt_test]
     async fn test_response_stream() {
         use futures_util::StreamExt;
@@ -755,7 +824,94 @@ mod tests {
             Payload::Stream(_) | Payload::H1(_)
         ));
         assert!(matches!(res.take_payload(), Payload::None));
+        let err = res.next().await.unwrap().unwrap_err();
+        assert!(matches!(err.into_error().0, PayloadError::AlreadyTaken));
         assert!(res.next().await.is_none());
+        assert!(res.next().await.is_none());
+    }
+
+    fn is_taken(err: Error<ClientPayloadError>) -> bool {
+        matches!(err.into_error().0, PayloadError::AlreadyTaken)
+    }
+
+    fn is_json_taken(err: &JsonPayloadError) -> bool {
+        matches!(
+            err,
+            JsonPayloadError::Payload(ClientPayloadError(PayloadError::AlreadyTaken))
+        )
+    }
+
+    /// STATEMENT: Reading a client response body after its payload was taken fails with
+    /// `PayloadError::AlreadyTaken` instead of returning an empty body, while real empty bodies,
+    /// JSON content-type rejection, buffer-once parsing and `set_payload()` keep working.
+    ///
+    /// HOW:
+    /// - Drop an unpolled `body()` future and assert later `body()`, `json()` and stream reads
+    ///   report `AlreadyTaken`, with the stream ending afterwards.
+    /// - Read a body twice and a response without a body twice; assert the first reads return the
+    ///   data or empty bytes and the second reads fail.
+    /// - Fail `json()` on malformed JSON and assert `body()` then reports `AlreadyTaken`.
+    /// - Reject a `text/plain` response in `json()` and assert `body()` still returns all bytes.
+    /// - Buffer a malformed JSON body once with `body()`, assert `serde_json::from_slice()` fails
+    ///   while the retained bytes are intact.
+    /// - Install a new payload with `set_payload()` after the stream reported the error and assert
+    ///   both `body()` and the stream can read again.
+    #[crate::rt_test]
+    async fn test_taken_payload_is_reported() {
+        use futures_util::StreamExt;
+
+        let mut res = TestResponse::with_header(header::CONTENT_TYPE, "application/json")
+            .set_payload(b"{\"name\": \"test\"}".as_ref())
+            .build();
+        drop(res.body());
+        assert!(is_taken(res.body().await.unwrap_err()));
+        assert!(is_json_taken(&res.json::<MyObject>().await.unwrap_err()));
+        assert!(is_taken(res.next().await.unwrap().unwrap_err()));
+        assert!(res.next().await.is_none());
+
+        let res = TestResponse::builder()
+            .set_payload(b"data".as_ref())
+            .build();
+        assert_eq!(res.body().await.unwrap(), "data");
+        assert!(is_taken(res.body().await.unwrap_err()));
+
+        let res = TestResponse::builder().build();
+        assert_eq!(res.body().await.unwrap(), Bytes::new());
+        assert!(is_taken(res.body().await.unwrap_err()));
+
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json")
+            .set_payload(b"{\"name\":".as_ref())
+            .build();
+        let err = res.json::<MyObject>().await.unwrap_err();
+        assert!(matches!(&*err, JsonPayloadError::Deserialize(Some(_))));
+        assert!(is_taken(res.body().await.unwrap_err()));
+
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "text/plain")
+            .set_payload(b"{\"name\": \"test\"}".as_ref())
+            .build();
+        let err = res.json::<MyObject>().await.unwrap_err();
+        assert!(matches!(&*err, JsonPayloadError::ContentType));
+        assert_eq!(res.body().await.unwrap(), "{\"name\": \"test\"}");
+
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json")
+            .set_payload(b"{\"name\":".as_ref())
+            .build();
+        let body = res.body().await.unwrap();
+        assert!(serde_json::from_slice::<MyObject>(&body).is_err());
+        assert_eq!(body, "{\"name\":");
+
+        let mut res = TestResponse::builder().build();
+        drop(res.take_payload());
+        assert!(is_taken(res.next().await.unwrap().unwrap_err()));
+        res.set_payload(Payload::from(crate::channel::bstream::empty(Some(
+            Bytes::from_static(b"again"),
+        ))));
+        assert_eq!(res.next().await.unwrap().unwrap(), "again");
+        res.set_payload(Payload::from(crate::channel::bstream::empty(Some(
+            Bytes::from_static(b"again"),
+        ))));
+        assert_eq!(res.body().await.unwrap(), "again");
+        assert!(is_taken(res.next().await.unwrap().unwrap_err()));
     }
 
     /// STATEMENT: Response metadata mutations are visible through accessors and debug output.
