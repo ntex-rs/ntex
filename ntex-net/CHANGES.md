@@ -2,6 +2,10 @@
 
 ## [4.9.0] - Unreleased
 
+* compio: The read task no longer submits a read while reads are paused, for
+  example after eof. Such a read held buffered input, so a stream truncated
+  mid-frame was reported as a clean `PeerGone(None)` instead of `UnexpectedEof`
+
 * connect: `Connect` owns a single pre-resolved address list, seeded from
   `Address::addr()` by `Connect::new()`. `set_addr`/`set_addrs` overrides now
   take precedence in `addrs()`/`take_addrs()` as they already did when
