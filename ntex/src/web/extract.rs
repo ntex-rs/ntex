@@ -30,7 +30,9 @@ use crate::http::Payload;
 /// When an extractor returns an error, ntex turns it into an HTTP response and
 /// skips the handler. The error must implement [`WebResponseError`] for the
 /// application. If the handler should still run, use `Option<T>` to receive
-/// `None`, or `Result<T, T::Error>` to receive the original error.
+/// `None`, or `Result<T, T::Error>` to receive the original error. Both also
+/// let malformed or oversized input through, so the handler must reject it
+/// itself when that matters.
 ///
 /// # Example
 ///
@@ -84,6 +86,15 @@ pub trait FromRequest<St>: Sized {
 /// Optionally extract a field from the request
 ///
 /// If the `FromRequest` for T fails, return None rather than returning an error response
+///
+/// `None` covers every extraction error, not only missing input. Input that is
+/// present but invalid also becomes `None`, and the handler runs. For example,
+/// `Option<Json<T>>` receives `None` for a missing body, a wrong content type,
+/// malformed JSON, and a body over the [`JsonConfig`](super::types::JsonConfig)
+/// limit, where `Json<T>` would reject the last two with 400 and 413. Use
+/// `Option<T>` only when such input may be ignored. To accept missing input
+/// but still reject invalid input, extract `Result<T, T::Error>` and return the
+/// errors that should still fail the request.
 ///
 /// The request body is not rewound. If `T` reads the body before failing, later
 /// extractors see only what remains. See [`FromRequest`] for a single-read
@@ -349,6 +360,121 @@ mod tests {
             .await
             .unwrap();
         assert!(r.is_err());
+    }
+
+    /// STATEMENT: `Option<Json<T>>` turns malformed and oversized bodies into `None` and
+    /// runs the handler, where `Json<T>` rejects them; `Result<Json<T>, _>` keeps the cause.
+    ///
+    /// HOW:
+    /// - Serve `Json<Value>`, `Option<Json<Value>>` and `Result<Json<Value>, JsonPayloadError>`
+    ///   routes with `JsonConfig::limit(8)`, counting handler invocations per route.
+    /// - Send an absent body, valid JSON, malformed JSON and a 13-byte body to each route.
+    /// - Assert `Json` returns 200, 400, 400 and 413 and runs only for valid input, while the
+    ///   optional routes return 200 and run every time, receiving `None` or the matching
+    ///   `ContentType`, `Deserialize` or `Overflow` error for every non-valid input.
+    #[crate::rt_test]
+    async fn test_optional_json_suppresses_validation() {
+        use crate::http::{Method, StatusCode};
+        use crate::web::error::JsonPayloadError;
+        use crate::web::test::{call_service, init_service, read_body};
+        use crate::web::types::JsonConfig;
+        use crate::web::{self, App, WebAppConfig};
+        use std::{cell::Cell, rc::Rc};
+
+        type Value = Json<serde_json::Value>;
+
+        let calls = Rc::new([Cell::new(0), Cell::new(0), Cell::new(0)]);
+        let (c1, c2, c3) = (calls.clone(), calls.clone(), calls.clone());
+        let srv = init_service(
+            App::new()
+                .with_config(WebAppConfig::new().set_value(JsonConfig::default().limit(8)))
+                .route(
+                    "/required",
+                    web::post().to(async move |v: Value| {
+                        c1[0].set(c1[0].get() + 1);
+                        v.into_inner().to_string()
+                    }),
+                )
+                .route(
+                    "/option",
+                    web::post().to(async move |v: Option<Value>| {
+                        c2[1].set(c2[1].get() + 1);
+                        v.map_or_else(|| "none".to_owned(), |v| v.into_inner().to_string())
+                    }),
+                )
+                .route(
+                    "/result",
+                    web::post().to(async move |v: Result<Value, JsonPayloadError>| {
+                        c3[2].set(c3[2].get() + 1);
+                        match v {
+                            Ok(v) => v.into_inner().to_string(),
+                            Err(JsonPayloadError::ContentType) => "content-type".to_owned(),
+                            Err(JsonPayloadError::Deserialize(_)) => "deserialize".to_owned(),
+                            Err(JsonPayloadError::Overflow) => "overflow".to_owned(),
+                            Err(JsonPayloadError::Payload(_)) => "payload".to_owned(),
+                        }
+                    }),
+                ),
+        )
+        .await;
+
+        // (input, body, required status, option body, result body)
+        let cases: [(&str, Option<&'static [u8]>, StatusCode, &str, &str); 4] = [
+            (
+                "absent",
+                None,
+                StatusCode::BAD_REQUEST,
+                "none",
+                "content-type",
+            ),
+            (
+                "valid",
+                Some(b"{\"a\":1}"),
+                StatusCode::OK,
+                "{\"a\":1}",
+                "{\"a\":1}",
+            ),
+            (
+                "malformed",
+                Some(b"{\"a\":"),
+                StatusCode::BAD_REQUEST,
+                "none",
+                "deserialize",
+            ),
+            (
+                "oversized",
+                Some(b"{\"a\":1234567}"),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "none",
+                "overflow",
+            ),
+        ];
+        let request = |path: &str, body: Option<&'static [u8]>| {
+            let req = TestRequest::with_uri(path).method(Method::POST);
+            match body {
+                None => req.to_request(),
+                Some(body) => req
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::CONTENT_LENGTH, body.len().to_string())
+                    .payload(Bytes::from_static(body))
+                    .to_request(),
+            }
+        };
+
+        let mut required_calls = 0;
+        for (n, (input, body, status, option, result)) in cases.into_iter().enumerate() {
+            let resp = call_service(&srv, request("/required", body)).await;
+            assert_eq!(resp.status(), status, "required {input}");
+            required_calls += usize::from(status == StatusCode::OK);
+            assert_eq!(calls[0].get(), required_calls, "required {input}");
+
+            for (path, idx, expected) in [("/option", 1, option), ("/result", 2, result)] {
+                let resp = call_service(&srv, request(path, body)).await;
+                assert_eq!(resp.status(), StatusCode::OK, "{path} {input}");
+                assert_eq!(read_body(resp).await, expected.as_bytes(), "{path} {input}");
+                assert_eq!(calls[idx].get(), n + 1, "{path} {input}");
+            }
+        }
     }
 
     fn body_parts(

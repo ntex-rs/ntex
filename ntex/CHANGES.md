@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* web: Document that `Option<T>` extractors turn malformed and oversized input
+  into `None` and run the handler, and show how `Result<T, T::Error>` can
+  accept missing input while still rejecting invalid input
+
 * client: Document the phase each timeout covers. `disable_timeout()` and
   `ClientRequest::timeout()` bound only the wait for the response head, the
   payload timeout stays active, and waiting for a pooled connection and
