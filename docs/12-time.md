@@ -379,8 +379,8 @@ async fn recv_within(rx: &mpsc::Receiver<String>, limit: Seconds) -> Option<Stri
 
 `Deadline::reset` takes `&mut self`. Resetting to zero disables the
 deadline, and resetting a disabled deadline to a non-zero value arms it
-again. `is_elapsed()` reports a disabled deadline as elapsed, meaning that
-there is nothing left to wait for.
+again. `is_elapsed()` agrees with awaiting the deadline: it is `true` only
+once an armed deadline has fired, and always `false` for a disabled one.
 
 ### `timeout` and `timeout_checked`
 
