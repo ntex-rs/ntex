@@ -84,11 +84,11 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
-        if !self.count.is_available() {
+        let _guard = match self.count.try_get() {
+            Some(guard) => guard,
             // Callers that skip readiness wait here for a free slot.
-            self.count.clone().available().await;
-        }
-        let _guard = self.count.get();
+            None => self.count.clone().acquire().await,
+        };
         ctx.call(&self.service, req).await
     }
 
