@@ -102,6 +102,16 @@ fn test_main_with_timer_resolution() {
     assert_eq!(main_with_timer_resolution(), 2);
 }
 
+/// STATEMENT: The `timer_resolution` argument of `test` configures the test system timer resolution.
+///
+/// HOW:
+/// - Run a test declared with `timer_resolution = 1`.
+/// - Check the running system reports a 1 ms resolution instead of the default 16 ms.
+#[ntex::test(timer_resolution = 1)]
+async fn test_with_timer_resolution() {
+    assert_eq!(System::current().timer_resolution(), 1);
+}
+
 #[ntex::test]
 async fn test_params() {
     let srv = test::server(async |_| {
