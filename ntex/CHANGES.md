@@ -2,6 +2,12 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `web::ws::start()` and `WsConnection::start()` answer a ping with a pong and
+  echo the peer's close when the frame service returns `None`; a pong already sent
+  through the sink is not repeated, and nothing is answered after a close was sent.
+  `WsConnection::receiver()` now also answers pings. `start_with()` still sends no
+  automatic replies.
+
 * `ws::Codec` validates incoming text messages as UTF-8, including
   characters split between fragments, and limits the total payload of a message
   to 4 MiB, both failing the connection with `ProtocolError::InvalidUtf8` or

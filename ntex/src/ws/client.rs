@@ -439,11 +439,10 @@ impl WsConnection<Sealed> {
     /// Starts the WebSocket dispatcher and returns a channel of received frames.
     ///
     /// The dispatcher runs in a spawned task. Protocol and connection errors
-    /// are delivered through the returned channel. A close frame from the peer
-    /// is answered automatically, unless a close message has already been sent
-    /// through a sink of this connection. Dropping the receiver sends
-    /// a close frame and closes the connection once the peer responds or the
-    /// closing-handshake timeout expires.
+    /// are delivered through the returned channel. Pings and the peer's close
+    /// frame are answered automatically, see [`WsConnection::start()`].
+    /// Dropping the receiver sends a close frame and closes the connection
+    /// once the peer responds or the closing-handshake timeout expires.
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
@@ -451,19 +450,9 @@ impl WsConnection<Sealed> {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
             let sink = self.sink();
-            let sink2 = sink.clone();
 
+            // `start()` answers pings and the peer's close frame
             let fut = self.start(fn_service(async move |item: ws::Frame| {
-                if let ws::Frame::Close(reason) = &item
-                    && !sink2.is_closed()
-                {
-                    // answer the peer's close frame, echoing its code
-                    let reply = reason.as_ref().map(|r| CloseReason::from(r.code));
-                    if sink2.send(ws::Message::Close(reply)).await.is_err() {
-                        let reply = CloseReason::from(CloseCode::Normal);
-                        let _ = sink2.send(ws::Message::Close(Some(reply))).await;
-                    }
-                }
                 match tx.send(Ok(item)) {
                     Ok(()) => (),
                     Err(_) => io.close(),
@@ -495,6 +484,14 @@ impl WsConnection<Sealed> {
     ///
     /// The service may return a message to send to the peer or [`None`] when no
     /// response is required.
+    ///
+    /// Control frames are passed to the service too. If it returns [`None`]
+    /// for a ping and hasn't sent a pong through a sink meanwhile, a pong with
+    /// the same payload is sent. If it returns [`None`] for the peer's close
+    /// frame, a close echoing the peer's code is sent. No automatic reply is
+    /// sent once a close message has been sent through a sink of this
+    /// connection. After the peer's close frame is handled, the connection is
+    /// closed.
     pub async fn start<T>(
         self,
         svc: impl IntoService<T, (), ws::Frame>,
@@ -509,7 +506,11 @@ impl WsConnection<Sealed> {
             async move |req, svc| match req {
                 DispatchItem::<ws::WsSink>::Item(item) => {
                     let close = matches!(item, ws::Frame::Close(_));
-                    let result = svc.call(item).await;
+                    let reply = sink.codec().auto_reply(&item);
+                    let result = svc
+                        .call(item)
+                        .await
+                        .map(|res| sink.codec().unanswered(res, reply));
                     if matches!(&result, Ok(Some(ws::Message::Close(_)))) {
                         sink.start_close_timeout();
                     }
@@ -1191,6 +1192,34 @@ mod tests {
         assert_eq!(
             read_frame(&client, &ws::Codec::new().set_client_mode()),
             ws::Frame::Close(Some(CloseCode::Normal.into()))
+        );
+    }
+
+    /// STATEMENT: The client receiver answers pings with a pong carrying the same payload and still delivers the ping.
+    ///
+    /// HOW:
+    /// - Write a ping from the in-memory server, receive it from `receiver()`, and decode the client's pong reply.
+    /// - Then write a raw close with the extension code and expect the client to echo it.
+    #[crate::rt_test]
+    async fn receiver_answers_ping() {
+        let (res, client) = connected(WsClientConfig::new(), SharedCfg::default()).await;
+        let rx = res.unwrap().seal().receiver();
+        let peer = ws::Codec::new();
+
+        client.write(peer_frame(&peer, ws::Message::Ping("hb".into())));
+        let item = rx.recv().await.unwrap().unwrap();
+        assert_eq!(item, ws::Frame::Ping("hb".into()));
+        crate::time::sleep(crate::time::Millis(50)).await;
+        assert_eq!(read_frame(&client, &peer), ws::Frame::Pong("hb".into()));
+
+        // clients may send the extension code, servers cannot encode it
+        client.write(&[0x88, 0x02, 0x03, 0xf2][..]);
+        let item = rx.recv().await.unwrap().unwrap();
+        assert_eq!(item, ws::Frame::Close(Some(CloseCode::Extension.into())));
+        crate::time::sleep(crate::time::Millis(50)).await;
+        assert_eq!(
+            read_frame(&client, &peer),
+            ws::Frame::Close(Some(CloseCode::Extension.into()))
         );
     }
 

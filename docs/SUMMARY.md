@@ -10,7 +10,7 @@
 - [Worker and Request State](6-server-app.md)
 - [I/O Abstraction Layer](7-io.md)
 - [Web Application Framework]()
-  - [Applications and Routing](8.1-web-app.md)
+  - [Routing and Handlers](8.1-web-app.md)
   - [Application State](8.2-web-app.md)
   - [Filters and Middleware](8.3-web-app.md)
   - [Extractors and Responders](8.4-web-app.md)
