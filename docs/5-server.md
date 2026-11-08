@@ -1268,6 +1268,13 @@ read-rate limits. `HttpServiceConfig` controls HTTP behavior such as
 keep-alive, request-head limits, and protocol timeouts. TLS and other protocols
 add their own configuration types to the same `SharedCfg`.
 
+A configuration type that was not added falls back to its `Default` value.
+Each worker thread creates and caches its own default, and a lookup does not
+report whether the value was added or defaulted. This is how the framework's
+configuration types get their defaults. For configuration your application
+cannot run without, add it explicitly and validate it when you build the
+`SharedCfg`, instead of relying on a default.
+
 The [I/O chapter](7-io.md) explains buffer limits, read rates, write
 backpressure, keep-alive, and shutdown timing in detail.
 
