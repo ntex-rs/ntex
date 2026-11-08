@@ -216,8 +216,11 @@ impl ClientConfig {
     /// Sets the response-header timeout.
     ///
     /// The timeout covers receiving the response head after the request has
-    /// been sent. Connecting and sending the request are not included. A zero
-    /// duration disables the timeout. The default is 5 seconds.
+    /// been sent. It does not cover waiting for a pooled connection,
+    /// connecting, sending the request body, or reading the response body;
+    /// the last is bounded separately by
+    /// [`set_response_payload_timeout`](Self::set_response_payload_timeout).
+    /// A zero duration disables the timeout. The default is 5 seconds.
     pub fn set_response_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.timeout = timeout.into();
         self
@@ -226,7 +229,12 @@ impl ClientConfig {
     #[must_use]
     /// Disables the response-header timeout.
     ///
-    /// This is the same as `set_response_timeout(Millis::ZERO)`.
+    /// This is the same as `set_response_timeout(Millis::ZERO)`. Only the
+    /// wait for the response head becomes unbounded. The response payload
+    /// timeout still applies to [`ClientResponse::body`](super::ClientResponse::body)
+    /// and [`ClientResponse::json`](super::ClientResponse::json); disable it
+    /// with `set_response_payload_timeout(Millis::ZERO)`. Connect and I/O
+    /// timeouts from [`IoConfig`](crate::io::IoConfig) are not affected.
     pub fn disable_timeout(mut self) -> Self {
         self.timeout = Millis::ZERO;
         self
@@ -244,6 +252,9 @@ impl ClientConfig {
     #[must_use]
     /// Sets the timeout for reading a complete response payload.
     ///
+    /// The timeout applies to [`ClientResponse::body`](super::ClientResponse::body)
+    /// and [`ClientResponse::json`](super::ClientResponse::json), starting when
+    /// either is called. Reading the response as a stream is not bounded. The timeout is independent of the response-header timeout.
     /// The default is 10 seconds. A zero duration disables the timeout.
     pub fn set_response_payload_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.pl_timeout = timeout.into();
