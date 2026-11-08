@@ -358,7 +358,15 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
 /// body on a new `System` named after the test. The system is built in
 /// testing mode, without signal and panic handling, and always uses
 /// `ntex::rt::DefaultRuntime`. The test can return a `Result`, like a normal
-/// test. The macro takes no arguments.
+/// test.
+///
+/// ## Arguments
+///
+/// - `timer_resolution = N` - resolution of the timer wheel in milliseconds,
+///   a power of two between 1 and 16. Defaults to 16.
+///
+/// Other arguments, including the rest of those of [`rt_main`], are a compile
+/// error. Build a `System` manually for any other runtime configuration.
 ///
 /// It also turns on `env_logger` at `trace` level, unless `RUST_LOG` is set.
 /// Set `NTEX_NO_TEST_LOG` or enable the `no-test-logging` feature of ntex to
@@ -374,10 +382,14 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
 /// async fn my_fallible_test() -> std::io::Result<()> {
 ///     Ok(())
 /// }
+///
+/// #[ntex::test(timer_resolution = 1)]
+/// async fn my_precise_timer_test() {}
 /// ```
 #[proc_macro_attribute]
-pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
+pub fn rt_test(args: TokenStream, item: TokenStream) -> TokenStream {
     gen_test(
+        args,
         item,
         quote!(ntex::util::enable_test_logging();),
         quote!(ntex::rt::System),
@@ -389,8 +401,9 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
 /// enable test logging.
 #[doc(hidden)]
 #[proc_macro_attribute]
-pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
+pub fn rt_test2(args: TokenStream, item: TokenStream) -> TokenStream {
     gen_test(
+        args,
         item,
         TokenStream2::new(),
         quote!(ntex_rt::System),
@@ -402,8 +415,9 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
 /// `crate::` paths.
 #[doc(hidden)]
 #[proc_macro_attribute]
-pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
+pub fn rt_test_internal(args: TokenStream, item: TokenStream) -> TokenStream {
     gen_test(
+        args,
         item,
         quote!(crate::util::enable_test_logging();),
         quote!(ntex_rt::System),
@@ -413,11 +427,17 @@ pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Expands a test function, `setup` runs before the system is built
 fn gen_test(
+    args: TokenStream,
     item: TokenStream,
     setup: TokenStream2,
     system: TokenStream2,
     runtime: TokenStream2,
 ) -> TokenStream {
+    let config = match sys::TestArgs::parse(args.into()) {
+        Ok(args) => args.gen_sys_config(),
+        Err(err) => return err.into(),
+    };
+
     let input = match parse::ItemFn::parse(item.into()) {
         Ok(input) => input,
         Err(err) => return err.into(),
@@ -447,6 +467,7 @@ fn gen_test(
             #system::build()
                 .name(stringify!(#name))
                 .testing()
+                #config
                 .build(#runtime)
                 .block_on(#fut)
         }

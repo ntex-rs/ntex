@@ -1,5 +1,11 @@
 # Changes
 
+## [4.5.0] - Unreleased
+
+* Add `timer_resolution` argument to `test` macro
+
+* Reject other arguments passed to the `test` macro instead of silently ignoring them
+
 ## [4.4.0] - 2026-11-07
 
 * Add `timer_resolution` argument to `main` macro

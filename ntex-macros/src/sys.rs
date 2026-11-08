@@ -127,6 +127,45 @@ impl MainArgs {
     }
 }
 
+/// Arguments of the `test` macro
+pub(crate) struct TestArgs {
+    timer_resolution: Option<Literal>,
+}
+
+impl TestArgs {
+    pub(crate) fn gen_sys_config(self) -> TokenStream {
+        self.timer_resolution
+            .map(|millis| quote!(.timer_resolution(#millis)))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn parse(input: TokenStream) -> Result<Self, Error> {
+        let mut args = TestArgs {
+            timer_resolution: None,
+        };
+
+        for param in parse_args(input)? {
+            if param.name != "timer_resolution" {
+                return Err(Error::new_spanned(
+                    &param.name,
+                    "unknown argument, expected `timer_resolution`",
+                ));
+            }
+            if args.timer_resolution.is_some() {
+                return Err(Error::new_spanned(
+                    &param.name,
+                    "duplicate `timer_resolution` argument",
+                ));
+            }
+            args.timer_resolution = Some(param.lit_int().ok_or_else(|| {
+                param.value_error("`timer_resolution` value must be an integer literal")
+            })?);
+        }
+
+        Ok(args)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +235,44 @@ mod tests {
         );
         assert_eq!(err("rt = \"x\""), "`rt` value must be a type");
         assert_eq!(err("rt = a, rt = b"), "duplicate `rt` argument");
+    }
+
+    fn test_err(s: &str) -> String {
+        TestArgs::parse(s.parse().unwrap())
+            .err()
+            .unwrap()
+            .to_string()
+    }
+
+    /// STATEMENT: The `test` macro accepts only `timer_resolution` and turns it into a builder call.
+    ///
+    /// HOW:
+    /// - Parse empty arguments and `timer_resolution = 1` and compare the
+    ///   generated builder calls.
+    /// - Parse unknown, `main`-only, wrongly typed and duplicate arguments and
+    ///   compare their errors.
+    #[test]
+    fn test_args() {
+        let cfg = |s: &str| {
+            TestArgs::parse(s.parse().unwrap())
+                .ok()
+                .unwrap()
+                .gen_sys_config()
+                .to_string()
+        };
+        assert_eq!(cfg(""), "");
+        assert_eq!(cfg("timer_resolution = 1"), ". timer_resolution (1)");
+
+        let unknown = "unknown argument, expected `timer_resolution`";
+        assert_eq!(test_err("foo = 1"), unknown);
+        assert_eq!(test_err("name = \"t\""), unknown);
+        assert_eq!(
+            test_err("timer_resolution = \"2\""),
+            "`timer_resolution` value must be an integer literal"
+        );
+        assert_eq!(
+            test_err("timer_resolution = 2, timer_resolution = 4"),
+            "duplicate `timer_resolution` argument"
+        );
     }
 }
