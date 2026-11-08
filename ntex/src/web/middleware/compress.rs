@@ -120,10 +120,11 @@ impl AcceptEncoding {
         if name.is_empty() {
             return None;
         }
+        // unsupported codings cannot be selected, skip them
         let encoding = if name == "*" {
             None
         } else {
-            Some(ContentEncoding::from(name))
+            Some(name.parse().ok()?)
         };
 
         // a malformed weight makes the entry unacceptable
@@ -251,7 +252,8 @@ mod tests {
     ///
     /// HOW:
     /// - Check gzip defaults, whitespace, case-insensitive `q`, extra parameters, and invalid quality.
-    /// - Assert wildcard has no specific encoding and an empty entry is ignored.
+    /// - Assert wildcard has no specific encoding, `identity` is kept, and empty or
+    ///   unsupported coding entries are ignored.
     #[test]
     fn test_accept_encoding_entry() {
         let entry = |tag| AcceptEncoding::new(tag).unwrap();
@@ -268,7 +270,13 @@ mod tests {
         assert_eq!(entry("gzip;q=abc").q, 0);
         assert_eq!(entry("gzip;0.8").q, 1000);
         assert_eq!(entry("*;q=0.1").encoding, None);
+        assert_eq!(
+            entry("identity;q=0").encoding,
+            Some(ContentEncoding::Identity)
+        );
         assert!(AcceptEncoding::new(" ").is_none());
+        assert!(AcceptEncoding::new("compress").is_none());
+        assert!(AcceptEncoding::new("gizp;q=1").is_none());
     }
 
     /// STATEMENT: Automatic compression selects supported encodings rather than unsupported preferences.

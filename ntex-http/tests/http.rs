@@ -192,6 +192,11 @@ fn errors() {
     let _: InvalidHeaderValue = http::HeaderValue::from_bytes(b"\n").unwrap_err().into();
 }
 
+/// STATEMENT: Parsed content encodings expose their canonical name and default quality.
+///
+/// HOW:
+/// - Parse supported names and assert the variant, `as_str()` and `quality()`.
+/// - Assert an unknown name fails to parse and `Auto` reports the identity name and quality.
 #[test]
 fn content_encoding() {
     for (s, enc, name, q) in [
@@ -199,13 +204,13 @@ fn content_encoding() {
         (" GZIP ", ContentEncoding::Gzip, "gzip", 1.0),
         ("Deflate", ContentEncoding::Deflate, "deflate", 0.9),
         ("identity", ContentEncoding::Identity, "identity", 0.1),
-        ("unknown", ContentEncoding::Identity, "identity", 0.1),
     ] {
-        let e = ContentEncoding::from(s);
+        let e: ContentEncoding = s.parse().unwrap();
         assert_eq!(e, enc);
         assert_eq!(e.as_str(), name);
         assert!((e.quality() - q).abs() < f64::EPSILON);
     }
+    assert!("unknown".parse::<ContentEncoding>().is_err());
     assert_eq!(ContentEncoding::Auto.as_str(), "identity");
     assert!((ContentEncoding::Auto.quality() - 0.1).abs() < f64::EPSILON);
     assert!(ContentEncoding::Gzip.is_compressed());

@@ -23,6 +23,8 @@ pub use http::header::{
 };
 pub use http::header::{HeaderName, InvalidHeaderName};
 
+pub use crate::error::InvalidContentEncoding;
+
 /// Represents supported types of content encodings
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ContentEncoding {
@@ -72,20 +74,30 @@ impl ContentEncoding {
     }
 }
 
-impl<'a> From<&'a str> for ContentEncoding {
-    fn from(s: &'a str) -> ContentEncoding {
+impl std::str::FromStr for ContentEncoding {
+    type Err = InvalidContentEncoding;
+
+    /// Parse a content-coding name.
+    ///
+    /// Accepts `br`, `gzip` (or `x-gzip`), `deflate`, `zstd` and `identity`,
+    /// ignoring ASCII case and surrounding whitespace. Unknown or empty names
+    /// return an error, use `.unwrap_or(ContentEncoding::Identity)` to fall
+    /// back to no compression.
+    fn from_str(s: &str) -> Result<ContentEncoding, InvalidContentEncoding> {
         let s = s.trim();
 
         if s.eq_ignore_ascii_case("br") {
-            ContentEncoding::Br
+            Ok(ContentEncoding::Br)
         } else if s.eq_ignore_ascii_case("gzip") || s.eq_ignore_ascii_case("x-gzip") {
-            ContentEncoding::Gzip
+            Ok(ContentEncoding::Gzip)
         } else if s.eq_ignore_ascii_case("deflate") {
-            ContentEncoding::Deflate
+            Ok(ContentEncoding::Deflate)
         } else if s.eq_ignore_ascii_case("zstd") {
-            ContentEncoding::Zstd
+            Ok(ContentEncoding::Zstd)
+        } else if s.eq_ignore_ascii_case("identity") {
+            Ok(ContentEncoding::Identity)
         } else {
-            ContentEncoding::Identity
+            Err(InvalidContentEncoding::new())
         }
     }
 }
@@ -94,6 +106,11 @@ impl<'a> From<&'a str> for ContentEncoding {
 mod tests {
     use super::*;
 
+    /// STATEMENT: `ContentEncoding` reports compression, names and default quality per variant.
+    ///
+    /// HOW:
+    /// - Assert `is_compressed()` for compressed variants and not for `Identity`/`Auto`.
+    /// - Assert `as_str()`, `Debug` output and the relative `quality()` ordering.
     #[test]
     fn encoding() {
         assert!(ContentEncoding::Br.is_compressed());
@@ -103,10 +120,38 @@ mod tests {
 
         assert!(ContentEncoding::Zstd.is_compressed());
         assert_eq!(ContentEncoding::Zstd.as_str(), "zstd");
-        assert_eq!(ContentEncoding::from(" ZStd "), ContentEncoding::Zstd);
-        assert_eq!(ContentEncoding::from("X-Gzip"), ContentEncoding::Gzip);
-        assert_eq!(ContentEncoding::from("x-zstd"), ContentEncoding::Identity);
         assert!(ContentEncoding::Br.quality() > ContentEncoding::Zstd.quality());
         assert!(ContentEncoding::Zstd.quality() > ContentEncoding::Gzip.quality());
+    }
+
+    /// STATEMENT: Parsing accepts only supported coding names and rejects anything else.
+    ///
+    /// HOW:
+    /// - Parse every supported name, the `x-gzip` alias and explicit `identity`,
+    ///   with mixed case and surrounding whitespace, and assert the variant.
+    /// - Assert typos, unsupported codings, `auto`, empty and blank input return
+    ///   `InvalidContentEncoding`, which converts into the generic `Error`.
+    #[test]
+    fn parse() {
+        for (s, enc) in [
+            ("br", ContentEncoding::Br),
+            ("gzip", ContentEncoding::Gzip),
+            ("X-Gzip", ContentEncoding::Gzip),
+            ("Deflate", ContentEncoding::Deflate),
+            (" ZStd ", ContentEncoding::Zstd),
+            ("identity", ContentEncoding::Identity),
+            ("IDENTITY", ContentEncoding::Identity),
+        ] {
+            assert_eq!(s.parse::<ContentEncoding>(), Ok(enc), "{s:?}");
+        }
+
+        for s in ["gizp", "x-zstd", "compress", "auto", "gzip, br", "", "  "] {
+            let err = s.parse::<ContentEncoding>().unwrap_err();
+            assert_eq!(err.to_string(), "Unsupported content encoding");
+            assert!(
+                crate::Error::from(err).is::<InvalidContentEncoding>(),
+                "{s:?}"
+            );
+        }
     }
 }

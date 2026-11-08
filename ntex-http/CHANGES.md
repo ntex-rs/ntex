@@ -1,5 +1,11 @@
 # Changes
 
+## [2.2.0] - Unreleased
+
+* Add `FromStr` for `ContentEncoding` with the `InvalidContentEncoding` error
+
+* Remove `From<&str>` for `ContentEncoding`, unknown names no longer silently map to `Identity`
+
 ## [2.1.0] - 2026-10-09
 
 * Add `ContentEncoding::Zstd`
