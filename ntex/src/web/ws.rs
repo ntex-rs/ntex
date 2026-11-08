@@ -51,8 +51,8 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
         })
 }
 
-/// Start websocket service handling Frame messages with automatic control/stop logic,
-/// including the chosen subprotocol in the response.
+/// Start websocket service handling Frame messages, including the chosen
+/// subprotocol in the response.
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. The protocol must be a valid HTTP
@@ -60,6 +60,15 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 ///
 /// If the handshake fails for an upgrade request, the handshake error response
 /// is sent and the connection is closed.
+///
+/// Control frames are passed to the service too. If it returns `None` for
+/// a ping and hasn't sent a pong through a sink meanwhile, a pong with the
+/// same payload is sent. If it returns `None` for the peer's close frame,
+/// a close echoing the peer's code is sent. No automatic reply is sent once
+/// a close message has been sent through a sink. After the peer's close frame
+/// is handled, the connection is closed. Dispatcher control and stop events
+/// are handled by `start()`, a service error sends a close frame with
+/// [`CloseCode::Away`].
 ///
 /// # Example
 ///
@@ -103,6 +112,8 @@ where
 
 /// Start websocket service handling raw `DispatchItem` messages requiring manual control/stop logic,
 /// including the chosen subprotocol in the response.
+///
+/// Unlike [`start()`], pings and close frames are not answered automatically.
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. The protocol must be a valid HTTP
@@ -225,13 +236,16 @@ where
     ) -> Result<Self::Res, Self::Error> {
         match req {
             DispatchItem::Item(item) => {
-                let s = if matches!(item, Frame::Close(_)) {
-                    Some(ctx.st().clone())
-                } else {
-                    None
-                };
-                let result = ctx.call(&self.svc, item).await.map_err(WsError::Service);
-                if let Some(s) = s {
+                let sink = ctx.st();
+                let close = matches!(item, Frame::Close(_));
+                let reply = sink.codec().auto_reply(&item);
+                let result = ctx
+                    .call(&self.svc, item)
+                    .await
+                    .map(|res| sink.codec().unanswered(res, reply))
+                    .map_err(WsError::Service);
+                if close {
+                    let s = sink.clone();
                     rt::spawn_detached(async move { s.io().close() });
                 }
                 result
@@ -354,5 +368,70 @@ mod tests {
         assert!(matches!(res, Ok(Some(Message::Pong(_)))));
         io.on_disconnect().await;
         assert!(io.is_closed());
+    }
+
+    /// STATEMENT: `start()` answers pings and the peer's close when the frame service returns `None`, without duplicating replies.
+    ///
+    /// HOW:
+    /// - Dispatch frames to a service that returns `None`, or a text reply for ping `"own"`, or sends a pong through the sink for ping `"sink"`.
+    /// - Expect a pong with the ping payload, the service's own reply, no reply after the sink pong but a pong for the next ping; text gets no reply.
+    /// - Expect the peer's close code to be echoed, an extension close to be answered with a normal close, and no reply once a close has been sent.
+    #[crate::rt_test]
+    async fn dispatch_service_auto_replies() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1 << 20);
+        let io = Io::from(server);
+        let sink = WsSink::new(io.get_ref(), ws::Codec::new(), crate::Cfg::default());
+        let sink2 = sink.clone();
+        let svc = Pipeline::new(
+            sink.clone(),
+            DispatchService {
+                svc: fn_service(async move |frame: Frame| match frame {
+                    Frame::Ping(p) if p == "own" => Ok(Some(Message::Text("own".into()))),
+                    Frame::Ping(p) if p == "sink" => {
+                        sink2.send(Message::Pong(p)).await.unwrap();
+                        Ok(None)
+                    }
+                    _ => Ok::<_, io::Error>(None),
+                }),
+            },
+        );
+
+        let res = svc.call(DispatchItem::Item(Frame::Ping("p".into()))).await;
+        assert_eq!(res.unwrap(), Some(Message::Pong("p".into())));
+        let res = svc
+            .call(DispatchItem::Item(Frame::Ping("own".into())))
+            .await;
+        assert_eq!(res.unwrap(), Some(Message::Text("own".into())));
+        let res = svc
+            .call(DispatchItem::Item(Frame::Ping("sink".into())))
+            .await;
+        assert_eq!(res.unwrap(), None);
+        let res = svc.call(DispatchItem::Item(Frame::Ping("p2".into()))).await;
+        assert_eq!(res.unwrap(), Some(Message::Pong("p2".into())));
+        let res = svc.call(DispatchItem::Item(Frame::Text("t".into()))).await;
+        assert_eq!(res.unwrap(), None);
+
+        // the peer's close code is echoed, servers cannot send the extension code
+        let close = Frame::Close(Some(ws::CloseCode::Away.into()));
+        let res = svc.call(DispatchItem::Item(close)).await;
+        assert_eq!(
+            res.unwrap(),
+            Some(Message::Close(Some(ws::CloseCode::Away.into())))
+        );
+        let close = Frame::Close(Some(ws::CloseCode::Extension.into()));
+        let res = svc.call(DispatchItem::Item(close)).await;
+        assert_eq!(
+            res.unwrap(),
+            Some(Message::Close(Some(ws::CloseCode::Normal.into())))
+        );
+
+        // nothing is sent after a close
+        sink.send(Message::Close(None)).await.unwrap();
+        let res = svc.call(DispatchItem::Item(Frame::Ping("p".into()))).await;
+        assert_eq!(res.unwrap(), None);
+        let close = Frame::Close(Some(ws::CloseCode::Away.into()));
+        let res = svc.call(DispatchItem::Item(close)).await;
+        assert_eq!(res.unwrap(), None);
     }
 }

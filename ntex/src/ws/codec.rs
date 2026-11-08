@@ -9,7 +9,7 @@ use crate::util::{BytePage, BytePages, ByteString, Bytes, BytesMut};
 use super::deflate::{Deflate, DeflateConfig};
 use super::error::ProtocolError;
 use super::frame::Parser;
-use super::proto::{CloseReason, OpCode};
+use super::proto::{CloseCode, CloseReason, OpCode};
 
 /// An outgoing WebSocket message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +100,8 @@ bitflags::bitflags! {
         const R_CLOSED       = 0b0001_0000;
         const R_COMPRESSED   = 0b0010_0000;
         const R_TEXT         = 0b0100_0000;
+        /// A pong was encoded since the last `auto_reply()` for a ping.
+        const W_PONG         = 0b1000_0000;
     }
 }
 
@@ -276,6 +278,48 @@ impl Codec {
         self.flags().contains(Flags::SERVER)
     }
 
+    /// Returns the reply to `frame` that is sent when a frame service
+    /// returns no response, pass it to [`Codec::unanswered()`] after the
+    /// service call.
+    ///
+    /// A ping is answered with a pong carrying the same payload, and a close
+    /// with a close echoing the peer's code. A server cannot send the
+    /// extension code, it answers it with a normal close.
+    pub(crate) fn auto_reply(&self, frame: &Frame) -> Option<Message> {
+        match frame {
+            Frame::Ping(data) => {
+                self.remove_flags(Flags::W_PONG);
+                Some(Message::Pong(data.clone()))
+            }
+            Frame::Close(reason) => Some(Message::Close(reason.as_ref().map(|r| {
+                if self.is_server() && r.code == CloseCode::Extension {
+                    CloseCode::Normal.into()
+                } else {
+                    r.code.into()
+                }
+            }))),
+            _ => None,
+        }
+    }
+
+    /// Returns the service response, or the automatic `reply` if the service
+    /// returned none.
+    ///
+    /// The automatic reply is dropped once a close message has been sent,
+    /// and a pong is dropped if one was sent while the service handled
+    /// the ping, e.g. through a sink.
+    pub(crate) fn unanswered(
+        &self,
+        res: Option<Message>,
+        reply: Option<Message>,
+    ) -> Option<Message> {
+        res.or_else(|| match reply {
+            _ if self.is_closed() => None,
+            Some(Message::Pong(_)) if self.flags().contains(Flags::W_PONG) => None,
+            reply => reply,
+        })
+    }
+
     #[cfg_attr(not(feature = "compress"), allow(clippy::unused_self))]
     fn is_compressed(&self) -> bool {
         #[cfg(feature = "compress")]
@@ -438,6 +482,7 @@ impl Encoder for Codec {
             }
             Message::Pong(txt) => {
                 Parser::write_message(dst, txt, OpCode::Pong, true, !self.is_server())?;
+                self.insert_flags(Flags::W_PONG);
             }
             Message::Close(reason) => {
                 Parser::write_close(dst, reason, !self.is_server())?;
