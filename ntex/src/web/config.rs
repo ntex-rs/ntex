@@ -391,7 +391,7 @@ mod tests {
     /// STATEMENT: An external resource registered through `configure` supports URL generation.
     ///
     /// HOW:
-    /// - Configure a named YouTube resource and return its generated URL from `/test`.
+    /// - Configure a `youtube` external resource and return its generated URL from `/test`.
     /// - Call the service and assert an OK response containing the substituted video URL.
     #[crate::rt_test]
     async fn test_configure_external_resource() {

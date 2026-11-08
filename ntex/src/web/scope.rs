@@ -1289,7 +1289,7 @@ mod tests {
     /// STATEMENT: External resources configured inside nested scopes retain their external origin.
     ///
     /// HOW:
-    /// - Register a YouTube template in `/app/v1` and return its generated URL from the root handler.
+    /// - Register the `youtube` external resource in `/app/v1` and return its generated URL from the root handler.
     /// - Assert OK and the exact external URL without either scope prefix.
     #[crate::rt_test]
     async fn test_url_for_external() {

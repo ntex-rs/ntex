@@ -1,6 +1,6 @@
 # Changes
 
-## [4.5.0] - Unreleased
+## [4.5.0] - 2026-11-09
 
 * Add `timer_resolution` argument to `test` macro
 

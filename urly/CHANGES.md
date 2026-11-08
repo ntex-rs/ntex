@@ -1,5 +1,10 @@
 # Changes
 
+## [1.2.2] - 2026-11-09
+
+* Return `ErrorKind::TooLong` from `Builder::build` instead of panicking when
+  the path, query or fragment makes the URL longer than 65535 bytes
+
 ## [1.2.1] - 2026-11-03
 
 * Improve quoting performance

@@ -980,7 +980,7 @@ mod tests {
     /// STATEMENT: Application external resources generate URLs inside request handlers.
     ///
     /// HOW:
-    /// - Register a named YouTube template and return `url_for` from `/test`.
+    /// - Register a `youtube` external resource and return `url_for` from `/test`.
     /// - Assert OK and the complete URL containing the supplied video ID.
     #[crate::rt_test]
     async fn test_external_resource() {
