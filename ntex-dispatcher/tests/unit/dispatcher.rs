@@ -2460,6 +2460,54 @@ async fn decoder_error_stops_dispatcher() {
     assert!(reason.contains("decode"), "{reason}");
 }
 
+/// STATEMENT: The transport close reason distinguishes failed terminations that the dispatcher completes as `Ok(())`.
+///
+/// HOW:
+/// - Run catch-all `Ok(None)` services over `ErrCodec` with malformed input and over `BCodec` with one whole frame followed by peer EOF.
+/// - Verify both dispatchers return `Ok(())`, while `IoRef::close_reason` reports `CloseReason::Decoder` and `CloseReason::PeerGone` respectively.
+/// - Run a service failing on its first item and verify `Err` together with `CloseReason::Service`.
+#[ntex::test]
+async fn close_reason_classifies_termination() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    client.write("!");
+    let (disp, state) = Dispatcher::debug(
+        Io::from(server),
+        ErrCodec,
+        ntex_service::fn_service(async |_: DispatchItem<ErrCodec>| Ok::<_, ()>(None)),
+    );
+    assert_eq!(timeout(Millis(1000), disp).await, Ok(Ok(())));
+    assert_eq!(state.0.close_reason(), Some(CloseReason::Decoder));
+
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    client.write("12345678");
+    let (disp, state) = Dispatcher::debug(
+        Io::from(server),
+        BCodec(8),
+        ntex_service::fn_service(async |_: DispatchItem<BCodec>| Ok::<_, ()>(None)),
+    );
+    let disp = spawn(disp);
+    sleep(Millis(25)).await;
+    client.close().await;
+    assert_eq!(timeout(Millis(1000), disp).await.unwrap().unwrap(), Ok(()));
+    assert_eq!(state.0.close_reason(), Some(CloseReason::PeerGone));
+
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    client.write("12345678");
+    let (disp, state) = Dispatcher::debug(
+        Io::from(server),
+        BCodec(8),
+        ntex_service::fn_service(async |msg: DispatchItem<BCodec>| match msg {
+            DispatchItem::Item(_) => Err("item"),
+            _ => Ok(None),
+        }),
+    );
+    assert_eq!(timeout(Millis(1000), disp).await, Ok(Err("item")));
+    assert_eq!(state.0.close_reason(), Some(CloseReason::Service));
+}
+
 /// STATEMENT: Dispatch items and stop reasons retain descriptive `Debug` formatting.
 ///
 /// HOW:
