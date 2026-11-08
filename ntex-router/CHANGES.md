@@ -1,5 +1,10 @@
 # Changes
 
+## [2.3.0] - 2026-11-xx
+
+* Add `ResourceDef::try_build_path()`, it checks elements against the patterns of
+  their dynamic segments
+
 ## [2.2.0] - 2026-11-07
 
 * Match a single `{name}` path segment without regex

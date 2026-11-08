@@ -27,10 +27,42 @@ pub struct ResourceDef {
     pub(super) prefix: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Error building a resource path, see [`ResourceDef::try_build_path()`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BuildPathError {
+    /// Not enough elements for the dynamic segments of the pattern
+    NotEnoughElements,
+    /// An element does not match the pattern of its dynamic segment
+    InvalidElement,
+}
+
+#[derive(Debug, Clone)]
 enum PathElement {
     Str(String),
-    Var(String),
+    Var(String, VarPattern),
+}
+
+/// Pattern a value of a dynamic segment must match
+#[derive(Debug, Clone)]
+enum VarPattern {
+    /// Default `.+` pattern
+    Default,
+    /// Remainder match, it accepts any value
+    Tail,
+    /// Custom pattern, anchored at both ends
+    Custom(Regex),
+}
+
+impl VarPattern {
+    fn is_match(&self, value: &str) -> bool {
+        match self {
+            // `.` does not match `\n`
+            VarPattern::Default => !value.is_empty() && !value.contains('\n'),
+            VarPattern::Tail => true,
+            VarPattern::Custom(re) => re.is_match(value),
+        }
+    }
 }
 
 impl PathElement {
@@ -48,7 +80,7 @@ impl PathElement {
 
     fn as_str(&self) -> &str {
         match self {
-            PathElement::Str(s) | PathElement::Var(s) => s.as_str(),
+            PathElement::Str(s) | PathElement::Var(s, _) => s.as_str(),
         }
     }
 }
@@ -192,49 +224,99 @@ impl ResourceDef {
     /// Elements are used for dynamic segments in pattern order, an iterator
     /// can be passed by `&mut` to continue using it afterwards. The path is
     /// appended to `path`. Returns `false` if there are not enough elements,
-    /// `path` is left unchanged then.
+    /// `path` is left unchanged then. Elements are not checked against the
+    /// segment patterns, see [`try_build_path()`](Self::try_build_path).
     pub fn build_path<U, I>(&self, path: &mut String, elements: U) -> bool
     where
         U: IntoIterator<Item = I>,
         I: AsRef<str>,
     {
         let mut elements = elements.into_iter();
-        self.build_path_with(path, |_| elements.next())
+        self.build_path_with(path, |_| elements.next(), |_, _| true, String::push_str)
+            .is_ok()
+    }
+
+    /// Build resource path from elements, checking each against the pattern
+    /// of its dynamic segment.
+    ///
+    /// Elements are used for dynamic segments in pattern order, an iterator
+    /// can be passed by `&mut` to continue using it afterwards. A remainder
+    /// segment (`{name}*`) accepts any value, a segment without a custom
+    /// pattern accepts any non-empty value without a newline. Each checked
+    /// element is appended to `path` by `encode`, for example
+    /// percent-encoded. On error `path` is left unchanged.
+    pub fn try_build_path<U, I, F>(
+        &self,
+        path: &mut String,
+        elements: U,
+        encode: F,
+    ) -> Result<(), BuildPathError>
+    where
+        U: IntoIterator<Item = I>,
+        I: AsRef<str>,
+        F: FnMut(&mut String, &str),
+    {
+        let mut elements = elements.into_iter();
+        self.build_path_with(
+            path,
+            |_| elements.next(),
+            VarPattern::is_match,
+            encode,
+        )
     }
 
     /// Build resource path from named elements, using the primary pattern.
     ///
     /// The path is appended to `path`. Returns `false` if an element is
-    /// missing, `path` is left unchanged then.
+    /// missing, `path` is left unchanged then. Elements are not checked
+    /// against the segment patterns.
     pub fn build_path_named<K, V, S>(&self, path: &mut String, elements: &HashMap<K, V, S>) -> bool
     where
         K: std::borrow::Borrow<str> + Eq + Hash,
         V: AsRef<str>,
         S: std::hash::BuildHasher,
     {
-        self.build_path_with(path, |name| elements.get(name))
+        self.build_path_with(
+            path,
+            |name| elements.get(name),
+            |_, _| true,
+            String::push_str,
+        )
+        .is_ok()
     }
 
-    fn build_path_with<F, I>(&self, path: &mut String, mut element: F) -> bool
+    fn build_path_with<F, C, E, I>(
+        &self,
+        path: &mut String,
+        mut element: F,
+        check: C,
+        mut encode: E,
+    ) -> Result<(), BuildPathError>
     where
         F: FnMut(&str) -> Option<I>,
+        C: Fn(&VarPattern, &str) -> bool,
+        E: FnMut(&mut String, &str),
         I: AsRef<str>,
     {
         let len = path.len();
         for el in &self.elements {
             match *el {
                 PathElement::Str(ref s) => path.push_str(s),
-                PathElement::Var(ref name) => {
-                    if let Some(val) = element(name) {
-                        path.push_str(val.as_ref());
-                    } else {
-                        path.truncate(len);
-                        return false;
-                    }
+                PathElement::Var(ref name, ref pattern) => {
+                    let err = match element(name) {
+                        Some(val) if check(pattern, val.as_ref()) => {
+                            encode(path, val.as_ref());
+                            continue;
+                        }
+                        Some(_) => BuildPathError::InvalidElement,
+                        None => BuildPathError::NotEnoughElements,
+                    };
+                    path.truncate(len);
+                    return Err(err);
                 }
             }
         }
-        true
+        Ok(())
     }
 
     fn parse_segment<'a>(
@@ -303,7 +385,14 @@ impl ResourceDef {
 
             re = format!(r"{}(?P<{}>{})", re, escape(name), pat);
 
-            elems.push(PathElement::Var(name.to_string()));
+            let var = if tail {
+                VarPattern::Tail
+            } else if pat == DEFAULT_PATTERN {
+                VarPattern::Default
+            } else {
+                VarPattern::Custom(Regex::new(&format!("^(?:{pat})$")).unwrap())
+            };
+            elems.push(PathElement::Var(name.to_string(), var));
 
             if let Some(idx) = rem.find(['{', '/']) {
                 end = Some(idx);
@@ -1328,6 +1417,61 @@ mod tests {
         map.insert("item2", "item2");
         assert!(resource.build_path_named(&mut s, &map));
         assert_eq!(s, "/user/item/item2/");
+    }
+
+    /// STATEMENT: `try_build_path` checks each element against the pattern of its
+    /// dynamic segment and encodes accepted elements.
+    ///
+    /// HOW:
+    /// - Build `/item/{id:[0-9]+}/{name}/{tail}*` with valid elements and an encoder that
+    ///   upper-cases, and expect the encoded path.
+    /// - Expect `InvalidElement` for a non-numeric id, a partially numeric id, an empty or
+    ///   multi-line name, and `NotEnoughElements` for a missing element; `path` keeps its
+    ///   prefix on error.
+    /// - Confirm the remainder accepts an empty value and `build_path` does not check.
+    #[test]
+    fn test_try_build_path() {
+        let resource = ResourceDef::new("/item/{id:[0-9]+}/{name}/{tail}*");
+        let encode = |path: &mut String, el: &str| path.push_str(&el.to_uppercase());
+
+        let mut s = String::new();
+        assert_eq!(
+            resource.try_build_path(&mut s, ["12", "ab", "c/d"], encode),
+            Ok(())
+        );
+        assert_eq!(s, "/item/12/AB/C/D");
+
+        for elements in [
+            ["abc", "a", ""],
+            ["1a", "a", ""],
+            ["1", "", ""],
+            ["1", "a\nb", ""],
+        ] {
+            let mut s = "/prefix".to_string();
+            assert_eq!(
+                resource.try_build_path(&mut s, elements, encode),
+                Err(BuildPathError::InvalidElement)
+            );
+            assert_eq!(s, "/prefix");
+        }
+
+        let mut s = "/prefix".to_string();
+        assert_eq!(
+            resource.try_build_path(&mut s, ["1", "a"], encode),
+            Err(BuildPathError::NotEnoughElements)
+        );
+        assert_eq!(s, "/prefix");
+
+        let mut s = String::new();
+        assert_eq!(
+            resource.try_build_path(&mut s, ["1", "a", ""], String::push_str),
+            Ok(())
+        );
+        assert_eq!(s, "/item/1/a/");
+
+        let mut s = String::new();
+        assert!(resource.build_path(&mut s, ["abc", "", ""]));
+        assert_eq!(s, "/item/abc//");
     }
 
     /// STATEMENT: Non-rooted patterns retain static boundaries, dynamic captures, and custom

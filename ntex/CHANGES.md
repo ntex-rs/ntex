@@ -2,6 +2,13 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `HttpRequest::url_for()` validates elements against their path segment patterns
+  (`{id:[0-9]+}`, non-empty for `{id}`) and fails with
+  `UrlGenerationError::InvalidElement`, and rejects unused elements with
+  `UrlGenerationError::TooManyElements`; `UrlGenerationError` is now
+  `#[non_exhaustive]`. Registering a resource name twice within the same scope or
+  application panics. Requires `ntex-router` 2.3.0.
+
 * `web::ws::start()` and `WsConnection::start()` answer a ping with a pong and
   echo the peer's close when the frame service returns `None`; a pong already sent
   through the sink is not repeated, and nothing is answered after a close was sent.

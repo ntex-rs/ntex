@@ -68,7 +68,7 @@ mod tree;
 
 pub use self::de::PathDeserializer;
 pub use self::path::{Path, PathIter};
-pub use self::resource::ResourceDef;
+pub use self::resource::{BuildPathError, ResourceDef};
 pub use self::router::{ResourceId, Router, RouterBuilder, RouterEntry};
 
 /// A value that can be matched by a [`Router`].

@@ -139,6 +139,22 @@ impl HttpRequest {
     /// Each element is percent-encoded as one literal URL component before it
     /// replaces a dynamic segment.
     ///
+    /// Elements fill the dynamic segments of the enclosing scopes first, then
+    /// of the resource. Each must match the pattern of its segment, for
+    /// example `{id:[0-9]+}`; a segment without a custom pattern accepts any
+    /// non-empty value without a newline, a remainder segment (`{tail}*`)
+    /// accepts any value.
+    ///
+    /// # Errors
+    ///
+    /// - [`ResourceNotFound`](crate::web::error::UrlGenerationError::ResourceNotFound) if no resource has this name.
+    /// - [`NotEnoughElements`](crate::web::error::UrlGenerationError::NotEnoughElements) or
+    ///   [`TooManyElements`](crate::web::error::UrlGenerationError::TooManyElements) if the number of elements
+    ///   differs from the number of dynamic segments.
+    /// - [`InvalidElement`](crate::web::error::UrlGenerationError::InvalidElement) if an element does not
+    ///   match the pattern of its segment.
+    /// - [`ParseError`](crate::web::error::UrlGenerationError::ParseError) if the generated URL is invalid.
+    ///
     /// ```rust
     /// # use ntex::web::{self, App, HttpRequest, HttpResponse};
     /// #

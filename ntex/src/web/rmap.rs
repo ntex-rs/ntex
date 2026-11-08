@@ -2,9 +2,9 @@ use std::{cell::RefCell, rc::Rc};
 
 use urly::{Url, quoting::Component, quoting::quote};
 
-use crate::router::ResourceDef;
+use crate::router::{BuildPathError, ResourceDef};
 use crate::util::HashMap;
-use crate::web::httprequest::HttpRequest;
+use crate::web::{error::UrlGenerationError, httprequest::HttpRequest};
 
 /// Map of registered resources, used for URL generation.
 ///
@@ -36,13 +36,23 @@ impl ResourceMap {
     ///
     /// Assigns the pattern its id within this map. Named patterns can be used
     /// for URL generation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a pattern with the same name is already added to this map.
     pub fn add(&mut self, pattern: &mut ResourceDef, nested: Option<Rc<ResourceMap>>) {
         pattern.set_id(self.patterns.len() as u16);
-        self.patterns.push((pattern.clone(), nested));
         if !pattern.name().is_empty() {
-            self.named
+            let prev = self
+                .named
                 .insert(pattern.name().to_string(), pattern.clone());
+            assert!(
+                prev.is_none(),
+                "Resource name {:?} is already used",
+                pattern.name()
+            );
         }
+        self.patterns.push((pattern.clone(), nested));
     }
 
     pub(crate) fn build(&self, current: &Rc<ResourceMap>) {
@@ -64,17 +74,18 @@ impl ResourceMap {
         req: &HttpRequest,
         name: &str,
         elements: U,
-    ) -> Result<Url, super::error::UrlGenerationError>
+    ) -> Result<Url, UrlGenerationError>
     where
         U: IntoIterator<Item = I>,
         I: AsRef<str>,
     {
         let mut path = String::new();
-        let mut elements = elements
-            .into_iter()
-            .map(|element| quote(element.as_ref(), Component::Opaque).into_owned());
+        let mut elements = elements.into_iter();
 
         if self.patterns_for(name, &mut path, &mut elements)?.is_some() {
+            if elements.next().is_some() {
+                return Err(UrlGenerationError::TooManyElements);
+            }
             if path.starts_with('/') {
                 let conn = req.connection_info();
                 let (scheme, host) = (conn.scheme(), conn.host());
@@ -87,7 +98,7 @@ impl ResourceMap {
             }
             Ok(Url::try_from(path)?)
         } else {
-            Err(super::error::UrlGenerationError::ResourceNotFound)
+            Err(UrlGenerationError::ResourceNotFound)
         }
     }
 
@@ -111,7 +122,7 @@ impl ResourceMap {
         name: &str,
         path: &mut String,
         elements: &mut U,
-    ) -> Result<Option<()>, super::error::UrlGenerationError>
+    ) -> Result<Option<()>, UrlGenerationError>
     where
         U: Iterator<Item = I>,
         I: AsRef<str>,
@@ -128,7 +139,7 @@ impl ResourceMap {
         name: &str,
         path: &mut String,
         elements: &mut U,
-    ) -> Result<Option<()>, super::error::UrlGenerationError>
+    ) -> Result<Option<()>, UrlGenerationError>
     where
         U: Iterator<Item = I>,
         I: AsRef<str>,
@@ -137,11 +148,8 @@ impl ResourceMap {
             if pattern.pattern().starts_with('/') {
                 self.fill_root(path, elements)?;
             }
-            if pattern.build_path(path, elements) {
-                Ok(Some(()))
-            } else {
-                Err(super::error::UrlGenerationError::NotEnoughElements)
-            }
+            build_path(pattern, path, elements)?;
+            Ok(Some(()))
         } else {
             for (_, rmap) in &self.patterns {
                 if let Some(rmap) = rmap
@@ -154,11 +162,7 @@ impl ResourceMap {
         }
     }
 
-    fn fill_root<U, I>(
-        &self,
-        path: &mut String,
-        elements: &mut U,
-    ) -> Result<(), super::error::UrlGenerationError>
+    fn fill_root<U, I>(&self, path: &mut String, elements: &mut U) -> Result<(), UrlGenerationError>
     where
         U: Iterator<Item = I>,
         I: AsRef<str>,
@@ -166,11 +170,7 @@ impl ResourceMap {
         if let Some(ref parent) = *self.parent.borrow() {
             parent.fill_root(path, elements)?;
         }
-        if self.root.build_path(path, elements) {
-            Ok(())
-        } else {
-            Err(super::error::UrlGenerationError::NotEnoughElements)
-        }
+        build_path(&self.root, path, elements)
     }
 
     fn parent_pattern_for<U, I>(
@@ -178,7 +178,7 @@ impl ResourceMap {
         name: &str,
         path: &mut String,
         elements: &mut U,
-    ) -> Result<Option<()>, super::error::UrlGenerationError>
+    ) -> Result<Option<()>, UrlGenerationError>
     where
         U: Iterator<Item = I>,
         I: AsRef<str>,
@@ -189,6 +189,27 @@ impl ResourceMap {
             Ok(None)
         }
     }
+}
+
+/// Build the path of `pattern`, each element must match its segment pattern
+/// and is percent-encoded as one literal URL component.
+fn build_path<U, I>(
+    pattern: &ResourceDef,
+    path: &mut String,
+    elements: &mut U,
+) -> Result<(), UrlGenerationError>
+where
+    U: Iterator<Item = I>,
+    I: AsRef<str>,
+{
+    pattern
+        .try_build_path(path, elements, |path, el| {
+            path.push_str(&quote(el, Component::Opaque));
+        })
+        .map_err(|err| match err {
+            BuildPathError::InvalidElement => UrlGenerationError::InvalidElement,
+            _ => UrlGenerationError::NotEnoughElements,
+        })
 }
 
 #[cfg(test)]
@@ -260,5 +281,75 @@ mod tests {
             assert!(rmap.url_for(&req, "index", [""; 0]).is_err());
             assert!(rmap.url_for(&req, "unknown", [""; 0]).is_err());
         }
+    }
+
+    /// STATEMENT: `url_for` rejects elements that do not match their segment patterns and
+    /// extra elements, including those of enclosing scopes.
+    ///
+    /// HOW:
+    /// - Register `/item/{id:[0-9]+}` in a scope with root `/{tenant:[a-z]+}`.
+    /// - Expect a URL for valid elements, with an encoded `/` in an unrestricted segment.
+    /// - Expect `InvalidElement` for a non-numeric id, a non-letter tenant and an empty
+    ///   tenant, and `TooManyElements` or `NotEnoughElements` for wrong element counts.
+    #[test]
+    fn url_for_validates_elements() {
+        let mut root = ResourceMap::new(ResourceDef::new(""));
+        let mut nested = ResourceMap::new(ResourceDef::root_prefix("/{tenant:[a-z]+}"));
+        let mut item = ResourceDef::new("/item/{id:[0-9]+}");
+        item.set_name("item");
+        nested.add(&mut item, None);
+        let mut file = ResourceDef::new("/file/{name}");
+        file.set_name("file");
+        root.add(&mut file, None);
+        root.add(
+            &mut ResourceDef::root_prefix("/{tenant:[a-z]+}"),
+            Some(Rc::new(nested)),
+        );
+        let root = Rc::new(root);
+        root.build(&root);
+
+        let req = TestRequest::default().to_http_request();
+        assert_eq!(
+            root.url_for(&req, "item", ["abc", "12"]).unwrap().as_str(),
+            "http://localhost:8080/abc/item/12"
+        );
+        assert_eq!(
+            root.url_for(&req, "file", ["a/b"]).unwrap().as_str(),
+            "http://localhost:8080/file/a%2Fb"
+        );
+        for elements in [["abc", "x1"], ["ab1", "12"], ["", "12"]] {
+            assert_eq!(
+                root.url_for(&req, "item", elements),
+                Err(UrlGenerationError::InvalidElement)
+            );
+        }
+        assert_eq!(
+            root.url_for(&req, "file", [""]),
+            Err(UrlGenerationError::InvalidElement)
+        );
+        assert_eq!(
+            root.url_for(&req, "item", ["abc", "12", "extra"]),
+            Err(UrlGenerationError::TooManyElements)
+        );
+        assert_eq!(
+            root.url_for(&req, "item", ["abc"]),
+            Err(UrlGenerationError::NotEnoughElements)
+        );
+    }
+
+    /// STATEMENT: A resource name can be used only once within a resource map.
+    ///
+    /// HOW:
+    /// - Add two resources named `index` to one map and expect a panic naming it.
+    #[test]
+    #[should_panic(expected = "Resource name \"index\" is already used")]
+    fn duplicate_name_panics() {
+        let mut rmap = ResourceMap::new(ResourceDef::new(""));
+        let mut a = ResourceDef::new("/a");
+        a.set_name("index");
+        rmap.add(&mut a, None);
+        let mut b = ResourceDef::new("/b");
+        b.set_name("index");
+        rmap.add(&mut b, None);
     }
 }
