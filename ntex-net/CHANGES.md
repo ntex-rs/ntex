@@ -1,5 +1,16 @@
 # Changes
 
+## [4.9.0] - Unreleased
+
+* connect: `Connect` owns a single pre-resolved address list, seeded from
+  `Address::addr()` by `Connect::new()`. `set_addr`/`set_addrs` overrides now
+  take precedence in `addrs()`/`take_addrs()` as they already did when
+  connecting, and `take_addrs()` empties the list for `SocketAddr` requests too
+
+* connect: Add `Connect::clear_addrs()`, `set_addr(None)` keeps the current addresses
+
+* connect: `Connect::new(SocketAddr)` reports the address port from `port()`
+
 ## [4.8.1] - 2026-11-07
 
 * io-uring: take send buffer and connect address pointers after the operation is stored,

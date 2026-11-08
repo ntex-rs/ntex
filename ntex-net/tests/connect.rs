@@ -52,6 +52,21 @@ async fn connect_socket_addr() {
     echo(&io).await;
 }
 
+/// STATEMENT: An explicit address overrides the intrinsic address of a `SocketAddr` request.
+///
+/// HOW:
+/// - Build a request for a closed `SocketAddr` and override it with a listening peer.
+/// - Check `addrs()` reports only the override and the connection reaches that peer.
+#[ntex::test]
+async fn connect_override_socket_addr() {
+    let addr = echo_peer();
+    let msg = Connect::new(closed_addr()).set_addr(Some(addr));
+    assert_eq!(msg.addrs().collect::<Vec<_>>(), vec![addr]);
+    let io = connect::connect(msg).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get(), Some(PeerAddr(addr)));
+    echo(&io).await;
+}
+
 #[ntex::test]
 async fn connect_ipv6() {
     let Ok(lst) = net::TcpListener::bind("[::1]:0") else {

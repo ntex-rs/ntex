@@ -11,7 +11,7 @@ pub(crate) async fn lookup<T: Address>(
     mut req: Connect<T>,
     tag: &str,
 ) -> Result<Connect<T>, Error<ConnectError>> {
-    if req.addr.is_some() || req.req.addr().is_some() {
+    if req.addr.is_some() {
         Ok(req)
     } else if let Some(addr) = ip_literal(parse(req.host()).0, req.port()) {
         req.addr = Some(Either::Left(addr));
