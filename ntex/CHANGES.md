@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* web: A `JsonConfig::content_type()` predicate now replaces the built-in JSON
+  content-type check instead of extending it; include `*/json` and `*/*+json`
+  in the predicate to keep accepting them
+
 * web: Rename `WebAppConfig::set_state()`/`state()` to `set_value()`/`value()`
   and `HttpRequest::app_state()`, `WebRequest::app_state()` and
   `TestRequest::app_state()` to `app_value()`; the old names are deprecated.

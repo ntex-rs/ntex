@@ -211,8 +211,10 @@ where
 ///             // change json extractor configuration
 ///             web::types::JsonConfig::default()
 ///                 .limit(4096)
-///                 .content_type(|mime| {  // <- accept text/plain content type
-///                     mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
+///                 .content_type(|mime| {  // <- accept JSON and text/plain content types
+///                     mime.subtype() == mime::JSON
+///                         || mime.suffix() == Some(mime::JSON)
+///                         || (mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN)
 ///                 }));
 ///
 ///     let app = App::default()
@@ -241,8 +243,11 @@ impl JsonConfig {
     #[must_use]
     /// Set predicate for allowed content types.
     ///
-    /// JSON content types (`*/json` and `*/*+json`) are always accepted. The
-    /// predicate can accept additional types.
+    /// By default, JSON content types (`*/json` and `*/*+json`) are accepted.
+    /// A predicate replaces this check: only content types for which it
+    /// returns `true` are accepted, so include the JSON types in the predicate
+    /// to keep accepting them. Requests without a valid `Content-Type` header
+    /// are always rejected.
     pub fn content_type<F>(mut self, predicate: F) -> Self
     where
         F: Fn(mime::Mime) -> bool + Send + Sync + 'static,
@@ -302,9 +307,11 @@ where
     ) -> Self {
         // check content-type
         let json = if let Ok(Some(mime)) = req.mime_type() {
-            mime.subtype() == mime::JSON
-                || mime.suffix() == Some(mime::JSON)
-                || ctype.as_ref().is_some_and(|predicate| predicate(mime))
+            if let Some(predicate) = ctype {
+                predicate(mime)
+            } else {
+                mime.subtype() == mime::JSON || mime.suffix() == Some(mime::JSON)
+            }
         } else {
             false
         };
@@ -722,5 +729,64 @@ mod tests {
 
         let s = from_request::<_, Json<MyObject>>(&(), &req, &mut pl).await;
         assert!(s.is_err());
+    }
+
+    /// STATEMENT: A `JsonConfig::content_type()` predicate replaces the built-in JSON media-type check.
+    ///
+    /// HOW:
+    /// - Without a predicate, assert `application/json`, `text/json` and `application/vnd.api+json`
+    ///   decode while `text/plain` fails with `JsonPayloadError::ContentType`.
+    /// - With a predicate accepting only `application/vnd.api+json`, assert that type decodes while
+    ///   `application/json`, `text/json` and `text/plain` fail with `ContentType`.
+    #[crate::rt_test]
+    async fn test_content_type_predicate_replaces_default() {
+        async fn extract(
+            ctype: &'static str,
+            cfg: Option<JsonConfig>,
+        ) -> Result<(), JsonPayloadError> {
+            let mut req = TestRequest::with_header(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static(ctype),
+            )
+            .header(
+                header::CONTENT_LENGTH,
+                header::HeaderValue::from_static("16"),
+            )
+            .payload(Bytes::from_static(b"{\"name\": \"test\"}"));
+            if let Some(cfg) = cfg {
+                req = req.app_value(cfg);
+            }
+            let (req, mut pl, ()) = req.to_http_parts();
+            from_request::<_, Json<MyObject>>(&(), &req, &mut pl)
+                .await
+                .map(|j| assert_eq!(j.name, "test"))
+        }
+
+        for ctype in ["application/json", "text/json", "application/vnd.api+json"] {
+            assert!(extract(ctype, None).await.is_ok(), "{ctype}");
+        }
+        assert!(matches!(
+            extract("text/plain", None).await,
+            Err(JsonPayloadError::ContentType)
+        ));
+
+        let only_vnd = || {
+            JsonConfig::default()
+                .content_type(|mime: mime::Mime| mime.essence_str() == "application/vnd.api+json")
+        };
+        assert!(
+            extract("application/vnd.api+json", Some(only_vnd()))
+                .await
+                .is_ok()
+        );
+        for ctype in ["application/json", "text/json", "text/plain"] {
+            assert!(
+                matches!(
+                    extract(ctype, Some(only_vnd())).await,
+                    Err(JsonPayloadError::ContentType)
+                ),
+                "{ctype}"
+            );
+        }
     }
 }
