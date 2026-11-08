@@ -1,0 +1,40 @@
+error[E0277]: the trait bound `&TestCfg: Configuration` is not satisfied
+  --> tests/ui/cfg_from_borrowed.rs:30:30
+   |
+30 |     let _cfg: Cfg<TestCfg> = Cfg::from(&value);
+   |                              ^^^ the trait `Configuration` is not implemented for `&TestCfg`
+   |
+help: the trait `Configuration` is implemented for `TestCfg`
+  --> tests/ui/cfg_from_borrowed.rs:9:1
+   |
+ 9 | impl Configuration for TestCfg {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for `Cfg<&TestCfg>` to implement `From<&TestCfg>`
+
+error[E0308]: mismatched types
+  --> tests/ui/cfg_from_borrowed.rs:30:30
+   |
+30 |     let _cfg: Cfg<TestCfg> = Cfg::from(&value);
+   |               ------------   ^^^^^^^^^^^^^^^^^ expected `Cfg<TestCfg>`, found `Cfg<&TestCfg>`
+   |               |
+   |               expected due to this
+   |
+   = note: expected struct `Cfg<TestCfg>`
+              found struct `Cfg<&TestCfg>`
+
+error[E0277]: the trait bound `&TestCfg: Configuration` is not satisfied
+  --> tests/ui/cfg_from_borrowed.rs:30:30
+   |
+30 |     let _cfg: Cfg<TestCfg> = Cfg::from(&value);
+   |                              ^^^^^^^^^^^^^^^^^ the trait `Configuration` is not implemented for `&TestCfg`
+   |
+help: the trait `Configuration` is implemented for `TestCfg`
+  --> tests/ui/cfg_from_borrowed.rs:9:1
+   |
+ 9 | impl Configuration for TestCfg {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `Cfg`
+  --> src/cfg.rs
+   |
+   | pub struct Cfg<T: Configuration>(UnsafeCell<*const T>, PhantomData<rc::Rc<T>>);
+   |                   ^^^^^^^^^^^^^ required by this bound in `Cfg`

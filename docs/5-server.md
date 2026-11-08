@@ -90,8 +90,8 @@ let builder = ntex::server::build()
     .workers(4);
 ```
 
-Use at least one worker. With no workers, the server has nowhere to dispatch
-connections and remains paused.
+The count must be at least one; `workers(0)` panics, because a server without
+workers could never become ready or dispatch connections.
 
 Each worker runs on its own arbiter thread and owns its own service instance.
 The factory passed to `bind()` is called for every worker. It may be called
