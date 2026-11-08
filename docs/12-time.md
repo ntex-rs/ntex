@@ -200,9 +200,8 @@ fn conversions() {
 ```
 
 Conversions and arithmetic **saturate** instead of overflowing or
-panicking. A negative `i32` becomes zero, and a `Duration` or `usize` that
-does not fit becomes the maximum value; the oversized cases also log an
-error:
+panicking. A `Duration` or `usize` that does not fit becomes the maximum
+value and logs an error:
 
 ```rust
 use std::time::Duration;
@@ -210,11 +209,28 @@ use ntex::time::{Millis, Seconds};
 
 fn saturation() {
     assert_eq!(Millis(u32::MAX) + Millis(1), Millis(u32::MAX));
-    assert_eq!(Millis::from(-5), Millis::ZERO);
     assert_eq!(Seconds::checked_new(100_000), Seconds(u16::MAX));
     assert_eq!(Millis::from(Duration::from_secs(u64::MAX)), Millis(u32::MAX));
 }
 ```
+
+`Millis::from(Duration)` rounds any sub-millisecond part **up**, so only
+`Duration::ZERO` becomes zero. A short positive timeout stays enabled and
+never fires early:
+
+```rust
+use std::time::Duration;
+use ntex::time::Millis;
+
+fn rounding() {
+    assert_eq!(Millis::from(Duration::from_micros(500)), Millis(1));
+    assert_eq!(Millis::from(Duration::from_micros(1_500)), Millis(2));
+    assert_eq!(Millis::from(Duration::ZERO), Millis::ZERO);
+}
+```
+
+A negative `i32` is invalid input. It panics in debug builds; release
+builds log an error and use zero, which disables the timeout.
 
 [`Millis`] converts from [`Seconds`], `Duration`, `u32`, `i32` and `usize`;
 [`Seconds`] converts from `u16`, `i32` and `usize`. Both convert into

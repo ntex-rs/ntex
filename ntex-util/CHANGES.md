@@ -1,5 +1,13 @@
 # Changes
 
+## [4.8.1] - Unreleased
+
+* `Millis::from(Duration)` rounds sub-millisecond parts up, so a positive duration
+  never becomes zero (disabled)
+
+* Negative `i32` conversions to `Millis` and `Seconds` log an error and panic in
+  debug builds; release builds still use zero
+
 ## [4.8.0] - 2026-11-07
 
 * Use the timer resolution of the current system for the timer wheel, see

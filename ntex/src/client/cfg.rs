@@ -367,6 +367,23 @@ mod tests {
         assert_eq!(cfg.pl_timeout, Millis(10));
     }
 
+    /// STATEMENT: A positive sub-millisecond `Duration` keeps client timeouts enabled.
+    ///
+    /// HOW:
+    /// - Set the response and payload timeouts to 500 us and check both are one millisecond, not the zero sentinel.
+    /// - Set `Duration::ZERO` and check it still disables the response timeout.
+    #[test]
+    fn submillisecond_timeouts() {
+        let cfg = ClientConfig::new()
+            .set_response_timeout(Duration::from_micros(500))
+            .set_response_payload_timeout(Duration::from_micros(500));
+        assert_eq!(cfg.response_timeout(), Millis(1));
+        assert_eq!(cfg.response_payload_timeout(), Millis(1));
+
+        let cfg = cfg.set_response_timeout(Duration::ZERO);
+        assert_eq!(cfg.response_timeout(), Millis::ZERO);
+    }
+
     /// STATEMENT: Valid header names are accepted as client defaults.
     ///
     /// HOW:
