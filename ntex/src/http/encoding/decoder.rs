@@ -93,13 +93,14 @@ where
 
     /// Construct decoder based on the `Content-Encoding` header.
     ///
-    /// A missing or invalid header selects the `Identity` encoding.
+    /// A missing, invalid or unsupported header selects the `Identity`
+    /// encoding, the payload is passed through undecoded.
     #[inline]
     pub fn from_headers(stream: S, headers: &HeaderMap) -> Decoder<S> {
         let encoding = headers
             .get(&CONTENT_ENCODING)
-            .and_then(|enc| enc.to_str().ok())
-            .map_or(ContentEncoding::Identity, ContentEncoding::from);
+            .and_then(|enc| enc.to_str().ok()?.parse().ok())
+            .unwrap_or(ContentEncoding::Identity);
         Self::new(stream, encoding)
     }
 }
@@ -693,24 +694,30 @@ mod tests {
         assert!(decoder.next().await.is_none());
     }
 
-    /// STATEMENT: An unparseable content-encoding header leaves input undecoded.
+    /// STATEMENT: An unparseable or unsupported content-encoding header leaves input undecoded.
     ///
     /// HOW:
-    /// - Construct a decoder from a non-text encoding header and verify raw bytes, disabled decoding, and EOF.
+    /// - Construct decoders from non-text, misspelled, unsupported and combined
+    ///   encoding headers and verify raw bytes, disabled decoding, and EOF.
+    /// - Construct a decoder from a supported `GZip` header and verify decoding is enabled.
     #[crate::rt_test]
     async fn decoder_from_headers() {
         use crate::http::header::HeaderValue;
 
+        for value in [&b"gzip\xff"[..], b"gizp", b"compress", b"gzip, br", b""] {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_ENCODING, HeaderValue::from_bytes(value).unwrap());
+            let chunks = vec![Ok::<_, PayloadError>(Bytes::from_static(b"raw"))];
+            let mut decoder = Decoder::from_headers(stream::iter(chunks), &headers);
+            assert!(!decoder.is_decoding(), "{value:?}");
+            assert_eq!(decoder.next().await.unwrap().unwrap(), "raw");
+            assert!(decoder.next().await.is_none());
+        }
+
         let mut headers = HeaderMap::new();
-        headers.insert(
-            CONTENT_ENCODING,
-            HeaderValue::from_bytes(b"gzip\xff").unwrap(),
-        );
-        let chunks = vec![Ok::<_, PayloadError>(Bytes::from_static(b"raw"))];
-        let mut decoder = Decoder::from_headers(stream::iter(chunks), &headers);
-        assert!(!decoder.is_decoding());
-        assert_eq!(decoder.next().await.unwrap().unwrap(), "raw");
-        assert!(decoder.next().await.is_none());
+        headers.insert(CONTENT_ENCODING, HeaderValue::from_static("GZip"));
+        let decoder = Decoder::from_headers(stream::iter(Vec::new()), &headers);
+        assert!(decoder.is_decoding());
     }
 
     /// STATEMENT: Large invalid input fails through the blocking decoder and then ends the stream.

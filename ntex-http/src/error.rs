@@ -44,6 +44,19 @@ pub struct InvalidMethod {
     _priv: (),
 }
 
+#[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[error("Unsupported content encoding")]
+/// An error returned when parsing an unknown or empty `ContentEncoding` name.
+pub struct InvalidContentEncoding {
+    _priv: (),
+}
+
+impl InvalidContentEncoding {
+    pub(crate) const fn new() -> Self {
+        InvalidContentEncoding { _priv: () }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 enum ErrorKind {
     StatusCode(InvalidStatusCode),
@@ -52,6 +65,7 @@ enum ErrorKind {
     UriParts(InvalidUri),
     HeaderName(InvalidHeaderName),
     HeaderValue(InvalidHeaderValue),
+    ContentEncoding(InvalidContentEncoding),
     Http,
 }
 
@@ -84,6 +98,7 @@ impl Error {
             ErrorKind::Uri(ref e) | ErrorKind::UriParts(ref e) => e,
             ErrorKind::HeaderName(ref e) => e,
             ErrorKind::HeaderValue(ref e) => e,
+            ErrorKind::ContentEncoding(ref e) => e,
             ErrorKind::Http => &DEFAULT_ERR,
         }
     }
@@ -147,6 +162,14 @@ impl From<InvalidHeaderValue> for Error {
     fn from(err: InvalidHeaderValue) -> Error {
         Error {
             inner: ErrorKind::HeaderValue(err),
+        }
+    }
+}
+
+impl From<InvalidContentEncoding> for Error {
+    fn from(err: InvalidContentEncoding) -> Error {
+        Error {
+            inner: ErrorKind::ContentEncoding(err),
         }
     }
 }
