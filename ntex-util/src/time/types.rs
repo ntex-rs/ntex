@@ -96,10 +96,14 @@ impl From<u32> for Millis {
     }
 }
 
+/// Converts a non-negative integer; negative values are invalid.
+///
+/// A negative value logs an error and becomes zero, which disables a
+/// timeout. Debug builds panic instead, so the mistake is caught early.
 impl From<i32> for Millis {
     #[inline]
     fn from(i: i32) -> Millis {
-        Millis(if i < 0 { 0 } else { i as u32 })
+        Millis(u32::try_from(i).unwrap_or_else(|_| negative("Millis", i)))
     }
 }
 
@@ -120,10 +124,16 @@ impl From<Seconds> for Millis {
     }
 }
 
+/// Converts a duration, rounding any sub-millisecond part up.
+///
+/// Only `Duration::ZERO` becomes zero, so a positive duration never turns
+/// into a disabled timeout and a timer never fires early. Durations that do
+/// not fit saturate at [`u32::MAX`] milliseconds and log an error.
 impl From<std::time::Duration> for Millis {
     #[inline]
     fn from(d: std::time::Duration) -> Millis {
-        Self(d.as_millis().try_into().unwrap_or_else(|_| {
+        let millis = d.as_millis() + u128::from(!d.subsec_nanos().is_multiple_of(1_000_000));
+        Self(millis.try_into().unwrap_or_else(|_| {
             log::error!("Duration is too large for Millis: {d:?}");
             u32::MAX
         }))
@@ -229,15 +239,27 @@ impl From<u16> for Seconds {
     }
 }
 
+/// Converts a non-negative integer, saturating at [`u16::MAX`].
+///
+/// A negative value logs an error and becomes zero, which disables a
+/// timeout. Debug builds panic instead, so the mistake is caught early.
 impl From<i32> for Seconds {
     #[inline]
     fn from(i: i32) -> Seconds {
         Seconds(if i < 0 {
-            0
+            negative("Seconds", i)
         } else {
             (i as u32).min(u32::from(u16::MAX)) as u16
         })
     }
+}
+
+#[cold]
+#[track_caller]
+fn negative<T: Default>(kind: &str, val: i32) -> T {
+    log::error!("Negative {kind} value {val}, using zero");
+    debug_assert!(val >= 0, "Negative {kind} value {val}");
+    T::default()
 }
 
 impl From<usize> for Seconds {
@@ -319,9 +341,6 @@ mod tests {
 
         let s = Seconds::from(10i32);
         assert_eq!(s.0, 10);
-
-        let s = Seconds::from(-10i32);
-        assert_eq!(s.0, 0);
         assert_eq!(Seconds::from(i32::MAX).0, u16::MAX);
 
         let s = Seconds::checked_new(10);
@@ -349,17 +368,19 @@ mod tests {
         assert_eq!(d.as_secs(), 100);
     }
 
-    /// STATEMENT: Integer time conversions clamp negative and oversized values.
+    /// STATEMENT: Integer time conversions keep valid values and saturate oversized ones.
     ///
     /// HOW:
-    /// - Check zero predicates and conversions from signed and pointer-sized integers.
+    /// - Check zero predicates and conversions from zero, positive signed and pointer-sized integers.
     /// - On 64-bit targets, verify maximum pointer-sized inputs saturate both time-unit types.
     #[test]
     fn time_types_conversions() {
         assert!(Millis(1).non_zero());
         assert!(!Millis::ZERO.non_zero());
-        assert_eq!(Millis::from(-5i32), Millis::ZERO);
+        assert_eq!(Millis::from(0i32), Millis::ZERO);
+        assert_eq!(Seconds::from(0i32), Seconds::ZERO);
         assert_eq!(Millis::from(5i32), Millis(5));
+        assert_eq!(Millis::from(i32::MAX), Millis(i32::MAX as u32));
         assert_eq!(Millis::from(7usize), Millis(7));
         assert_eq!(Seconds::from(7usize), Seconds(7));
 
@@ -368,5 +389,49 @@ mod tests {
             assert_eq!(Millis::from(usize::MAX), Millis(u32::MAX));
             assert_eq!(Seconds::from(usize::MAX), Seconds(u16::MAX));
         }
+    }
+
+    /// STATEMENT: Negative integers are rejected in debug builds and become zero in release builds.
+    ///
+    /// HOW:
+    /// - Convert `-1` and `i32::MIN` into `Millis` and `Seconds` under `catch_unwind`.
+    /// - With debug assertions expect a panic; without them expect `ZERO`.
+    #[test]
+    fn negative_integer_conversions() {
+        fn check<T: PartialEq + std::fmt::Debug>(f: impl FnOnce() -> T, zero: &T) {
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            if cfg!(debug_assertions) {
+                assert!(res.is_err());
+            } else {
+                assert_eq!(&res.unwrap(), zero);
+            }
+        }
+        for val in [-1, i32::MIN] {
+            check(|| Millis::from(val), &Millis::ZERO);
+            check(|| Seconds::from(val), &Seconds::ZERO);
+        }
+    }
+
+    /// STATEMENT: `Duration` conversion rounds positive sub-millisecond parts up so only zero disables a timeout.
+    ///
+    /// HOW:
+    /// - Convert zero, 1 ns, 500 us, exact 1 ms and 1 s, 1.5 ms, and 1 ms + 1 ns, and compare the milliseconds.
+    /// - Check that values at and just above `u32::MAX` milliseconds saturate.
+    #[test]
+    fn duration_conversion_rounds_up() {
+        assert_eq!(Millis::from(Duration::ZERO), Millis::ZERO);
+        assert_eq!(Millis::from(Duration::from_nanos(1)), Millis(1));
+        assert_eq!(Millis::from(Duration::from_micros(500)), Millis(1));
+        assert_eq!(Millis::from(Duration::from_millis(1)), Millis(1));
+        assert_eq!(Millis::from(Duration::from_secs(1)), Millis(1_000));
+        assert_eq!(Millis::from(Duration::from_micros(1_500)), Millis(2));
+        assert_eq!(Millis::from(Duration::from_nanos(1_000_001)), Millis(2));
+
+        let max = Duration::from_millis(u64::from(u32::MAX));
+        assert_eq!(Millis::from(max), Millis(u32::MAX));
+        assert_eq!(
+            Millis::from(max + Duration::from_nanos(1)),
+            Millis(u32::MAX)
+        );
     }
 }
