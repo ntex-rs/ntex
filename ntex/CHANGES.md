@@ -2,6 +2,14 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `ws::Codec` validates incoming text messages as UTF-8, including
+  characters split between fragments, and limits the total payload of a message
+  to 4 MiB, both failing the connection with `ProtocolError::InvalidUtf8` or
+  `ProtocolError::Overflow`. Configure with `Codec::validate_utf8()` and
+  `Codec::max_message_size()`, or `WsClientConfig::set_validate_utf8()` and
+  `set_max_message_size()`. A codec with `max_size()` above 4 MiB needs a larger
+  message limit to accept single-frame messages of that size.
+
 * `guard::Host(..).scheme(..)` fails closed. A request that carries no
   scheme (origin-form target without a scheme in `Host`, or a `CONNECT` authority)
   no longer matches a guard that requires one.

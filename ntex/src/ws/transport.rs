@@ -22,6 +22,10 @@ bitflags::bitflags! {
 /// Incoming binary messages and fragments are forwarded as bytes. Text
 /// messages are rejected, ping frames receive automatic pong replies, and
 /// close frames close the underlying I/O stream.
+///
+/// The codec's message size limit, see [`Codec::max_message_size()`], also
+/// bounds a fragmented binary message. To stream data of unbounded size in a
+/// single fragmented message, set it to `usize::MAX`.
 pub struct WsTransport {
     codec: Codec,
     flags: Cell<Flags>,

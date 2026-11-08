@@ -65,13 +65,13 @@ pub enum ProtocolError {
     /// Invalid close-frame payload.
     #[error("Invalid close-frame payload")]
     InvalidClosePayload,
-    /// A close-frame description is not valid UTF-8.
-    #[error("Invalid UTF-8 in close-frame description")]
+    /// A text message or a close-frame description is not valid UTF-8.
+    #[error("Invalid UTF-8 in text message or close-frame description")]
     InvalidUtf8,
     /// A message was encoded after a close message.
     #[error("WebSocket codec is closed")]
     Closed,
-    /// A payload reached size limit.
+    /// A frame or message payload exceeds the size limit.
     #[error("A payload reached size limit.")]
     Overflow,
     /// Continuation is not started
