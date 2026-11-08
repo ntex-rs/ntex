@@ -130,6 +130,9 @@ impl Builder {
     }
 
     /// Builds the URL.
+    ///
+    /// Returns an error with [`ErrorKind::TooLong`] if the URL would exceed
+    /// 65535 bytes.
     pub fn build(self) -> Result<Url, InvalidUrl> {
         let mut url = self.base.unwrap_or_else(Url::empty);
         if let Some(scheme) = self.scheme {
@@ -148,16 +151,16 @@ impl Builder {
             url.set_port(self.port)?;
         }
         if let Some(path) = self.path {
-            url.set_path(&path);
+            url.try_set_path(&path)?;
         }
         if let Some(query) = self.query {
-            url.set_query(Some(&query));
+            url.try_set_query(Some(&query))?;
         }
         if !self.pairs.is_empty() {
-            url.extend_query_pairs(self.pairs);
+            url.try_extend_query_pairs(self.pairs)?;
         }
         if let Some(fragment) = self.fragment {
-            url.set_fragment(Some(&fragment));
+            url.try_set_fragment(Some(&fragment))?;
         }
         if url.as_str().is_empty() {
             Err(InvalidUrl::new(ErrorKind::Empty))

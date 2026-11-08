@@ -885,6 +885,10 @@ impl Url {
     /// assert_eq!(url, "http://h/c%20d?q");
     /// ```
     pub fn set_path(&mut self, path: &str) {
+        too_long(self.try_set_path(path));
+    }
+
+    pub(crate) fn try_set_path(&mut self, path: &str) -> Result<(), InvalidUrl> {
         let prefixed;
         let path = if self.auth_start != 0 && !path.is_empty() && !path.starts_with('/') {
             prefixed = format!("/{path}");
@@ -893,7 +897,7 @@ impl Url {
             path
         };
         let path = parse::normalize_path(path);
-        *self = self.derive(|c| c.path = &path);
+        self.rebuild(|c| c.path = &path).map(|url| *self = url)
     }
 
     /// Replaces the last path segment with a literal file name.
@@ -957,13 +961,22 @@ impl Url {
     /// assert_eq!(url, "http://h/?a=b+c&d#f");
     /// ```
     pub fn set_query(&mut self, query: Option<&str>) {
+        too_long(self.try_set_query(query));
+    }
+
+    pub(crate) fn try_set_query(&mut self, query: Option<&str>) -> Result<(), InvalidUrl> {
         let query = query.map(|q| requote(q, Component::Query));
-        *self = self.derive(|c| c.query = query.as_deref());
+        self.rebuild(|c| c.query = query.as_deref())
+            .map(|url| *self = url)
     }
 
     /// Keeps existing pairs whose decoded key passes `keep` and appends literal
     /// `pairs`. An empty result removes the query.
-    fn edit_query_pairs<I, K, V>(&mut self, keep: impl Fn(&str) -> bool, pairs: I)
+    fn edit_query_pairs<I, K, V>(
+        &mut self,
+        keep: impl Fn(&str) -> bool,
+        pairs: I,
+    ) -> Result<(), InvalidUrl>
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
@@ -983,7 +996,8 @@ impl Url {
             }))
             .collect();
         let query = pieces.join("&");
-        *self = self.derive(|c| c.query = (!query.is_empty()).then_some(query.as_str()));
+        self.rebuild(|c| c.query = (!query.is_empty()).then_some(query.as_str()))
+            .map(|url| *self = url)
     }
 
     /// Replaces the query with literal key-value pairs. Empty pairs remove the query.
@@ -1001,7 +1015,7 @@ impl Url {
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        self.edit_query_pairs(|_| false, pairs);
+        too_long(self.edit_query_pairs(|_| false, pairs));
     }
 
     /// Appends literal key-value pairs to the query.
@@ -1011,7 +1025,16 @@ impl Url {
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        self.edit_query_pairs(|_| true, pairs);
+        too_long(self.try_extend_query_pairs(pairs));
+    }
+
+    pub(crate) fn try_extend_query_pairs<I, K, V>(&mut self, pairs: I) -> Result<(), InvalidUrl>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        self.edit_query_pairs(|_| true, pairs)
     }
 
     /// Replaces all values of the given keys, appending the new pairs.
@@ -1031,7 +1054,7 @@ impl Url {
     {
         let pairs: Vec<(K, V)> = pairs.into_iter().collect();
         let keep = |key: &str| !pairs.iter().any(|(k, _)| k.as_ref() == key);
-        self.edit_query_pairs(keep, pairs.iter().map(|(k, v)| (k.as_ref(), v.as_ref())));
+        too_long(self.edit_query_pairs(keep, pairs.iter().map(|(k, v)| (k.as_ref(), v.as_ref()))));
     }
 
     /// Removes all pairs with the given keys from the query.
@@ -1052,13 +1075,18 @@ impl Url {
     {
         let keys: Vec<K> = keys.into_iter().collect();
         let keep = |key: &str| !keys.iter().any(|k| k.as_ref() == key);
-        self.edit_query_pairs(keep, std::iter::empty::<(&str, &str)>());
+        too_long(self.edit_query_pairs(keep, std::iter::empty::<(&str, &str)>()));
     }
 
     /// Sets or removes the percent-encoded fragment.
     pub fn set_fragment(&mut self, fragment: Option<&str>) {
+        too_long(self.try_set_fragment(fragment));
+    }
+
+    pub(crate) fn try_set_fragment(&mut self, fragment: Option<&str>) -> Result<(), InvalidUrl> {
         let fragment = fragment.map(|f| requote(f, Component::Fragment));
-        *self = self.derive(|c| c.fragment = fragment.as_deref());
+        self.rebuild(|c| c.fragment = fragment.as_deref())
+            .map(|url| *self = url)
     }
 
     /// Splits the URL into its parts.

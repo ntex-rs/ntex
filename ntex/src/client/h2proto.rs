@@ -529,7 +529,7 @@ mod tests {
     /// STATEMENT: HTTP/2 client requests skip interim responses and return the final head and payload state.
     ///
     /// HOW:
-    /// - Inject `103` and `100` HEADERS frames followed by a final `200` with END_STREAM.
+    /// - Inject `103` and `100` HEADERS frames followed by a final `200` with `END_STREAM`.
     /// - Verify the request returns OK with no payload.
     #[crate::rt_test]
     async fn test_skip_interim_responses() {
@@ -612,7 +612,7 @@ mod tests {
     /// STATEMENT: An HTTP/2 response interrupted by reset or disconnect reports a payload error rather than clean EOF.
     ///
     /// HOW:
-    /// - Receive a response head without END_STREAM, then reset the stream or close the peer transport.
+    /// - Receive a response head without `END_STREAM`, then reset the stream or close the peer transport.
     /// - Bound the next payload read and verify it yields an error.
     #[crate::rt_test]
     async fn test_response_payload_interrupted() {

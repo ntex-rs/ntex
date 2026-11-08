@@ -389,7 +389,8 @@ impl ClientRequest {
 
     /// Serializes `query` and replaces the query component of the request URI.
     ///
-    /// Serialization errors are stored and returned by the next `send*` call.
+    /// Serialization errors, and a resulting URI longer than 65535 bytes, are
+    /// stored and returned by the next `send*` call.
     #[must_use]
     pub fn query<T: Serialize>(mut self, query: &T) -> Self {
         let query = match serde_urlencoded::to_string(query) {
@@ -400,7 +401,13 @@ impl ClientRequest {
             }
         };
 
-        self.request.head.uri.set_query(Some(&query));
+        match urly::Builder::from(self.request.head.uri.clone())
+            .query(&query)
+            .build()
+        {
+            Ok(uri) => self.request.head.uri = uri,
+            Err(e) => self.err = Some(InvalidUrl::Parse(e).into()),
+        }
         self
     }
 }
@@ -830,6 +837,38 @@ mod tests {
             .get("http://localhost/p?a=1")
             .query(&[("k", "v")]);
         assert_eq!(req.get_uri(), "http://localhost/p?k=v");
+    }
+
+    /// STATEMENT: A query that makes the URI too long is returned as an error by `send` instead of panicking.
+    ///
+    /// HOW:
+    /// - Set a query value that makes `http://localhost/p?k=...` exactly 65535 bytes and check it is applied.
+    /// - Set a value one byte longer and check the URI is unchanged and the stored error is `TooLong`.
+    /// - Send the oversized request and check it fails with the same URL parse error.
+    #[crate::rt_test]
+    async fn client_query_too_long() {
+        let prefix = "http://localhost/p?k=".len();
+        let value = "a".repeat(65_535 - prefix);
+        let req = Client::new()
+            .get("http://localhost/p?a=1")
+            .query(&[("k", &value)]);
+        assert!(req.err.is_none());
+        assert_eq!(req.get_uri().as_str().len(), 65_535);
+
+        let value = "a".repeat(65_536 - prefix);
+        let req = Client::new()
+            .get("http://localhost/p?a=1")
+            .query(&[("k", &value)]);
+        assert_eq!(req.get_uri(), "http://localhost/p?a=1");
+        assert!(matches!(
+            &req.err,
+            Some(ClientError::Url(InvalidUrl::Parse(e))) if e.kind() == urly::ErrorKind::TooLong
+        ));
+        let err = req.send().await.unwrap_err();
+        assert!(matches!(
+            err.into_error(),
+            ClientError::Url(InvalidUrl::Parse(e)) if e.kind() == urly::ErrorKind::TooLong
+        ));
     }
 
     /// STATEMENT: Header builders reject invalid input except when an existing conditional header makes replacement unnecessary.

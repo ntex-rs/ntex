@@ -1,5 +1,10 @@
 # Changes
 
+## [4.6.2] - 2026-11-08
+
+* client: Return an error from `send` instead of panicking when
+  `ClientRequest::query` makes the URI longer than 65535 bytes
+
 ## [4.6.1] - 2026-11-07
 
 * http: Fix HTTP/1 not shutting down per-connection application and control services

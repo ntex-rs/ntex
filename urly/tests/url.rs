@@ -668,6 +668,44 @@ fn long_urls() {
     assert!(std::panic::catch_unwind(|| &url(&max) / "a").is_err());
 }
 
+/// STATEMENT: `Builder::build` returns `TooLong` instead of panicking when any component pushes the URL past 65535 bytes.
+///
+/// HOW:
+/// - Build `http://h` URLs whose path, query, query pair, or fragment makes the
+///   result exactly 65535 bytes and check they succeed.
+/// - Add one more byte to each component and check `build` returns
+///   `ErrorKind::TooLong`, also when the overflow comes from combining components.
+/// - Check the infallible `Url::set_query` still panics on the same overflow.
+#[test]
+fn builder_too_long() {
+    let base = || Builder::from(url("http://h/"));
+    let fill = |prefix: &str, extra: usize| "a".repeat(65_535 - prefix.len() + extra);
+    let check = |res: Result<Url, urly::InvalidUrl>, ok: bool| {
+        if ok {
+            assert_eq!(res.unwrap().as_str().len(), 65_535);
+        } else {
+            assert_eq!(res.unwrap_err().kind(), ErrorKind::TooLong);
+        }
+    };
+
+    for (extra, ok) in [(0, true), (1, false)] {
+        let path = fill("http://h/", extra);
+        check(base().path(&format!("/{path}")).build(), ok);
+        check(base().query(&fill("http://h/?", extra)).build(), ok);
+        check(
+            base().query_pair("k", &fill("http://h/?k=", extra)).build(),
+            ok,
+        );
+        check(base().fragment(&fill("http://h/#", extra)).build(), ok);
+    }
+
+    let half = "a".repeat(32_768);
+    check(base().query(&half).fragment(&half).build(), false);
+
+    let query = fill("http://h/?", 1);
+    assert!(std::panic::catch_unwind(|| url("http://h/").set_query(Some(&query))).is_err());
+}
+
 #[cfg(feature = "serde")]
 #[test]
 fn serde() {
