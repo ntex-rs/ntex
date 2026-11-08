@@ -72,6 +72,27 @@ pub trait Responder<St: State = ()> {
     /// }
     /// # fn main() {}
     /// ```
+    ///
+    /// The override is unconditional. Applied to a `Result`, it also replaces
+    /// the status of the error response, so an `Err` that renders
+    /// `400 Bad Request` would be sent as, for example, `201 Created` with the
+    /// error body. To set a success status only, map the `Ok` value instead:
+    ///
+    /// ```rust
+    /// use ntex::http::StatusCode;
+    /// use ntex::web::{Responder, error};
+    ///
+    /// async fn create(name: String) -> impl Responder {
+    ///     let result = if name.is_empty() {
+    ///         Err(error::ErrorBadRequest("name is required"))
+    ///     } else {
+    ///         Ok(name)
+    ///     };
+    ///     // `Ok` becomes 201 Created, `Err` keeps 400 Bad Request
+    ///     result.map(|name| name.with_status(StatusCode::CREATED))
+    /// }
+    /// # fn main() {}
+    /// ```
     fn with_status(self, status: StatusCode) -> CustomResponder<Self, St>
     where
         Self: Sized,
@@ -155,6 +176,11 @@ where
     }
 }
 
+/// Renders `T`, then replaces its status unconditionally.
+///
+/// Like [`Responder::with_status()`], this also overrides error statuses when
+/// `T` is a `Result`; map the `Ok` value, as in
+/// `result.map(|v| (v, StatusCode::CREATED))`, to set a success status only.
 impl<St, T> Responder<St> for (T, StatusCode)
 where
     St: State,
@@ -244,6 +270,11 @@ impl<T: Responder<St>, St: State> CustomResponder<T, St> {
     }
 
     /// Override a status code for the Responder's response.
+    ///
+    /// The status replaces whatever the inner responder produced, including
+    /// error statuses rendered by a `Result` error. Use
+    /// `result.map(|v| v.with_status(status))` to change only the success
+    /// status; see [`Responder::with_status()`].
     ///
     /// ```rust
     /// use ntex::http::StatusCode;
@@ -720,5 +751,55 @@ pub(crate) mod tests {
             res.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("json")
         );
+    }
+
+    /// STATEMENT: Status overrides on a `Result` replace error statuses, while mapping only the `Ok` value preserves them.
+    ///
+    /// HOW:
+    /// - Render a `400 Bad Request` `Err` through `with_status(CREATED)` and a `(result, CREATED)` tuple and assert both send `201` with the error body.
+    /// - Render the same `Err` through `Result::map` with `with_status(CREATED)` and with a tuple, and assert both keep `400`.
+    /// - Render an `Ok` value through both mapped forms and assert they send `201` with the success body.
+    #[crate::rt_test]
+    async fn test_result_status_override_and_success_only_mapping() {
+        let req = TestRequest::default().to_http_request();
+        let err = || Err::<&'static str, _>(crate::web::error::ErrorBadRequest("invalid"));
+
+        for res in [
+            err()
+                .with_status(StatusCode::CREATED)
+                .respond_to(&(), &req)
+                .await,
+            (err(), StatusCode::CREATED).respond_to(&(), &req).await,
+        ] {
+            assert_eq!(res.status(), StatusCode::CREATED);
+            assert_eq!(res.get_body_ref(), b"invalid");
+        }
+
+        for res in [
+            err()
+                .map(|v| v.with_status(StatusCode::CREATED))
+                .respond_to(&(), &req)
+                .await,
+            err()
+                .map(|v| (v, StatusCode::CREATED))
+                .respond_to(&(), &req)
+                .await,
+        ] {
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(res.get_body_ref(), b"invalid");
+        }
+
+        let ok = || Ok::<_, crate::web::error::InternalError<&'static str>>("created");
+        for res in [
+            ok().map(|v| v.with_status(StatusCode::CREATED))
+                .respond_to(&(), &req)
+                .await,
+            ok().map(|v| (v, StatusCode::CREATED))
+                .respond_to(&(), &req)
+                .await,
+        ] {
+            assert_eq!(res.status(), StatusCode::CREATED);
+            assert_eq!(res.get_body_ref(), b"created");
+        }
     }
 }

@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* web: Document that `Responder::with_status()` and `(T, StatusCode)` also
+  override error statuses of a `Result`; map the `Ok` value to set a success
+  status only
+
 * web: A `JsonConfig::content_type()` predicate now replaces the built-in JSON
   content-type check instead of extending it; include `*/json` and `*/*+json`
   in the predicate to keep accepting them
