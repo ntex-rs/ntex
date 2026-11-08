@@ -117,7 +117,8 @@ where
 {
     /// Set resource name.
     ///
-    /// Name is used for url generation.
+    /// Name is used for url generation, it must be unique within the
+    /// enclosing scope or application, which panics on start otherwise.
     #[must_use]
     pub fn name(mut self, name: &str) -> Self {
         self.name = Some(name.to_string());

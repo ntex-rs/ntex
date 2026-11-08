@@ -294,7 +294,8 @@ where
     ///
     /// External resources are useful for URL generation purposes only
     /// and are never considered for matching at request time. Calls to
-    /// `HttpRequest::url_for()` will work as expected.
+    /// `HttpRequest::url_for()` will work as expected. The name must not be
+    /// used by another resource of the application.
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpRequest, HttpResponse, error::UrlGenerationError};

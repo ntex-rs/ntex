@@ -123,6 +123,7 @@ where
 
 /// Errors which can occur when attempting to generate resource uri.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum UrlGenerationError {
     /// Resource not found
     #[error("Resource not found")]
@@ -130,6 +131,12 @@ pub enum UrlGenerationError {
     /// Not all path pattern covered
     #[error("Not all path pattern covered")]
     NotEnoughElements,
+    /// More elements than dynamic segments of the resource path
+    #[error("Too many elements for the resource path")]
+    TooManyElements,
+    /// An element does not match the pattern of its dynamic segment
+    #[error("Element does not match its path segment pattern")]
+    InvalidElement,
     /// URL parse error
     #[error("{0}")]
     ParseError(
