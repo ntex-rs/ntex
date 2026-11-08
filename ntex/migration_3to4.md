@@ -306,7 +306,8 @@ needs request extractors.
 
 The old `App::state()` model is replaced by service state for the primary
 application state. Additional configuration values can be stored with
-`WebAppConfig::set_state()` and retrieved with `HttpRequest::app_state()`.
+`WebAppConfig::set_value()` and retrieved with `HttpRequest::app_value()`
+(named `set_state()` and `app_state()` before ntex 4.7).
 Request-local state is available through `WebRequest::st()` and
 `WebRequest::st_mut()`. Filters and middleware can change its type with
 `WebRequest::map_state()`.

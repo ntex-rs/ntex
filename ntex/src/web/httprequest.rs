@@ -201,9 +201,19 @@ impl HttpRequest {
     }
 
     #[inline]
-    /// Get an application state object stored with `WebAppConfig`.
+    /// Get a configuration value stored with [`WebAppConfig::set_value()`].
+    ///
+    /// This does not read the application state `St`, see
+    /// [`WebAppConfig::set_value()`].
+    pub fn app_value<T: 'static>(&self) -> Option<&T> {
+        self.0.config.value::<T>()
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    #[deprecated(since = "4.7.0", note = "use `HttpRequest::app_value()` instead")]
     pub fn app_state<T: 'static>(&self) -> Option<&T> {
-        self.0.config.state::<T>()
+        self.app_value()
     }
 }
 

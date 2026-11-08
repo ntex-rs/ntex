@@ -2,6 +2,12 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* web: Rename `WebAppConfig::set_state()`/`state()` to `set_value()`/`value()`
+  and `HttpRequest::app_state()`, `WebRequest::app_state()` and
+  `TestRequest::app_state()` to `app_value()`; the old names are deprecated.
+  Extractor configs (`JsonConfig`, `FormConfig`, `PayloadConfig`) are read only
+  from this store, not from `AppState`
+
 * http: Add `HttpServiceConfig::set_request_target_validation()` to reject
   malformed request targets without normalizing valid ones
 

@@ -319,8 +319,8 @@ where
     /// [`WebAppConfig`] contains connection metadata used by the application,
     /// such as the host, secure-connection flag, local address, and request pool
     /// size. It can also store typed configuration values with
-    /// [`WebAppConfig::set_state()`]; those values are available through
-    /// [`HttpRequest::app_state()`](crate::web::HttpRequest::app_state) and [`WebRequest::app_state()`].
+    /// [`WebAppConfig::set_value()`]; those values are available through
+    /// [`HttpRequest::app_value()`](crate::web::HttpRequest::app_value) and [`WebRequest::app_value()`].
     ///
     /// Without an explicit configuration, each request uses the
     /// [`WebAppConfig`] from its I/O context, or the default configuration if
@@ -335,14 +335,14 @@ where
     /// use ntex::web::{self, App, HttpRequest, WebAppConfig};
     ///
     /// async fn index(req: HttpRequest) -> String {
-    ///     let value = req.app_state::<usize>().copied().unwrap_or_default();
+    ///     let value = req.app_value::<usize>().copied().unwrap_or_default();
     ///     format!("Configured value: {value}")
     /// }
     ///
     /// let config = WebAppConfig::new()
     ///     .set_host("www.example.com".to_owned())
     ///     .set_secure()
-    ///     .set_state(42usize);
+    ///     .set_value(42usize);
     ///
     /// App::default()
     ///     .with_config(config)
@@ -956,17 +956,17 @@ mod tests {
     /// - Assert both reads return 10 and the request completes with OK.
     #[crate::rt_test]
     async fn test_extension() {
-        let cfg = WebAppConfig::new().set_state(10usize);
+        let cfg = WebAppConfig::new().set_value(10usize);
 
         let srv = init_service(
             App::new()
                 .with_config(cfg)
                 .filter(async move |req: WebRequest<()>| {
-                    assert_eq!(*req.app_state::<usize>().unwrap(), 10);
+                    assert_eq!(*req.app_value::<usize>().unwrap(), 10);
                     Ok::<_, Infallible>(req)
                 })
                 .service(web::resource("/").to(async move |req: HttpRequest| {
-                    assert_eq!(*req.app_state::<usize>().unwrap(), 10);
+                    assert_eq!(*req.app_value::<usize>().unwrap(), 10);
                     HttpResponse::Ok()
                 })),
         )

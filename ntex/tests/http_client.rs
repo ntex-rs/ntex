@@ -602,7 +602,7 @@ async fn test_client_gzip_encoding_large_random() {
         test::config().server_cfg(
             SharedCfg::new("SRV").add(
                 web::WebAppConfig::new()
-                    .set_state(web::types::PayloadConfig::default().limit(1_048_576)),
+                    .set_value(web::types::PayloadConfig::default().limit(1_048_576)),
             ),
         ),
         async |_| {
