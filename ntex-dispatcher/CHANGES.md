@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* Document classifying dispatcher termination with `IoRef::close_reason()`,
+  since codec, I/O, and timeout failures can complete as `Ok(())`
+
 ## [4.4.0] - 2026-10-21
 
 * Release in-flight call counts on cancellation, and cancel the dispatcher-held

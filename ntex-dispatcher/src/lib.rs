@@ -41,6 +41,61 @@
 //! }
 //! ```
 //!
+//! # Termination outcome
+//!
+//! `Ok(())` therefore does not mean the connection ended cleanly: a service
+//! that returns `Ok(None)` for every [`DispatchItem::Stop`] also completes with
+//! `Ok(())` after a decoder, encoder, I/O, or timeout failure. To distinguish
+//! these outcomes, keep an [`IoRef`](ntex_io::IoRef) from
+//! [`Io::get_ref`](ntex_io::Io::get_ref) (also available on [`IoBoxed`])
+//! before constructing the dispatcher, then inspect
+//! [`IoRef::close_reason`](ntex_io::IoRef::close_reason) after awaiting it:
+//!
+//! | Stop reason | Recorded [`CloseReason`] | Typical meaning |
+//! |-------------|--------------------------|-----------------|
+//! | [`Reason::Service`] | [`CloseReason::Service`] | service failure or service-initiated stop |
+//! | [`Reason::Io`] with `None` | [`CloseReason::PeerGone`] | clean peer disconnect |
+//! | [`Reason::Io`] with `Some` | [`CloseReason::Io`] | transport failure or truncated frame |
+//! | [`Reason::Encoder`] | [`CloseReason::Encoder`] | encoding failure |
+//! | [`Reason::Decoder`] | [`CloseReason::Decoder`] | malformed peer input |
+//! | [`Reason::KeepAlive`] | [`CloseReason::KeepAlive`] | idle timeout |
+//! | [`Reason::ReadTimeout`] | [`CloseReason::ReadTimeout`] | frame read too slow |
+//! | [`Reason::WriteTimeout`] | [`CloseReason::WriteTimeout`] | output not drained in time |
+//!
+//! Only the first reported close reason is kept, so a reason set earlier by the
+//! application, a filter, or the transport (for example
+//! [`CloseReason::Shutdown`]) is not overwritten by the dispatcher.
+//!
+//! ```
+//! use std::convert::Infallible;
+//!
+//! use ntex_codec::BytesCodec;
+//! use ntex_dispatcher::{DispatchItem, Dispatcher};
+//! use ntex_io::{CloseReason, IoBoxed};
+//! use ntex_service::{Pipeline, fn_service};
+//!
+//! async fn run(io: IoBoxed) -> Result<(), &'static str> {
+//!     let service = fn_service(async |event: DispatchItem<BytesCodec>| {
+//!         Ok::<_, Infallible>(match event {
+//!             DispatchItem::Item(bytes) => Some(bytes),
+//!             _ => None,
+//!         })
+//!     });
+//!
+//!     let io_ref = io.get_ref();
+//!     Dispatcher::new(io, BytesCodec, Pipeline::new((), service))
+//!         .await
+//!         .map_err(|_| "service error")?;
+//!
+//!     match io_ref.close_reason() {
+//!         Some(CloseReason::Decoder) => Err("malformed input"),
+//!         Some(CloseReason::Encoder | CloseReason::Io) => Err("transport failure"),
+//!         Some(CloseReason::ReadTimeout | CloseReason::WriteTimeout) => Err("timeout"),
+//!         _ => Ok(()),
+//!     }
+//! }
+//! ```
+//!
 //! # Configuration
 //!
 //! Configure the transport with [`ntex_io::IoConfig`] before constructing the
@@ -143,7 +198,9 @@ pub enum Control {
 ///
 /// A stop caused by I/O, codec, or timeout failure can still yield `Ok(())`
 /// from the dispatcher if no service error is recorded. Inspect the stop
-/// event when the application needs to distinguish those outcomes.
+/// event, or [`IoRef::close_reason`](ntex_io::IoRef::close_reason) after the
+/// dispatcher completes, when the application needs to distinguish those
+/// outcomes; see the [crate-level docs](crate#termination-outcome).
 pub enum Reason<U: Encoder + Decoder> {
     /// A service readiness check or event call failed.
     ///
@@ -248,7 +305,11 @@ fn truncated(io: &IoBoxed) -> Option<io::Error> {
 /// shutdown, and errors reported after handoff are not returned by it.
 ///
 /// Only service errors are returned as `Err`; other stop reasons are reported
-/// as events. A service error recorded before stop delivery takes precedence
+/// as events, so `Ok(())` may follow a codec, I/O, or timeout failure. Keep an
+/// [`IoRef`](ntex_io::IoRef) and inspect
+/// [`IoRef::close_reason`](ntex_io::IoRef::close_reason) after completion to
+/// classify the termination; see the [crate-level docs](crate#termination-outcome).
+/// A service error recorded before stop delivery takes precedence
 /// over a later stop-handler error. If none was recorded, a stop-handler error
 /// is returned when that call completes before handoff.
 ///
