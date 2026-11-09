@@ -165,6 +165,9 @@ impl<St> WebRequest<St> {
     }
 
     /// Get `ConnectionInfo` for the current request.
+    ///
+    /// Forwarding headers are used as configured by
+    /// [`WebAppConfig::set_forwarded`](crate::web::WebAppConfig::set_forwarded).
     pub fn connection_info(&self) -> Ref<'_, ConnectionInfo> {
         ConnectionInfo::get(self.head(), self.app_config())
     }

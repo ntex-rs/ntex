@@ -7,7 +7,7 @@ use crate::{router::ResourceDef, util::ByteString, util::HashMap};
 
 use super::httprequest::{HttpRequest, HttpRequestInner};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::{Resource, Route, State};
+use super::{ForwardedPolicy, Resource, Route, State};
 
 /// Application configuration
 #[derive(Debug)]
@@ -16,6 +16,7 @@ pub struct WebAppConfig {
     secure: bool,
     host: String,
     addr: SocketAddr,
+    forwarded: ForwardedPolicy,
     config: CfgContext,
     state: HashMap<TypeId, Box<dyn Any + Sync + Send>>,
     pub(super) pool_size: usize,
@@ -60,6 +61,7 @@ impl WebAppConfig {
             addr,
             name: name.into(),
             pool_size: 128,
+            forwarded: ForwardedPolicy::default(),
             state: HashMap::default(),
             config: CfgContext::default(),
         }
@@ -91,6 +93,11 @@ impl WebAppConfig {
         self.addr
     }
 
+    /// Trust policy for the `Forwarded` and `X-Forwarded-*` request headers.
+    pub fn forwarded(&self) -> &ForwardedPolicy {
+        &self.forwarded
+    }
+
     /// Get a configuration value stored with [`WebAppConfig::set_value()`].
     ///
     /// Returns `None` if no value of type `T` is stored.
@@ -119,6 +126,16 @@ impl WebAppConfig {
     /// Connection is secure(https).
     pub fn set_secure(mut self) -> Self {
         self.secure = true;
+        self
+    }
+
+    #[must_use]
+    /// Set the trust policy for the `Forwarded` and `X-Forwarded-*` request
+    /// headers, used by [`ConnectionInfo`](crate::web::dev::ConnectionInfo).
+    ///
+    /// By default the headers are ignored, see [`ForwardedPolicy`].
+    pub fn set_forwarded(mut self, policy: ForwardedPolicy) -> Self {
+        self.forwarded = policy;
         self
     }
 

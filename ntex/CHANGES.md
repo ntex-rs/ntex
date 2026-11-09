@@ -2,6 +2,13 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* web: `ConnectionInfo` ignores `Forwarded` and `X-Forwarded-*`
+  headers by default; configure them with `WebAppConfig::set_forwarded()` and
+  `ForwardedPolicy::{ignore, trust_all, trust_proxies, trust_fn}`. Trusted-proxy
+  policies use the headers only from a trusted peer and pick the nearest
+  untrusted hop. `Forwarded` values are parsed per RFC 7239 and unquoted. To
+  restore the previous behavior use `ForwardedPolicy::trust_all()`
+
 * web: `Compress` adds `Vary: Accept-Encoding` to responses whose encoding it
   negotiates, and picks `identity` when the client weights it (explicitly or
   via `*`) strictly above every supported compression

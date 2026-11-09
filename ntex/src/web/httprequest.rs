@@ -203,6 +203,9 @@ impl HttpRequest {
 
     /// Get *`ConnectionInfo`* for the current request.
     ///
+    /// Forwarding headers are used as configured by
+    /// [`WebAppConfig::set_forwarded`](crate::web::WebAppConfig::set_forwarded).
+    ///
     /// This method panics if request's extensions container is already
     /// borrowed.
     #[inline]
