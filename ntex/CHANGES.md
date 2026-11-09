@@ -1,6 +1,6 @@
 # Changes
 
-## [4.7.0] - 2026-11-xx
+## [4.7.0] - 2026-11-09
 
 * Security: the default OpenSSL HTTP client (`Client::new()`, `ClientBuilder::new()`) now
   verifies server certificates against the system trust store and checks the hostname;

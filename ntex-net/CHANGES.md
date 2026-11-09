@@ -1,6 +1,6 @@
 # Changes
 
-## [4.9.0] - Unreleased
+## [4.9.0] - 2026-11-09
 
 * compio: The read task no longer submits a read while reads are paused, for
   example after eof. Such a read held buffered input, so a stream truncated

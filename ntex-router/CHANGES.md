@@ -1,6 +1,6 @@
 # Changes
 
-## [2.3.0] - 2026-11-xx
+## [2.3.0] - 2026-11-09
 
 * Add `ResourceDef::try_build_path()`, it checks elements against the patterns of
   their dynamic segments
