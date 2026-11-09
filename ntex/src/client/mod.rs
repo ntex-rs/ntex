@@ -108,6 +108,9 @@ impl Default for Client {
 
 impl Client {
     /// Creates a client with default settings.
+    ///
+    /// HTTPS peers are verified by default; see the TLS defaults of
+    /// [`ClientBuilder::new`].
     pub fn new() -> Client {
         ClientBuilder::new().build(SharedCfg::default())
     }

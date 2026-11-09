@@ -400,3 +400,110 @@ async fn test_h2_request_body_dropped_after_response_is_reset() {
     .await
     .expect("request body upload is not stopped");
 }
+
+fn verify_server() -> http::test::TestServer {
+    test_server(async |_| {
+        http::openssl(
+            ssl_acceptor(),
+            HttpService::h2(
+                App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok()))),
+            ),
+        )
+    })
+}
+
+/// Connector that trusts the self-signed test certificate (`CN=www.example.com`).
+fn trusting_connector() -> SslConnector {
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_ca_file("./tests/cert.pem").unwrap();
+    builder.set_alpn_protos(b"\x02h2\x08http/1.1").unwrap();
+    builder.build()
+}
+
+/// STATEMENT: The default OpenSSL HTTP client verifies peer certificates and
+/// rejects an untrusted one.
+///
+/// HOW:
+/// - Serve HTTPS with the self-signed test certificate.
+/// - Send a request with `Client::new()` and assert it fails with a certificate
+///   verification error.
+#[ntex::test]
+async fn test_default_client_rejects_untrusted_certificate() {
+    let srv = verify_server();
+
+    let err = Client::new().get(srv.surl("/")).send().await.unwrap_err();
+    assert!(
+        format!("{err:?}").contains("certificate verify failed"),
+        "{err:?}"
+    );
+}
+
+/// STATEMENT: An OpenSSL client that trusts the peer's certificate connects
+/// when the request host matches it.
+///
+/// HOW:
+/// - Trust the self-signed test certificate as a root.
+/// - Request `https://www.example.com` routed to the test server with
+///   `address()` and assert a successful HTTP/2 response.
+#[ntex::test]
+async fn test_trusted_peer_is_verified() {
+    let srv = verify_server();
+    let client = Client::builder()
+        .openssl(trusting_connector())
+        .build(SharedCfg::default());
+
+    let url = format!("https://www.example.com:{}/", srv.addr().port());
+    let response = client.get(url).address(srv.addr()).send().await.unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(response.version(), Version::HTTP_2);
+}
+
+/// STATEMENT: An OpenSSL client rejects a trusted certificate issued for a
+/// different host.
+///
+/// HOW:
+/// - Trust the self-signed `www.example.com` test certificate as a root.
+/// - Request `https://localhost` on the test server and assert it fails with a
+///   certificate verification error.
+#[ntex::test]
+async fn test_hostname_mismatch_is_rejected() {
+    let srv = verify_server();
+    let client = Client::builder()
+        .openssl(trusting_connector())
+        .build(SharedCfg::default());
+
+    let url = format!("https://localhost:{}/", srv.addr().port());
+    let err = client
+        .get(url)
+        .address(srv.addr())
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("certificate verify failed"),
+        "{err:?}"
+    );
+}
+
+/// STATEMENT: Certificate verification is skipped only through an explicitly
+/// insecure connector.
+///
+/// HOW:
+/// - Build a connector with `SslVerifyMode::NONE` and pass it to
+///   `ClientBuilder::openssl`.
+/// - Request the self-signed test server through a mismatched host and assert
+///   success.
+#[ntex::test]
+async fn test_explicit_insecure_connector() {
+    let srv = verify_server();
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    builder.set_alpn_protos(b"\x02h2\x08http/1.1").unwrap();
+    let client = Client::builder()
+        .openssl(builder.build())
+        .build(SharedCfg::default());
+
+    let url = format!("https://localhost:{}/", srv.addr().port());
+    let response = client.get(url).address(srv.addr()).send().await.unwrap();
+    assert!(response.status().is_success());
+}
