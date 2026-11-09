@@ -4,7 +4,7 @@ use std::{cell::Ref, cell::RefMut, error::Error, fmt, fmt::Write, str};
 use serde::Serialize;
 
 #[cfg(feature = "cookie")]
-use coo_kie::{Cookie, CookieJar};
+use coo_kie::Cookie;
 
 use crate::http::StatusCode;
 use crate::http::body::{Body, BodyStream, MessageBody, ResponseBody};
@@ -333,7 +333,7 @@ pub struct ResponseBuilder {
     head: Option<Message<ResponseHead>>,
     err: Option<HttpError>,
     #[cfg(feature = "cookie")]
-    cookies: Option<CookieJar>,
+    cookies: Vec<Cookie<'static>>,
 }
 
 impl ResponseBuilder {
@@ -345,7 +345,7 @@ impl ResponseBuilder {
             head: Some(Message::with_status(status)),
             err: None,
             #[cfg(feature = "cookie")]
-            cookies: None,
+            cookies: Vec::new(),
         }
     }
 
@@ -503,6 +503,11 @@ impl ResponseBuilder {
     #[cfg(feature = "cookie")]
     /// Set a cookie.
     ///
+    /// A cookie is identified by its name, path, and domain. Setting a cookie
+    /// replaces a cookie previously set or deleted by this builder with the
+    /// same name, path, and domain; cookies with the same name but a different
+    /// path or domain are kept.
+    ///
     /// ```rust
     /// use coo_kie as cookie;
     /// use ntex::http::{Request, Response};
@@ -523,18 +528,21 @@ impl ResponseBuilder {
     where
         C: Into<Cookie<'static>>,
     {
-        if let Some(cookies) = &mut self.cookies {
-            cookies.add(cookie.into());
-        } else {
-            let mut jar = CookieJar::new();
-            jar.add(cookie.into());
-            self.cookies = Some(jar);
-        }
+        self.set_cookie(cookie.into());
         self
     }
 
     #[cfg(feature = "cookie")]
     /// Remove cookie.
+    ///
+    /// Adds a removal cookie, an empty cookie that has already expired, with
+    /// the name, path, and domain of `cookie`. It replaces a cookie previously
+    /// set or deleted by this builder with the same name, path, and domain.
+    ///
+    /// A client removes a stored cookie only if the path and domain match the
+    /// ones it was set with. Request cookies carry only a name and a value, so
+    /// the path and domain of a cookie set with them must be added before
+    /// deletion.
     ///
     /// ```rust
     /// use ntex::http::{Request, Response, HttpMessage};
@@ -542,22 +550,37 @@ impl ResponseBuilder {
     /// fn index(req: Request) -> Response {
     ///     let mut builder = Response::Ok();
     ///
-    ///     if let Some(ref cookie) = req.cookie("name") {
-    ///         builder.del_cookie(cookie);
+    ///     if let Some(mut cookie) = req.cookie("name") {
+    ///         // the cookie was set with `Path=/app`
+    ///         cookie.set_path("/app");
+    ///         builder.del_cookie(&cookie);
     ///     }
     ///
     ///     builder.build()
     /// }
     /// ```
     pub fn del_cookie(&mut self, cookie: &Cookie<'_>) -> &mut Self {
-        if self.cookies.is_none() {
-            self.cookies = Some(CookieJar::new());
-        }
-        let jar = self.cookies.as_mut().unwrap();
-        let cookie = cookie.clone().into_owned();
-        jar.add_original(cookie.clone());
-        jar.remove(cookie);
+        let mut cookie = cookie.clone().into_owned();
+        cookie.make_removal();
+        self.set_cookie(cookie);
         self
+    }
+
+    #[cfg(feature = "cookie")]
+    fn set_cookie(&mut self, cookie: Cookie<'static>) {
+        let same_scope = |c: &Cookie<'_>| {
+            c.name() == cookie.name()
+                && c.path() == cookie.path()
+                && match (c.domain(), cookie.domain()) {
+                    (Some(d1), Some(d2)) => d1.eq_ignore_ascii_case(d2),
+                    (d1, d2) => d1 == d2,
+                }
+        };
+        if let Some(c) = self.cookies.iter_mut().find(|c| same_scope(c)) {
+            *c = cookie;
+        } else {
+            self.cookies.push(cookie);
+        }
     }
 
     /// Returns the response extensions.
@@ -606,14 +629,10 @@ impl ResponseBuilder {
         let mut response = self.head.take().expect("cannot reuse response builder");
 
         #[cfg(feature = "cookie")]
-        {
-            if let Some(ref jar) = self.cookies {
-                for cookie in jar.delta() {
-                    match HeaderValue::from_str(&cookie.to_string()) {
-                        Ok(val) => response.headers.append(header::SET_COOKIE, val),
-                        Err(e) => return Response::from(HttpError::from(e)).into_body(),
-                    }
-                }
+        for cookie in &self.cookies {
+            match HeaderValue::from_str(&cookie.to_string()) {
+                Ok(val) => response.headers.append(header::SET_COOKIE, val),
+                Err(e) => return Response::from(HttpError::from(e)).into_body(),
             }
         }
 
@@ -688,7 +707,7 @@ impl ResponseBuilder {
             head: self.head.take(),
             err: self.err.take(),
             #[cfg(feature = "cookie")]
-            cookies: self.cookies.take(),
+            cookies: std::mem::take(&mut self.cookies),
         }
     }
 }
@@ -708,32 +727,12 @@ fn parts(
 /// Convert `Response` to a `ResponseBuilder`. Body get dropped.
 impl<B> From<Response<B>> for ResponseBuilder {
     fn from(res: Response<B>) -> ResponseBuilder {
-        #[cfg(feature = "cookie")]
-        {
-            // If this response has cookies, load them into a jar
-            let mut jar: Option<CookieJar> = None;
-            for c in res.cookies() {
-                if let Some(ref mut j) = jar {
-                    j.add_original(c.into_owned());
-                } else {
-                    let mut j = CookieJar::new();
-                    j.add_original(c.into_owned());
-                    jar = Some(j);
-                }
-            }
-
-            ResponseBuilder {
-                head: Some(res.head),
-                err: None,
-                cookies: jar,
-            }
-        }
-        #[cfg(not(feature = "cookie"))]
-        {
-            ResponseBuilder {
-                head: Some(res.head),
-                err: None,
-            }
+        // existing `Set-Cookie` headers are kept in the head
+        ResponseBuilder {
+            head: Some(res.head),
+            err: None,
+            #[cfg(feature = "cookie")]
+            cookies: Vec::new(),
         }
     }
 }
@@ -749,36 +748,12 @@ impl<'a> From<&'a ResponseHead> for ResponseBuilder {
         }
         msg.no_chunking(!head.chunked());
 
-        #[cfg(feature = "cookie")]
-        {
-            // If this response has cookies, load them into a jar
-            let mut jar: Option<CookieJar> = None;
-
-            let cookies = CookieIter {
-                iter: head.headers.get_all(header::SET_COOKIE),
-            };
-            for c in cookies {
-                if let Some(ref mut j) = jar {
-                    j.add_original(c.into_owned());
-                } else {
-                    let mut j = CookieJar::new();
-                    j.add_original(c.into_owned());
-                    jar = Some(j);
-                }
-            }
-            ResponseBuilder {
-                head: Some(msg),
-                err: None,
-                cookies: jar,
-            }
-        }
-
-        #[cfg(not(feature = "cookie"))]
-        {
-            ResponseBuilder {
-                head: Some(msg),
-                err: None,
-            }
+        // existing `Set-Cookie` headers are copied into the head
+        ResponseBuilder {
+            head: Some(msg),
+            err: None,
+            #[cfg(feature = "cookie")]
+            cookies: Vec::new(),
         }
     }
 }
@@ -973,6 +948,60 @@ mod tests {
             val[1],
             "name=value; HttpOnly; Path=/test; Domain=www.rust-lang.org; Max-Age=86400"
         );
+    }
+
+    /// STATEMENT: Builder cookies are identified by name, path, and domain, so cookies that
+    /// share a name but differ in scope are all emitted and a same-scope cookie is replaced.
+    ///
+    /// HOW:
+    /// - Set `sid` for paths `/` and `/admin`, `sid` for domain `a.example`, then `sid` for
+    ///   `/` again, `sid` for `A.EXAMPLE`, and `sid` without path or domain.
+    /// - Confirm the `Set-Cookie` headers hold, in insertion order, the replaced `/` cookie,
+    ///   the `/admin` cookie, the replaced domain cookie, and the unscoped cookie.
+    /// - Delete `sid` for `/admin` and confirm only that cookie becomes an expired empty
+    ///   cookie which keeps `Path=/admin`.
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn test_builder_cookie_scope() {
+        let resp = Response::Ok()
+            .cookie(Cookie::build(("sid", "1")).path("/"))
+            .cookie(Cookie::build(("sid", "2")).path("/admin"))
+            .cookie(Cookie::build(("sid", "3")).domain("a.example"))
+            .cookie(Cookie::build(("sid", "4")).path("/"))
+            .cookie(Cookie::build(("sid", "5")).domain("A.EXAMPLE"))
+            .cookie(Cookie::new("sid", "6"))
+            .build();
+        assert_eq!(
+            set_cookies(&resp),
+            [
+                "sid=4; Path=/",
+                "sid=2; Path=/admin",
+                "sid=5; Domain=A.EXAMPLE",
+                "sid=6"
+            ]
+        );
+
+        let resp = Response::Ok()
+            .cookie(Cookie::build(("sid", "1")).path("/"))
+            .cookie(Cookie::build(("sid", "2")).path("/admin"))
+            .del_cookie(&Cookie::build("sid").path("/admin").build())
+            .build();
+        let vals = set_cookies(&resp);
+        assert_eq!(vals.len(), 2);
+        assert_eq!(vals[0], "sid=1; Path=/");
+        assert!(
+            vals[1].starts_with("sid=; Path=/admin; Max-Age=0; Expires="),
+            "{}",
+            vals[1]
+        );
+    }
+
+    #[cfg(feature = "cookie")]
+    fn set_cookies<B>(resp: &Response<B>) -> Vec<String> {
+        resp.headers()
+            .get_all(header::SET_COOKIE)
+            .map(|v| v.to_str().unwrap().to_owned())
+            .collect()
     }
 
     /// STATEMENT: Deleting a response cookie removes every matching name while retaining unrelated cookies.

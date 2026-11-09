@@ -2,6 +2,13 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `ResponseBuilder::cookie()` and `del_cookie()` identify cookies by name, path,
+  and domain, so same-name cookies with different scopes are all sent; cookies
+  are emitted in insertion order. `del_cookie()` keeps the cookie's path and
+  domain, which must match the ones it was set with. `HttpMessage::cookies()`
+  skips malformed request cookie pairs and `ClientResponse` skips malformed
+  `Set-Cookie` headers instead of failing all cookies
+
 * web: `ConnectionInfo` ignores `Forwarded` and `X-Forwarded-*`
   headers by default; configure them with `WebAppConfig::set_forwarded()` and
   `ForwardedPolicy::{ignore, trust_all, trust_proxies, trust_fn}`. Trusted-proxy

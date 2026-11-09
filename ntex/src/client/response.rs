@@ -42,6 +42,12 @@ impl HttpMessage for ClientResponse {
 
     #[cfg(feature = "cookie")]
     /// Parses cookies from the response `Set-Cookie` headers.
+    ///
+    /// Headers that are not valid UTF-8 or cannot be parsed are skipped.
+    ///
+    /// # Errors
+    ///
+    /// This implementation does not return an error.
     fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, CookieParseError> {
         use crate::http::header::SET_COOKIE;
 
@@ -50,8 +56,11 @@ impl HttpMessage for ClientResponse {
         if self.message_extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();
             for hdr in self.message_headers().get_all(&SET_COOKIE) {
-                let s = std::str::from_utf8(hdr.as_bytes()).map_err(CookieParseError::from)?;
-                cookies.push(Cookie::parse_encoded(s)?.into_owned());
+                if let Ok(s) = std::str::from_utf8(hdr.as_bytes())
+                    && let Ok(cookie) = Cookie::parse_encoded(s)
+                {
+                    cookies.push(cookie.into_owned());
+                }
             }
             self.message_extensions_mut().insert(Cookies(cookies));
         }
@@ -912,6 +921,27 @@ mod tests {
         ))));
         assert_eq!(res.body().await.unwrap(), "again");
         assert!(is_taken(res.next().await.unwrap().unwrap_err()));
+    }
+
+    /// STATEMENT: A malformed `Set-Cookie` header is skipped without hiding valid cookies.
+    ///
+    /// HOW:
+    /// - Build a client response with `Set-Cookie` headers `garbage`, a non-UTF-8 value, and
+    ///   `sid=ok; Path=/p`.
+    /// - Confirm `cookies` returns only `sid` and `cookie("sid")` keeps value `ok` and path `/p`.
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn test_cookies_malformed_header() {
+        let res = TestResponse::with_header(header::SET_COOKIE, "garbage")
+            .header(
+                header::SET_COOKIE,
+                HeaderValue::from_bytes(b"c=\xff").unwrap(),
+            )
+            .header(header::SET_COOKIE, "sid=ok; Path=/p")
+            .build();
+        assert_eq!(res.cookies().unwrap().len(), 1);
+        let cookie = res.cookie("sid").unwrap();
+        assert_eq!((cookie.value(), cookie.path()), ("ok", Some("/p")));
     }
 
     /// STATEMENT: Response metadata mutations are visible through accessors and debug output.

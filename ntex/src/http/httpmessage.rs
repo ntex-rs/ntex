@@ -104,18 +104,21 @@ pub trait HttpMessage: Sized {
     #[cfg(feature = "cookie")]
     /// Parses and caches cookies from the `Cookie` headers.
     ///
+    /// Each `name=value` pair is parsed separately; pairs that are not valid
+    /// UTF-8 or cannot be parsed are skipped.
+    ///
     /// # Errors
     ///
-    /// Returns an error if a header is not valid UTF-8 or a cookie cannot be
-    /// parsed.
+    /// The default implementation does not return an error.
     fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, coo_kie::ParseError> {
         if self.message_extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();
             for hdr in self.message_headers().get_all(header::COOKIE) {
-                let s = str::from_utf8(hdr.as_bytes()).map_err(coo_kie::ParseError::from)?;
-                for cookie_str in s.split(';').map(str::trim) {
-                    if !cookie_str.is_empty() {
-                        cookies.push(Cookie::parse_encoded(cookie_str)?.into_owned());
+                for pair in hdr.as_bytes().split(|b| *b == b';') {
+                    if let Ok(pair) = str::from_utf8(pair)
+                        && let Ok(cookie) = Cookie::parse_encoded(pair)
+                    {
+                        cookies.push(cookie.into_owned());
                     }
                 }
             }
@@ -261,6 +264,40 @@ mod tests {
             )
             .build();
         assert_eq!(req.mime_type(), Err(ContentTypeError::ParseError));
+    }
+
+    /// STATEMENT: A malformed request cookie pair is skipped without hiding the valid pairs
+    /// around it.
+    ///
+    /// HOW:
+    /// - Send `Cookie` headers `sid=ok; garbage; =x; a=b` and `c\xff=1; d=2`, where
+    ///   `garbage`, `=x`, and the non-UTF-8 pair cannot be parsed.
+    /// - Confirm `cookies` returns `sid`, `a`, and `d` in order and `cookie("sid")` finds `ok`.
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn test_cookie_malformed_pair() {
+        let req = TestRequest::default()
+            .header(header::COOKIE, "sid=ok; garbage; =x; a=b")
+            .header(
+                header::COOKIE,
+                header::HeaderValue::from_bytes(b"c\xff=1; d=2").unwrap(),
+            )
+            .build();
+        let names: Vec<_> = req
+            .cookies()
+            .unwrap()
+            .iter()
+            .map(|c| (c.name().to_owned(), c.value().to_owned()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("sid".into(), "ok".into()),
+                ("a".into(), "b".into()),
+                ("d".into(), "2".into())
+            ]
+        );
+        assert_eq!(req.cookie("sid").unwrap().value(), "ok");
     }
 
     /// STATEMENT: Cookie lookup returns no match for an absent name after parsing a trailing separator.
