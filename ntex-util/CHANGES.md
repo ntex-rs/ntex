@@ -2,6 +2,10 @@
 
 ## [4.9.0] - Unreleased
 
+* Add `services::ordered`: `Ordered` runs one service concurrently and enters
+  a second service in ticket order; tickets come from call arrival order or
+  from an external system (`Ticket`, `Tickets`, `Sequencer`, `tickets()`)
+
 * Document that `mpsc::Receiver`, `Sender::closed`, `Sleep`, `Deadline` and
   `TimerHandle` wake only the most recently polled task; wait from one task at
   a time
