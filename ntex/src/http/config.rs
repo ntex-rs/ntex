@@ -138,10 +138,17 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets the maximum number of headers in a message.
     ///
-    /// Every header line counts, including repeated header names.
+    /// Every header field counts, including repeated header names. HTTP/2
+    /// pseudo-header fields do not count.
     ///
     /// Requests exceeding this limit are rejected with
-    /// `431 Request Header Fields Too Large`. The default is 96.
+    /// `431 Request Header Fields Too Large`; an HTTP/2 connection stays open
+    /// and only the offending stream is answered. The default is 96.
+    ///
+    /// HTTP/2 also applies its own decoder limit, set by
+    /// [`Http2ServiceConfig::set_max_headers`](crate::http::h2::Http2ServiceConfig::set_max_headers),
+    /// before this check; streams exceeding that limit are refused with
+    /// `REFUSED_STREAM` instead, so the stricter of the two limits applies.
     pub fn set_max_headers(mut self, val: u16) -> Self {
         self.max_headers = val;
         self

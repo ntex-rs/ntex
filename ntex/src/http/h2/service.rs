@@ -193,6 +193,7 @@ impl Service<(), h2::Control<Error<H2Error>>> for ControlService {
 struct PublishService<Err> {
     id: usize,
     target_policy: TargetPolicy,
+    max_headers: usize,
     io: IoRef,
     svc: Pipeline<Request, Response, Err>,
     control: PipelineBinding<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
@@ -222,14 +223,32 @@ where
         svc: Pipeline<Request, Response, Err>,
         control: PipelineBinding<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
     ) -> Self {
+        let cfg = io.cfg().ctx().get::<HttpServiceConfig>();
         Self {
             id,
-            target_policy: io.cfg().ctx().get::<HttpServiceConfig>().target_policy(),
+            target_policy: cfg.target_policy(),
+            max_headers: usize::from(cfg.max_headers),
             io,
             svc,
             control,
             streams: Rc::new(RefCell::new(HashMap::default())),
             empty_data: Cell::new(0),
+        }
+    }
+}
+
+impl<Err> PublishService<Err> {
+    /// Answers a rejected request with an empty response, the connection stays open.
+    fn reject(&self, stream: &h2::StreamRef, status: StatusCode, eof: bool) {
+        self.streams.borrow_mut().remove(&stream.id());
+
+        let mut res = Response::new(status).drop_body();
+        let head = res.head_mut();
+        prepare_response(head, &mut BodySize::Empty);
+        let _ = stream.send_response(status, &head.headers, true);
+        if !eof {
+            // the request body is not needed
+            stream.reset(h2::frame::Reason::NO_ERROR);
         }
     }
 }
@@ -363,6 +382,13 @@ where
             }
         };
 
+        // repeated header names count separately, like HTTP/1
+        if headers.iter().nth(self.max_headers).is_some() {
+            log::debug!("{}: Too many headers on {:?}", self.io.tag(), stream.id());
+            self.reject(&stream, StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE, eof);
+            return Ok(());
+        }
+
         // a malformed request is a stream error, the connection stays open,
         // see RFC 9113 section 8.1.1
         let Some((method, uri)) = request_uri(&pseudo, self.target_policy) else {
@@ -371,16 +397,7 @@ where
                 self.io.tag(),
                 stream.id()
             );
-            self.streams.borrow_mut().remove(&stream.id());
-
-            let mut res = Response::new(StatusCode::BAD_REQUEST).drop_body();
-            let head = res.head_mut();
-            prepare_response(head, &mut BodySize::Empty);
-            let _ = stream.send_response(StatusCode::BAD_REQUEST, &head.headers, true);
-            if !eof {
-                // the request body is not needed
-                stream.reset(h2::frame::Reason::NO_ERROR);
-            }
+            self.reject(&stream, StatusCode::BAD_REQUEST, eof);
             return Ok(());
         };
 

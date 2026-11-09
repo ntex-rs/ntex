@@ -2294,6 +2294,66 @@ async fn test_h2_malformed_request_uri() {
     }
 }
 
+/// STATEMENT: The `HttpServiceConfig` header limit rejects HTTP/2 streams without closing connections.
+///
+/// HOW:
+/// - Configure `set_max_headers(2)` and send requests with two and three header fields,
+///   where the three fields repeat one header name, with open and closed request bodies.
+/// - Require `431` for three fields and `200` for two fields, all on one connection.
+/// - For a rejected open request body, verify further payload writes fail because the
+///   stream is reset.
+/// - Check the connection is still open afterwards.
+#[ntex::test]
+async fn test_h2_max_headers() {
+    use ntex::http::{HeaderMap, HttpServiceConfig, header};
+    use ntex::time::timeout;
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test::server_with_config(
+        async |_| HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_max_headers(2)),
+    );
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, false, "localhost".into());
+    for (count, eof, expected) in [
+        (3, true, StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE),
+        (2, true, StatusCode::OK),
+        (3, false, StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE),
+        (2, false, StatusCode::OK),
+    ] {
+        let mut headers = HeaderMap::default();
+        headers.insert(header::USER_AGENT, header::HeaderValue::from_static("test"));
+        for value in ["a", "b"].into_iter().take(count - 1) {
+            headers.append(header::ACCEPT, header::HeaderValue::from_static(value));
+        }
+        let (snd, rcv) = client
+            .send(Method::POST, "/".into(), headers, eof)
+            .await
+            .unwrap();
+        if !eof && expected == StatusCode::OK {
+            snd.send_payload(Bytes::new(), true).await.unwrap();
+        }
+        let msg = timeout(Seconds(5), rcv.recv()).await.unwrap().unwrap();
+        let MessageKind::Headers { pseudo, .. } = msg.kind else {
+            panic!("unexpected message: {msg:?}")
+        };
+        assert_eq!(pseudo.status, Some(expected), "{count} {eof}");
+
+        if !eof && expected != StatusCode::OK {
+            let mut reset = false;
+            for _ in 0..100 {
+                if snd.send_payload(Bytes::new(), false).await.is_err() {
+                    reset = true;
+                    break;
+                }
+                sleep(Millis(50)).await;
+            }
+            assert!(reset, "request stream is not reset");
+        }
+    }
+    assert!(!client.is_closed());
+}
+
 /// STATEMENT: An HTTP/2 response body error resets only the failing stream.
 ///
 /// HOW:
