@@ -223,13 +223,20 @@ impl IoRef {
     #[inline]
     /// Encodes an item into the write buffer.
     ///
+    /// # `Ok` does not mean the item was buffered
+    ///
     /// This method reports codec errors only. Any `io::Error` produced while
     /// buffering is discarded: if the connection is already closing or closed
-    /// the item is not encoded, and a transport or filter error raised by an
-    /// eager backend write is dropped. Such errors remain observable later
-    /// through [`crate::Io::poll_flush`] or [`crate::Io::poll_recv`]. Use
-    /// [`encode_slice`](Self::encode_slice) or
-    /// [`encode_bytes`](Self::encode_bytes) when they must be observed at the
+    /// (for example after [`close`](Self::close)), the item is **silently
+    /// dropped** and `Ok(())` is returned. A transport or filter error raised
+    /// by an eager backend write is dropped the same way. Such errors remain
+    /// observable later through [`crate::Io::poll_flush`] or
+    /// [`crate::Io::poll_recv`].
+    ///
+    /// When delivery matters, check [`is_active`](Self::is_active) before
+    /// encoding, or encode into a buffer with the codec yourself and write it
+    /// with [`encode_bytes`](Self::encode_bytes) or
+    /// [`encode_slice`](Self::encode_slice), which return these errors at the
     /// call site.
     ///
     /// # Back-pressure is advisory

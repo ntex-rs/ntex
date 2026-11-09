@@ -2,6 +2,9 @@
 
 ## [4.7.1] - Unreleased
 
+* Document that `IoRef::encode()` and `Io::send()` silently drop the item and return `Ok`
+  on a closing or closed connection
+
 * Filter shutdown fails with an error naming the discarded byte count when a filter layer
   still retains unwritten output after its `shutdown()` completes, instead of silently
   dropping it; `FilterCtx::clear_write_buf()` now returns the number of discarded bytes

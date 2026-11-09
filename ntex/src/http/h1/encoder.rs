@@ -829,18 +829,22 @@ mod tests {
     /// `Content-Length`, and invalid declarations are rejected.
     ///
     /// HOW:
-    /// - Encode an unchunked response stream declaring 3 bytes, write 4 bytes and
-    ///   check only 3 are sent and the connection stays alive.
+    /// - Encode an unchunked response stream (with an explicit `Date`, so no
+    ///   runtime is needed) declaring 3 bytes, write 4 bytes and check only 3
+    ///   are sent and the connection stays alive.
     /// - Check a 2-byte body fails at eof with `UnexpectedEof`.
     /// - Check extra headers override the message length only when they carry
     ///   `Content-Length`, tunnels stay close-delimited, and repeated, non-numeric or overflowing values fail
     ///   with `InvalidLength`.
-    #[crate::rt_test]
-    async fn test_stream_declared_length() {
+    #[test]
+    fn test_stream_declared_length() {
         let encode =
             |cl: &[&'static str], extra: Option<(HeaderName, &'static str)>, stream: bool| {
                 let mut res = Response::with_body(StatusCode::OK, ());
                 res.head_mut().no_chunking(true);
+                // an explicit date skips `DateService`, which needs a runtime
+                res.headers_mut()
+                    .insert(DATE, HeaderValue::from_static("date"));
                 for v in cl {
                     res.headers_mut()
                         .append(CONTENT_LENGTH, HeaderValue::from_static(v));
