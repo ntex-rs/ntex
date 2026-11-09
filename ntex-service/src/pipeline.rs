@@ -65,6 +65,11 @@ pub use crate::pl_state::{PipelineState, PipelineStateBinding};
 /// service chain.
 /// Successful readiness is shared by every binding until a subscribed
 /// [`crate::ReadyNotifier`] invalidates it. Calls do not consume readiness.
+///
+/// Shutdown is advisory: it shuts down the enclosed service, but does not
+/// reject later calls. Readiness checks return `Ok(())` once shutdown has
+/// started, and calls are still forwarded to the service. Callers that must
+/// stop admitting work check [`Pipeline::is_shutdown`].
 pub struct Pipeline<Req, Res, Err> {
     api: PipelineApi<Req, Res, Err>,
 }
@@ -132,7 +137,8 @@ where
     #[inline]
     /// Waits for readiness, then calls the service.
     ///
-    /// Reuses valid shared readiness without consuming it.
+    /// Reuses valid shared readiness without consuming it. Calls are forwarded
+    /// even after shutdown has started; see [`Pipeline`].
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
         let pl = self.bind();
         pl.api.call(pl.idx, req).await
@@ -170,12 +176,18 @@ where
 
     #[inline]
     /// Checks whether pipeline shutdown has been initiated.
+    ///
+    /// The pipeline does not reject calls after shutdown; callers use this to
+    /// stop admitting new work.
     pub fn is_shutdown(&self) -> bool {
         self.api.is_shutdown()
     }
 
     #[inline]
     /// Shuts down the enclosed service.
+    ///
+    /// Marks the pipeline as shutting down, then waits for the service's
+    /// shutdown. Later calls are not rejected; see [`Pipeline`].
     pub async fn shutdown(&self) {
         future::poll_fn(|cx| self.api.poll_shutdown(cx)).await;
     }
@@ -259,20 +271,34 @@ where
     /// Waits until the pipeline is ready to process a request.
     ///
     /// Reuses valid shared readiness without consuming it or allocating a
-    /// readiness future.
+    /// readiness future. Returns successfully if pipeline shutdown has
+    /// started, like [`Pipeline::ready`].
     ///
     /// The first caller that finds readiness invalid runs the shared check in its
     /// own future, and other waiters wait for it. Like a held lock, a pending
     /// future must be polled or dropped: keeping it alive without polling stalls
     /// every other readiness waiter on this pipeline.
     pub async fn ready(&self) -> Result<(), Err> {
-        self.api.ready(self.idx).await
+        if self.api.is_shutdown() {
+            Ok(())
+        } else {
+            self.api.ready(self.idx).await
+        }
+    }
+
+    #[inline]
+    /// Checks whether pipeline shutdown has been initiated.
+    ///
+    /// See [`Pipeline::is_shutdown`].
+    pub fn is_shutdown(&self) -> bool {
+        self.api.is_shutdown()
     }
 
     #[inline]
     /// Waits for readiness, then calls the service.
     ///
-    /// Reuses valid shared readiness without consuming it.
+    /// Reuses valid shared readiness without consuming it. Calls are forwarded
+    /// even after shutdown has started; see [`Pipeline`].
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
         let pl = self.clone();
         pl.api.call(pl.idx, req).await

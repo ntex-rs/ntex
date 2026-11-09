@@ -206,18 +206,68 @@ async fn pipeline_state_cached_readiness() {
     assert_eq!(cnt.get(), 3);
 }
 
-/// STATEMENT: Polling state-taking pipeline readiness after shutdown panics.
+async fn poll_once<F: Future>(fut: F) -> Poll<F::Output> {
+    let mut fut = std::pin::pin!(fut);
+    lazy(|cx| fut.as_mut().poll(cx)).await
+}
+
+/// STATEMENT: Shutdown of a state-taking pipeline is advisory: readiness reports ready and calls still reach the service.
 ///
 /// HOW:
-/// - Complete shutdown on a `PipelineState`.
-/// - Poll readiness and expect the explicit shutting-down panic.
+/// - Shut down a `PipelineState` whose service readiness never completes.
+/// - Check `is_shutdown` on the pipeline and its binding, and that `ready` and
+///   `poll_ready` return `Ok(())` on first poll without running the readiness check.
+/// - Release readiness and check calls through the pipeline and binding still
+///   return service results.
 #[ntex::test]
-#[should_panic(expected = "Pipeline is shutting down")]
-async fn pipeline_state_poll_ready_after_shutdown() {
+async fn pipeline_state_shutdown_is_advisory() {
+    let cnt = Rc::new(Cell::new(0));
     let cond = condition::Condition::new();
-    let pl = PipelineState::new(Srv(Rc::default(), cond.wait(), ReadyNotifier::new()));
+    let pl = PipelineState::new(Srv(cnt.clone(), cond.wait(), ReadyNotifier::new()));
+    let b = pl.bind();
+    assert!(!pl.is_shutdown());
+    assert!(!b.is_shutdown());
     pl.shutdown(&1).await;
-    let _ = lazy(|cx| pl.poll_ready(cx, &1)).await;
+    assert!(pl.is_shutdown());
+    assert!(b.is_shutdown());
+    assert_eq!(cnt.get(), 100);
+
+    assert_eq!(lazy(|cx| pl.poll_ready(cx, &1)).await, Poll::Ready(Ok(())));
+    assert_eq!(poll_once(pl.ready(&1)).await, Poll::Ready(Ok(())));
+    assert_eq!(cnt.get(), 100);
+
+    cond.notify_and_lock(());
+    assert_eq!(pl.call(1, &2).await, Ok(3));
+    assert_eq!(b.call(1, &3).await, Ok(4));
+}
+
+/// STATEMENT: Shutdown of an owning pipeline is advisory: readiness reports ready and calls still reach the service.
+///
+/// HOW:
+/// - Shut down a `Pipeline` whose service readiness never completes.
+/// - Check `is_shutdown` on the pipeline and a binding, and that both `ready`
+///   methods return `Ok(())` on first poll without running the readiness check.
+/// - Release readiness and check calls through the pipeline and binding still
+///   return service results.
+#[ntex::test]
+async fn pipeline_shutdown_is_advisory() {
+    let cnt = Rc::new(Cell::new(0));
+    let cond = condition::Condition::new();
+    let pl = crate::Pipeline::new(2, Srv(cnt.clone(), cond.wait(), ReadyNotifier::new()));
+    let b = pl.bind();
+    assert!(!b.is_shutdown());
+    pl.shutdown().await;
+    assert!(pl.is_shutdown());
+    assert!(b.is_shutdown());
+    assert_eq!(cnt.get(), 200);
+
+    assert_eq!(poll_once(pl.ready()).await, Poll::Ready(Ok(())));
+    assert_eq!(poll_once(b.ready()).await, Poll::Ready(Ok(())));
+    assert_eq!(cnt.get(), 200);
+
+    cond.notify_and_lock(());
+    assert_eq!(pl.call(1).await, Ok(3));
+    assert_eq!(b.call(2).await, Ok(4));
 }
 
 struct Guard<'a>(&'a [usize]);

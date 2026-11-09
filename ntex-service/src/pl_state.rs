@@ -17,6 +17,11 @@ use crate::readiness::ReadyScope;
 /// All bindings share one readiness cache and checker, including bindings with
 /// different state values. Readiness may inspect state, but must describe the
 /// shared pipeline-wide gate. Independent gates require separate pipelines.
+///
+/// Shutdown is advisory, as for [`crate::Pipeline`]: readiness checks return
+/// `Ok(())` once shutdown has started, and calls are still forwarded to the
+/// service. Callers that must stop admitting work check
+/// [`PipelineState::is_shutdown`].
 pub struct PipelineState<St, Req, Res, Err> {
     api: Rc<dyn PipelineStateApi<St, Req, Res, Err>>,
 }
@@ -59,8 +64,9 @@ where
     /// own future, and other waiters wait for it. Like a held lock, a pending
     /// future must be polled or dropped: keeping it alive without polling stalls
     /// every other readiness waiter on this pipeline.
+    /// Returns successfully if pipeline shutdown has started.
     pub async fn ready(&self, st: &St) -> Result<(), Err> {
-        if self.is_ready() {
+        if self.is_ready() || self.is_shutdown() {
             Ok(())
         } else {
             self.api.ready(0, st).await
@@ -79,7 +85,8 @@ where
     #[inline]
     /// Waits for readiness, then calls the service with `st`.
     ///
-    /// Reuses valid shared readiness without consuming it.
+    /// Reuses valid shared readiness without consuming it. Calls are forwarded
+    /// even after shutdown has started; see [`PipelineState`].
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = self.binding();
         self.api.call(pl.idx, req, st).await
@@ -87,8 +94,20 @@ where
 
     #[inline]
     /// Shuts down the enclosed service.
+    ///
+    /// Marks the pipeline as shutting down, then waits for the service's
+    /// shutdown. Later calls are not rejected; see [`PipelineState`].
     pub async fn shutdown(&self, st: &St) {
         self.api.shutdown(0, st).await;
+    }
+
+    #[inline]
+    /// Checks whether pipeline shutdown has been initiated.
+    ///
+    /// The pipeline does not reject calls after shutdown; callers use this to
+    /// stop admitting new work.
+    pub fn is_shutdown(&self) -> bool {
+        self.api.is_shutdown()
     }
 
     #[inline]
@@ -100,16 +119,17 @@ where
     /// The retained check and its wake sources run on this pipeline's thread.
     /// Its checker wakers must also be finally dropped on that thread, even
     /// after the pipeline is dropped; foreign wakes or final drops panic.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `.shutdown()` has been called. Unlike [`crate::Pipeline::poll_ready`],
-    /// it does not return `Ready(Ok(()))` after shutdown.
+    /// Returns `Ready(Ok(()))` if pipeline shutdown has started, like
+    /// [`crate::Pipeline::poll_ready`].
     pub fn poll_ready(&self, cx: &mut Context<'_>, st: &St) -> Poll<Result<(), Err>>
     where
         St: Clone,
     {
-        self.api.poll_ready(cx, st)
+        if self.is_shutdown() {
+            Poll::Ready(Ok(()))
+        } else {
+            self.api.poll_ready(cx, st)
+        }
     }
 
     fn binding(&self) -> Binding<'_, St, Req, Res, Err> {
@@ -231,12 +251,21 @@ where
     /// Waits for readiness, then calls the service with `st`.
     ///
     /// Reuses valid shared readiness without consuming it, regardless of `st`.
+    /// Calls are forwarded even after shutdown has started; see [`PipelineState`].
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = Binding {
             idx: self.api.reg(),
             api: self.api.as_ref(),
         };
         pl.api.call(pl.idx, req, st).await
+    }
+
+    #[inline]
+    /// Checks whether pipeline shutdown has been initiated.
+    ///
+    /// See [`PipelineState::is_shutdown`].
+    pub fn is_shutdown(&self) -> bool {
+        self.api.is_shutdown()
     }
 
     #[inline]
@@ -409,7 +438,6 @@ where
     where
         St: Clone,
     {
-        assert!(!self.waiters.is_shutdown(), "Pipeline is shutting down");
         self.readiness.poll_ready(cx, || {
             // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
             // `fut` is stored in `self.readiness`, which is reset before other

@@ -1,6 +1,13 @@
 # Changes
 
-## [5.8.0] - Unreleased
+## [5.7.2] - Unreleased
+
+* Document pipeline shutdown as advisory: calls after `shutdown()` are still
+  forwarded to the service. `PipelineState::ready()` and `poll_ready()` now
+  return `Ok(())` once shutdown has started, like `Pipeline`, instead of
+  `poll_ready()` panicking; `PipelineBinding::ready()` does the same. Add
+  `is_shutdown()` to `PipelineState`, `PipelineBinding` and
+  `PipelineStateBinding`
 
 * Remove `From<&T> for Cfg<T>`. The conversion looked up `T` in the
   value's context and, for a standalone value, returned a default and silently
