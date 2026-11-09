@@ -210,9 +210,9 @@ Readiness checks and their wake sources must run on the pipeline's thread.
 A child receives the same `&St` as its parent unless you explicitly substitute
 state. A generic wrapper that does not read it can implement `Service<St, Req>`
 for any compatible `St`; it should not hard-code `()` and accidentally exclude
-stateful children. The `Trimmed` wrapper in
-[Wrapping a Child Service](./1-service.md#wrapping-a-child-service) shows the
-complete pattern with `forward!`.
+stateful children. The `ResponseHeaderService` middleware in
+[Writing a Middleware Service](./8.3-web-app.md#writing-a-middleware-service)
+shows the complete pattern with `forward!`.
 
 If constructing a child needs state, its factory receives `&St` too. A factory
 can use that reference to configure a new service, but a service stored in an

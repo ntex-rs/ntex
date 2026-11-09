@@ -1,6 +1,6 @@
 # Service Pipelines
 
-In the previous section, we described what a `Service` is and how to define one.
+In the previous section, we introduced the idea of a service.
 Consider the HTTP endpoint from our earlier example:
 
 ```rust

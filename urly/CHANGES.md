@@ -1,6 +1,6 @@
 # Changes
 
-## [1.3.0] - 2026-11-xx
+## [1.3.0] - 2026-11-09
 
 * Requoting decodes only unreserved escapes (`A-Z a-z 0-9 - . _ ~`); escapes of
   reserved characters such as `%2F` and `%3B` are kept, so decoding can no longer
