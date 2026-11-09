@@ -53,7 +53,9 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
         let (mut head, payload) = con.send_request(req, body, timeout).await?;
 
         #[cfg(feature = "compress")]
-        if response_decompress {
+        // bodiless responses keep `Payload::None`, their framing headers
+        // describe a representation that is not sent
+        if response_decompress && !matches!(payload, Payload::None) {
             let decoder = Decoder::from_headers(payload, &head.headers);
             if decoder.is_decoding() {
                 // the headers describe the encoded payload

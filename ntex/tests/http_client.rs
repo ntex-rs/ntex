@@ -1289,3 +1289,35 @@ async fn client_invalid_response_head() {
         .unwrap_err();
     assert!(matches!(err.into_error(), ClientError::Response(_)));
 }
+
+/// STATEMENT: Bodiless responses ignore an advertised `Content-Length` larger
+/// than the client body limit.
+///
+/// HOW:
+/// - Serve a gzip-encoded `HEAD` response, a `204` and a `304`, each
+///   advertising `content-length: 1000000` (above the 256 KiB default limit)
+///   via `raw_server`.
+/// - Assert each keeps its `Content-Length` header (decompression does not
+///   strip it) and `body()` returns empty bytes instead of `Overflow`.
+#[ntex::test]
+async fn client_bodiless_response_ignores_content_length_limit() {
+    let head =
+        raw_server(b"HTTP/1.1 200 OK\r\ncontent-encoding: gzip\r\ncontent-length: 1000000\r\n\r\n");
+    let no_content = raw_server(b"HTTP/1.1 204 No Content\r\ncontent-length: 1000000\r\n\r\n");
+    let not_modified = raw_server(b"HTTP/1.1 304 Not Modified\r\ncontent-length: 1000000\r\n\r\n");
+
+    let client = Client::new();
+    let requests = [
+        client.head(format!("http://{head}/").as_str()),
+        client.get(format!("http://{no_content}/").as_str()),
+        client.get(format!("http://{not_modified}/").as_str()),
+    ];
+    for req in requests {
+        let response = req.send().await.unwrap();
+        assert_eq!(
+            response.headers().get(header::CONTENT_LENGTH).unwrap(),
+            "1000000"
+        );
+        assert_eq!(response.body().await.unwrap(), Bytes::new());
+    }
+}
