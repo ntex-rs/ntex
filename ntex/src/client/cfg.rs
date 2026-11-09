@@ -263,7 +263,10 @@ impl ClientConfig {
 
     /// Adds a header to every request.
     ///
-    /// A request-specific header with the same name takes precedence.
+    /// Repeated calls with the same name add values; every value is sent. A
+    /// request replaces the default values with
+    /// [`ClientRequest::set_header()`](super::ClientRequest::set_header), while
+    /// [`ClientRequest::header()`](super::ClientRequest::header) appends to them.
     pub fn set_header<K, V>(mut self, key: K, value: V) -> Result<Self, HttpError>
     where
         HeaderName: TryFrom<K>,

@@ -12,6 +12,11 @@
   with another address (or none) no longer reuses a connection to a
   different server
 
+* Fix client dropping header values when merging: every value of a
+  multi-value `ClientConfig::set_header()` default is now sent (previously
+  only the first), and `ClientRequest::cookie()` merges all raw `Cookie`
+  headers into the single `Cookie` header instead of keeping only the first
+
 * HTTP/1 client requests now honor settings that were silently ignored:
   `version(Version::HTTP_10)` is sent as `HTTP/1.0` (other versions are sent
   as `HTTP/1.1`; HTTP/2 connections always use `HTTP/2`); the `close`,
