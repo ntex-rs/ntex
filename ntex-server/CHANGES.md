@@ -1,6 +1,6 @@
 # Changes
 
-## [4.5.1] - Unreleased
+## [4.5.1] - 2026-11-09
 
 * The accept loop's error back-off timer is created on the system thread, as
   `ntex-util` timer futures are no longer `Send`

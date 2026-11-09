@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [4.4.1] - 2026-11-09
 
 * Rely on ntex-io 4.7.1 to report frames truncated by peer EOF
 

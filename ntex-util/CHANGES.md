@@ -1,6 +1,6 @@
 # Changes
 
-## [4.9.0] - Unreleased
+## [4.9.0] - 2026-11-09
 
 * Add `services::ordered`: `Ordered` runs one service concurrently and enters
   a second service in ticket order; tickets come from call arrival order or

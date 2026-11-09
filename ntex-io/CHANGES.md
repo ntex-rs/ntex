@@ -1,6 +1,6 @@
 # Changes
 
-## [4.7.1] - Unreleased
+## [4.7.1] - 2026-11-09
 
 * Document that `IoRef::encode()` and `Io::send()` silently drop the item and return `Ok`
   on a closing or closed connection

@@ -1,6 +1,6 @@
 # Changes
 
-## [5.7.2] - Unreleased
+## [5.7.2] - 2026-11-09
 
 * Document how to wrap services: a wrapper implementing only `call` skips its
   child's binding, readiness and shutdown; use `fn_layer`, `apply_fn` or
