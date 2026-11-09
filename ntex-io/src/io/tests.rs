@@ -3121,6 +3121,42 @@ async fn held_back_output_queued_during_write_is_processed() {
     assert_eq!(ctx.with_write_dst(|buf| buf.len()), 4);
 }
 
+/// STATEMENT: Shutdown reports output a filter layer still retains instead of
+/// discarding it silently, and succeeds once the layer has released its output.
+///
+/// HOW:
+/// - Queue four bytes behind `HoldOutput`, which keeps the default `shutdown`,
+///   and check `Io::shutdown` fails with a message naming the four lost bytes
+///   while the peer receives nothing.
+/// - Repeat after the peer sends the release message and check shutdown
+///   succeeds with the bytes delivered.
+#[ntex::test]
+async fn shutdown_reports_output_retained_by_filter() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::from(server).add_filter(HoldOutput::default());
+
+    io.encode_slice(b"1234").unwrap();
+    let err = timeout(Millis(1000), io.shutdown())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "filter layer retained 4 unwritten bytes at shutdown"
+    );
+    assert!(client.read_any().is_empty());
+
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::from(server).add_filter(HoldOutput::default());
+    client.write(b"go");
+    io.encode_slice(b"1234").unwrap();
+    sleep(Millis(10)).await;
+    timeout(Millis(1000), io.shutdown()).await.unwrap().unwrap();
+    assert_eq!(client.read_any(), b"1234".as_ref());
+}
+
 /// Expands every write into 600 bytes.
 #[derive(Debug)]
 struct Expand;
@@ -4243,14 +4279,16 @@ async fn blocked_filter_shutdown_is_reported() {
     assert!(!io.st().flags.is_terminating());
 }
 
-/// STATEMENT: Shutdown rejects new application writes and filter shutdown clears unprocessed output.
+/// STATEMENT: Shutdown rejects new application writes and filter shutdown reports and
+/// clears unprocessed output.
 ///
 /// HOW:
 /// - Start shutdown, check the write rejection, and run a layer shutdown over buffered data.
-/// - Verify its output is discarded, then stop the transport and check termination errors and final closure.
+/// - Verify the shutdown fails naming the three retained bytes and the output is cleared,
+///   then stop the transport and check termination errors and final closure.
 #[ntex::test]
 async fn shutdown() {
-    // layer drops all unprocessed data after filter shutdown
+    // layer retains all unprocessed data at filter shutdown
     #[derive(Debug)]
     struct F;
 
@@ -4290,8 +4328,14 @@ async fn shutdown() {
     st.buffer
         .with_write_src(io.as_ref(), |p| p.put_slice(b"123"));
     assert_eq!(st.buffer.write_buf_size(), 3);
-    let res = st.buffer.with_filter(io.as_ref(), |f| layer.shutdown(f));
-    assert!(matches!(res, Ok(Poll::Ready(()))));
+    let err = st
+        .buffer
+        .with_filter(io.as_ref(), |f| layer.shutdown(f))
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "filter layer retained 3 unwritten bytes at shutdown"
+    );
     assert_eq!(st.buffer.write_buf_size(), 0);
 
     // == terminate

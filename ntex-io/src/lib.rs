@@ -161,6 +161,14 @@ pub trait FilterLayer: fmt::Debug + 'static {
     /// only stall the close until the shutdown timeout expires. The runtime
     /// also ends the shutdown phase itself in that case, but it cannot know
     /// whether the filter considers the shutdown complete.
+    ///
+    /// Once this returns a ready result, [`process_write_buf`](Self::process_write_buf)
+    /// runs one final time and the layer is finished. Output still left in
+    /// the layer's write source after that pass is discarded and shutdown
+    /// fails with an error reporting the lost byte count. The default
+    /// implementation is ready immediately, so a filter that retains output
+    /// (for example until a handshake completes) must override this method
+    /// and return `Poll::Pending` until that output has been processed.
     fn shutdown(&self, buf: &FilterBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))
     }
