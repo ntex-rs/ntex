@@ -452,6 +452,56 @@ mod tests {
         assert!(format!("{cfg:?}").contains("PayloadConfig"));
     }
 
+    /// STATEMENT: Body extractors exceeding the payload limit render `413`, other errors `400`.
+    ///
+    /// HOW:
+    /// - Extract `Bytes` and `String` with a five-byte `PayloadConfig`, from a declared
+    ///   and an undeclared longer body, and render each error.
+    /// - Assert `PAYLOAD_TOO_LARGE`, then assert a media-type mismatch renders `BAD_REQUEST`.
+    #[crate::rt_test]
+    async fn test_payload_overflow_status() {
+        use crate::web::{DefaultError, WebResponseError};
+
+        fn status(err: &PayloadError) -> crate::http::StatusCode {
+            WebResponseError::<(), DefaultError>::error_response(err, &()).status()
+        }
+
+        for declared in [true, false] {
+            let mut req = TestRequest::default()
+                .app_value(PayloadConfig::new(5))
+                .payload(Bytes::from_static(b"hello=world"));
+            if declared {
+                req = req.header(header::CONTENT_LENGTH, "11");
+            }
+            let (req, mut pl, ()) = req.to_http_parts();
+            let err = from_request::<_, Bytes>(&(), &req, &mut pl)
+                .await
+                .unwrap_err();
+            assert_eq!(status(&err), crate::http::StatusCode::PAYLOAD_TOO_LARGE);
+
+            let mut req = TestRequest::default()
+                .app_value(PayloadConfig::new(5))
+                .payload(Bytes::from_static(b"hello=world"));
+            if declared {
+                req = req.header(header::CONTENT_LENGTH, "11");
+            }
+            let (req, mut pl, ()) = req.to_http_parts();
+            let err = from_request::<_, String>(&(), &req, &mut pl)
+                .await
+                .unwrap_err();
+            assert_eq!(status(&err), crate::http::StatusCode::PAYLOAD_TOO_LARGE);
+        }
+
+        let (req, mut pl, ()) = TestRequest::default()
+            .app_value(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+            .payload(Bytes::from_static(b"hello=world"))
+            .to_http_parts();
+        let err = from_request::<_, Bytes>(&(), &req, &mut pl)
+            .await
+            .unwrap_err();
+        assert_eq!(status(&err), crate::http::StatusCode::BAD_REQUEST);
+    }
+
     /// STATEMENT: Extracted `Payload` streams expose the request's original bytes.
     ///
     /// HOW:

@@ -2,6 +2,15 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `web::types::Form` decodes percent-encoded and raw bytes with the request
+  charset (`caf%E9` with `charset=windows-1252` is `café`) and fails with
+  `UrlencodedError::Parse` on bytes invalid in that charset, including invalid
+  UTF-8, instead of substituting replacement characters
+
+* `web::error::PayloadError::Payload(Overflow)` renders
+  `413 Payload Too Large`, so `Bytes` and `String` extractors over the
+  `PayloadConfig` limit answer 413 instead of 400
+
 * `HttpServiceConfig::set_max_headers` is enforced for HTTP/2 requests: a
   stream with too many header fields (repeated names count separately) is
   answered with `431 Request Header Fields Too Large` and the connection stays
