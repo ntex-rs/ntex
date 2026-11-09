@@ -280,7 +280,7 @@ pub struct ResponseHead {
     pub reason: Option<&'static str>,
     pub(crate) io: CurrentIo,
     pub(crate) extensions: RefCell<Extensions>,
-    flags: Flags,
+    pub(crate) flags: Flags,
 }
 
 impl ResponseHead {
