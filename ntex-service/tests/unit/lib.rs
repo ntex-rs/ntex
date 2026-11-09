@@ -300,6 +300,144 @@ async fn forward_macro() {
     assert_eq!(pl.call(1).await, Err(4));
 }
 
+#[derive(Default)]
+struct GateState {
+    closed: Cell<bool>,
+    changed: ReadyNotifier,
+    binds: Cell<usize>,
+    checks: Cell<usize>,
+    shutdowns: Cell<usize>,
+}
+
+#[derive(Clone, Default)]
+struct Gate(Rc<GateState>);
+
+impl Gate {
+    fn set_closed(&self, closed: bool) {
+        self.0.closed.set(closed);
+        self.0.changed.notify();
+    }
+
+    fn counts(&self) -> (usize, usize, usize) {
+        (
+            self.0.binds.get(),
+            self.0.checks.get(),
+            self.0.shutdowns.get(),
+        )
+    }
+}
+
+impl Service<usize, usize> for Gate {
+    type Res = usize;
+    type Error = &'static str;
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        self.0.binds.set(self.0.binds.get() + 1);
+        ctx.subscribe(&self.0.changed);
+    }
+
+    async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), Self::Error> {
+        self.0.checks.set(self.0.checks.get() + 1);
+        if self.0.closed.get() { Err("closed") } else { Ok(()) }
+    }
+
+    async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
+        Ok(req)
+    }
+
+    async fn shutdown(&self, _: Ctx<'_, Self, usize>) {
+        self.0.shutdowns.set(self.0.shutdowns.get() + 1);
+    }
+}
+
+struct GateFwd(Gate);
+
+impl Service<usize, usize> for GateFwd {
+    type Res = usize;
+    type Error = &'static str;
+
+    crate::forward!(usize, 0);
+
+    async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
+        ctx.call(&self.0, req).await
+    }
+}
+
+struct GateCallOnly(Gate);
+
+impl Service<usize, usize> for GateCallOnly {
+    type Res = usize;
+    type Error = &'static str;
+
+    async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
+        ctx.call(&self.0, req).await
+    }
+}
+
+async fn check_wrapper_lifecycle(gate: &Gate, pl: Pipeline<usize, usize, &'static str>) {
+    assert_eq!(gate.counts(), (1, 0, 0));
+
+    assert_eq!(pl.ready().await, Ok(()));
+    assert_eq!(pl.call(2).await, Ok(2));
+    assert_eq!(gate.counts(), (1, 1, 0));
+
+    gate.set_closed(true);
+    assert_eq!(pl.ready().await, Err("closed"));
+    assert_eq!(pl.call(2).await, Err("closed"));
+
+    gate.set_closed(false);
+    assert_eq!(pl.call(3).await, Ok(3));
+    let checks = gate.counts().1;
+    assert_eq!(pl.call(4).await, Ok(4));
+    assert_eq!(gate.counts(), (1, checks, 0));
+
+    pl.shutdown().await;
+    assert_eq!(gate.counts(), (1, checks, 1));
+}
+
+/// STATEMENT: `forward!` and `fn_layer` wrappers preserve child binding, readiness
+/// errors, readiness invalidation, and shutdown.
+///
+/// HOW:
+/// - Wrap a `Gate` child, whose `bind` subscribes a `ReadyNotifier`, with a
+///   `forward!` service and with `fn_layer` middleware.
+/// - Confirm the child is bound once on construction and readiness is checked once
+///   for repeated calls while cached.
+/// - Close the gate and notify, then confirm `ready` and `call` return the child's
+///   error; reopen and confirm calls succeed and cache readiness again.
+/// - Shut the pipeline down and confirm the child's `shutdown` runs once.
+#[ntex::test]
+async fn wrappers_preserve_child_lifecycle() {
+    let gate = Gate::default();
+    let pl = Pipeline::new(1, GateFwd(gate.clone()));
+    check_wrapper_lifecycle(&gate, pl).await;
+
+    let gate = Gate::default();
+    let layer = fn_layer(async |req: usize, ctx| ctx.call(req).await);
+    let pl = Pipeline::new(1, layer.create(&1, gate.clone()));
+    check_wrapper_lifecycle(&gate, pl).await;
+}
+
+/// STATEMENT: A wrapper implementing only `call` compiles but bypasses its child's
+/// binding, readiness errors, and shutdown.
+///
+/// HOW:
+/// - Wrap a closed `Gate` in `GateCallOnly`, which relies on the default `bind`,
+///   `ready`, and `shutdown`.
+/// - Confirm the pipeline reports ready and dispatches calls without checking the
+///   child, and that shutdown never reaches the child.
+#[ntex::test]
+async fn call_only_wrapper_bypasses_child_lifecycle() {
+    let gate = Gate::default();
+    gate.set_closed(true);
+    let pl = Pipeline::new(1, GateCallOnly(gate.clone()));
+
+    assert_eq!(pl.ready().await, Ok(()));
+    assert_eq!(pl.call(2).await, Ok(2));
+    pl.shutdown().await;
+    assert_eq!(gate.counts(), (0, 0, 0));
+}
+
 /// STATEMENT: Pipeline call entry points share cached readiness until shutdown invalidates it.
 ///
 /// HOW:

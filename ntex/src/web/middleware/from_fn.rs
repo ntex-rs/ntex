@@ -215,9 +215,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, rc::Rc};
+
     use super::*;
     use crate::http::StatusCode;
+    use crate::http::error::Canceled;
     use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
+    use crate::service::{Pipeline, ReadyNotifier};
     use crate::web::test::{TestRequest, call_service, init_service, init_service_st};
     use crate::web::{self, App, AppState, HttpResponse, error, middleware::DefaultHeaders};
 
@@ -332,5 +336,93 @@ mod tests {
         .await;
         let res = call_service(&srv, TestRequest::with_uri("/test").to_request()).await;
         assert_eq!(res.headers().get("x-st").unwrap(), "st");
+    }
+
+    #[derive(Default)]
+    struct GateState {
+        closed: Cell<bool>,
+        changed: ReadyNotifier,
+        binds: Cell<usize>,
+        checks: Cell<usize>,
+        shutdowns: Cell<usize>,
+    }
+
+    #[derive(Clone, Default)]
+    struct Gate(Rc<GateState>);
+
+    impl Gate {
+        fn set_closed(&self, closed: bool) {
+            self.0.closed.set(closed);
+            self.0.changed.notify();
+        }
+
+        fn counts(&self) -> (usize, usize, usize) {
+            (
+                self.0.binds.get(),
+                self.0.checks.get(),
+                self.0.shutdowns.get(),
+            )
+        }
+    }
+
+    impl Service<(), WebRequest<()>> for Gate {
+        type Res = WebResponse;
+        type Error = Canceled;
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            self.0.binds.set(self.0.binds.get() + 1);
+            ctx.subscribe(&self.0.changed);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Canceled> {
+            self.0.checks.set(self.0.checks.get() + 1);
+            if self.0.closed.get() { Err(Canceled) } else { Ok(()) }
+        }
+
+        async fn call(
+            &self,
+            req: WebRequest<()>,
+            _: Ctx<'_, Self>,
+        ) -> Result<WebResponse, Canceled> {
+            Ok(req.into_response(HttpResponse::Ok().build()))
+        }
+
+        async fn shutdown(&self, _: Ctx<'_, Self>) {
+            self.0.shutdowns.set(self.0.shutdowns.get() + 1);
+        }
+    }
+
+    /// STATEMENT: `from_fn` middleware preserves child binding, readiness errors,
+    /// readiness invalidation, and shutdown.
+    ///
+    /// HOW:
+    /// - Wrap a `Gate` child, whose `bind` subscribes a `ReadyNotifier`, with a
+    ///   pass-through `from_fn` closure and confirm it is bound once.
+    /// - Confirm repeated calls check child readiness once while cached.
+    /// - Close the gate and notify, confirm `ready` fails; reopen, notify, and
+    ///   confirm calls succeed again.
+    /// - Shut the pipeline down and confirm the child's `shutdown` runs once.
+    #[crate::rt_test]
+    async fn from_fn_preserves_child_lifecycle() {
+        let gate = Gate::default();
+        let mw = from_fn(async |req, next| next.call(req).await);
+        let pl = Pipeline::new((), mw.create(&(), gate.clone()));
+        assert_eq!(gate.counts(), (1, 0, 0));
+
+        let res = pl.call(TestRequest::default().to_srv_request()).await;
+        assert_eq!(res.unwrap().status(), StatusCode::OK);
+        let res = pl.call(TestRequest::default().to_srv_request()).await;
+        assert_eq!(res.unwrap().status(), StatusCode::OK);
+        assert_eq!(gate.counts(), (1, 1, 0));
+
+        gate.set_closed(true);
+        assert!(pl.ready().await.is_err());
+        gate.set_closed(false);
+        let res = pl.call(TestRequest::default().to_srv_request()).await;
+        assert_eq!(res.unwrap().status(), StatusCode::OK);
+        assert_eq!(gate.counts(), (1, 3, 0));
+
+        pl.shutdown().await;
+        assert_eq!(gate.counts(), (1, 3, 1));
     }
 }

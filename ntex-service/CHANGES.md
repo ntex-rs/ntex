@@ -2,6 +2,11 @@
 
 ## [5.7.2] - Unreleased
 
+* Document how to wrap services: a wrapper implementing only `call` skips its
+  child's binding, readiness and shutdown; use `fn_layer`, `apply_fn` or
+  `forward!`. Add tests showing these wrappers preserve child readiness
+  invalidation
+
 * Document pipeline shutdown as advisory: calls after `shutdown()` are still
   forwarded to the service. `PipelineState::ready()` and `poll_ready()` now
   return `Ok(())` once shutdown has started, like `Pipeline`, instead of
