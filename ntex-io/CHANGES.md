@@ -2,6 +2,10 @@
 
 ## [4.7.1] - Unreleased
 
+* Filter shutdown fails with an error naming the discarded byte count when a filter layer
+  still retains unwritten output after its `shutdown()` completes, instead of silently
+  dropping it; `FilterCtx::clear_write_buf()` now returns the number of discarded bytes
+
 * `Io::poll_recv()` and `Io::poll_recv_decode()` report a clean peer EOF that leaves
   undecodable bytes as `RecvError::PeerGone(Some(UnexpectedEof))` instead of
   `PeerGone(None)`, matching `Io::recv()`

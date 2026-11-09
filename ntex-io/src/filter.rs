@@ -199,8 +199,14 @@ where
                 self.process_write_buf(ctx)?;
                 self.2.set(true);
 
-                // Discard the write buffer; it won't be processed
-                ctx.clear_write_buf();
+                // The layer is done and its write buffer won't be processed
+                // again, retained output would be lost silently.
+                let lost = ctx.clear_write_buf();
+                if lost != 0 {
+                    return Err(io::Error::other(format!(
+                        "filter layer retained {lost} unwritten bytes at shutdown"
+                    )));
+                }
             } else {
                 // Output produced by this filter's shutdown sits in the buffer
                 // of the inner filter, which only runs its write processing

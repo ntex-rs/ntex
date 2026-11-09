@@ -544,8 +544,13 @@ impl FilterCtx<'_> {
         self.layers.write_dst_size()
     }
 
-    pub(crate) fn clear_write_buf(&mut self) {
-        self.buffer().with_write(BytePages::clear);
+    /// Clears the current layer's write source and returns the discarded length.
+    pub(crate) fn clear_write_buf(&mut self) -> usize {
+        self.buffer().with_write(|buf| {
+            let len = buf.len();
+            buf.clear();
+            len
+        })
     }
 
     fn buffer(&self) -> &Buffer {
