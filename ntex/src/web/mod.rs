@@ -104,6 +104,7 @@ pub use self::error::{DefaultError, InternalError, WebError, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::handler::{Handler, HandlerSt};
 pub use self::httprequest::HttpRequest;
+pub use self::info::ForwardedPolicy;
 pub use self::request::WebRequest;
 pub use self::resource::{Resource, ResourceServices};
 pub use self::responder::{CustomResponder, Responder};

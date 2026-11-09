@@ -41,7 +41,9 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 ///
 /// `%%`  The percent sign
 ///
-/// `%a`  Remote IP-address (IP-address of proxy if using reverse proxy)
+/// `%a`  Remote address, see [`ConnectionInfo::remote`](crate::web::dev::ConnectionInfo::remote).
+/// Forwarding headers are used only as allowed by
+/// [`ForwardedPolicy`](crate::web::ForwardedPolicy); by default this is the peer address.
 ///
 /// `%t`  Time when the request was started to process (in HTTP-date format,
 /// e.g. `Thu, 04 Sep 2025 15:33:20 GMT`)
