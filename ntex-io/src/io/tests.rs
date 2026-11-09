@@ -734,6 +734,27 @@ async fn drop_closes_gracefully_once_output_is_flushed() {
     );
 }
 
+/// STATEMENT: After `close()`, `encode` silently drops the item and reports `Ok`, while
+/// `encode_slice` and `encode_bytes` report the closed connection.
+///
+/// HOW:
+/// - Close an `Io` over an in-memory transport and verify `is_active` reports it.
+/// - Call `encode` with `BytesCodec` and verify it returns `Ok` with no output buffered.
+/// - Call `encode_slice` and `encode_bytes` and verify both return an `io::Error`.
+#[ntex::test]
+async fn encode_on_closed_io_drops_item_silently() {
+    let (_client, server) = IoTest::create();
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    io.close();
+    assert!(!io.is_active());
+
+    assert!(io.encode(Bytes::from_static(b"lost"), &BytesCodec).is_ok());
+    assert_eq!(io.st().buffer.write_buf_size(), 0);
+    assert!(io.encode_slice(b"lost").is_err());
+    assert!(io.encode_bytes(Bytes::from_static(b"lost")).is_err());
+    assert_eq!(io.st().buffer.write_buf_size(), 0);
+}
+
 /// STATEMENT: Dropping a connection with undeliverable output requests transport abort.
 ///
 /// HOW:

@@ -137,6 +137,10 @@ impl<F> Io<F> {
     /// [write timeout](crate::IoConfig::set_write_timeout), if one is set;
     /// when it expires this returns [`io::ErrorKind::TimedOut`] in
     /// [`Either::Right`].
+    ///
+    /// The item is encoded with [`IoRef::encode`], so on a connection that is
+    /// already closing or closed it is silently dropped and `Ok(())` is
+    /// returned. See [`IoRef::encode`] for details.
     pub async fn send<U>(&self, item: U::Item, codec: &U) -> Result<(), Either<U::Error, io::Error>>
     where
         U: Encoder,
