@@ -169,9 +169,16 @@ impl<St> WebResponseError<St, DefaultError> for error::QueryPayloadError {
     }
 }
 
+/// Returns `PayloadTooLarge` for `Payload(Overflow)` and `BadRequest` otherwise.
 impl<St> WebResponseError<St, DefaultError> for error::PayloadError {
     fn error_response(&self, _: &St) -> HttpResponse {
-        HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
+        let status = match self {
+            error::PayloadError::Payload(http::error::PayloadError::Overflow) => {
+                StatusCode::PAYLOAD_TOO_LARGE
+            }
+            _ => StatusCode::BAD_REQUEST,
+        };
+        HttpResponse::render_with(status, self)
     }
 }
 

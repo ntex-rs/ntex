@@ -1,6 +1,6 @@
 //! Form extractor
 use std::task::{Context, Poll, ready};
-use std::{borrow::Cow, fmt, future::Future, marker::PhantomData, ops, pin::Pin};
+use std::{borrow::Cow, fmt, future::Future, marker::PhantomData, ops, pin::Pin, str};
 
 use encoding_rs::{Encoding, UTF_8};
 use serde::{Serialize, de::DeserializeOwned};
@@ -22,6 +22,11 @@ use crate::web::{FromRequest, HttpRequest, Responder, State};
 ///
 /// [`FormConfig`] allows to configure extraction
 /// process.
+///
+/// Field names and values are decoded with the `charset` parameter of the
+/// `Content-Type` header, UTF-8 by default: with `charset=windows-1252`,
+/// `caf%E9` yields `café`. Raw or percent-encoded bytes that are invalid in
+/// that charset fail with `UrlencodedError::Parse` rather than being replaced.
 ///
 /// ### Example
 /// ```rust
@@ -301,18 +306,80 @@ where
             }
         };
 
-        Poll::Ready(if encoding == UTF_8 {
-            serde_urlencoded::from_bytes::<U>(&body).map_err(|_| UrlencodedError::Parse)
-        } else {
-            encoding
-                .decode_without_bom_handling_and_without_replacement(&body)
-                .map(Cow::into_owned)
+        Poll::Ready(
+            to_utf8_form(&body, encoding)
                 .ok_or(UrlencodedError::Parse)
                 .and_then(|body| {
-                    serde_urlencoded::from_str::<U>(&body).map_err(|_| UrlencodedError::Parse)
-                })
-        })
+                    serde_urlencoded::from_bytes::<U>(&body).map_err(|_| UrlencodedError::Parse)
+                }),
+        )
     }
+}
+
+/// Converts a form body to an equivalent UTF-8 form body.
+///
+/// Raw and percent-decoded bytes are decoded with `encoding`, so `caf%E9`
+/// with `windows-1252` yields `café`. Returns `None` if the bytes are not
+/// valid in that encoding.
+fn to_utf8_form<'a>(body: &'a [u8], encoding: &'static Encoding) -> Option<Cow<'a, [u8]>> {
+    let (body, encoding): (Cow<'a, [u8]>, _) = if encoding.is_ascii_compatible() {
+        (Cow::Borrowed(body), encoding)
+    } else {
+        // delimiters and escapes are only recognizable after decoding the text
+        let text = encoding.decode_without_bom_handling_and_without_replacement(body)?;
+        (Cow::Owned(text.into_owned().into_bytes()), UTF_8)
+    };
+
+    if encoding == UTF_8 {
+        // delimiters are ASCII, so the whole body is valid iff every field is
+        str::from_utf8(&percent_decode(&body)).ok()?;
+        return Some(body);
+    }
+
+    let decode = |part: &[u8]| {
+        encoding
+            .decode_without_bom_handling_and_without_replacement(&percent_decode(part))
+            .map(Cow::into_owned)
+    };
+    let mut fields = Vec::new();
+    for field in body.split(|b| *b == b'&').filter(|f| !f.is_empty()) {
+        let (name, value) = match field.iter().position(|b| *b == b'=') {
+            Some(pos) => (&field[..pos], &field[pos + 1..]),
+            None => (field, &b""[..]),
+        };
+        fields.push((decode(name)?, decode(value)?));
+    }
+    serde_urlencoded::to_string(fields)
+        .ok()
+        .map(|body| Cow::Owned(body.into_bytes()))
+}
+
+/// Decodes `+` and `%XX` escapes, keeping malformed escapes as-is.
+fn percent_decode(input: &[u8]) -> Vec<u8> {
+    fn hex(b: u8) -> Option<u8> {
+        char::from(b)
+            .to_digit(16)
+            .and_then(|d| u8::try_from(d).ok())
+    }
+
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        match input[i] {
+            b'+' => out.push(b' '),
+            b'%' if let (Some(hi), Some(lo)) = (
+                input.get(i + 1).copied().and_then(hex),
+                input.get(i + 2).copied().and_then(hex),
+            ) =>
+            {
+                out.push(hi << 4 | lo);
+                i += 2;
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -492,6 +559,100 @@ mod tests {
                 counter: 123
             }
         );
+    }
+
+    /// STATEMENT: Form fields are decoded with the declared charset and rejected if invalid.
+    ///
+    /// HOW:
+    /// - Deserialize bodies using raw bytes, `+`, `%XX`, escaped delimiters, malformed escapes,
+    ///   empty fields and fields without `=` under UTF-8, `windows-1252`, `shift_jis` and
+    ///   `utf-16le` charsets.
+    /// - Assert the decoded `hello` value, or `Parse` for bytes invalid in the charset.
+    /// - Assert empty fields add no map entries, and a missing charset rejects invalid UTF-8.
+    #[crate::rt_test]
+    async fn test_urlencoded_charset() {
+        let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+        let cases: Vec<(&str, Vec<u8>, Option<&str>)> = vec![
+            (
+                "windows-1252",
+                b"hello=caf%E9&counter=1".to_vec(),
+                Some("caf\u{e9}"),
+            ),
+            (
+                "windows-1252",
+                b"hello=caf\xe9&counter=1".to_vec(),
+                Some("caf\u{e9}"),
+            ),
+            (
+                "windows-1252",
+                b"hello=a%26b%3Dc+d&&counter=1&".to_vec(),
+                Some("a&b=c d"),
+            ),
+            (
+                "windows-1252",
+                b"hello=100%25%zz%4&counter=1".to_vec(),
+                Some("100%%zz%4"),
+            ),
+            ("windows-1252", b"counter=1&hello".to_vec(), Some("")),
+            ("windows-1252", b"h%65llo=x&counter=1".to_vec(), Some("x")),
+            (
+                "shift_jis",
+                b"hello=%82%A0&counter=1".to_vec(),
+                Some("\u{3042}"),
+            ),
+            ("shift_jis", b"hello=%82&counter=1".to_vec(), None),
+            ("shift_jis", b"h%82=x&counter=1".to_vec(), None),
+            (
+                "utf-8",
+                b"hello=caf%C3%A9+x&counter=1".to_vec(),
+                Some("caf\u{e9} x"),
+            ),
+            ("utf-8", b"hello=caf%E9&counter=1".to_vec(), None),
+            ("utf-8", b"hello=caf\xff&counter=1".to_vec(), None),
+            (
+                "utf-16le",
+                utf16("hello=caf%C3%A9&counter=1"),
+                Some("caf\u{e9}"),
+            ),
+            ("utf-16le", utf16("hello=caf%E9&counter=1"), None),
+            ("utf-16le", b"hello=x&counter=1".to_vec(), None),
+        ];
+        for (charset, body, expected) in cases {
+            let (req, mut pl, ()) = TestRequest::with_header(
+                CONTENT_TYPE,
+                format!("application/x-www-form-urlencoded; charset={charset}"),
+            )
+            .payload(Bytes::from(body.clone()))
+            .to_http_parts();
+            let res = UrlEncoded::<Info>::new(&req, &mut pl).await;
+            match expected {
+                Some(hello) => assert_eq!(res.unwrap().hello, hello, "{charset} {body:?}"),
+                None => assert!(
+                    matches!(res, Err(UrlencodedError::Parse)),
+                    "{charset} {body:?}"
+                ),
+            }
+        }
+
+        // empty fields are skipped, not decoded as an empty name
+        let (req, mut pl, ()) = TestRequest::with_header(
+            CONTENT_TYPE,
+            "application/x-www-form-urlencoded; charset=windows-1252",
+        )
+        .payload(Bytes::from_static(b"&a=1&&b=2&"))
+        .to_http_parts();
+        let res = UrlEncoded::<std::collections::HashMap<String, String>>::new(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!(res.len(), 2, "{res:?}");
+
+        // a missing charset means UTF-8
+        let (req, mut pl, ()) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .payload(Bytes::from_static(b"hello=caf%FF&counter=1"))
+                .to_http_parts();
+        let res = UrlEncoded::<Info>::new(&req, &mut pl).await;
+        assert!(matches!(res, Err(UrlencodedError::Parse)));
     }
 
     /// STATEMENT: Form responders serialize fields with the URL-encoded media type.
