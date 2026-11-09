@@ -64,7 +64,7 @@ ntex-server = "4.5.0"
 ntex-service = "5.8.0"
 ntex-tls = "4.8.0"
 ntex-util = "4.9.0"
-urly = "1.2.2"
+urly = "1.3.0"
 
 ntex-io-uring = "1.0.0"
 ntex-httparse = "2.3.0"

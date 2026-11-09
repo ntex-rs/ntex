@@ -25,6 +25,7 @@ use crate::{chars::lowercase, host::normalize_host, parse, scheme::Scheme};
 ///   unreserved characters are decoded, hex digits are uppercased
 /// * dot segments are removed from absolute paths
 /// * an empty path of `http`, `https`, `ws` and `wss` URLs becomes `/`
+/// * the default port of the scheme is removed, as in `https://h:443/`
 ///
 /// The normalized URL always passes strict [`Url::validate`].
 /// [`Url::parse_target`] and [`Url::from_target_parts`] instead preserve unvalidated
@@ -92,6 +93,17 @@ fn assemble_inner(
     orig: Option<&ByteString>,
     target: bool,
 ) -> Result<Url, InvalidUrl> {
+    let stripped;
+    let c = match c.authority {
+        Some(a) if !target => {
+            stripped = Components {
+                authority: Some(strip_default_port(c.scheme, a)),
+                ..*c
+            };
+            &stripped
+        }
+        _ => c,
+    };
     let prefix = if c.authority.is_some() {
         if c.path.is_empty() {
             let special = c
@@ -177,6 +189,23 @@ fn assemble_inner(
         host_start,
         host_end,
     })
+}
+
+/// Removes the port from `authority` if it is the default port of `scheme`.
+fn strip_default_port<'a>(scheme: Option<&str>, authority: &'a str) -> &'a str {
+    // a port ends the authority with a digit
+    if !authority.as_bytes().last().is_some_and(u8::is_ascii_digit) {
+        return authority;
+    }
+    let Some(default) = scheme.and_then(|s| Scheme::from_str_unchecked(s).default_port()) else {
+        return authority;
+    };
+    let (_, host, port) = authority::split(authority);
+    if port.and_then(|p| authority::parse_port(p).ok()) == Some(default) {
+        &authority[..authority::offset(authority, host) + host.len()]
+    } else {
+        authority
+    }
 }
 
 /// Concatenates `pieces` of total length `len` with a single copy.
@@ -519,6 +548,9 @@ impl Url {
     }
 
     /// Returns the explicit port, if present.
+    ///
+    /// The default port of the scheme is removed during normalization, so it
+    /// is not returned for a normalized URL; use [`Url::port_or_known_default`].
     pub fn port(&self) -> Option<Port<&str>> {
         if self.auth_start > 0 && self.host_end < self.path_start {
             Port::parse(self.range(self.host_end + 1, self.path_start))
@@ -650,7 +682,9 @@ impl Url {
     /// Appends literal path segments, without query and fragment.
     ///
     /// Segments are percent-encoded; `/` is kept and a leading `/` is ignored.
-    /// The same operation is available as the `/` operator.
+    /// `.` and `..` segments are resolved within the appended segments, so they
+    /// never remove a segment of this URL's path. The same operation is
+    /// available as the `/` operator.
     ///
     /// ```
     /// use urly::Url;
@@ -658,24 +692,37 @@ impl Url {
     /// let url = Url::from_static("http://h/api?q");
     /// assert_eq!(url.push_segments(["v1", "a b"]), "http://h/api/v1/a%20b");
     /// assert_eq!(&url / "users/" / "1", "http://h/api/users/1");
+    /// assert_eq!(&url / "../admin", "http://h/api/admin");
+    /// assert_eq!(&url / "v1/../v2", "http://h/api/v2");
     /// ```
     pub fn push_segments<I, S>(&self, segments: I) -> Url
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let mut path = self.path().as_str().to_string();
+        // appended segments, relative to a virtual root
+        let mut rel = String::from("/");
+        let mut pushed = false;
         for segment in segments {
             let segment = segment.as_ref();
             let segment = segment.strip_prefix('/').unwrap_or(segment);
-            if !path.is_empty() && !path.ends_with('/') {
-                path.push('/');
+            if !rel.ends_with('/') {
+                rel.push('/');
             }
-            path.push_str(&quote(segment, Component::Path));
+            rel.push_str(&quote(segment, Component::Path));
+            pushed = true;
         }
-        if path.starts_with('/') && parse::has_dot_segments(&path) {
-            path = parse::remove_dot_segments(&path);
+        if !pushed {
+            return self.with_path(self.path().as_str());
         }
+        if parse::has_dot_segments(&rel) {
+            rel = parse::remove_dot_segments(&rel);
+        }
+        let mut path = self.path().as_str().to_string();
+        if !path.is_empty() && !path.ends_with('/') {
+            path.push('/');
+        }
+        path.push_str(&rel[1..]);
         self.with_path(&path)
     }
 
