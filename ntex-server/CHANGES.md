@@ -2,6 +2,9 @@
 
 ## [4.5.1] - Unreleased
 
+* The accept loop's error back-off timer is created on the system thread, as
+  `ntex-util` timer futures are no longer `Send`
+
 * `WorkerPool::workers(0)` and `ServerBuilder::workers(0)` now panic; previously
   the server started no workers and stayed in `ServerStatus::Starting` forever
 
