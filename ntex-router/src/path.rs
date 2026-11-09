@@ -102,9 +102,19 @@ impl<T: ResourcePath> Path<T> {
     /// Skip first `n` bytes in path, matching starts after them
     ///
     /// The skipped length is limited to the path length.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the skipped length ends inside a multi-byte character.
     pub fn skip(&mut self, n: u32) {
-        let len = u32::try_from(self.resource.path().len()).unwrap_or(u32::MAX);
-        self.skip = self.skip.saturating_add(n).min(len);
+        let path = self.resource.path();
+        let len = u32::try_from(path.len()).unwrap_or(u32::MAX);
+        let skip = self.skip.saturating_add(n).min(len);
+        assert!(
+            path.is_char_boundary(skip as usize),
+            "skipped length {skip} is not a char boundary of path {path:?}"
+        );
+        self.skip = skip;
     }
 
     // pub(crate) fn add(&mut self, name: &'static str, value: String) {
@@ -337,5 +347,27 @@ mod tests {
         p.add_static("st", "static");
         assert_eq!(&p[0], "static");
         let _ = &p[1];
+    }
+
+    /// STATEMENT: `skip` accepts lengths at char boundaries and panics inside a multi-byte
+    /// character instead of failing later in `path()`.
+    ///
+    /// HOW:
+    /// - Skip the three bytes of `/é` in `/é/x` and confirm the remaining path is `/x`.
+    /// - Skip two bytes of `/é` and confirm the panic names the length and the path.
+    #[test]
+    fn test_skip_char_boundary() {
+        let mut p = Path::new("/é/x");
+        p.skip(3);
+        assert_eq!(p.path(), "/x");
+
+        let msg = std::panic::catch_unwind(|| Path::new("/é").skip(2))
+            .unwrap_err()
+            .downcast::<String>()
+            .unwrap();
+        assert_eq!(
+            *msg,
+            r#"skipped length 2 is not a char boundary of path "/é""#
+        );
     }
 }

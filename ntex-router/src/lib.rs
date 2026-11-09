@@ -29,9 +29,16 @@
 //! * `/users/{id:[0-9]+}` — a dynamic segment with a custom regular
 //!   expression.
 //! * `/static/{tail}*` — a tail segment matches the rest of the path,
-//!   including `/`. Custom regular expressions are not supported for tails.
+//!   including `/`, and may be empty: `/static/` matches with an empty
+//!   `tail`. Custom regular expressions are not supported for tails.
 //! * `/static/*` — a static tail matches the rest of the path without storing
-//!   it.
+//!   it. Unlike `{tail}*` it needs at least one character, `/static/` does
+//!   not match.
+//!
+//! Each parameter name may be used once per pattern, including the names of
+//! named groups inside custom regular expressions. Such a group is stored
+//! only if it participates in the match: `{a:(?P<x>q)?z}` matches `z` with
+//! `a` and without `x`.
 //!
 //! [`ResourceDef::prefix()`] creates a resource that matches paths starting
 //! with the pattern, at a segment boundary. After a match, [`Path::path()`]

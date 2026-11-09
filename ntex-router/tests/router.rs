@@ -635,6 +635,8 @@ fn default_resource_path_does_not_decode() {
 ///   without the `id` group.
 /// - Confirm `/a` matches with `id` equal to `a`.
 /// - Confirm `/b` matches nothing and leaves no `id` capture in the path.
+/// - Register tail pattern `/{id:a)|(b}-{tail}*`, whose regex matches `b-x` without
+///   the `id` group, and confirm `/b-x` matches nothing.
 #[test]
 fn missing_named_capture_is_not_a_match() {
     let mut builder = Router::<usize>::builder();
@@ -648,4 +650,11 @@ fn missing_named_capture_is_not_a_match() {
     let mut path = Path::new("/b");
     assert_eq!(router.recognize(&mut path).map(|v| *v.0), None);
     assert_eq!(path.get("id"), None);
+
+    let mut builder = Router::<usize>::builder();
+    builder.path("/{id:a)|(b}-{tail}*", 1);
+    let router = builder.build();
+
+    let mut path = Path::new("/b-x");
+    assert_eq!(router.recognize(&mut path).map(|v| *v.0), None);
 }

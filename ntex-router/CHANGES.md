@@ -5,6 +5,18 @@
 * Add `ResourceDef::try_build_path()`, it checks elements against the patterns of
   their dynamic segments
 
+* Panic when a path pattern uses a parameter name more than once, including names
+  of groups inside custom regular expressions
+
+* Match custom regexes whose optional named groups do not participate in the match,
+  such groups are not stored in `Path`
+
+* `Path::skip()` panics if the skipped length is not a char boundary of the path
+
+* Document that a static `*` tail requires at least one character
+
+* Remove `log` dependency
+
 ## [2.2.0] - 2026-11-07
 
 * Match a single `{name}` path segment without regex

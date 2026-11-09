@@ -90,7 +90,9 @@ pub(crate) enum Segment {
     Static(String),
     Dynamic {
         pattern: Regex,
-        names: Vec<&'static str>,
+        /// Capture names, `true` for declared parameters which must
+        /// participate in a match, `false` for groups of custom regexes.
+        names: Vec<(&'static str, bool)>,
         tail: bool,
         /// The segment is a single `{name}` with the default pattern, it is
         /// matched without the regex.
@@ -129,7 +131,8 @@ impl ResourceDef {
     /// Path segments are separated by `/`, a leading `/` is optional. Static
     /// segments could be case insensitive.
     ///
-    /// Panics if path pattern is malformed.
+    /// Panics if path pattern is malformed or uses a parameter name more than
+    /// once, including names of groups inside custom regular expressions.
     pub fn new<T: IntoPattern>(path: T) -> Self {
         ResourceDef::create(path, false)
     }
@@ -138,7 +141,8 @@ impl ResourceDef {
     ///
     /// A prefix resource matches paths that start with one of its patterns.
     ///
-    /// Panics if path pattern is malformed.
+    /// Panics if path pattern is malformed or uses a parameter name more than
+    /// once, including names of groups inside custom regular expressions.
     pub fn prefix<T: IntoPattern>(path: T) -> Self {
         ResourceDef::create(path, true)
     }
@@ -148,7 +152,8 @@ impl ResourceDef {
     /// Same as [`prefix()`](Self::prefix), but inserts `/` to the start of
     /// the patterns that do not have it.
     ///
-    /// Panics if path pattern is malformed.
+    /// Panics if path pattern is malformed or uses a parameter name more than
+    /// once, including names of groups inside custom regular expressions.
     pub fn root_prefix<T: IntoPattern>(path: T) -> Self {
         let mut patterns = path.patterns();
         for path in &mut patterns {
@@ -413,8 +418,10 @@ impl ResourceDef {
     }
 
     fn parse(mut pattern: &str) -> (Segments, Vec<PathElement>) {
+        let source = pattern;
         let mut elems = Vec::new();
         let mut pelems = Vec::new();
+        let mut seen: Vec<&'static str> = Vec::new();
 
         if pattern.is_empty() {
             return (
@@ -443,12 +450,27 @@ impl ResourceDef {
             }
 
             // dynamic segment
+            let declared = elems.len();
             let (re_part, rem, tail) = Self::parse_segment(pattern, &mut elems);
+            let declared = &elems[declared..];
             let re = Regex::new(&re_part).unwrap();
             let names: Vec<_> = re
                 .capture_names()
-                .filter_map(|name| name.map(|name| Box::leak(Box::new(name.to_owned())).as_str()))
+                .flatten()
+                .map(|name| {
+                    let required = declared
+                        .iter()
+                        .any(|el| matches!(el, PathElement::Var(var, _) if var == name));
+                    (Box::leak(Box::new(name.to_owned())).as_str(), required)
+                })
                 .collect();
+            for &(name, _) in &names {
+                assert!(
+                    !seen.contains(&name),
+                    "duplicate parameter name `{name}` in path pattern `{source}`"
+                );
+                seen.push(name);
+            }
             let src = &pattern[..pattern.len() - rem.len()];
             let src = src.strip_prefix('/').unwrap_or(src);
             let whole = !tail
@@ -1589,6 +1611,62 @@ mod tests {
         assert_eq!(p.get("r"), Some("5bddc58f"));
         assert_eq!(p.get("s"), Some("srv"));
         assert_eq!(p.len(), 4);
+    }
+
+    /// STATEMENT: A parameter name may be used only once per pattern, including names of
+    /// groups inside custom regular expressions.
+    ///
+    /// HOW:
+    /// - Create definitions repeating a name across segments, within a segment, and as a
+    ///   custom regex group, and confirm each panics, the first with a message naming `id`.
+    /// - Create a definition whose separate patterns reuse `id` and confirm it succeeds.
+    #[test]
+    fn test_duplicate_param_names() {
+        let msg = std::panic::catch_unwind(|| ResourceDef::new("/dup/{id}/{id}"))
+            .unwrap_err()
+            .downcast::<String>()
+            .unwrap();
+        assert_eq!(
+            *msg,
+            "duplicate parameter name `id` in path pattern `/dup/{id}/{id}`"
+        );
+        for pattern in ["/{a}-{a}", "/{a}/{b:(?P<a>x)}"] {
+            assert!(
+                std::panic::catch_unwind(|| ResourceDef::new(pattern)).is_err(),
+                "{pattern}"
+            );
+        }
+
+        let re = ResourceDef::new(["/a/{id}", "/b/{id}"]);
+        assert_eq!(re.patterns().len(), 2);
+    }
+
+    /// STATEMENT: Optional groups of a custom regex that do not participate in a match are
+    /// left out of the captures instead of rejecting the path.
+    ///
+    /// HOW:
+    /// - Match `/opt/{a:(?P<x>q)?z}` against `/opt/z` and a percent-encoded `Url` for it and
+    ///   confirm each match stores only `a`.
+    /// - Match `/opt/qz` and confirm both `a` and `x` are stored.
+    #[test]
+    fn test_optional_group() {
+        let tree = Tree::new(&ResourceDef::new("/opt/{a:(?P<x>q)?z}"), 1);
+        let mut p = Path::new("/opt/z");
+        assert_eq!(tree.find(&mut p), Some(1));
+        assert_eq!(p.get("a"), Some("z"));
+        assert_eq!(p.get("x"), None);
+        assert_eq!(p.len(), 1);
+
+        let mut p = Path::new(urly::Url::try_from("/opt/%7A").unwrap());
+        assert_eq!(tree.find(&mut p), Some(1));
+        assert_eq!(p.get("a"), Some("z"));
+        assert_eq!(p.get("x"), None);
+        assert_eq!(p.len(), 1);
+
+        let mut p = Path::new("/opt/qz");
+        assert_eq!(tree.find(&mut p), Some(1));
+        assert_eq!(p.get("a"), Some("qz"));
+        assert_eq!(p.get("x"), Some("q"));
     }
 
     /// STATEMENT: Array-based resource definitions preserve every pattern and accept borrowed
