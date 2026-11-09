@@ -1,10 +1,15 @@
 # Service State
 
-Services often need access to information that is not part of an individual
-request. Examples include connection metadata, a database pool, application
-configuration, or a channel to another subsystem.
+Services often need information beyond the request they are handling. This
+might be connection metadata, a database pool, application configuration, or a
+channel to another subsystem.
 
-The `Service` trait represents this information with its `St` type parameter:
+Putting these dependencies into every request would mix long-lived resources
+with the data for one operation. Storing a copy in every service can work, but
+then each wrapper has to carry dependencies it does not itself use. Pipeline
+state gives the service graph one place to obtain this shared context.
+
+The `St` type parameter on `Service` represents this information:
 
 ```rust,ignore
 trait Service<St, Req> {
@@ -19,9 +24,9 @@ trait Service<St, Req> {
 }
 ```
 
-A service borrows the pipeline state through [`Ctx`] instead of owning it. The
-service can still own its own fields, such as configuration or inner services.
-The pipeline state is available during calls, readiness checks, and shutdown:
+A service borrows pipeline state through [`Ctx`]. It can still own fields,
+such as configuration or inner services. You can access pipeline state during
+calls, readiness checks, and shutdown:
 
 ```rust,ignore
 async fn call(&self, req: Req, ctx: Ctx<'_, Self, AppState>) -> Result<Self::Res, Self::Error> {
@@ -30,14 +35,26 @@ async fn call(&self, req: Req, ctx: Ctx<'_, Self, AppState>) -> Result<Self::Res
 }
 ```
 
-Because the state type is part of `Service<St, Req>`, Rust verifies that a
-service is used with compatible state. A service requiring `AppState` cannot be
-placed directly in a pipeline that supplies an unrelated type.
+Rust checks that the pipeline supplies a compatible state type because that
+type is part of `Service<St, Req>`. You cannot place a service that requires
+`AppState` directly in a pipeline with an unrelated state type.
+
+Keep the three kinds of data separate. The request is the input consumed by
+one call. A service's fields belong to that service instance: its configuration,
+children, or a cache used only by that component. `St` is the context supplied
+to the service graph, so several components can borrow the same database pool
+or connection metadata without embedding it in each request.
+
+For example, `Service<AppState, String>` processes a `String` using `AppState`;
+`Service<(), String>` has no additional state. The order matters: `St` comes
+first. It is an ordinary Rust type, not a string-keyed container, so dependency
+requirements appear in trait bounds and the compiler checks them. Low-level
+service state does not require the web framework's `web::State` trait.
 
 ## State-aware functions
 
-An asynchronous function whose first argument is `&St` can be converted into a
-state-aware service. This is the simplest way to define one:
+You can turn an asynchronous function into a state-aware service by making
+`&St` its first argument:
 
 ```rust
 use std::convert::Infallible;
@@ -60,50 +77,104 @@ async fn main() {
 }
 ```
 
-The function receives `&AppState` for each call. The [`IntoService`]
-implementation performs this conversion automatically. You can call
-[`fn_service_st`] explicitly when the service value must be named or passed
-through an API before creating the pipeline.
+The function receives `&AppState` on each call. The [`IntoService`]
+implementation converts it into a service automatically.
+
+Use [`fn_service_st`] explicitly if you need to name the service value or pass
+it through an API before creating the pipeline. Use `fn_service` instead when
+the function only takes a request; it does not receive pipeline state.
+
+The state is borrowed, not cloned for every call. `Pipeline::new` owns both the
+state and service, and requires them to be `'static`. An owned `String` or `Rc`
+can meet that bound; `'static` does not mean you must leak memory or use a global
+variable. A reference to a local stack value generally cannot be stored there.
+The state type itself need not implement `Clone` for `Pipeline::new`.
 
 ## Testing state-aware function services
 
-A state-aware function service can be tested without starting a server. Create
-the service with [`fn_service_st`], place it and the test state in a
-[`Pipeline::new`], then call it with the request value. This exercises the same
-state access and readiness handling used in production.
+You can test a state-aware function service without starting a server. Create
+the service with [`fn_service_st`]. Put it and the test state in a pipeline
+using [`Pipeline::new`], then call it with the request value.
 
-When the state contains external dependencies, a mocking library can verify how
-the service uses them:
+This exercises the same state access and readiness handling used in production.
 
-- [`tests/mockall`] defines the state behavior as a trait. Mockall creates a mock
-  state and checks calls to its accessor and operation methods.
-- [`tests/shimforge`] keeps the concrete state type. Shimforge replaces its
-  methods during the test, including a method on an object nested in the state,
-  and checks the receiver's attributes and call arguments.
+If the state contains external dependencies, you can use a mocking library to
+check how the service uses them. These examples show two approaches:
 
-Both examples configure call counts and ordering, invoke the service through a
-pipeline, and assert its response.
+- [`tests/mockall`] defines the state behavior as a trait. Mockall creates a
+  mock state and checks calls to its accessor and operation methods.
+- [`tests/shimforge`] keeps the concrete state type. Shimforge replaces methods
+  during the test, including a method on an object nested in the state. It
+  checks the receiver's attributes and call arguments.
+
+Both examples configure call counts and ordering. Each invokes the service
+through a pipeline and asserts its response.
 
 ## Pipeline-owned state
 
-[`Pipeline::new`] stores one service and one state value together. Every call,
-readiness check, and shutdown operation on that pipeline uses the same state
-instance.
+Use [`Pipeline::new`] to keep one service and one state value together. Every
+call, readiness check, and shutdown operation uses that same state instance.
 
-The state belongs to that pipeline rather than to the process. Creating another
-pipeline creates another state instance unless the application explicitly
-shares a resource. For example, several worker-local states can each hold a
-clone of the same `Arc<Pool>`.
+The state belongs to the pipeline, rather than the process. Each new pipeline
+owns the state value you give it. Whether the underlying data is independent
+or shared depends on that value: two separately constructed counters are
+independent, but two `Rc` clones point to the same counter. Similarly, several
+worker-local states can each hold a clone of the same `Arc<Pool>`.
 
-Pipeline bindings share the original pipeline and its state; cloning a
+Pipeline bindings share the original pipeline and its state. Cloning a
 [`PipelineBinding`] does not clone the state value. Bindings also participate
 in the pipeline's coordinated readiness and shutdown handling.
 
+### Sharing Mutable State
+
+A borrowed state value can still contain mutable data. For worker-local
+counters, `Cell` inside an `Rc` is enough. Here a separate handle lets the
+caller observe how many requests the service processed:
+
+```rust
+use std::{cell::Cell, convert::Infallible, rc::Rc};
+
+use ntex::{Pipeline, service::fn_service_st};
+
+struct Counters {
+    calls: Rc<Cell<usize>>,
+}
+
+async fn record_call(state: &Counters, value: usize) -> Result<usize, Infallible> {
+    state.calls.set(state.calls.get() + 1);
+    Ok(value)
+}
+
+#[ntex::main]
+async fn main() {
+    let calls = Rc::new(Cell::new(0));
+    let pipeline = Pipeline::new(
+        Counters { calls: calls.clone() },
+        fn_service_st(record_call),
+    );
+    let handle = pipeline.bind();
+
+    assert_eq!(pipeline.call(10).await.unwrap(), 10);
+    assert_eq!(handle.call(20).await.unwrap(), 20);
+    assert_eq!(calls.get(), 2);
+}
+```
+
+Both calls reach the same service and counter. Creating a binding does not
+construct another `Counters` value. You also do not need to make `Counters`
+implement `Clone` just to share this pipeline.
+
+Pipelines and their bindings are thread-local. Use `Rc`, `Cell`, and `RefCell`
+for data confined to that thread; use `Arc` with suitable synchronization for
+resources deliberately shared across workers. An `Arc` alone does not make
+mutable data thread-safe. When using `RefCell`, end a mutable borrow before an
+`.await` that could let another request borrow the same value.
+
 ## Calling nested services
 
-`Ctx` does more than provide `ctx.st()`. It connects a service call to the
-pipeline's readiness and shutdown machinery. A service that wraps another
-service should call it through the context:
+When your service wraps another service, call the child through `Ctx`. The
+context provides `ctx.st()` and connects the call to the pipeline's readiness
+and shutdown handling:
 
 ```rust,ignore
 async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
@@ -111,35 +182,50 @@ async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self
 }
 ```
 
-[`Ctx::call`] reuses valid readiness from the nearest upstream scope, checking
-only the target service on a cache miss. A child wrapped with `ready(svc)` also
-checks its own independent cache. Cached success is not consumed by calls, and
-the valid-cache path adds no readiness allocations.
+[`Ctx::call`] reuses valid readiness from the nearest upstream scope. On a
+cache miss, it checks only the target service. A child wrapped with `ready(svc)`
+also checks its own independent cache.
 
-Use `ctx.call(&self.inner, req).await` even after an explicit readiness check:
-it retains the cached fast path while observing intervening invalidation.
+Calls do not consume cached success. When the cache is valid, the call adds no
+readiness allocations. Use `ctx.call(&self.inner, req).await` even after an
+explicit readiness check. It keeps this fast path while observing any
+invalidation between the check and the call.
 
 `Ctx` also provides `ready()` and `shutdown()` operations. Wrappers must forward
-`Service::bind`, `Service::ready`, and `Service::shutdown` to their children,
-for example with `forward!`.
-Services whose readiness changes must subscribe to a `ReadyNotifier` in `bind`
-and notify on every relevant change. A raw `Ctx::ready` call does not populate
-an upstream cache; use `ready(svc)` when a child needs independent persistent
-readiness.
+the lifecycle methods to their children:
 
-Readiness checks and their wake sources run on the pipeline's thread. This
-local-only requirement is specific to readiness; ordinary call, shutdown,
-runtime, and I/O task wakers are unchanged.
+- `Service::bind`
+- `Service::ready`
+- `Service::shutdown`
 
-`Service::call` remains the primitive dispatch operation and is not deprecated.
-For ordinary nested calls, use `Ctx::call` to retain context and readiness
-coordination rather than bypassing them.
+You can use `forward!` to forward these methods. A service whose readiness
+changes must subscribe to a `ReadyNotifier` in `bind` and notify on every
+relevant change.
+
+A raw `Ctx::ready` call does not populate an upstream cache. Use `ready(svc)`
+when a child needs independent, persistent readiness.
+
+Readiness checks and their wake sources must run on the pipeline's thread.
+
+A child receives the same `&St` as its parent unless you explicitly substitute
+state. A generic wrapper that does not read it can implement `Service<St, Req>`
+for any compatible `St`; it should not hard-code `()` and accidentally exclude
+stateful children. The `Trimmed` wrapper in
+[Wrapping a Child Service](./1-service.md#wrapping-a-child-service) shows the
+complete pattern with `forward!`.
+
+If constructing a child needs state, its factory receives `&St` too. A factory
+can use that reference to configure a new service, but a service stored in an
+owned pipeline cannot retain a short-lived borrow of the factory argument.
+Clone an owned resource handle into the service when it needs to keep one, or
+borrow the state through `Ctx` on each call. For a lazily created child, use
+`ctx.create(&factory).await` so creation also registers its dependencies.
 
 ## Substituting state
 
-Sometimes one service in a larger chain needs a different state type.
-[`map_state`] wraps that service with a fixed state value while allowing the
-outer pipeline to use another state type:
+Use [`map_state`] when one service in a chain needs a different state type. It
+wraps that service with a fixed state value. The outer pipeline can keep using
+its own state type:
 
 ```rust
 use std::convert::Infallible;
@@ -164,10 +250,18 @@ async fn main() {
 }
 ```
 
+The adapter owns `Metrics` and supplies it to the inner service's readiness,
+call, and shutdown methods. It does not convert the outer state or look up a
+field in it. Use this for a component with fixed private context, not as a way
+to select a different tenant or user on each request. The surrounding readiness
+scope is preserved; replacing state does not create an independent capacity
+gate.
+
 ## State supplied per operation
 
-[`PipelineState`] stores a service without owning its state. The caller supplies
-a state reference for each readiness check, call, or shutdown operation:
+Use [`PipelineState`] when callers need to select the state for each
+operation. It stores a service without owning its state. The caller supplies a
+state reference for each readiness check, call, or shutdown operation:
 
 ```rust
 use std::convert::Infallible;
@@ -194,24 +288,34 @@ async fn main() {
 }
 ```
 
-Use `Pipeline` when one state value should remain attached to the service. Use
-`PipelineState` when the same service and readiness machinery must operate with
-a state selected by each caller. `PipelineState::bind_state()` can attach an
-owned state value and produce a normal `PipelineBinding`, the state type must
-implement `Clone`.
+Use `Pipeline` when one state value should stay attached to the service.
+`PipelineState` keeps the same service and readiness machinery while letting
+each caller choose the state.
+
+To attach an owned state value, call `PipelineState::bind_state()`. It produces
+a normal `PipelineBinding` and requires the state type to implement `Clone`.
 
 All of these handles share one readiness cache and pending checker, even when
 they supply different state values. Passing a different state does not
-invalidate cached success. `Service::ready` may inspect the state, but its result
-must describe the shared pipeline-wide gate; use separate pipelines or service
-bindings for independent state-specific gates.
+invalidate cached success.
+
+`Service::ready` may inspect the state, but its result must describe the shared
+pipeline-wide gate. Use separate pipelines or service bindings if you need
+independent, state-specific gates. For example, changing a tenant identifier
+between two calls is not enough to re-check a tenant-specific quota. A shared
+cache could still contain the first tenant's success. Keep such admission
+checks in request processing or give independently limited services their own
+gates.
 
 ## Carrying state with a request
 
-Some protocol boundaries receive both a request and the state that a nested
-pipeline should use. The [`RequestState`] trait represents such an input.
-[`State<St, Req>`] and `(St, Req)` implement it by splitting the value into a
-state and a request:
+At some protocol boundaries, the input contains both a request and the state
+for a nested pipeline. The [`RequestState`] trait represents this input.
+This packaging does not itself change any pipeline's state: the receiving
+service unpacks it and supplies the state to the nested pipeline.
+
+[`State<St, Req>`] implements the trait by splitting the input into a state and
+a request. The tuple `(St, Req)` implements it too:
 
 ```rust
 use ntex::service::{RequestState, State};
@@ -226,16 +330,38 @@ assert_eq!(connection, "connection-1");
 assert_eq!(request, "request");
 ```
 
-For example, ntex HTTP services use `RequestState` to extract state associated
-with an accepted connection and then provide that state to the HTTP request and
-control-service pipelines. This keeps connection setup state separate from the
-HTTP request value while preserving its concrete type.
+For example, ntex HTTP services use `RequestState` to extract an accepted
+connection's state. They provide that state to the HTTP request and
+control-service pipelines. Connection setup state stays separate from the HTTP
+request value and keeps its concrete type.
 
-A plain `Io` also implements `RequestState` with `()` as its state, so an
-ordinary server can pass accepted connections to `HttpService` without
-wrapping them. See
+A plain `Io` also implements `RequestState`, using `()` as its state. An
+ordinary server can therefore pass accepted connections to `HttpService`
+without wrapping them. See
 [Passing Connection State to the HTTP Service](6-server-app.md#passing-connection-state-to-the-http-service)
 for an example that wraps an accepted `Io` in `State`.
+
+## Choosing State at Application Boundaries
+
+Start with `Pipeline` when the service and its context should have the same
+lifetime. Use `PipelineState` when one service must work with a caller-selected
+context. Use `map_state` for a fixed inner context, and `State` or a tuple to
+carry context across a protocol boundary. These choices control who supplies
+the value; none automatically creates a process-wide shared resource.
+
+The [server state chapter](./6-server-app.md#worker-local-and-process-wide-state)
+applies the same distinction to workers and connections. Server configuration
+creates worker state; connection setup can add metadata before passing an
+accepted stream to HTTP. Expensive pools and caches usually belong to worker
+or process setup, not to an application service constructed for each
+connection.
+
+For web handlers, [Web Application State](./8.2-web-app.md) builds on this model
+with the `web::State` trait and handler APIs. Its application state is distinct
+from request-local state carried through web filters. Keeping those lifetimes
+separate avoids two common surprises: expecting a plain cloned value to share
+mutations across connections, and putting one request's identity into a
+long-lived worker-wide value.
 
 [`Ctx`]: https://docs.ntex.rs/api/ntex/struct.Ctx.html
 [`Ctx::call`]: https://docs.ntex.rs/api/ntex/struct.Ctx.html#method.call

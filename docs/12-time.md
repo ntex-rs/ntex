@@ -1,52 +1,51 @@
 # Timers and Time Utilities
 
-A network server is full of deadlines. A connection must finish its TLS
-handshake in time, a client that stops sending must eventually be dropped,
-an idle keep-alive connection must be closed, and an upstream request must
-not wait forever. Almost none of these timers ever fire: the handshake
-completes, the next request arrives, the upstream answers. Each one is armed,
-then cancelled or pushed further into the future, thousands of times per
-second.
+A network server needs deadlines for TLS handshakes and clients that stop
+sending. It must also close idle keep-alive connections and limit waits for
+upstream requests.
 
-`ntex-util` provides the timer functionality for ntex. The `ntex` crate
-re-exports it as [`ntex::time`], and it works the same with every runtime
-backend. It contains:
+Almost none of these timers fire. The handshake completes, the next request
+arrives, or the upstream answers. Timers are armed, then cancelled or pushed
+further into the future, thousands of times per second.
 
-- [`Millis`] and [`Seconds`], compact duration types used throughout the ntex
-  configuration APIs;
-- asynchronous utilities: [`sleep`], [`deadline`], [`timeout`],
-  [`timeout_checked`] and [`interval`];
-- [`CallbackTimer`], which runs a short closure on expiry without a task;
-- [`now`] and [`system_time`], cheap cached clocks.
+`ntex-util` provides ntex's timer utilities. The `ntex` crate re-exports them as
+[`ntex::time`], with the same behavior on every runtime backend. Use [`sleep`]
+to delay a task, [`timeout`] to put a limit on another future, or [`interval`]
+for periodic work. Their shared timer design explains the trade-off between
+precision and cost.
 
 ## How the timer works
 
-The ntex timer implementation is ported from the Linux kernel
+ntex's timer design makes it cheap to cancel timers before they expire. It is
+ported from the Linux kernel
 [timer wheel](https://github.com/torvalds/linux/blob/master/kernel/time/timer.c).
-The kernel faces the same problem as a network server: most of its timers
-are timeouts for events that are expected to arrive, such as a network packet
-or an I/O completion, and are cancelled long before they expire.
-[Reinventing the timer wheel](https://lwn.net/Articles/646950/) on LWN
-describes the design and the reasoning behind it.
+
+The kernel faces the same problem as a network server. Most timers wait for an
+expected event, such as a network packet or an I/O completion. They are
+cancelled long before they expire.
+[Reinventing the timer wheel](https://lwn.net/Articles/646950/) on LWN explains
+the design and its reasoning.
 
 ### A wheel of buckets
 
-Keeping timers in a sorted list or a binary heap gives exact ordering, but
-every insert and cancel costs `O(log n)` or more. A **timer wheel** works
-more like a clock face. It is an array of buckets, and each bucket collects
-all timers that expire during the same slice of time. Adding a timer means
-computing a bucket index and pushing an entry; cancelling it means removing
-that entry. Both are `O(1)`, however many timers there are.
+A **timer wheel** groups timers by expiry time, so adding and cancelling timers
+costs `O(1)` regardless of their number. A sorted list or binary heap gives
+exact ordering, but every insert and cancel costs `O(log n)` or more.
 
-The wheel doesn't count time in milliseconds but in *units*, and by default
-**one unit is 16 milliseconds**. Every delay is converted to units before it
-is stored, so one unit is the finest resolution an ntex timer can have. The
-unit can be made smaller, see [Choosing the resolution](#choosing-the-resolution).
+The wheel is an array of buckets, like a clock face. Each bucket holds timers
+that expire during the same slice of time. To add a timer, the wheel computes
+a bucket index and pushes an entry. To cancel it, the wheel removes that entry.
 
-Each bucket on the first level covers one unit, so 64 buckets reach only
-about one second ahead. To cover longer delays, ntex stacks 8 levels of 64
-buckets, and each level is 8 times coarser than the one below it. With the
-default 16 ms unit:
+The wheel counts time in *units*. By default, **one unit is 16 milliseconds**.
+Every delay is converted to units before storage. One unit is therefore the
+finest resolution an ntex timer can have. You can make the unit smaller; see
+[Choosing the resolution](#choosing-the-resolution).
+
+Each bucket on the first level covers one unit. Its 64 buckets reach only
+about one second ahead. To cover longer delays, ntex uses 8 levels of 64
+buckets. Each level is 8 times coarser than the one below it.
+
+With the default 16 ms unit, the levels cover these ranges:
 
 | Level | Granularity | Range            |
 |-------|-------------|------------------|
@@ -59,68 +58,78 @@ default 16 ms unit:
 | 6     | ~70 m       | ~9.2 h .. ~3 d   |
 | 7     | ~9.3 h      | ~3 d .. ~24.5 d  |
 
-A timer goes on the first level that can hold its delay: a 100 ms timeout
-lands on level 0, a 30-second keep-alive on level 2. Anything longer than
-the whole wheel, about 24 days, is clamped to that maximum.
+A timer goes on the first level that can hold its delay. A 100 ms timeout
+lands on level 0; a 30-second keep-alive lands on level 2. Delays longer than
+the whole wheel, about 24 days, are clamped to that maximum.
 
 ### No cascading
 
-In a classic hierarchical wheel, timers *cascade*: when a coarse bucket
-comes due, its timers are moved down into finer levels so that each one
-fires at its exact time. That work comes in bursts, and most of it is wasted,
-because by then most of those timers would have been cancelled anyway.
+ntex leaves each timer in its original bucket, avoiding work to move it
+between levels. Its expiry is **rounded up** to that level's granularity.
+This modified wheel was added to Linux in 2016.
 
-The modified wheel, added to Linux in 2016 and used by ntex, skips cascading
-entirely. A timer stays in the bucket where it was placed, and its expiry is
-**rounded up** to that level's granularity. As a result:
+In a classic hierarchical wheel, timers *cascade*. When a coarse bucket comes
+due, its timers move into finer levels so that each fires at its exact time.
+That work comes in bursts. Most of it is wasted because most of those timers
+would have been cancelled before expiry anyway.
 
-- **A timer never fires early.** The delay counts from the moment the timer
-  is armed, and is then rounded up.
-- **A timer may fire a little late**, by at most one granularity of its
-  level. For delays over one second this is less than about 13%: a 5-second
-  timer can be up to 128 ms late, a 30-second timer up to about a second.
-- **Every operation is `O(1)`**, including expiry processing.
+For delays within the wheel's range, this rounding means a timer never fires
+early: its delay counts from when it is armed and is rounded up. The rounding
+adds at most one granularity of its level, less than about 13% for delays over
+one second. It can add up to 128 ms to a 5-second timer, or about a second to
+a 30-second timer. A busy runtime can delay execution further.
+
+Insertion, cancellation, and per-timer expiry bookkeeping stay `O(1)`.
+Expiring a bucket still requires visiting every timer in it, but no timers
+need to move between levels first.
 
 ### Finding the next expiry
 
-Each level keeps a 64-bit bitmap with one bit per non-empty bucket. To find
-the next timer that is due, the wheel rotates the bitmap to the current
-position and counts the trailing zeros. Empty buckets are never scanned.
+A mostly idle server should not wake up to inspect empty time slots. The
+wheel finds the next expiry without scanning empty buckets: each level keeps
+a 64-bit bitmap with one bit per non-empty bucket. It rotates that bitmap to
+the current position, then counts trailing zeros to find the next timer due.
 
 ### One driver per thread
 
-Every runtime thread, such as each server worker, has its own wheel. Timer
-operations therefore need no locks or atomics. This is also why timer
-handles are `!Send`: create a timer on the thread that awaits it.
+Create a timer on the thread that awaits it. Every runtime thread, including
+each server worker, has its own wheel. Timer operations need no locks or
+atomics, and timer handles are `!Send`.
 
-Each thread runs a single driver task. It sleeps until the earliest
-non-empty bucket is due, then wakes every timer in that bucket. The driver
-moves the wheel clock to the time the bucket was *scheduled* for, not the
-time it actually woke up, so one late wakeup doesn't delay the timers that
-come after it. The driver starts with the first timer, so a thread that
-never uses timers never wakes up for them. When the runtime stops, every
-pending timer is marked as elapsed.
+One driver task per thread serves all timers on its wheel. It sleeps until
+the earliest non-empty bucket is due, then wakes every timer in that bucket.
+The driver advances the wheel clock to the bucket's *scheduled* time, even
+if it woke up late, so one late wakeup does not shift later timers' deadlines.
+
+The driver starts with the first timer. A thread that never uses timers never
+wakes up for them. When the runtime stops, every pending timer is marked as
+elapsed.
 
 ### Low precision by design
 
-ntex timers are made for network work: timeouts, keep-alives, retries and
-periodic housekeeping. They give up precision in exchange for constant-time
-operations. Don't use them to measure time, to rate-limit at millisecond
-resolution, or to drive animations. Their resolution is one unit (16 ms by
-default), and even a zero-duration [`sleep`] waits for the next timer tick. To measure
-how long something took, use [`std::time::Instant`].
+Use ntex timers for network work such as timeouts, keep-alives, retries, and
+periodic housekeeping. They trade precision for constant-time operations.
+Use [`std::time::Instant`] to measure elapsed time.
 
-The ntex I/O layer goes a step further. Per-connection dispatcher timeouts,
-such as keep-alive and frame read rate, are grouped into one-second slots,
-and all connections on a thread share a single timer. That's one reason
-most I/O configuration methods take [`Seconds`].
+Timer resolution is one unit, or 16 ms by default. Even a zero-duration
+[`sleep`] waits for the next timer tick. Do not use these timers for
+millisecond rate limits or animations.
+
+The ntex I/O layer groups per-connection dispatcher timeouts into one-second
+slots. These include keep-alive and frame read rate timeouts. All connections
+on a thread share a single timer. This is one reason most I/O configuration
+methods take [`Seconds`].
 
 ### Choosing the resolution
 
+Keep the default resolution unless short sleeps or timeouts affect your
+latency. A smaller unit helps with short delays, at the cost of more frequent
+driver wakeups while short timers are pending. It also shortens the maximum
+delay; longer timers are clamped to the end of the wheel.
+
 The unit is a per-system setting. It must be a power of two between 1 and
-16 milliseconds; other values panic. Set it with
-[`Builder::timer_resolution`] when building the system yourself, or with the
-`timer_resolution` argument of `#[ntex::main]`:
+16 milliseconds; other values panic. Use the `timer_resolution` argument of
+`#[ntex::main]` to set it:
 
 ```rust
 #[ntex::main(timer_resolution = 2)]
@@ -130,6 +139,8 @@ async fn main() {
 }
 ```
 
+When you build the system yourself, use [`Builder::timer_resolution`]:
+
 ```rust
 let sys = ntex::rt::System::build()
     .name("server")
@@ -137,14 +148,14 @@ let sys = ntex::rt::System::build()
     .build(ntex::rt::DefaultRuntime);
 ```
 
-Every thread of the system, including server workers, reads the setting
-when its timer driver starts, and keeps it until the runtime stops and the
-wheel is empty. A thread without a running system uses 16 ms.
+Every thread in the system, including server workers, reads the setting when
+its timer driver starts. It keeps that setting until the runtime stops and
+the wheel is empty. A thread without a running system uses 16 ms.
 
-The level layout stays the same; only the unit changes. All granularities
-and ranges in the table above scale with it. With a 2 ms unit, level 0 has
-2 ms buckets and covers about 128 ms, and level 1 has 16 ms buckets. The
-whole wheel shrinks in the same proportion:
+The level layout stays the same. All granularities and ranges in the table
+above scale with the unit. With a 2 ms unit, level 0 has 2 ms buckets and
+covers about 128 ms. Level 1 has 16 ms buckets, and the whole wheel shrinks
+in the same proportion:
 
 | Unit  | Level 0 range | Whole wheel |
 |-------|---------------|-------------|
@@ -154,26 +165,24 @@ whole wheel shrinks in the same proportion:
 | 2 ms  | ~128 ms       | ~3 d        |
 | 1 ms  | ~64 ms        | ~1.5 d      |
 
-A smaller unit helps services that wait on short delays, for example a
-handler that sleeps for 10 ms, which otherwise always waits a full 16 ms
-tick. Longer delays gain little, since they land on a higher level with
-about the same granularity as before. The cost is more frequent driver
-wakeups while short timers are pending, and a shorter maximum delay: longer
-timers are clamped to the end of the wheel. Keep the default
-unless short sleeps or timeouts show up in your latency.
+For example, a 10 ms sleep is scheduled on 16 ms ticks at the default
+resolution. A smaller unit reduces the rounding added to that short delay.
+Longer delays gain little because they land on a higher level with about the
+same granularity as before.
 
 ## `Millis` and `Seconds`
 
-[`std::time::Duration`] is 16 bytes and can represent billions of years.
-Network timeouts need neither. ntex uses two small `Copy` types instead:
+[`Millis`] and [`Seconds`] are compact `Copy` duration types used throughout
+ntex's configuration APIs. Network timeouts do not need the 16 bytes or the
+billions-of-years range of [`std::time::Duration`]:
 
 | Type      | Inner value | Size    | Longest span  |
 |-----------|-------------|---------|---------------|
 | `Millis`  | `u32`       | 4 bytes | about 49 days |
 | `Seconds` | `u16`       | 2 bytes | about 18 hours |
 
-Both are plain tuple structs, so they can be written directly and used in
-`const` items. They implement `Eq`, `Ord` and `Hash`, and their default value
+Both types are plain tuple structs. You can write them directly and use them
+in `const` items. They implement `Eq`, `Ord`, and `Hash`. Their default value
 is zero:
 
 ```rust
@@ -199,9 +208,9 @@ fn conversions() {
 }
 ```
 
-Conversions and arithmetic **saturate** instead of overflowing or
-panicking. A `Duration` or `usize` that does not fit becomes the maximum
-value and logs an error:
+Conversions and arithmetic **saturate** rather than overflowing or panicking.
+Converting a `Duration` or `usize` that does not fit gives the maximum value
+and logs an error:
 
 ```rust
 use std::time::Duration;
@@ -214,7 +223,7 @@ fn saturation() {
 }
 ```
 
-`Millis::from(Duration)` rounds any sub-millisecond part **up**, so only
+`Millis::from(Duration)` rounds any sub-millisecond part **up**. Only
 `Duration::ZERO` becomes zero. A short positive timeout stays enabled and
 never fires early:
 
@@ -229,21 +238,28 @@ fn rounding() {
 }
 ```
 
-A negative `i32` is invalid input. It panics in debug builds; release
-builds log an error and use zero, which disables the timeout.
+A negative `i32` is invalid input and panics in debug builds. Release builds
+log an error and use zero, which disables the timeout.
 
-[`Millis`] converts from [`Seconds`], `Duration`, `u32`, `i32` and `usize`;
-[`Seconds`] converts from `u16`, `i32` and `usize`. Both convert into
-`Duration`. There is no conversion from `Duration` to `Seconds`, because it
-would silently drop the sub-second part.
+The supported conversions are:
+
+- `Millis` converts from `Seconds`, `Duration`, `u32`, `i32`, and `usize`.
+- `Seconds` converts from `u16`, `i32`, and `usize`.
+- Both types convert into `Duration`.
+
+There is no conversion from `Duration` to `Seconds`. It would silently drop
+the sub-second part.
 
 ### Zero means "disabled"
 
-In ntex configuration, a zero timeout usually turns the feature off: for
-example `Seconds::ZERO` as a keep-alive timeout disables keep-alive. The
-`is_zero`, `non_zero` and `map` helpers make that convention easy to follow
-in your own code. `map` calls the closure only for a non-zero value; on
-`Seconds`, the closure receives the value as `Millis`:
+A zero timeout usually turns off a feature or deadline in ntex configuration,
+but the meaning depends on the setting. For example, zero disables the idle
+timer in `IoConfig`, while `HttpServiceConfig::set_keepalive_timeout` with
+`Seconds::ZERO` disables HTTP persistent connections.
+
+Use the `is_zero` and `non_zero` helpers to follow this convention in your own
+code. The `map` helper calls a closure only for a non-zero value. When you call
+it on `Seconds`, the closure receives the value as `Millis`:
 
 ```rust
 use ntex::time::{Millis, Seconds, Sleep, sleep};
@@ -263,8 +279,10 @@ fn retry_delay(base: Millis, attempt: u32) -> Millis {
 
 ### Passing durations to timers
 
-Every timer constructor accepts `impl Into<Millis>`, so the same function
-takes any of these types:
+The convenience functions `sleep`, `deadline`, `interval`, `timeout`, and
+`timeout_checked` accept `impl Into<Millis>`, so you can pass any supported
+duration type directly. The corresponding `Sleep`, `Deadline`, and `Interval`
+constructors take `Millis` instead. For example:
 
 ```rust
 use std::time::Duration;
@@ -279,24 +297,24 @@ async fn waits() {
 
 ## Reading the clock
 
-Reading the system clock is cheap, but not free, and a busy server reads it
-for every request: to check deadlines, write a `Date` header or log access
-times. `ntex::time` offers two cached clocks:
+Use the cached clocks in `ntex::time` when you can tolerate approximate time.
+Reading the system clock is cheap, but a busy server pays that cost on every
+request. It checks deadlines, writes a `Date` header, or logs access times.
 
-- [`now`] returns an [`Instant`] for the start of the current runtime turn.
-  On the neon and compio backends, all tasks polled in the same turn see the
-  same value; on tokio it is [`Instant::now`].
-- [`system_time`] returns a cached [`SystemTime`] that is refreshed roughly
-  every 150 ms. Use it for wall-clock values that tolerate that lag, such as
-  log lines and HTTP `Date` headers.
+For deadline checks, [`now`] returns an [`Instant`] for the start of the
+current runtime turn. On the neon and compio backends, all tasks polled in
+the same turn see the same value. On tokio, it is [`Instant::now`].
 
-Both are approximations. When exact elapsed time matters, call
-[`Instant::now`] yourself.
+For wall-clock values, [`system_time`] returns a cached [`SystemTime`],
+refreshed roughly every 150 ms. Use it where that lag is acceptable, such as
+log lines and HTTP `Date` headers. These clocks favor inexpensive reads over
+precision; call [`Instant::now`] yourself when exact elapsed time matters.
 
 ## Asynchronous timers
 
-All asynchronous timers are futures that are woken by the timer driver. No
-task is spawned per timer, and dropping a timer cancels it.
+Use asynchronous timers when a task needs to wait for time to pass. Each timer
+is a future woken by the shared timer driver, not a separate task. Dropping
+a timer cancels it.
 
 ### `sleep`
 
@@ -312,8 +330,8 @@ async fn main() {
 }
 ```
 
-A `Sleep` does not have to be consumed by `.await`. Its methods take
-`&self`, so one timer can be waited on, inspected and rearmed repeatedly:
+You can reuse a `Sleep` without consuming it through `.await`. Its methods
+take `&self`, so you can wait on it, inspect it, and rearm it repeatedly:
 
 | Method                 | Effect |
 |------------------------|--------|
@@ -323,9 +341,9 @@ A `Sleep` does not have to be consumed by `.await`. Its methods take
 | `is_elapsed()`         | `true` once the timer has fired or was elapsed |
 | `poll_elapsed(cx)`     | polls the timer from a hand-written future or service |
 
-Resetting is cheaper than creating a new timer: it moves the existing entry
-to another bucket and keeps the registered waker. This makes `Sleep` a good
-fit for an idle timeout that restarts on every message:
+Reset a `Sleep` for an idle timeout that restarts on every message. Resetting
+moves the existing entry to another bucket and keeps the registered waker.
+It is cheaper than creating a new timer:
 
 ```rust
 use ntex::channel::mpsc;
@@ -357,11 +375,11 @@ moment as the timeout is still processed.
 
 ### `deadline`
 
-[`deadline`] works like `sleep`, but treats zero differently: a
-zero-duration `sleep` waits for one timer tick, while a zero-duration
-[`Deadline`] **never** completes. This fits the "zero means disabled"
-convention, because an optional timeout can be awaited without a separate
-code path:
+Use [`deadline`] when a zero duration should disable a timeout. It works like
+`sleep` for non-zero durations. A zero-duration [`Deadline`] **never**
+completes; a zero-duration `sleep` waits for one timer tick.
+
+You can await an optional timeout without a separate code path:
 
 ```rust
 use ntex::channel::mpsc;
@@ -377,16 +395,17 @@ async fn recv_within(rx: &mpsc::Receiver<String>, limit: Seconds) -> Option<Stri
 }
 ```
 
-`Deadline::reset` takes `&mut self`. Resetting to zero disables the
-deadline, and resetting a disabled deadline to a non-zero value arms it
-again. `is_elapsed()` agrees with awaiting the deadline: it is `true` only
-once an armed deadline has fired, and always `false` for a disabled one.
+`Deadline::reset` takes `&mut self`. Resetting to zero disables the deadline.
+Resetting a disabled deadline to a non-zero value arms it again.
+
+`is_elapsed()` agrees with awaiting the deadline. It is `true` only once an
+armed deadline has fired, and always `false` for a disabled one.
 
 ### `timeout` and `timeout_checked`
 
-[`timeout`] runs a future with a time limit. It returns `Ok` with the
-future's output, or `Err(())` if the time ran out first, in which case the
-inner future is dropped:
+Use [`timeout`] to run a future with a time limit. It returns `Ok` with the
+future's output if the future finishes in time. If time runs out first, it
+returns `Err(())` and drops the inner future:
 
 ```rust
 use ntex::time::{Seconds, sleep, timeout};
@@ -401,12 +420,12 @@ async fn main() {
 }
 ```
 
-If the future and the timer become ready during the same poll, the future
-wins. Like `sleep`, a zero-duration `timeout` still waits one timer tick, so
-it fails almost immediately unless the future is already ready.
+If the future and timer become ready during the same poll, the future wins.
+Like `sleep`, a zero-duration `timeout` waits one timer tick. It fails almost
+immediately unless the future is already ready.
 
-[`timeout_checked`] treats zero as "no timeout" and simply runs the future.
-Use it when the limit comes from configuration:
+Use [`timeout_checked`] when the limit comes from configuration. It treats
+zero as "no timeout" and runs the future without a time limit:
 
 ```rust
 use ntex::time::{Seconds, timeout_checked};
@@ -420,8 +439,9 @@ async fn call_upstream(limit: Seconds) -> Result<String, &'static str> {
 
 ### `interval`
 
-[`interval`] returns an [`Interval`] that ticks repeatedly. The first tick
-completes immediately:
+For recurring work such as collecting statistics, use [`interval`]. It returns
+an [`Interval`] that ticks repeatedly, with the first tick completing
+immediately:
 
 ```rust
 use ntex::time::{Seconds, interval};
@@ -435,19 +455,19 @@ async fn report_stats() {
 }
 ```
 
-Each later tick completes one period after the previous tick was
-*observed*. If the task is busy and picks up a tick late, the schedule
-shifts instead of delivering a burst of missed ticks. That suits periodic
-housekeeping, but an `Interval` is not a precise metronome.
+Each later tick completes one period after the previous tick was *observed*.
+If a busy task picks up a tick late, the schedule shifts. It does not deliver
+a burst of missed ticks. Use this for periodic housekeeping rather than
+precise timing.
 
-`Interval` also implements [`Stream`] with `()` items, and [`poll_tick`] is
-available for hand-written futures. Dropping the interval stops it.
+`Interval` also implements [`Stream`] with `()` items. Use [`poll_tick`] in
+hand-written futures. Dropping the interval stops it.
 
 ### Timers in hand-written futures
 
-`Sleep`, `Deadline` and `Interval` are `Unpin`, and each has a `poll_*`
-method that takes `&self`. A service or future can store a timer as a plain
-field and poll it from its own `poll` or readiness check:
+You can store a timer as a plain field in a service or future. Poll it from
+your own `poll` method or readiness check. `Sleep`, `Deadline`, and `Interval`
+are `Unpin`; each has a `poll_*` method that takes `&self`:
 
 ```rust
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
@@ -472,22 +492,22 @@ fn throttle(delay: Millis) -> Throttle {
 
 ## Callback timers
 
-An asynchronous timer only does something when a task polls it. That is
-fine for one task waiting for one timer, but it is wasteful when the reaction
-to a timeout is tiny, such as setting a flag or waking someone else: you would
-need a task, or an extra branch in an existing `select`, just to observe the
-timer.
+Use [`CallbackTimer`] when expiry needs only a short action, such as setting a
+flag or waking another task. It runs a closure directly from the timer driver.
+No task is spawned and nothing is polled.
 
-[`CallbackTimer`] runs a closure directly from the timer driver instead.
-No task is spawned and nothing is polled. Each timer is a small wheel entry
-plus the closure, so it suits per-connection or per-request state.
-The ntex [`KeepAlive`] middleware uses one to notice idle services.
+This avoids a task or an extra branch in an existing `select` just to observe
+expiry. A callback timer needs only a small wheel entry and the closure, so
+it suits per-connection or per-request state.
+
+The ntex [`KeepAlive`] middleware uses a callback timer to notice idle services.
 
 ### Using a callback timer
 
-`CallbackTimer::new` arms a single invocation of the closure. The timer is
-**reusable**: after it fires or is cancelled, `reset` arms another
-invocation of the same closure.
+Call `CallbackTimer::new` to arm a single invocation of a closure. Keep the
+handle alive for as long as you want the callback to run. The timer is
+**reusable**: after it fires or is cancelled, `reset` arms another invocation
+of the same closure.
 
 ```rust
 use std::{cell::Cell, rc::Rc};
@@ -525,16 +545,13 @@ async fn main() {
 | `is_elapsed()` | `true` when disarmed: fired, cancelled or stopped by shutdown |
 | drop           | cancels any pending invocation and releases the closure |
 
-The handle must be kept alive for as long as the callback should run.
-Dropping it is the way to stop the timer for good.
-
 ### Lazy rearming
 
-The real strength of callback timers is that a frequently extended deadline
-does not need a timer operation on every extension. Record the activity time
-in a `Cell`, and let the callback check whether the deadline really passed.
-If not, it rearms itself for the remaining time. This is how [`KeepAlive`]
-works:
+On a busy connection, most activity only pushes the idle deadline further
+away. You can avoid changing the timer on every request by recording the
+activity time in a `Cell`. When the callback runs, it checks whether the
+deadline has passed and rearms itself for the remaining time if needed.
+This is how [`KeepAlive`] works:
 
 ```rust
 use std::{cell::Cell, rc::Rc, rc::Weak, time::Duration, time::Instant};
@@ -581,53 +598,40 @@ impl IdleTracker {
 }
 ```
 
-A connection that receives a thousand requests within one timeout period
-costs a thousand `Cell` writes and at most one or two timer resets.
+For a thousand requests within one timeout period, a connection needs a
+thousand `Cell` writes and at most one or two timer resets.
 
-The callback captures a `Weak` reference. The tracker owns the timer and the
-timer owns the closure, so a strong `Rc` in the closure would form a cycle
-and the tracker would never be dropped.
+The callback captures a `Weak` reference to avoid a cycle. The tracker owns
+the timer, and the timer owns the closure. A strong `Rc` in the closure would
+keep the tracker from ever being dropped.
 
 ### Rules for callbacks
 
-- **Keep callbacks short, synchronous and non-blocking.** They run inside the
-  thread's timer driver; a slow callback delays every other timer on that
-  thread. To do asynchronous work, wake a task, notify a waiter or send to
-  a channel from the callback.
-- **The closure is `Fn`, not `FnMut`,** because it can run many times. Keep
-  changing state in `Cell`, `RefCell` or similar.
-- **Callbacks may use timers freely.** They run after the driver has released
-  the wheel, so a callback can create, reset, cancel or drop timers,
-  including its own. A callback that resets its own timer arms a new
-  invocation.
-- **Order is not guaranteed** between callbacks that fire on the same tick.
-- **A zero duration never runs the callback inline;** it waits for the next
-  timer tick, like `sleep`.
-- **Panics propagate** through the runtime and may stop the timer driver of
-  that thread. Do not use panics for control flow in callbacks.
-- **Callback timers are local.** The handle is neither `Send` nor `Sync`
-  and cannot be cloned, so the closure may capture `Rc` state.
-- **Shutdown cancels pending callbacks.** A surviving handle can be reset in
-  a new runtime on the same thread, but it is not rearmed automatically.
-- `is_elapsed()` tells you that the timer is disarmed, not that the callback
-  has already run. Track that in your own state if it matters.
+Callbacks run inside the thread's timer driver, so a slow callback delays
+every other timer on that thread. Keep callbacks short, synchronous, and
+non-blocking. To do asynchronous work, wake a task, notify a waiter, or send
+to a channel from the callback.
 
-## Summary
+The closure implements `Fn`, not `FnMut`, because it can run many times.
+Store changing state in `Cell`, `RefCell`, or a similar type. Capturing `Rc`
+state is fine: the timer handle is local, neither `Send` nor `Sync`, and
+cannot be cloned.
 
-- Use [`Millis`] and [`Seconds`] for timeouts. They are small, `Copy`,
-  saturate instead of overflowing, and convert to and from `Duration`.
-- Use [`sleep`] for a delay, and `reset` a `Sleep` for a restartable idle
-  timer.
-- Use [`deadline`] or [`timeout_checked`] when zero should mean "no limit",
-  and [`timeout`] when zero should fail fast.
-- Use [`interval`] for periodic housekeeping, not for precise scheduling.
-- Use [`CallbackTimer`] when the reaction to a timeout is a short,
-  synchronous state change, especially for per-connection timers that are
-  extended often.
-- Expect timers to fire on time or a little late, never early. Measure
-  elapsed time with `Instant`.
-- Keep the default 16 ms timer resolution unless short delays dominate your
-  latency; then lower it with `timer_resolution`.
+The driver releases the wheel before invoking a callback, so the callback
+can create, reset, cancel, or drop timers, including its own. Resetting its
+own timer arms a new invocation.
+
+A zero duration still waits for the next timer tick, like `sleep`; it never
+runs the callback inline. Do not depend on an order between callbacks due on
+the same tick.
+
+Panics propagate through the runtime and may stop that thread's timer driver.
+Do not use them for control flow in callbacks.
+
+Shutdown cancels pending callbacks. A surviving handle can be reset in a new
+runtime on the same thread, but is not rearmed automatically. As the method
+table above shows, `is_elapsed()` reports that the timer is disarmed, not
+whether the callback ran. Track execution in your own state if it matters.
 
 [`ntex::time`]: https://docs.ntex.rs/api/ntex/time/index.html
 [`Builder::timer_resolution`]: https://docs.ntex.rs/api/ntex/rt/struct.Builder.html#method.timer_resolution

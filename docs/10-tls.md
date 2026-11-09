@@ -1,43 +1,38 @@
 # Securing Connections with TLS
 
-Sooner or later, almost every service has to leave `localhost`. When it does,
-its traffic crosses networks you do not control, and you want two guarantees:
-nobody in between can read or alter the data, and each side is talking to the
-peer it expects. TLS provides both.
+When your service leaves `localhost`, its traffic crosses networks you do not
+control. TLS protects that traffic from being read or altered in transit. It
+also lets peers authenticate each other so they can check who they are talking
+to.
 
-The good news is that adding TLS to an ntex application changes how you set up
-a connection, not how you handle its messages. TLS encrypts the traffic and
-lets peers authenticate each other, while your HTTP handlers, WebSocket
-services, and custom protocols continue to work with ordinary application
+In ntex, you configure TLS when setting up a connection. Your HTTP handlers,
+WebSocket services, and custom protocols still work with ordinary application
 bytes.
 
-TLS does not depend on the runtime's I/O implementation either. All ntex TLS
-backends work on in-memory byte streams through the I/O filter layer; they do
-not read from or write to sockets themselves. You can use them with any
-ntex-supported I/O or runtime backend, as long as the TLS backend supports your
-platform.
+All ntex TLS backends work on in-memory byte streams through the I/O filter
+layer. They do not read from or write to sockets themselves. You can use them
+with any ntex-supported I/O or runtime backend, provided the TLS backend
+supports your platform.
 
-ntex also provides a platform-independent way to work with X.509 certificates
-and identities through its [`x509`] module. You use a common API for loading
-identities, inspecting certificates, and checking trust, while ntex uses the
-appropriate platform or backend functionality underneath.
+The [`x509`] module gives you a platform-independent API for certificates and
+identities. You use the same API to load identities, inspect certificates, and
+check trust. ntex uses the appropriate platform or backend functionality
+underneath.
 
-This chapter starts with a small HTTPS server you can run in a few minutes. It
-then walks through choosing a backend, configuring connections, and working
-with certificates. Depending on where you are starting from:
+If you are new to TLS, start with the
+[HTTPS server](#quick-start-an-https-server), then read the
+[certificate primer](#certificates-in-a-nutshell). If you already have a TLS
+configuration, skip to [connecting it to ntex](#configuring-ntex-components).
 
-- **New to TLS in ntex?** Read the [quick start](#quick-start-an-https-server)
-  and the [certificate primer](#certificates-in-a-nutshell).
-- **Already have a TLS configuration?** Go straight to
-  [configuring ntex components](#configuring-ntex-components).
-- **Need to identify your clients?** Start with
-  [client-certificate authentication](#client-certificate-authentication).
-- **Preparing for production?** Finish with the
-  [checklist](#production-checklist).
+For services that identify clients by certificate, the
+[client-authentication section](#client-certificate-authentication) separates
+TLS verification from application access checks. Use the
+[production checklist](#production-checklist) before deploying either kind of
+service.
 
 The snippets focus on configuration. For complete programs, use the
-[ntex examples repository][examples]; each example's README includes dependencies,
-certificate setup, and run commands.
+[ntex examples repository][examples]. Each example's README includes its
+dependencies, certificate setup, and run commands.
 
 ## Supported backends
 
@@ -50,9 +45,9 @@ or directly from `ntex_tls`.
 | rustls | `ntex/rustls` or `ntex-tls/rustls` | Configured with rustls `ClientConfig` and `ServerConfig`; choose a crypto provider |
 | Schannel | Available automatically on Windows | Windows-native identities, trust policy, protocol versions and cipher suites |
 
-Choose OpenSSL or rustls by enabling the corresponding feature; neither is
-enabled by default in `ntex-tls`. Schannel is already available on Windows, so
-you do not need to enable its compatibility-only `schannel` feature.
+Enable the corresponding feature to use OpenSSL or rustls. Neither is enabled
+by default in `ntex-tls`. Schannel is available automatically on Windows; you do
+not need its compatibility-only `schannel` feature.
 
 For an OpenSSL application, start with:
 
@@ -62,8 +57,8 @@ ntex = { version = "4", features = ["tokio", "openssl"] }
 openssl = "0.10"
 ```
 
-For rustls, you also need a crypto provider: the implementation of the
-cryptographic algorithms. The examples in this chapter use ring:
+For rustls, you also need a crypto provider to implement the cryptographic
+algorithms. The examples in this chapter use ring:
 
 ```toml
 [dependencies]
@@ -81,43 +76,46 @@ without changing the TLS configuration.
 
 ### Choosing a backend
 
-All three backends give you the same ntex integration, so the choice is mostly
-about your platform and operations rather than your application code:
+Choose a backend based on your platform and deployment needs. All three use
+the same ntex integration.
 
-- **rustls** is a good default for new services. It is written in Rust, needs
-  no system TLS library, and makes cross-compilation and static builds simple.
-  You choose its crypto provider explicitly.
-- **OpenSSL** fits best when your organization already standardizes on it, when
-  you need to reuse existing OpenSSL configuration, or when you need a feature
-  only OpenSSL provides here, such as pre-shared-key (PSK) identities.
-- **Schannel** is the natural choice for Windows-first deployments. It uses the
-  Windows certificate stores, trust policy, and keys that can be used without
-  being exported.
+For a new service, **rustls** is a good starting point. It is written in Rust
+and needs no system TLS library, which simplifies cross-compilation and static
+builds. You choose its crypto provider explicitly.
 
-Because protocol code does not depend on the backend, switching later usually
-means changing only the configuration code shown in this chapter.
+Choose **OpenSSL** if your organization already standardizes on it, you need to
+reuse an existing configuration, or you need a feature only it provides here,
+such as pre-shared-key (PSK) identities.
+
+For a Windows-first deployment, **Schannel** uses the certificate stores and
+trust policy already on the machine. It can also use keys without exporting
+them.
+
+Your protocol code does not depend on the backend. Switching later usually
+requires changes only to the configuration code shown here.
 
 ### TLS and X.509 backend selection are different
 
-The backend that encrypts a connection is not necessarily the one that loads
-or verifies certificates. You can enable both TLS features and choose a
-transport for each connection, but the [`x509`] helpers follow a separate rule:
-they always use native APIs on Windows; elsewhere, they use rustls when enabled
-and OpenSSL otherwise. If verification fails, they do not retry with another
-backend.
+You can choose different backends for TLS connections and certificate
+operations. Enabling both TLS features lets you choose a transport for each
+connection.
 
-The `x509` module is always available on Windows. On other platforms, enable
-OpenSSL or rustls; enabling `x509` alone is not enough.
+The [`x509`] helpers select their backend separately. On Windows, they always
+use native APIs. Elsewhere, they use rustls when enabled and OpenSSL otherwise.
+This means a certificate operation may not use the backend you chose for the
+connection.
 
-There is one extra dependency to keep in mind: on Unix, loading a PKCS#12 archive
-requires OpenSSL, even if rustls handles your TLS connections and certificate
-verification.
+If verification fails, the helpers do not retry with another backend. The
+`x509` module is always available on Windows. On other platforms, you must
+enable OpenSSL or rustls; enabling `x509` alone is not enough.
+
+On Unix, loading a PKCS#12 archive requires OpenSSL. This requirement applies
+even if rustls handles your TLS connections and certificate verification.
 
 ## Quick start: an HTTPS server
 
-Before looking at the moving parts, here is the whole thing working. This
-program serves one route over HTTPS using rustls and the dependencies listed
-above:
+This program serves one route over HTTPS. It uses rustls and the dependencies
+listed above:
 
 ```rust,no_run
 use std::sync::Arc;
@@ -154,31 +152,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-You need a certificate to run it. The quickest way is to clone the
-[examples repository][examples], run `sh tls/generate-certs.sh` from its root,
-and copy `server.pem`, `server.key`, and `ca.pem` from `tls/certs` into a
-`certs` directory next to your project. Then, in another terminal:
+You need a certificate to run the server. Clone the
+[examples repository][examples] and run `sh tls/generate-certs.sh` from its
+root. Copy `server.pem`, `server.key`, and `ca.pem` from `tls/certs` into a
+`certs` directory next to your project.
+
+Start the server, then run this command in another terminal:
 
 ```sh
 curl --cacert certs/ca.pem https://localhost:8443/
 ```
 
 The `--cacert` option tells curl to trust the example certificate authority.
-Without it, curl rightly refuses the connection because nobody it trusts has
-vouched for the server.
+Without it, curl refuses the connection because it cannot verify the server
+through an authority it trusts.
 
-Notice what did *not* change: the application, its routes, and its handler are
-the same as for a plain HTTP server. Only the setup code loads an identity,
-builds a rustls `ServerConfig`, and calls `bind_rustls` instead of `bind`. The
-rest of this chapter explains each of those pieces, and how to do the same with
-the other backends and on the client side. The [rustls example][rustls-example]
-is a fuller version of this program.
+The application, routes, and handler stay the same as for a plain HTTP server.
+The setup code loads an identity and builds a rustls `ServerConfig`. It then
+calls `bind_rustls` instead of `bind`. The [rustls example][rustls-example]
+provides a fuller version of this program.
 
 ## TLS as an I/O filter
 
-Think of TLS as another layer between the socket and your protocol. On reads,
-it decrypts bytes before your application sees them. On writes, it encrypts
-the bytes your application produces:
+TLS sits between the socket and your protocol. It decrypts incoming bytes
+before your application sees them and encrypts the bytes your application
+writes:
 
 ```text
 socket <-> TLS <-> HTTP
@@ -190,22 +188,22 @@ direction. The filters transform buffers, while the I/O backend handles the
 socket. The [I/O filter subsystem](7-io.md#filter-subsystem) chapter explains
 this model in more detail.
 
-**Client and server protocol code does not need to depend on a TLS backend to
-operate over TLS.** Write your protocol against ntex I/O rather than a bare
-TCP socket, and leave the transport choice to the connection setup:
+Write your client or server protocol against ntex I/O to keep it independent
+of the TLS backend. Using ntex I/O instead of a bare TCP socket leaves the
+transport choice to connection setup.
 
-| Connection stage | Responsibility |
-| --- | --- |
-| Server listener | Accept a transport connection |
-| TLS acceptor | Upgrade existing `Io` through a server handshake |
-| TLS connector | Establish a transport and perform a client handshake |
-| Protocol service or codec | Process application bytes, independent of the installed TLS backend |
+On a server, the listener accepts a transport connection and a TLS acceptor
+upgrades the existing `Io` through a handshake. On a client, a TLS connector
+establishes the transport and performs the client handshake. After that, your
+protocol service or codec handles application bytes without needing to know
+which TLS backend is installed.
 
 Adding TLS preserves any filters already installed on the connection. The type
 `Io<Layer<TlsFilter, F>>` describes that stack. Your protocol can stay generic
-over `F: Filter`, or use `Io::seal` or `Io::boxed` to hide the concrete filter
-type. Hiding the type does not change the connection: encryption, metadata,
-readiness, and shutdown behavior all remain in place.
+over `F: Filter`.
+
+To hide the concrete filter type, use `Io::seal` or `Io::boxed`. Encryption and
+metadata remain available. Readiness and shutdown behavior also stay the same.
 
 For example, this byte-stream service has no TLS imports:
 
@@ -222,8 +220,8 @@ async fn echo(io: IoBoxed) -> std::io::Result<()> {
 ```
 
 The same function accepts plain I/O or `io.boxed()` after a TLS handshake.
-It echoes byte chunks, not complete application messages: if your protocol
-has message boundaries, use a framing codec instead of `BytesCodec`.
+It echoes byte chunks rather than complete application messages. If your
+protocol has message boundaries, use a framing codec instead of `BytesCodec`.
 
 You can see this separation in the examples. The
 [connection-state example][state-example] performs a handshake after accepting
@@ -231,24 +229,23 @@ a connection and before constructing its HTTP state. The
 [WebSocket example][ws-example] uses the same frame handlers for plain and
 encrypted connections.
 
-There is one important exception: if your application uses certificates to
-decide who may connect, that part of the application needs to inspect and verify
-the peer's certificate.
+If your application uses certificates to decide who may connect, its access
+checks do need to inspect and verify the peer's certificate.
 
 ## Certificates in a nutshell
 
-Most TLS problems are really certificate problems, so a little vocabulary goes
-a long way. If you already know how certificate chains work, skip ahead.
+Understanding certificates helps you diagnose TLS failures. If you already
+know how certificate chains work, skip ahead.
 
-A **certificate** is a signed statement: "this public key belongs to these
-names." The names live in the certificate's subject alternative names (SANs),
-for example `DNS:api.example.com`, `IP:10.0.0.5`, or a URI such as
-`spiffe://example.org/billing`. The certificate also carries a validity period
-and the identity of its **issuer**, the party that signed it.
+A **certificate** is a signed statement that a public key belongs to certain
+names. Its subject alternative names (SANs) can include `DNS:api.example.com`
+or `IP:10.0.0.5`. They can also contain a URI such as
+`spiffe://example.org/billing`. The certificate records a validity period and
+its **issuer**, the party that signed it.
 
-The matching **private key** never leaves its owner. During the handshake, a
-peer proves that it holds the key, so a stolen copy of a certificate alone is
-useless. In ntex, a certificate chain together with its private key is called an
+The matching **private key** stays with its owner. During the handshake, a peer
+proves that it holds the key. A stolen certificate alone cannot provide that
+proof. In ntex, a certificate chain together with its private key is called an
 **identity**.
 
 Issuers are themselves identified by certificates, which forms a **chain**:
@@ -257,11 +254,13 @@ Issuers are themselves identified by certificates, which forms a **chain**:
 leaf (api.example.com)  ->  intermediate CA  ->  root CA
 ```
 
-The leaf identifies the endpoint. Intermediates connect it to a root. A root is
-self-signed, so it proves nothing by itself; it is useful only because *you*
-decided to trust it. Those locally configured certificates are called **trust
-anchors**, and certificate authorities (CAs) are the organizations or internal
-services that issue certificates.
+The leaf identifies the endpoint. Intermediates connect it to a root. A root
+is self-signed and proves nothing by itself. It is useful only because you
+decided to trust it.
+
+Locally configured trusted certificates are called **trust anchors**.
+Certificate authorities (CAs) are the organizations or internal services that
+issue certificates.
 
 To verify a peer, a TLS implementation checks that:
 
@@ -271,26 +270,27 @@ To verify a peer, a TLS implementation checks that:
    this use;
 4. for a server, the leaf's names include the host the client meant to reach.
 
-Nearly every failure you will see corresponds to one of these steps: an unknown
-issuer, an expired certificate, or a name mismatch. Keep the list in mind when
-reading error messages, and fix the configuration rather than disabling the
-check.
+Nearly every certificate failure corresponds to one of these steps. An unknown
+issuer, an expired certificate, or a name mismatch can each prevent a
+connection. Use these checks to interpret error messages, then fix the
+configuration rather than disabling verification.
 
 ## Configuring a backend
 
-A TLS configuration answers four questions:
+Your TLS configuration defines how peers identify and verify each other. It
+also controls which application protocols they can negotiate.
 
-- Which identity, meaning a certificate chain and private key, do I present?
-- Which certificate authorities do I trust to identify the other side?
-- As a client, which server name do I expect?
-- Which application protocols can we use? TLS negotiates these through
-  Application-Layer Protocol Negotiation (ALPN).
+Start with the identity you will present: a certificate chain and its private
+key. Then choose the certificate authorities you trust to identify the other
+side. A client also needs the server name it expects to reach. Finally, list
+the application protocols you support. TLS chooses between those protocols
+through Application-Layer Protocol Negotiation (ALPN).
 
-The server name deserves particular care. The connector normally checks the
-host from the request, not just the address it connects to. A certificate for
-`localhost` does not also identify `127.0.0.1` unless it lists that IP address.
-Server Name Indication (SNI) helps the server choose which certificate to
-present; it does not replace the client's verification.
+The connector normally checks the host from the request, not just the address
+it connects to. A certificate for `localhost` does not also identify
+`127.0.0.1` unless it lists that IP address. Server Name Indication (SNI) helps
+the server choose which certificate to present. SNI does not replace the
+client's verification.
 
 To try the examples, first run [`tls/generate-certs.sh`][cert-setup] from the
 examples repository root:
@@ -300,18 +300,20 @@ sh tls/generate-certs.sh
 ```
 
 The script creates a local certificate authority (CA) and certificates with
-subject alternative names (SANs), which identify their hosts or application
-identities. It also creates unencrypted PKCS#8 private keys. These files are
-gitignored and meant only for local development; never deploy them.
+subject alternative names (SANs). These names identify hosts or application
+identities. The script also creates unencrypted PKCS#8 private keys. The files
+are gitignored and meant only for local development; never deploy them.
 
 Run each program from its own example directory so the relative certificate
-paths resolve correctly. If a connection fails, check the trust configuration
-and certificate names rather than turning off verification.
+paths resolve correctly. The following sections build the client and server
+configurations separately. Then attach them to your application as shown in
+[configuring ntex components](#configuring-ntex-components).
 
 ### OpenSSL
 
-The [OpenSSL example][openssl-example] includes an HTTPS server and client,
-plus a mutual TLS (mTLS) server that authenticates clients.
+To use OpenSSL, configure client verification and the server's identity
+separately. The [OpenSSL example][openssl-example] includes an HTTPS server
+and client, plus a mutual TLS (mTLS) server that authenticates clients.
 
 Start the client configuration by enabling verification and loading the CA
 certificates it should trust:
@@ -350,23 +352,24 @@ fn server_config() -> Result<SslAcceptorBuilder, Box<dyn std::error::Error>> {
 }
 ```
 
-`set_identity` installs the private key, the endpoint's certificate (the leaf),
-and its intermediate certificates in chain order. It leaves out the self-signed
-root and does not change how peers are verified. The
-`mozilla_intermediate_v5` preset supports modern TLS, including TLS 1.3.
+`set_identity` installs the private key and the endpoint's certificate (the
+leaf). It includes intermediate certificates in chain order and leaves out
+the self-signed root. It does not change how peers are verified.
 
-You can pass these configurations to the HTTP helpers below, or build
-`ntex::tls::openssl::SslConnector` and `SslAcceptor` services directly. If you
-are building a custom protocol, set ALPN for that protocol instead of copying
-the HTTP protocol list.
+The `mozilla_intermediate_v5` preset supports modern TLS, including TLS 1.3.
+You can pass these configurations to the HTTP helpers below. For direct use,
+build a `ntex::tls::openssl::SslConnector` service or an `SslAcceptor` service.
+If you are building a custom protocol, set its ALPN instead of copying the HTTP
+protocol list.
 
 ### rustls
 
-The [rustls example][rustls-example] selects ring explicitly for TLS and enables
-`rustls-ring` for the portable identity and trust helpers. Loading or converting
-an identity does not silently install a process-wide crypto provider.
+To configure rustls, choose a crypto provider and the certificates you trust.
+The [rustls example][rustls-example] selects ring explicitly for TLS. It also
+enables `rustls-ring` for the portable identity and trust helpers.
 
-A client needs both a crypto provider and a root store:
+Loading or converting an identity does not install a process-wide crypto
+provider. A client needs both a provider and a root store:
 
 ```rust,no_run
 use std::{fs::File, io::BufReader, sync::Arc};
@@ -420,11 +423,10 @@ On this side of the connection, `with_no_client_auth` means "do not ask for a
 client certificate." The server still presents its own identity. To require
 client certificates, configure a client verifier instead.
 
-Be careful if your dependencies enable more than one rustls crypto provider.
-Before using a default builder that needs a provider, explicitly install the
-one you intend to use process-wide. `builder_with_provider` only configures
-that builder; it does not select a provider for every other builder or X.509
-operation.
+If your dependencies enable more than one rustls crypto provider, choose the
+process-wide provider explicitly. Install it before using a default builder
+that needs a provider. `builder_with_provider` configures only that builder.
+It does not select a provider for other builders or X.509 operations.
 
 ### Windows Schannel
 
@@ -439,8 +441,8 @@ fn client_config() -> ntex::tls::schannel::ClientConfig {
 }
 ```
 
-This client offers `h2` and `http/1.1`, but sends no client certificate.
-To send one, call `set_client_cert` explicitly; Schannel does not choose an
+This client offers `h2` and `http/1.1` and sends no client certificate.
+To send one, call `set_client_cert` explicitly. Schannel does not choose an
 identity from the user's certificate stores for you.
 
 A server requires a native identity:
@@ -458,10 +460,10 @@ By default, the server does not ask for client certificates. You can change
 ALPN with `set_alpn_protocols` on either configuration. The available TLS
 versions and cipher suites depend on Windows policy and OS support.
 
-This client configuration does not provide a separate root store for verifying
-servers. For local development, follow the example README to add and later
-remove the example CA in an isolated Windows account. Keep verification enabled;
-configure Windows trust rather than bypassing it.
+This client configuration has no separate root store for verifying servers.
+For local development, follow the example README to add the example CA in an
+isolated Windows account, then remove it afterward. Keep verification enabled
+and configure Windows trust rather than bypassing it.
 
 ## Configuring ntex components
 
@@ -471,9 +473,9 @@ clients, so use the section that matches your application.
 
 ### HTTP client
 
-For HTTPS, pass your configuration to `ClientBuilder::openssl(config)` or
-`ClientBuilder::rustls(config)`. Both install a secure connector, and the rest
-of the client works as usual:
+For HTTPS, install a secure connector on the client builder. Pass an OpenSSL
+configuration to `ClientBuilder::openssl(config)`. For rustls, use
+`ClientBuilder::rustls(config)`. Request and response handling stay the same:
 
 ```rust,no_run
 async fn fetch(config: rustls::ClientConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -486,8 +488,8 @@ async fn fetch(config: rustls::ClientConfig) -> Result<(), Box<dyn std::error::E
 }
 ```
 
-Build the client once and reuse it: it keeps a connection pool, so later
-requests to the same host can skip the TLS handshake.
+Build the client once and reuse it. Its connection pool lets later requests
+to the same host skip the TLS handshake.
 
 If you have a custom TLS connector service, including Schannel, pass it to
 `secure_connector`:
@@ -502,8 +504,8 @@ fn client() -> ntex::client::Client {
 }
 ```
 
-Do not confuse this with `ClientBuilder::connector`: that method configures
-**unsecured** connections and leaves the HTTPS connector unchanged.
+`ClientBuilder::connector` configures **unsecured** connections. It leaves
+the HTTPS connector unchanged.
 
 The built-in default OpenSSL connector verifies server certificates against
 OpenSSL's default trust store (the system roots) and checks the request host.
@@ -518,9 +520,10 @@ On Windows without either feature, install Schannel explicitly through
 The [HTTP client example][http-client-example] shows a custom HTTPS connector.
 The backend examples also show how to use private trust roots and client
 identities. Once the client is built, request and body handling stay the same.
-When wrapping connection errors, keep the original error in an application
-error type or `Box<dyn std::error::Error>` rather than turning it into an
-`io::Error` containing only a string.
+
+When wrapping connection errors, preserve the original error in an application
+error type or `Box<dyn std::error::Error>`. Avoid converting it to an
+`io::Error` that contains only a string.
 
 ### WebSocket client
 
@@ -529,7 +532,7 @@ error type or `Box<dyn std::error::Error>` rather than turning it into an
 not enable TLS.**
 
 Install a TLS connector explicitly. These WebSocket APIs use an HTTP/1.1
-upgrade, not HTTP/2 extended CONNECT, so offer `http/1.1` rather than `h2`:
+upgrade rather than HTTP/2 extended CONNECT. Offer `http/1.1` instead of `h2`:
 
 ```rust,no_run
 use ntex::{SharedCfg, ws::WsClient};
@@ -551,9 +554,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-With rustls, set `config.alpn_protocols = vec![b"http/1.1".to_vec()]` and use
-`.rustls(Arc::new(config))`. With Schannel, restrict ALPN in `ClientConfig` and
-use `.connector(TlsConnector::with_config(config))`.
+With rustls, set `config.alpn_protocols = vec![b"http/1.1".to_vec()]`.
+Then pass the configuration to `.rustls(Arc::new(config))`.
+
+With Schannel, restrict ALPN in `ClientConfig`. Pass the configuration to
+`.connector(TlsConnector::with_config(config))`.
 
 Unlike the HTTP client's `connector`, `WsClient::connector` replaces the whole
 connector for this connection, including its TLS behavior.
@@ -575,9 +580,9 @@ For web applications, use the backend-specific HTTP server helpers:
 These helpers perform the TLS handshake before serving HTTP and configure
 HTTP ALPN for you. Keep your existing routes, middleware, and handlers.
 
-A WebSocket connection starts as HTTP, so the server setup is the same: use
-an HTTPS listener and keep your upgrade and frame handlers. TLS stays in place
-after the upgrade; `web::ws::start` does not remove it.
+A WebSocket connection starts as HTTP. Use an HTTPS listener and keep your
+upgrade and frame handlers. TLS stays in place after the upgrade;
+`web::ws::start` does not remove it.
 
 Use the lower-level server builder when you need Schannel, a custom protocol,
 or a certificate check before serving any requests. Compose the services in
@@ -590,8 +595,8 @@ listener -> TLS acceptor -> optional authorization gate -> HttpService / protoco
 There is no `bind_schannel` web-server helper. The
 [Schannel server][schannel-example] and both mutual-authentication examples
 show this service chain. Their HTTP service does not depend on the concrete
-TLS filter, and they use a shared boxed error type to preserve errors from
-the handshake, authentication, and HTTP layers.
+TLS filter. They use a shared boxed error type to preserve errors from the
+handshake, authentication, and HTTP layers.
 
 ### Shared handshake configuration
 
@@ -606,9 +611,9 @@ let cfg: SharedCfg = SharedCfg::new("TLS")
     .into();
 ```
 
-Pass `cfg` to the server's bind/listen call, `ClientBuilder::build`, or
-`WsClient::new`. The default TLS handshake timeout is five seconds; zero
-disables the deadline.
+Pass `cfg` to the server's bind/listen call, to `ClientBuilder::build` for an
+HTTP client, or to `WsClient::new` for a WebSocket client. The default TLS
+handshake timeout is five seconds; zero disables the deadline.
 
 This timeout covers only TLS negotiation. DNS lookup, establishing a TCP
 connection, waiting for an HTTP response, and the WebSocket opening handshake
@@ -616,13 +621,9 @@ have separate settings in their respective components.
 
 ## X.509 certificates and identity loading
 
-The [`x509`] module provides a platform- and backend-independent API for
-working with X.509 certificates and identities. It uses platform- and
-backend-specific functionality underneath, so your application can use common
-types instead of calling each backend directly. The API is portable, but
-supported features and verification behavior can still differ by backend.
-
-Before loading certificate files, it helps to separate three concepts:
+Use the [`x509`] API to load certificates and identities across platforms.
+Supported features and verification behavior can still differ by backend.
+The API distinguishes certificates, identities, and trust anchors:
 
 | Type | Meaning |
 | --- | --- |
@@ -631,27 +632,29 @@ Before loading certificate files, it helps to separate three concepts:
 | `CaCerts` | Certificates you explicitly trust when verifying clients |
 
 Loading an identity checks that its data is well-formed and the key matches
-the certificate. It does not tell you whether to trust that identity, grant it
-access, or accept it for a particular hostname. Parsing a certificate likewise
-reads its contents; it does not authenticate whoever sent it.
+the certificate. It does not establish trust or grant access. It also does not
+check whether the identity is valid for a particular hostname. Parsing a
+certificate reads its contents without authenticating whoever sent it.
 
 The [X.509 example][x509-example] includes an inspector you can run against your
 files, plus the authentication helpers shared by all three backend examples.
 
 ### PEM and DER
 
-PEM is a text encoding; DER is binary. To load an identity from PEM, use
-`Identity::from_pem(certificates, private_key)` with the leaf certificate first
-in the chain and an **unencrypted PKCS#8** private key.
-`Identity::from_der(&[&[u8]], private_key)` takes the equivalent DER inputs.
-If your key is in PKCS#1, SEC1, or encrypted PEM form, convert it before using
-these portable loaders.
-
-`Certificate::from_pem` reads a certificate; `from_pem_multi` reads a bundle.
-`Certificate::from_der` parses owned DER bytes. These operations need no private
+PEM stores certificate data as text; DER stores it as binary. Load a PEM
+identity with `Identity::from_pem(certificates, private_key)`. Put the leaf
+certificate first in the chain and supply an **unencrypted PKCS#8** private
 key.
 
-If you are loading from files, `IdentitySource` handles the file reads for you:
+For DER inputs, use `Identity::from_der(&[&[u8]], private_key)`. Convert PKCS#1,
+SEC1, or encrypted PEM keys before using these portable loaders.
+
+If you only need to inspect a certificate, you do not need a private key.
+Use `Certificate::from_pem` for one PEM certificate, `from_pem_multi` for a
+PEM bundle, or `Certificate::from_der` for owned DER bytes.
+
+For an identity stored in files, `IdentitySource` handles the file reads for
+you:
 
 ```rust,no_run
 use ntex::tls::x509::{Identity, IdentitySource};
@@ -670,20 +673,20 @@ that loads `server.pem` and `server.key`.
 
 ### PKCS#12 and Windows stores
 
-PKCS#12 archives bundle certificates and private keys. If the archive has a
-password, use `Identity::from_pkcs12(bytes, password)`;
-`IdentitySource::Pkcs12File(path)` uses an empty password.
+PKCS#12 archives bundle certificates and private keys. For a password-protected
+archive, use `Identity::from_pkcs12(bytes, password)`. The file loader,
+`IdentitySource::Pkcs12File(path)`, uses an empty password.
 
-Be explicit about the format: parsing a plain string as `IdentitySource`
-treats it as a PKCS#12 path, **not** a PEM path. Load passwords from a secret
-source or protected environment configuration, not command-line arguments,
-and keep them out of logs.
+Parsing a plain string as `IdentitySource` treats it as a PKCS#12 path,
+**not** a PEM path. Load passwords from a secret source or protected environment
+configuration. Do not pass them as command-line arguments or write them to logs.
 
 PKCS#12 loading uses native APIs on Windows and requires the `openssl` feature
 on Unix. You can still use rustls for TLS; using OpenSSL to import an archive
 does not choose the connection's TLS backend.
 
-On Windows, you can also select an identity and its key from a certificate store:
+On Windows, you can also select an identity and its key from a certificate
+store:
 
 ```text
 cert:CurrentUser\MY\<40-hex-SHA1-thumbprint>
@@ -692,17 +695,22 @@ cert:LocalMachine\MY\subject=<name>
 
 A thumbprint selector does not check whether the certificate is currently
 valid. A subject selector picks a currently valid match with an accessible
-private key, choosing the one with the latest expiry. Neither verifies trust.
-These selectors work only on Windows.
+private key. If several match, it chooses the one with the latest expiry.
+Neither selector verifies trust, and both work only on Windows.
 
-Windows keys may be non-exportable: a backend can use the key to sign without
-being able to read its bytes. Key lifetime also matters when importing an
-identity. `Identity` keeps an isolated imported key for Schannel until its last
-owner is dropped, then normally deletes it. An abnormal process exit can leave
-that key behind. `ClientIdentity` imports use ephemeral native keys instead,
-which is useful when the identity is only needed by a client.
+Windows keys may be non-exportable. A backend can use such a key to sign
+without reading its bytes.
+
+When importing an identity, consider how long the key stays on the system.
+`Identity` keeps an isolated imported key for Schannel until its last owner is
+dropped, then normally deletes it. An abnormal process exit can leave the key
+behind. `ClientIdentity` imports use ephemeral native keys instead, which is
+useful when only a client needs the identity.
 
 ### Using an identity with each backend
+
+Once you have loaded an identity, adapt it to your TLS backend. The adapter
+determines whether the backend can use the identity's private key.
 
 | Backend | Adapter | Important limitation |
 | --- | --- | --- |
@@ -710,14 +718,16 @@ which is useful when the identity is only needed by a client.
 | rustls | `certified_key(&identity)` or `client_certified_key(&client_identity)` | Install the result through a certificate resolver; native Windows keys can sign without being exported |
 | Schannel | `identity.schannel().clone()` | Windows-only native identity for client/server configuration |
 
-For rustls, use `SingleCertAndKey` when you have one configured identity; it
-works for both clients and servers. `ClientIdentity::from_identity` prepares
-an ordered client chain from an existing identity. You can also load a
-`ClientIdentity` directly from PEM, DER, or PKCS#12.
+For rustls, use `SingleCertAndKey` when you have one configured identity. It
+works for both clients and servers.
 
-The OpenSSL and rustls adapters put the chain in order for you. Underneath,
-`Identity::ordered_chain(false)` arranges the intermediates, leaves out the
-self-signed root, and drops unrelated certificates with a warning.
+To prepare an ordered client chain from an existing identity, use
+`ClientIdentity::from_identity`. You can also load a `ClientIdentity` directly
+from PEM, DER, or PKCS#12.
+
+The OpenSSL and rustls adapters order the chain for you. They use
+`Identity::ordered_chain(false)` to arrange the intermediates and leave out the
+self-signed root. It drops unrelated certificates with a warning.
 
 Sending a root certificate does not make the other side trust it. Trusted
 certificates belong in the verifier's configuration, not in a chain supplied
@@ -725,9 +735,12 @@ by the peer.
 
 ## Client-certificate authentication
 
-With ordinary HTTPS, the client authenticates the server. Mutual TLS also asks
-the client to present a certificate and prove that it owns the corresponding
-private key. Your application still needs to answer three separate questions:
+Use mutual TLS when clients need to prove their identities with certificates.
+Ordinary HTTPS authenticates the server to the client. Mutual TLS also asks the
+client to present a certificate and prove that it owns the corresponding
+private key.
+
+Your application still needs to answer three separate questions:
 
 1. Did the client provide a certificate?
 2. Is that certificate trusted?
@@ -741,21 +754,23 @@ Start by configuring the server to ask for or require a client certificate:
 | rustls | Configure `WebPkiClientVerifier` with client roots; do not enable anonymous clients when a certificate is mandatory |
 | Schannel | `request_client_cert(true)` requests an optional certificate and proof of key possession; the application must require and verify it |
 
+The client needs its own identity as well as roots for checking the server.
+Install that identity with OpenSSL's `set_identity`, a rustls certificate
+resolver, or Schannel's `set_client_cert`. Keep these two parts of the
+configuration separate: sending a client certificate does not replace
+checking the server's name and certificate chain.
+
 In OpenSSL, `PEER` alone does not require the client to send a certificate.
 In rustls, making the verifier optional is not the same as turning off client
 authentication altogether.
 
 **Schannel only requests a certificate; it does not enforce your authentication
-policy.** The handshake can succeed without a certificate, and it does not
-check the client's certificate trust here. Your application must reject missing
-or unacceptable identities before doing any protected work. The example makes
-this check before `HttpService`, so rejection closes the connection without
-sending an HTTP response.
+policy.** The handshake can succeed without a certificate. It also does not
+check trust in the client's certificate here. Your application must reject
+missing or unacceptable identities before doing any protected work.
 
-The client also needs its own identity configured: use `set_identity` with
-OpenSSL, a certificate resolver with rustls, or `set_client_cert` with Schannel.
-This is separate from the roots it uses to trust the server. Sending a client
-certificate does not replace checking the server's name and certificate chain.
+The example checks the identity before `HttpService`. A rejection therefore
+closes the connection without sending an HTTP response.
 
 To try the OpenSSL example, run these from `tls/openssl` in separate terminals:
 
@@ -765,18 +780,19 @@ cargo run --bin openssl-client -- https://localhost:8443/ ../certs/client
 ```
 
 With the expected client identity, the response is `authorized`. Try again
-without an identity, with `untrusted-client`, and with `other-client`; each
-connection should be rejected. The last case is worth noticing:
-`other-client` has a valid certificate from a trusted issuer, but not the
-identity this application allows.
+without an identity, with `untrusted-client`, and with `other-client`. Each
+connection should be rejected.
+
+The `other-client` certificate is valid and comes from a trusted issuer. Its
+identity is still not one this application allows.
 
 The rustls and Schannel READMEs provide equivalent commands.
 
 ## Reading peer certificates
 
-When your application needs the peer's certificate, use [`PeerCertDer`] and
-[`PeerCertChainDer`]. These queries work across backends, unlike native
-certificate-chain queries whose conventions differ.
+Use [`PeerCertDer`] to read the peer's leaf certificate. Use
+[`PeerCertChainDer`] to read its certificate chain. These queries work across
+backends; native certificate-chain queries follow different conventions.
 
 This helper works with `IoRef` from any supported TLS backend:
 
@@ -786,58 +802,57 @@ use ntex::tls::{PeerCertChainDer, PeerCertDer};
 use ntex::tls::x509::{self, PeerCerts};
 
 fn peer_certs(io: &IoRef) -> Result<Option<PeerCerts>, x509::Error> {
-    let Some(leaf) = io.query::<PeerCertDer>().as_ref().cloned() else {
+    let Some(leaf) = io.query::<PeerCertDer>().into_inner() else {
         return Ok(None);
     };
     let chain = io.query::<PeerCertChainDer>()
-        .as_ref()
-        .cloned()
+        .into_inner()
         .map(|item| item.0)
         .unwrap_or_default();
     PeerCerts::from_der(leaf.0, chain).map(Some)
 }
 ```
 
-The query values own their DER buffers. `PeerCerts::from_der` parses them and
-removes a duplicated leaf if it appears at the start of the supplied chain.
-`PeerCerts::chain` holds the remaining chain, which may be incomplete or
-untrusted. On versions that provide `QueryItem::into_inner`, you can move the
-query value out instead of cloning it.
+`QueryItem::into_inner()` moves out the query values, which own their DER
+buffers. `PeerCerts::from_der` parses those buffers. It removes a duplicated
+leaf if one appears at the start of the supplied chain.
 
-In a web handler, use `HttpRequest::io()` to reach the connection. This example
-returns the leaf certificate's SHA-256 thumbprint:
+`PeerCerts::chain` holds the remaining chain. That chain may be incomplete or
+untrusted.
+
+In a web handler, use `HttpRequest::io()` to reach the connection. The
+`peer_certs` helper above then parses its certificates. This example returns
+the leaf certificate's SHA-256 thumbprint:
 
 ```rust,no_run
 async fn certificate(req: ntex::web::HttpRequest) -> ntex::web::HttpResponse {
-    use ntex::tls::{PeerCertChainDer, PeerCertDer};
-    use ntex::tls::x509::{PeerCerts, digest::Algorithm};
+    use ntex::tls::x509::digest::Algorithm;
     use ntex::web::HttpResponse;
 
     let Some(io) = req.io() else {
         return HttpResponse::Unauthorized().build();
     };
-    let Some(leaf) = io.query::<PeerCertDer>().as_ref().cloned() else {
-        return HttpResponse::Unauthorized().build();
-    };
-    let chain = io.query::<PeerCertChainDer>().as_ref().cloned()
-        .map(|item| item.0).unwrap_or_default();
-    match PeerCerts::from_der(leaf.0, chain) {
-        Ok(peer) => HttpResponse::Ok().body(peer.leaf().thumbprint(Algorithm::Sha256)),
+    match peer_certs(io) {
+        Ok(Some(peer)) => HttpResponse::Ok().body(peer.leaf().thumbprint(Algorithm::Sha256)),
+        Ok(None) => HttpResponse::Unauthorized().build(),
         Err(_) => HttpResponse::Forbidden().build(),
     }
 }
 ```
 
-This handler reports metadata; it does **not** decide whether the peer is
-allowed to use your application. It handles both a missing connection, as can
-happen with a synthetic request, and a connection without a peer certificate.
-Keep endpoints like this protected: certificate fields and stable identity
-identifiers should not be exposed as public diagnostics.
+This handler reports metadata. It does **not** decide whether the peer is
+allowed to use your application.
+
+The two `Unauthorized` paths cover a synthetic request with no connection
+and a real connection without a peer certificate.
+
+Protect endpoints like this. Do not expose certificate fields or stable
+identity identifiers as public diagnostics.
 
 You can also read a `Certificate`'s subject, issuer, SANs, and validity dates.
-Other TLS queries include `Servername`, `TlsVersion`, `TlsCipher`, and
-`ntex::io::types::HttpProtocol`, depending on the backend and negotiated
-session. `PskIdentity` is available only with OpenSSL.
+For connection metadata, query `Servername`, `TlsVersion`, `TlsCipher`, or
+`ntex::io::types::HttpProtocol`. Their availability depends on the backend and
+negotiated session. `PskIdentity` is available only with OpenSSL.
 
 ## Trust and application authorization
 
@@ -849,10 +864,6 @@ Build the store from certificates your application explicitly trusts, called
 *trust anchors*. Never build it from the chain a client sends you. Every
 certificate you register becomes an anchor, even an intermediate or a pinned
 leaf. An empty store trusts nothing.
-
-Pay attention to import errors: `from_certs` logs and skips rejected anchors,
-while `from_certs_with` lets you handle those rejections. The examples reject
-an incomplete import rather than continuing with fewer roots than configured.
 
 First verify the peer's chain at the current time, then check the application
 identity. For example, this function accepts only the expected URI:
@@ -885,11 +896,17 @@ trust failures separate from name mismatches so callers can tell them apart.
 The URI is an example application identity; matching it is not a complete
 implementation of SPIFFE policy.
 
+Check for import errors. The `from_certs` method logs and skips rejected
+anchors. Use `from_certs_with` to handle those rejections yourself. The examples
+reject an incomplete import rather than continuing with fewer roots than
+configured.
+
 ### Expiry and long-lived connections
 
-`is_trusted` returns the earliest expiry in the verified certificate path,
-including the trust anchor. Treat this as a deadline: an authenticated
-connection must not stay open beyond it.
+Close authenticated connections when their verified certificate path
+expires. The `is_trusted` method returns the earliest expiry in that path,
+including the trust anchor. An authenticated connection must not stay open
+beyond that deadline.
 
 The examples schedule the connection to close at that time and cancel the
 timer if it disconnects earlier. For long-lived sessions, also decide how your
@@ -897,7 +914,8 @@ application will respond to configuration changes and revoked identities.
 
 ### Other authorization checks
 
-The `auth` helpers let you choose other identity checks:
+Use the `auth` helpers to choose the identity fields or thumbprints your
+application accepts. Some helpers also check certificate validity:
 
 | Helper | Behavior |
 | --- | --- |
@@ -907,16 +925,19 @@ The `auth` helpers let you choose other identity checks:
 | `thumbprint_matches` | Matches an allow-list without checking dates |
 | `verify_thumbprint` | Checks both the allow-list and validity |
 
-Use SHA-256 for new thumbprint policies. SHA-1 is still useful for Windows
-store selectors and compatibility, but these helpers do not verify certificate
+Use SHA-256 for new thumbprint policies. SHA-1 remains useful for Windows
+store selectors and compatibility. These helpers do not verify certificate
 chains, regardless of the digest you choose.
 
 ### Backend differences
 
-`CaCerts` does not check revocation. Also, do not assume that Crypt32, WebPKI,
-and OpenSSL accept exactly the same certificates. They differ in supported
-algorithms, Extended Key Usage (EKU) checks for client authentication, and
-how they handle a directly trusted leaf certificate.
+If your application runs on several platforms, check how each backend applies
+your trust policy. Crypt32, WebPKI, and OpenSSL do not necessarily accept the
+same certificates. They differ in supported algorithms and Extended Key Usage
+(EKU) checks for client authentication. They also handle directly trusted leaf
+certificates differently.
+
+`CaCerts` does not check revocation.
 
 For example, Windows checks validity rather than performing ordinary chain
 validation for a pinned leaf. OpenSSL also handles EKU on intermediate
@@ -926,27 +947,31 @@ across platforms.
 
 ## Operational guidance
 
+TLS configuration also affects how your service handles load and closes
+connections.
+
 ### Handshake limits
 
-Use `max_concurrent_ssl_accept` to limit how many TLS handshakes run at once
-per worker. Acceptors on the same thread share the limit, which defaults to
-256. Set it before starting workers: changing it later does not update counters
-that other threads have already initialized.
+TLS handshakes cost work before your application handles any requests. Use
+`max_concurrent_ssl_accept` to limit concurrent handshakes per worker.
+Acceptors on the same thread share the limit, which defaults to 256. Set it
+before starting workers. Later changes do not update counters that other
+threads have already initialized.
 
-This is a **soft** limit. Readiness slows down acceptance but does not reserve
-a slot, so independently ready pipelines can exceed it. Setting the limit to
-zero keeps acceptor readiness pending; zero does **not** mean unlimited.
+This is a **soft** limit. Readiness slows acceptance without reserving a slot,
+so independently ready pipelines can exceed it. Setting the limit to zero
+keeps acceptor readiness pending. Zero does **not** mean unlimited.
 
 Low-level handshake functions and filter constructors do not use this acceptor
-limit and have their own timeout behavior. In particular, OpenSSL's free
-`accept` and `connect` functions apply neither the service timeout nor its
-concurrency limit. Use the services when you need those controls.
+limit. They have their own timeout behavior. OpenSSL's free `accept` and
+`connect` functions apply neither the service timeout nor its concurrency
+limit. Use the services when you need those controls.
 
 ### Shutdown
 
-TLS filters take part in normal, graceful I/O shutdown. Let the connection or
-server shut down normally when possible. Forcing the transport to close can
-lose queued bytes or prevent the TLS close notification from reaching the peer.
+Let the connection or server shut down gracefully when possible. TLS filters
+participate in normal I/O shutdown. Forcing the transport to close can lose
+queued bytes or prevent the TLS close notification from reaching the peer.
 
 ### Troubleshooting
 
@@ -971,7 +996,7 @@ as identity data, not harmless debugging output.
 
 ## Production checklist
 
-Before you ship, walk through these questions:
+Before deploying, check each item:
 
 - **Verification is on everywhere.** Every client, including the HTTP client
   with OpenSSL and every `WsClient`, uses a verifying configuration with the
@@ -986,16 +1011,13 @@ Before you ship, walk through these questions:
 - **ALPN matches the protocol.** HTTP servers and clients offer the protocols
   they actually speak; WebSocket clients offer `http/1.1`.
 - **Client authentication is enforced, not just requested.** For mutual TLS,
-  missing certificates are rejected, client trust anchors are configured
-  explicitly, and the application checks *which* identity connected, not only
-  that its certificate is valid.
+  reject missing certificates and configure client trust anchors explicitly.
+  Check *which* identity connected; a valid certificate alone does not grant
+  access.
 - **Long-lived connections respect expiry.** Authenticated connections close
   when their verified certificate path expires.
 - **Handshakes are bounded.** The handshake timeout and
   `max_concurrent_ssl_accept` suit your expected load.
-
-If every answer is yes, TLS is doing its job, and your handlers never had to
-know it was there.
 
 [examples]: https://github.com/ntex-rs/examples/tree/main/tls
 [cert-setup]: https://github.com/ntex-rs/examples/blob/main/tls/README.md#local-certificates

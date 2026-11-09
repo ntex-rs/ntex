@@ -1,18 +1,16 @@
 # Making HTTP Requests
 
-Very few services live alone. Sooner or later yours will need to talk to a
-payment provider, an internal API, an object store, or someone's webhook.
-`ntex::client` is the tool for that job.
+Use `ntex::client` when your service needs to call a payment provider, an
+internal API, an object store, or a webhook.
 
-If you have built a server with ntex, the client will feel familiar. It is
-made of the same pieces: [services](1-service.md), the
-[I/O layer](7-io.md), and shared configuration. It speaks HTTP/1.1 and HTTP/2,
-keeps connections open and reuses them, and supports TLS through OpenSSL or
-rustls. Optional features add response decompression and cookies, and
-middleware lets you hook your own logic into every request.
+If you have built a server with ntex, the client will feel familiar. It uses
+the same [services](1-service.md), [I/O layer](7-io.md), and shared
+configuration. It speaks HTTP/1.1 and HTTP/2, keeps connections open for
+reuse, and supports TLS through OpenSSL or rustls.
 
-Making a request comes down to three steps: build it, send it, and read what
-comes back.
+Optional features add response decompression and cookies. Middleware lets
+you run your own logic on every request. To make a request, start with a
+`Client`:
 
 ```rust,no_run
 use ntex::client::Client;
@@ -34,16 +32,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-That is all you need for simple cases. The rest of this chapter looks at each
-step more closely, starting with what happens inside the client.
-
 ## How the client works
 
-A `Client` is not meant to be created per request. It owns connection pools
-and configuration, and its value comes from reusing them. An application
-usually creates one client for each kind of outgoing traffic, such as one for
-the payment provider and another for an internal API, each with its own
-timeouts and limits. It then keeps those clients for its whole lifetime.
+Create a `Client` once and reuse it across requests. It owns connection
+pools and configuration. An application usually keeps one client for each
+kind of outgoing traffic throughout its lifetime. For example, a payment
+provider and an internal API may need different timeouts and limits.
 
 A `Client` is a lightweight handle. Cloning it is cheap, and all clones share
 the same connection pools, so you can hand copies to every part of your code
@@ -59,12 +53,14 @@ ClientRequest ─► middleware ─► Sender ─► Connector ─┬─► plai
                                                     └─► TLS pool   ─► HTTP/1.1 or HTTP/2 connections
 ```
 
-It starts as a `ClientRequest`, the builder you get from `client.get(...)`
-and friends, which collects the method, URL, headers, and body. Next comes
-any [middleware](#middleware) you installed; it can inspect or change the
-request on its way out and the response on its way back. Then the `Sender`
-takes over. It asks the `Connector` for a connection, writes the request, and
-waits for the response head.
+A request starts as a `ClientRequest`. This is the builder you get from
+`client.get(...)` and similar methods. It collects the method, URL, headers,
+and body.
+
+Next comes any [middleware](#middleware) you installed. It can inspect or
+change the outgoing request and the incoming response. Then the `Sender`
+asks the `Connector` for a connection, writes the request, and waits for the
+response head.
 
 The `Connector` chooses a pool based on the URL scheme: `http` goes to
 the plain pool, `https` to the TLS pool. Each pool keeps
@@ -76,11 +72,11 @@ You don't pick the HTTP version yourself. For `https` URLs, client and server
 settle it during the TLS handshake using ALPN: the client offers `h2` and
 `http/1.1`, and the server chooses. Plain `http` URLs always use HTTP/1.1.
 
-One detail is worth remembering. An HTTP/1.1 connection goes back to the
-pool only after its response body has been read to the end. If you drop a
-response without reading the body, the client can't tell what is left on the
-wire, so it closes the connection instead. If you want connections reused,
-read the body, even when you don't care what's in it.
+An HTTP/1.1 connection goes back to the pool only after you read its response
+body to the end. If you drop a response without reading the body, the
+client can't tell what is left on the wire, so it closes the connection
+instead. Read the body to reuse the connection, even when you don't care
+what's in it.
 
 You don't have to shut the client down explicitly. Once the last clone and
 every request made with it are dropped, the pools close idle connections in
@@ -93,8 +89,8 @@ The client is for requests and responses. WebSockets have their own client,
 
 ## Configuration
 
-`Client::new()` uses sensible defaults, and for a quick script they are
-fine. For a real service you will want to tune at least the timeouts.
+`Client::new()` uses defaults that work for a quick script. For a service,
+you will usually want to tune at least the timeouts.
 
 Configuration works the same way as on an ntex server. You put
 configuration objects into a [`SharedCfg`] and build the client from it. A
@@ -114,7 +110,9 @@ shows up in logs, so choose one that tells you which client is talking.
 
 ### Client settings
 
-Most of the settings you will reach for live in `ClientConfig`:
+For an API client, start by deciding how long to wait and how much response
+data to buffer. `ClientConfig` groups those limits with connection-pool
+settings and headers that should accompany every request:
 
 ```rust
 use ntex::client::{Client, ClientConfig};
@@ -134,7 +132,8 @@ fn api_client(token: &str) -> Result<Client, HttpError> {
 }
 ```
 
-Here is the full list, with defaults:
+The timeout settings control individual requests; the connection settings
+control how the client shares and reuses connections:
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -150,13 +149,15 @@ Here is the full list, with defaults:
 | `set_h2_lifetime` | 1 h | Maximum age of an HTTP/2 connection |
 
 Connection limits don't make requests fail. When every connection is busy,
-new requests simply wait their turn. The plain and TLS pools count their
-connections separately.
+new requests wait their turn. The plain and TLS pools count connections
+separately.
 
-`set_header`, `set_basic_auth`, and `set_bearer_auth` add headers to every
-request the client sends. If a request sets a header with the same name, the
-request wins. These methods return a `Result` because a header name or value
-can be invalid, which is why the example uses `?`.
+Use `set_header` to add a header to every request the client sends.
+`set_basic_auth` and `set_bearer_auth` set authentication headers the same
+way. If a request sets a header with the same name, the request wins.
+
+These methods return a `Result` because a header name or value can be
+invalid. The example uses `?` to pass those errors to the caller.
 
 ### I/O settings
 
@@ -196,11 +197,13 @@ them, and turning one off leaves the others in place:
    `ClientConfig::set_response_payload_timeout`, 10 seconds, or `timeout()`
    on the body future. Reading the response as a stream has no timeout.
 
-So `ClientConfig::disable_timeout()` and `timeout(Millis::ZERO)` only lift
-the limit on waiting for the response head. A slow body still fails after the payload
+`ClientConfig::disable_timeout()` only removes the response-head timeout.
+So does `timeout(Millis::ZERO)`. A slow body still fails after the payload
 timeout unless you also set `set_response_payload_timeout(Millis::ZERO)`.
-There is no single deadline for the whole request; for that, wrap the whole
-exchange, `send()` plus reading the body, in `ntex::time::timeout`.
+
+There is no single deadline for the whole request. To set one, wrap the
+whole exchange in `ntex::time::timeout`, including `send()` and reading the
+body.
 
 ### Secure connections
 
@@ -213,15 +216,14 @@ one.
 
 You rarely need to set the secure connector by hand. TLS comes from the
 `openssl` or `rustls` feature of `ntex`. Enable one, and `Client::new()` and
-`Client::builder()` install a secure connector for you. What that connector
-does depends on the backend:
+`Client::builder()` install a secure connector for you. Its default trust
+roots depend on the backend.
 
-- **rustls** checks server certificates against the webpki root
-  certificates, as you would expect.
-- **OpenSSL** checks server certificates against OpenSSL's default trust
-  store (the system roots) and checks that the certificate matches the
-  request host. To trust a private root, or to accept a self-signed
-  certificate while testing, give the client your own configuration.
+The rustls connector checks server certificates against the webpki roots.
+OpenSSL uses its default trust store (the system roots) and checks that the
+certificate matches the request host. If your server uses a private root or a
+self-signed certificate for testing, supply a configuration that trusts it
+rather than disabling verification.
 
 If both features are enabled, OpenSSL wins. If neither is, `https` requests
 fail with `ConnectError::SslIsNotSupported`.
@@ -248,17 +250,19 @@ fn https_client() -> Client {
 OpenSSL works the same way: build an `openssl::ssl::SslConnector`, set ALPN
 with `set_alpn_protos(b"\x02h2\x08http/1.1")`, and pass it to `.openssl()`.
 
-`.rustls()` and `.openssl()` are shortcuts. Each wraps your configuration in
-one of ntex's TLS connectors, `ntex::connect::rustls::TlsConnector` or
-`ntex::connect::openssl::SslConnector`, and passes it to
-`secure_connector()`. You can call `secure_connector()` directly with any
-connector you like. It might be an OpenSSL or rustls connector set up
-differently, or one built on another TLS implementation entirely, such as
-Schannel on Windows or Secure Transport on macOS. The client doesn't care how
-the connection is secured. A connector is a service that takes a
-`ntex::connect::Connect` holding the target URL and returns an I/O object.
-If that I/O object reports HTTP/2 as its negotiated protocol, the client
-speaks HTTP/2 over it.
+`.rustls()` wraps your configuration in
+`ntex::connect::rustls::TlsConnector`. `.openssl()` uses
+`ntex::connect::openssl::SslConnector`. Both pass the connector to
+`secure_connector()`.
+
+You can also call `secure_connector()` directly with your own connector.
+It might use OpenSSL or rustls with different settings, or another TLS
+implementation, such as Schannel on Windows or Secure Transport on macOS.
+The client does not depend on how the connection is secured.
+
+A connector is a service that takes a `ntex::connect::Connect` holding the
+target URL and returns an I/O object. If that object reports HTTP/2 as its
+negotiated protocol, the client speaks HTTP/2 over it.
 
 `connector()` takes the same kind of service for plain `http` URLs. Use it
 when connections need something other than a direct TCP connection, for
@@ -273,15 +277,80 @@ the [TLS chapter](10-tls.md#http-client).
 `patch`, `delete`, `head`, `options`, and `query`. For anything else there is
 `request(method, url)`. Each returns a [`ClientRequest`] builder.
 
-URLs must be absolute: an `http` or `https` scheme plus a host.
-You may notice that the builder methods never return errors. If something is
-wrong, such as a bad URL, an invalid header, or a query that won't
-serialize, the builder remembers the error and returns it when you send the
-request. That keeps the builder chain free of `?`.
+URLs must be absolute, with an `http` or `https` scheme and a host. The
+builder methods never return errors. If a URL or header is invalid, or a
+query won't serialize, the builder saves the error until you send the
+request. The builder chain needs no `?`.
+
+### Common requests
+
+A JSON API usually needs the same short sequence: build a request, send it,
+then deserialize the response. This example looks up users by name and creates
+one. It expects `GET /users` to return a JSON array and `POST /users` to return
+the created user:
+
+```rust,no_run
+use ntex::{client::Client, time::Seconds};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+struct User {
+    id: u64,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct NewUser<'a> {
+    name: &'a str,
+}
+
+#[ntex::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::new();
+
+    let response = client
+        .get("http://127.0.0.1:8080/users")
+        .query(&[("name", "Ferris")])
+        .header("accept", "application/json")
+        .timeout(Seconds(2))
+        .send()
+        .await?;
+    let users: Vec<User> = response.json().timeout(Seconds(5)).await?;
+    for user in users {
+        println!("{}: {}", user.id, user.name);
+    }
+
+    let response = client
+        .post("http://127.0.0.1:8080/users")
+        .header("accept", "application/json")
+        .send_json(&NewUser { name: "Ferris" })
+        .await?;
+    let user: User = response.json().await?;
+    println!("created user {}: {}", user.id, user.name);
+    Ok(())
+}
+```
+
+The GET uses `query()` so you do not have to build or escape the query string
+yourself. The `Accept` header asks for a JSON response; it does not describe the
+request body. For the POST, `send_json()` serializes `NewUser` and sets
+`Content-Type: application/json` unless you already set a content type.
+
+The two timeouts cover different waits. On the request builder, `timeout()`
+bounds the wait for response headers after sending. On `json()`, it bounds
+reading the response body. Neither is an overall deadline; see the
+[timeout stages](#io-settings) when you need to bound the complete exchange.
+
+This example assumes successful responses have the expected JSON shape. If the
+API uses a different shape for errors, check `response.status()` before
+choosing how to read the body. An HTTP error status does not make `send()` fail;
+[request errors](#when-something-goes-wrong) are a separate concern.
 
 ### Building the request
 
-Here is a request that uses a few of the builder's features:
+Once the basic exchange works, you can adapt the builder to the API's
+requirements. This search request adds pagination, optional authentication,
+and a per-request timeout:
 
 ```rust,no_run
 use serde::Serialize;
@@ -310,19 +379,24 @@ async fn search(client: &Client, token: Option<&str>) -> Result<(), Box<dyn std:
 ```
 
 `query()` serializes any `serde::Serialize` value into the query string,
-replacing whatever was there. `if_some()` applies a change only when an
-`Option` has a value, here adding a token only when there is one. Its sibling
-`if_true()` does the same for a `bool`. Both let you make a request
-conditional without breaking up the chain. `timeout()` overrides the
-client's response-head timeout for this one request; a zero duration turns
-that timeout off, but not the payload timeout or any connect timeout.
+replacing whatever was there.
 
-For headers you have three choices. `header()` appends a value,
-`set_header()` replaces any existing value, and `set_header_if_none()` sets
-the header only if it isn't there yet. `content_type()` and
-`content_length()` are shortcuts for the two most common ones. For
-authentication there are `basic_auth(user, password)` and
-`bearer_auth(token)`, and with the `cookie` feature, `cookie()` attaches a
+Use `if_some()` to apply a change only when an `Option` has a value. Here,
+it adds a token only when there is one. `if_true()` does the same for a
+`bool`. Both keep conditional changes within the builder chain.
+
+`timeout()` overrides the client's response-head timeout for this request.
+A zero duration turns that timeout off. It leaves the payload timeout and
+any connect timeout in place.
+
+Use `header()` when a header may have several values: it appends rather than
+replaces. If you mean to override an earlier value, use `set_header()` instead.
+`set_header_if_none()` is useful for a fallback that should leave an existing
+value alone.
+
+`content_type()` and `content_length()` are shortcuts for the two most
+common headers. For authentication, use `basic_auth(user, password)` or
+`bearer_auth(token)`. With the `cookie` feature, `cookie()` attaches a
 cookie.
 
 A few methods control the connection itself. `force_close()` closes an
@@ -333,13 +407,13 @@ useful for testing a particular backend behind a load balancer.
 
 With the `compress` feature, the client asks servers for compressed
 responses and decompresses them for you. `no_decompress()` turns that off for
-a single request, which is usually what a proxy wants. Proxies will also like
-`client.request_from(url, head)`, which starts a request with the method and
-headers copied from an incoming one.
+a single request, which is usually useful in a proxy.
+`client.request_from(url, head)` also helps when writing a proxy. It starts
+a request with the method and headers copied from an incoming one.
 
 ### Sending a body
 
-You choose how to send the body by choosing which `send` method to call:
+Choose the `send` method that matches your body:
 
 | Method | Body |
 |---|---|
@@ -349,7 +423,9 @@ You choose how to send the body by choosing which `send` method to call:
 | `send_form(&value)` | `value` serialized as a URL-encoded form; sets the matching content type |
 | `send_stream(stream)` | A stream of `Result<Bytes, E>` chunks, sent as they arrive |
 
-The first four cover most needs:
+For a text endpoint, choose `send_body` and set the content type yourself.
+For JSON and form endpoints, let `send_json` or `send_form` serialize your
+value and set the matching content type:
 
 ```rust,no_run
 use serde::Serialize;
@@ -433,9 +509,9 @@ async fn fetch(client: &Client) {
 }
 ```
 
-Note that a 404 or a 500 is not an error here. From the client's point of
-view, the request worked: the server received it and answered. It's up to
-you to check `response.status()` and decide what that answer means.
+A 404 or a 500 is not an error here. The server received the request and
+answered it. Check `response.status()` to decide what that answer means for
+your application.
 
 ## Reading responses
 
@@ -463,16 +539,18 @@ fn inspect(response: &ClientResponse) {
 `ClientResponse` also implements `HttpMessage`, which brings helpers such as
 `content_type()` and, with the `cookie` feature, `cookies()`.
 
-How you read the body depends on how big it is and what you plan to do with
-it.
+For a small JSON document or text response, buffer the body and work with the
+result. For a large download or an open-ended feed, read it as a stream so you
+do not have to keep the whole response in memory.
 
 ### Buffering the body
 
 If the body is reasonably small, read it all at once. `body()` collects it
-into `Bytes`, and `json::<T>()` deserializes it with serde (it refuses
-responses whose content type isn't JSON). Both enforce the payload limit and
-payload timeout from `ClientConfig`, and you can adjust either for a single
-response:
+into `Bytes`. `json::<T>()` deserializes it with serde and refuses responses
+whose content type isn't JSON.
+
+Both enforce the payload limit and payload timeout from `ClientConfig`.
+You can adjust either for a single response:
 
 ```rust,no_run
 use serde::Deserialize;
@@ -505,7 +583,7 @@ you gigabytes, and you'd buffer every byte. If the response declares a
 any of the body.
 
 The body can be read only once. `body()` and `json()` take the payload as
-soon as you call them, not when the future first runs, so dropping the future
+soon as you call them, before the future first runs. Dropping the future
 also drops the body. Any later `body()`, `json()` or stream read fails with
 `PayloadError::AlreadyTaken` instead of silently returning nothing. A
 response that never had a body still reads as empty bytes.
@@ -559,9 +637,7 @@ async fn download(client: &Client) -> Result<usize, Box<dyn std::error::Error>> 
 Since you only hold one chunk at a time, the payload limit and payload
 timeout don't apply here. If you need them, enforce them in the loop. To pass
 the body on to something else, such as a response in a proxy, take it with
-`take_payload()`. If the body was already taken, the stream yields a single
-`PayloadError::AlreadyTaken` error and then ends; `set_payload()` installs a
-new body and makes the response readable again.
+`take_payload()`.
 
 ## Middleware
 
@@ -573,15 +649,15 @@ on the way out, and each response on the way back. It is the same idea as
 
 Some things should happen on every request, no matter where in your code the
 request is made. Without middleware, you'd have to remember them at every
-call site. With middleware, you write them once:
+call site. Middleware gives those concerns one place to live.
 
-- **Authentication** that changes over time, such as an access token that a
-  background task refreshes.
-- **Tracing**: adding a request ID or trace context to every call.
-- **Logging and metrics**: recording method, URL, status, and latency.
-- **Policy**: refusing to call hosts the service shouldn't talk to.
-- **Rewriting**: sending requests to a different host in tests, or adjusting
-  response headers.
+For example, authentication middleware can read an access token that a
+background task refreshes. Tracing middleware can add a request ID or trace
+context, while logging and metrics record the method, URL, status, and latency.
+
+Middleware can also enforce policy by refusing calls to disallowed hosts, or
+rewrite requests to point at a test server. On the way back, it can adjust
+response headers before the caller sees them.
 
 You don't need middleware for headers that never change, such as a fixed
 `User-Agent` or a static API key. The default headers in `ClientConfig`
@@ -589,12 +665,13 @@ handle those.
 
 ### How middleware works
 
-Middleware is installed with `ClientBuilder::middleware()`. The quickest way
-to write one is `fn_layer` from `ntex::service`, which turns an async closure
-into middleware. The closure gets the request and the next service in the
-chain, and returns whatever that service returns. This one adds an
-`Authorization` header, reading the token fresh for each request so that a
-refreshed token is picked up immediately:
+Install middleware with `ClientBuilder::middleware()`. For a closure-based
+layer, use `fn_layer` from `ntex::service`. It turns an async closure into
+middleware. The closure gets the request and the next service in the chain,
+and returns whatever that service returns.
+
+This layer adds an `Authorization` header. It reads the token for each
+request, so a refreshed token is picked up immediately:
 
 ```rust,no_run
 use std::{cell::RefCell, rc::Rc};
@@ -615,18 +692,21 @@ fn client(token: Rc<RefCell<HeaderValue>>) -> Client {
 }
 ```
 
-Middleware doesn't see the friendly `ClientRequest` builder. It works with a
-[`ServiceRequest`], the request as it is about to be sent. `head()` gives you
-the method, URL, and headers. `headers()` is a separate set of headers that
-take precedence over the ones in the head, which makes it a convenient place
-to add or override a header. `body()` and `address()` give you the body and
-the target address.
+Middleware works with a [`ServiceRequest`], the request as it is about to
+be sent, rather than the `ClientRequest` builder. `head()` gives you the
+method, URL, and headers.
 
-On the way back, middleware gets a [`ServiceResponse`]: the response before
-it becomes a `ClientResponse`. `head()` holds the status and headers, and
-`payload()` the body stream. Middleware sees the response as soon as its head
-arrives, before the body is read, so timing a request in middleware measures
-the time until the response head arrives, not the full download.
+`headers()` is a separate set of headers that take precedence over those in
+the head. Use it to add or override a header. `body()` gives you the body,
+and `address()` gives you the target address.
+
+On the way back, middleware gets a [`ServiceResponse`] before it becomes a
+`ClientResponse`. `head()` holds the status and headers. `payload()` holds
+the body stream.
+
+Middleware sees the response as soon as its head arrives, before the body
+is read. Timing a request in middleware measures the wait for the response
+head, not the full download.
 
 Middleware can stop a request by returning an error instead of calling the
 next service. It can't invent a response, though; every successful response
@@ -716,28 +796,9 @@ let client = ntex::client::Client::builder()
     .build(SharedCfg::new("API-CLIENT"));
 ```
 
-A word of caution about retries. It is tempting to write middleware that
-resends a failed request, but a request is consumed when it is sent, and a
-streaming body can only be sent once. There is no copy of `ServiceRequest`
-left to resend. Retries are usually easier in application code, where you can
-simply build the request again.
-
-## Summary
-
-- Create one `Client` per kind of outgoing traffic, once per thread, and
-  reuse it for the life of the application. Clones are cheap and share
-  connection pools.
-- Tune the client with `ClientConfig`, `IoConfig`, and friends in a
-  `SharedCfg`. Always set a connect timeout.
-- The default secure connector verifies certificates. Provide your own TLS
-  configuration for private roots or testing, and set ALPN on it if you want
-  HTTP/2.
-- Pick the body format by picking the method: `send`, `send_body`,
-  `send_json`, `send_form`, or `send_stream`.
-- Buffer small bodies with `body()` or `json()`, and stream large ones.
-  Read bodies to the end so connections can be reused.
-- Reach for middleware when something must happen on every request:
-  authentication, tracing, logging, metrics, or policy.
+Retries are usually easier in application code, where you can build the
+request again. Sending consumes the request, and a streaming body can only
+be sent once. Middleware has no copy of `ServiceRequest` left to resend.
 
 To see a complete program, look at the [HTTP client example] and the
 [HTTP proxy example].
