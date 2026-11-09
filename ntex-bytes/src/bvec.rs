@@ -85,12 +85,15 @@ impl BytesMut {
     /// The buffer has the [`capacity`](BytePageSize::capacity) of the page
     /// size. Pages are taken from the current thread's page cache, and the
     /// page returns to the cache of the thread that drops the last reference
-    /// to it, including [`Bytes`] split off the buffer.
+    /// to it, including [`Bytes`] split off the buffer. If the cache has no
+    /// page of the requested size but has one of the next smaller size, see
+    /// [`BytePageSize::prev`], that page is used instead, the buffer then has
+    /// the smaller capacity and page size.
     ///
     /// When the buffer grows, it moves to a page of the size that fits the
-    /// new capacity, see [`reserve`](Self::reserve). Above the largest page
-    /// size the buffer is a regular allocation without a page size, it is
-    /// freed when dropped.
+    /// new capacity, see [`reserve`](Self::reserve). Growth always uses a
+    /// page of exactly that size. Above the largest page size the buffer is
+    /// a regular allocation without a page size, it is freed when dropped.
     ///
     /// [`BytePageSize::Unset`] has the allocation size of
     /// [`BytePageSize::Size64`], it creates a `Size64` page.
