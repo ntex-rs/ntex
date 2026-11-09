@@ -2,6 +2,9 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* Document that `HttpService` application and control factories are
+  instantiated per connection; build expensive or shared state per worker
+
 * `web::types::Form` decodes percent-encoded and raw bytes with the request
   charset (`caf%E9` with `charset=windows-1252` is `café`) and fails with
   `UrlencodedError::Parse` on bytes invalid in that charset, including invalid
