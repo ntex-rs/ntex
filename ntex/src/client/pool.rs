@@ -1,5 +1,5 @@
-use std::time::Instant;
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, future, rc::Rc};
+use std::{net::SocketAddr, time::Instant};
 
 use ntex_h2::{self as h2};
 use urly::{Authority, Url};
@@ -15,15 +15,20 @@ use super::connection::{Connection, ConnectionType};
 use super::h1proto::host_port;
 use super::{ClientConfig, Connect, ConnectorPipeline, error::ConnectError, h2proto::H2Client};
 
+/// Pooled connections are shared only by requests with the same authority
+/// and the same [`ClientRequest::address`](super::ClientRequest::address)
+/// override, so an override never reuses a connection to another server.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(super) struct Key {
     authority: ByteString,
+    addr: Option<SocketAddr>,
 }
 
-impl From<&Authority> for Key {
-    fn from(authority: &Authority) -> Key {
+impl Key {
+    fn new(authority: &Authority, addr: Option<SocketAddr>) -> Key {
         Key {
             authority: ByteString::from(authority.as_str()),
+            addr,
         }
     }
 }
@@ -156,7 +161,7 @@ impl Service<SharedCfg, Connect> for ConnectionPool {
         let waiters = self.0.waiters.clone();
 
         let key = if let Some(authority) = req.uri.authority() {
-            authority.into()
+            Key::new(authority, req.addr)
         } else {
             return Err(ConnectError::Unresolved.into());
         };
@@ -735,12 +740,12 @@ mod tests {
             false,
             ByteString::from_static("localhost"),
         );
-        let key = Key::from(Authority::from_static("localhost"));
+        let key = Key::new(Authority::from_static("localhost"), None);
         (add_h2_client(&pool.0.inner, &key, client), server)
     }
 
     fn h2_key() -> Key {
-        Key::from(Authority::from_static("localhost"))
+        Key::new(Authority::from_static("localhost"), None)
     }
 
     fn secs_ago(secs: u64) -> Instant {
