@@ -147,8 +147,9 @@ impl Client {
         <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         let mut req = ClientRequest::new(method, url, self.cfg.clone(), self.svc.bind());
+        // the request has no headers yet, every value of a multi-value default is copied
         for (key, value) in self.cfg.headers() {
-            req = req.set_header_if_none(key.clone(), value.clone());
+            req.headers_mut().append(key.clone(), value.clone());
         }
         req
     }

@@ -330,6 +330,9 @@ impl ClientRequest {
     #[cfg(feature = "cookie")]
     /// Set a cookie.
     ///
+    /// When the request is sent, all cookies and every raw `Cookie` header
+    /// value are merged into a single `Cookie` header.
+    ///
     /// ```rust
     /// use coo_kie as cookie;
     /// use ntex::client::Client;
@@ -504,15 +507,20 @@ impl ClientRequest {
             None => return Err(ClientError::from(InvalidUrl::MissingScheme).into()),
         }
 
-        // set cookies, appended to an existing `Cookie` header
+        // set cookies, merged with all existing `Cookie` headers into a single header
         #[cfg(feature = "cookie")]
         {
             if let Some(ref jar) = self.cookies {
                 let headers = &mut self.request.head.headers;
-                let mut cookie = headers
-                    .get(header::COOKIE)
-                    .map(|v| v.as_bytes().to_vec())
-                    .unwrap_or_default();
+                let mut cookie = Vec::new();
+                for v in headers.get_all(header::COOKIE) {
+                    if !v.is_empty() {
+                        if !cookie.is_empty() {
+                            cookie.extend_from_slice(b"; ");
+                        }
+                        cookie.extend_from_slice(v.as_bytes());
+                    }
+                }
                 for c in jar.iter() {
                     crate::http::helpers::push_cookie(&mut cookie, c.name(), c.value());
                 }
@@ -622,10 +630,11 @@ mod tests {
         let _ = req.send_body("").await;
     }
 
-    /// STATEMENT: Request cookies combine with one another and extend a preexisting cookie header.
+    /// STATEMENT: Request cookies combine with one another and with every preexisting `Cookie` header into a single header.
     ///
     /// HOW:
     /// - Prepare requests with two builder cookies and with a raw header plus one cookie, then compare header entries.
+    /// - Add three raw `Cookie` headers, one empty, plus a builder cookie, and check that a single header joins all non-empty values in order.
     #[cfg(feature = "cookie")]
     #[crate::rt_test]
     async fn cookies_extend_cookie_header() {
@@ -651,6 +660,40 @@ mod tests {
             .header(header::COOKIE, "c0=v0")
             .cookie(Cookie::build(("c1", "v1")));
         assert_eq!(cookie_header(&mut req), "c0=v0; c1=v1");
+
+        let mut req = Client::new()
+            .get("http://localhost/")
+            .header(header::COOKIE, "a=1")
+            .header(header::COOKIE, "")
+            .header(header::COOKIE, "b=2; c=3")
+            .cookie(Cookie::build(("c1", "v1")));
+        assert_eq!(cookie_header(&mut req), "a=1; b=2; c=3; c1=v1");
+        assert_eq!(req.headers().get_all(header::COOKIE).count(), 1);
+    }
+
+    /// STATEMENT: Every value of a multi-value client default header is copied into new requests.
+    ///
+    /// HOW:
+    /// - Configure two default `Accept` values and check that a new request carries both, in order.
+    /// - Replace them with `set_header` and check that only the request value remains.
+    #[crate::rt_test]
+    async fn test_client_multi_value_default_header() {
+        let client = Client::builder().build(
+            SharedCfg::new("H").add(
+                ClientConfig::new()
+                    .set_header(header::ACCEPT, "text/html")
+                    .unwrap()
+                    .set_header(header::ACCEPT, "text/plain")
+                    .unwrap(),
+            ),
+        );
+        let req = client.get("/");
+        let accept: Vec<_> = req.headers().get_all(header::ACCEPT).collect();
+        assert_eq!(accept, ["text/html", "text/plain"]);
+
+        let req = client.get("/").set_header(header::ACCEPT, "*/*");
+        let accept: Vec<_> = req.headers().get_all(header::ACCEPT).collect();
+        assert_eq!(accept, ["*/*"]);
     }
 
     /// STATEMENT: Client-wide default headers are copied into new requests.
