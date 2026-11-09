@@ -2,6 +2,12 @@
 
 ## [4.9.0] - Unreleased
 
+* `TimerHandle` is neither `Send` nor `Sync`, and neither are `Sleep`,
+  `Deadline`, `Interval`, and `Timeout`; a handle indexes the current thread's
+  timer wheel, so using or dropping it on another thread panicked or touched an
+  unrelated timer. To run a timer on another thread, send a future that creates
+  it there, e.g. spawn it locally from the sent future
+
 * Add `Counter::acquire()` and `Counter::try_get()`, which take a slot only
   when capacity is free; `Counter::available()` is documented as advisory, and
   `InFlight` now acquires slots atomically so concurrent callers cannot exceed

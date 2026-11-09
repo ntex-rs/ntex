@@ -137,9 +137,12 @@ fn test_block_on() {
     assert_eq!(id, id2);
 
     let (tx, rx) = mpsc::channel();
+    // timers are thread-local, create the sleep on the system thread
     sys.handle().spawn_detached(async move {
-        ntex::time::sleep(std::time::Duration::from_millis(100)).await;
-        System::list_arbiter_pings(|_, recs| tx.send(recs.clone()).unwrap());
+        rt::spawn_detached(async move {
+            ntex::time::sleep(std::time::Duration::from_millis(100)).await;
+            System::list_arbiter_pings(|_, recs| tx.send(recs.clone()).unwrap());
+        });
     });
     let recs = rx.recv().unwrap();
 
@@ -177,10 +180,7 @@ fn test_spawn_api() {
         assert!(hnd.is_finished());
 
         let hnd = crate::Handle::current();
-        let task = hnd.spawn(async move {
-            sleep(Millis(25)).await;
-            1
-        });
+        let task = hnd.spawn(async move { 1 });
         let res = task.await.unwrap();
         assert_eq!(res, 1);
     });

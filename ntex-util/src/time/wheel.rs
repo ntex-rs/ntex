@@ -68,9 +68,9 @@
 //! Registrations retain owned [`ntex_rt::LocalWaker`] handles, specializing
 //! native owner-thread wakes without allocating wrappers or growing entries.
 //! Standard wakers are still accepted at polling boundaries.
-use std::num::NonZeroUsize;
 use std::time::{Duration, Instant, SystemTime};
 use std::{cell::Cell, cmp, future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
+use std::{marker::PhantomData, num::NonZeroUsize};
 
 use futures_timer::Delay;
 use slab::Slab;
@@ -164,7 +164,12 @@ pub fn system_time() -> SystemTime {
 ///
 /// Timer operations are not reentrant. Registered wakers must not synchronously
 /// access the timer wheel when cloned, woken or dropped.
-pub struct TimerHandle(NonZeroUsize);
+///
+/// The handle refers to a slot in the current thread's wheel, so it is neither
+/// `Send` nor `Sync`, and neither are the timer futures that hold it. To run a
+/// timer on another thread, send a future that creates it there instead of
+/// one that already holds it.
+pub struct TimerHandle(NonZeroUsize, PhantomData<*const ()>);
 
 impl TimerHandle {
     /// Registers a timer that elapses after `millis`.
@@ -424,7 +429,7 @@ impl Timer {
         };
 
         // slot 0 is reserved in `Timer::new()`
-        TimerHandle(NonZeroUsize::new(no).unwrap())
+        TimerHandle(NonZeroUsize::new(no).unwrap(), PhantomData)
     }
 
     /// Moves the timer to a new bucket, a zero delay elapses it and wakes its
@@ -2400,5 +2405,34 @@ mod tests {
                 "elapsed: {_elapsed:?}",
             );
         }
+    }
+
+    /// STATEMENT: `TimerHandle` and the timer futures holding it are neither `Send` nor
+    /// `Sync`, so they cannot reach another thread's wheel.
+    ///
+    /// HOW:
+    /// - Define a trait with a blanket impl for all types and a second impl for
+    ///   `Send` (or `Sync`) types.
+    /// - Resolve the trait item with an inferred parameter for `TimerHandle`, `Sleep`,
+    ///   `Deadline`, and `Interval`; it compiles only if exactly one impl applies,
+    ///   i.e. the type is not `Send` (or `Sync`).
+    #[test]
+    fn timer_handle_is_thread_local() {
+        trait NotSend<A> {
+            fn check() {}
+        }
+        impl<T: ?Sized> NotSend<()> for T {}
+        impl<T: ?Sized + Send> NotSend<u8> for T {}
+        trait NotSync<A> {
+            fn check() {}
+        }
+        impl<T: ?Sized> NotSync<()> for T {}
+        impl<T: ?Sized + Sync> NotSync<u8> for T {}
+
+        <TimerHandle as NotSend<_>>::check();
+        <TimerHandle as NotSync<_>>::check();
+        <crate::time::Sleep as NotSend<_>>::check();
+        <crate::time::Deadline as NotSend<_>>::check();
+        <crate::time::Interval as NotSend<_>>::check();
     }
 }

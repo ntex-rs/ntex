@@ -479,9 +479,12 @@ impl Accept {
                 info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
 
                 let notify = self.notify.clone();
+                // timers are thread-local, create the sleep on the system thread
                 System::current().handle().spawn_detached(async move {
-                    sleep(ERR_SLEEP_TIMEOUT).await;
-                    notify.send(Command::Timer);
+                    ntex_rt::spawn_detached(async move {
+                        sleep(ERR_SLEEP_TIMEOUT).await;
+                        notify.send(Command::Timer);
+                    });
                 });
             } else {
                 info.registered.set(true);
@@ -639,9 +642,12 @@ impl Accept {
                         info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
 
                         let notify = self.notify.clone();
+                        // timers are thread-local, create the sleep on the system thread
                         System::current().handle().spawn_detached(async move {
-                            sleep(ERR_SLEEP_TIMEOUT).await;
-                            notify.send(Command::Timer);
+                            ntex_rt::spawn_detached(async move {
+                                sleep(ERR_SLEEP_TIMEOUT).await;
+                                notify.send(Command::Timer);
+                            });
                         });
                         return false;
                     }
