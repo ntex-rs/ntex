@@ -9,6 +9,11 @@
   skips malformed request cookie pairs and `ClientResponse` skips malformed
   `Set-Cookie` headers instead of failing all cookies
 
+* `ResponseBuilder::from(&ResponseHead)` keeps the connection type and moves the
+  head's extensions into the builder. `InternalError::from_response()` renders the
+  stored response on every call; in-memory bodies are repeated, a streaming body
+  is sent once and later renders get an empty body
+
 * web: `ConnectionInfo` ignores `Forwarded` and `X-Forwarded-*`
   headers by default; configure them with `WebAppConfig::set_forwarded()` and
   `ForwardedPolicy::{ignore, trust_all, trust_proxies, trust_fn}`. Trusted-proxy

@@ -27,6 +27,9 @@ impl Response<Body> {
     }
 
     /// Creates a response builder from another compatible value.
+    ///
+    /// See the `From` implementations of [`ResponseBuilder`] for what is kept;
+    /// building from a [`ResponseHead`] moves its extensions into the builder.
     #[inline]
     pub fn builder_from<T: Into<ResponseBuilder>>(source: T) -> ResponseBuilder {
         source.into()
@@ -737,7 +740,11 @@ impl<B> From<Response<B>> for ResponseBuilder {
     }
 }
 
-/// Convert `ResponseHead` to a `ResponseBuilder`
+/// Convert `ResponseHead` to a `ResponseBuilder`.
+///
+/// Status, version, reason, headers, connection type, and chunking policy are
+/// copied. Extensions cannot be cloned, so they are moved into the builder and
+/// `head` is left with empty extensions.
 impl<'a> From<&'a ResponseHead> for ResponseBuilder {
     fn from(head: &'a ResponseHead) -> ResponseBuilder {
         let mut msg = Message::with_status(head.status);
@@ -746,7 +753,8 @@ impl<'a> From<&'a ResponseHead> for ResponseBuilder {
         for (k, v) in &head.headers {
             msg.headers.append(k.clone(), v.clone());
         }
-        msg.no_chunking(!head.chunked());
+        msg.flags = head.flags;
+        *msg.extensions.get_mut() = std::mem::take(&mut *head.extensions.borrow_mut());
 
         // existing `Set-Cookie` headers are copied into the head
         ResponseBuilder {
@@ -1298,5 +1306,24 @@ mod tests {
         let mut builder = ResponseBuilder::from(resp);
         let resp3 = builder.build();
         assert_eq!(resp3.cookies().count(), 2);
+    }
+
+    /// STATEMENT: Building from a `ResponseHead` keeps its connection type and moves its
+    /// extensions out of the source head.
+    ///
+    /// HOW:
+    /// - Build a forced-close, non-chunked response with a `u32` extension.
+    /// - Create a builder from its head and build a new response.
+    /// - Confirm the new response has `ConnectionType::Close`, no chunking, and the
+    ///   extension, and the source head no longer has the extension.
+    #[test]
+    fn test_builder_from_head_keeps_state() {
+        let resp = Response::Ok().force_close().no_chunking().build();
+        resp.extensions_mut().insert(7u32);
+        let resp2 = Response::builder_from(resp.head()).build();
+        assert_eq!(resp2.head().connection_type(), ConnectionType::Close);
+        assert!(!resp2.head().chunked());
+        assert_eq!(resp2.extensions().get::<u32>(), Some(&7));
+        assert!(resp.extensions().get::<u32>().is_none());
     }
 }

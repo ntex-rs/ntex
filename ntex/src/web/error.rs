@@ -288,7 +288,7 @@ pub struct InternalError<T> {
 
 enum InternalErrorType {
     Status(StatusCode),
-    Response(RefCell<Option<HttpResponse>>),
+    Response(RefCell<HttpResponse>),
 }
 
 impl<T> InternalError<T> {
@@ -311,10 +311,16 @@ impl<T> InternalError<T> {
     }
 
     /// Create `InternalError` with predefined `Response`.
+    ///
+    /// Each `error_response()` call builds a response with the status, headers,
+    /// and connection type of `response`. An empty or in-memory body is repeated
+    /// on every call. A streaming body can be sent only once: the first call
+    /// gets it and later calls get an empty body. Extensions are moved into the
+    /// first response.
     pub fn from_response(cause: T, response: HttpResponse) -> Self {
         InternalError {
             cause,
-            status: InternalErrorType::Response(RefCell::new(Some(response))),
+            status: InternalErrorType::Response(RefCell::new(response)),
         }
     }
 }
@@ -365,11 +371,17 @@ where
                 res.set_body(Body::from(buf))
             }
             InternalErrorType::Response(ref resp) => {
-                if let Some(resp) = resp.borrow_mut().take() {
-                    resp
-                } else {
-                    HttpResponse::new(StatusCode::INTERNAL_SERVER_ERROR)
-                }
+                let mut stored = resp.borrow_mut();
+                let (body, kept) = match Body::from(stored.take_body()) {
+                    Body::Bytes(b) => (Body::Bytes(b.clone()), Body::Bytes(b)),
+                    Body::Message(m) => (Body::Message(m), Body::Empty),
+                    Body::Empty => (Body::Empty, Body::Empty),
+                    Body::None => (Body::None, Body::None),
+                };
+                let res = HttpResponse::builder_from(stored.head()).body(body);
+                let old = std::mem::replace(&mut *stored, HttpResponse::new(StatusCode::OK));
+                *stored = old.set_body(kept);
+                res
             }
         }
     }
@@ -1328,17 +1340,47 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    /// STATEMENT: An `InternalError` consumes its supplied response only once.
+    /// STATEMENT: An `InternalError` built from a response renders the same response on
+    /// every call; a streaming body is sent only once.
     ///
     /// HOW:
-    /// - Construct the error with an OK response and render it twice.
-    /// - Assert the first status is OK and the second falls back to `INTERNAL_SERVER_ERROR`.
+    /// - Build the error from a `409` response with an `x-test` header, a forced close,
+    ///   a `u32` extension, and body `conflict`, then render it twice.
+    /// - Confirm both renders keep status, header, connection type, and body, and only
+    ///   the first carries the extension.
+    /// - Build an error from a `502` streaming response, render it twice, and confirm the
+    ///   first render has the stream and the second keeps the status with an empty body.
     #[test]
-    fn test_internal_error_response_taken() {
-        let err = InternalError::from_response("err", HttpResponse::Ok().build());
+    fn test_internal_error_response_reuse() {
+        use crate::http::{ConnectionType, body::BodySize, body::MessageBody, body::ResponseBody};
+
+        let res = HttpResponse::Conflict()
+            .header("x-test", "1")
+            .force_close()
+            .body("conflict");
+        res.extensions_mut().insert(7u32);
+        let err = InternalError::from_response("err", res);
+        for ext in [Some(7u32), None] {
+            let res = WebResponseError::<(), DefaultError>::error_response(&err, &());
+            assert_eq!(res.status(), StatusCode::CONFLICT);
+            assert_eq!(res.headers().get("x-test").unwrap(), "1");
+            assert_eq!(res.head().connection_type(), ConnectionType::Close);
+            assert_eq!(res.extensions().get::<u32>().copied(), ext);
+            assert!(matches!(
+                res.body(),
+                ResponseBody::Other(Body::Bytes(b)) | ResponseBody::Body(Body::Bytes(b))
+                    if b == &b"conflict"[..]
+            ));
+        }
+
+        let stream =
+            futures_util::stream::iter([Ok::<_, io::Error>(crate::util::Bytes::from_static(b"x"))]);
+        let err = InternalError::from_response("err", HttpResponse::BadGateway().streaming(stream));
         let res = WebResponseError::<(), DefaultError>::error_response(&err, &());
-        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(res.body().size(), BodySize::Stream);
         let res = WebResponseError::<(), DefaultError>::error_response(&err, &());
-        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(res.body().size(), BodySize::Empty);
     }
 }
