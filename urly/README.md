@@ -65,7 +65,8 @@ URL is normalized and parsing a normalized URL returns it unchanged:
 
 * valid `%XX` escapes are kept and their hex digits are uppercased
 * escapes of unreserved characters (`A-Z a-z 0-9 - . _ ~`) are decoded
-* `%2F` in a path is kept encoded, so it doesn't become a path separator
+* escapes of reserved characters are kept, so `%2F` in a path doesn't become a
+  path separator and `%3B` doesn't become `;`
 * any other character that isn't allowed in the component is percent-encoded,
   including non-ASCII characters (as UTF-8) and a `%` that doesn't start a
   valid escape

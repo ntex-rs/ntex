@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* With request-target normalization enabled, absolute-form targets lose the
+  scheme's default port (`https://h:443/` becomes `https://h/`) and escapes of
+  reserved characters such as `%3B` are no longer decoded (urly 1.3.0)
+
 * `middleware::DefaultHeaders` no longer implements `Clone`, and configuring it
   after creating a middleware from it no longer panics. A header set several
   times now emits all its values when the response lacks that name; previously

@@ -23,7 +23,7 @@ fn url(s: &str) -> Url {
 fn request_target_normalization() {
     for (target, raw, normalized) in [
         ("/a/../%7e?%7E=%3d", "/a/../%7e?%7E=%3d", "/~?~=%3D"),
-        ("/%7e%3b%2f?%7E%3d", "/%7e%3b%2f?%7E%3d", "/~;%2F?~%3D"),
+        ("/%7e%3b%2f?%7E%3d", "/%7e%3b%2f?%7E%3d", "/~%3B%2F?~%3D"),
         (
             "/a[0]|^`{}?a[]=1&b=%00",
             "/a[0]|^`{}?a[]=1&b=%00",
@@ -34,7 +34,7 @@ fn request_target_normalization() {
         (
             "HTTPS://Example.COM:00443/a/../%7e?q=%41",
             "HTTPS://Example.COM:00443/a/../%7e?q=%41",
-            "https://example.com:443/~?q=A",
+            "https://example.com/~?q=A",
         ),
         (
             "http://Example.COM",
@@ -389,7 +389,7 @@ fn derived() {
 
     assert_eq!(&u / "d e", "https://user@example.com:8443/a/b/c/d%20e");
     assert_eq!(&u / "x/y", "https://user@example.com:8443/a/b/c/x/y");
-    assert_eq!(&u / "../d", "https://user@example.com:8443/a/b/d");
+    assert_eq!(&u / "../d", "https://user@example.com:8443/a/b/c/d");
     assert_eq!(url("http://h") / "a" / "b", "http://h/a/b");
     assert_eq!(
         url("http://h/a/").push_segments(["b", "c"]),
@@ -1109,4 +1109,100 @@ fn shared_input() {
     assert_eq!(u.as_bytes(), src.as_bytes());
     assert_eq!(u.clone().into_byte_string(), src);
     assert_eq!(u.as_byte_string(), src);
+}
+
+/// STATEMENT: Normalization decodes only unreserved escapes, so encoded delimiters keep their meaning.
+///
+/// HOW:
+/// - Parse a URL with escaped sub-delimiters and delimiters in userinfo, path, query and fragment.
+/// - Assert every reserved escape survives parsing and `normalize`, only uppercased.
+/// - Assert escapes of unreserved characters are still decoded.
+#[test]
+fn reserved_escapes_are_kept() {
+    let u = url("http://u%3aa%40@h/a%3bb%40c%2b%3a%2c?q=%2f%3b%2b#%3f%21");
+    assert_eq!(u, "http://u%3Aa%40@h/a%3Bb%40c%2B%3A%2C?q=%2F%3B%2B#%3F%21");
+    assert_eq!(u.path().decode(), "/a;b@c+:,");
+    assert_ne!(u, url("http://u%3aa%40@h/a;b@c+:,?q=/;%2B#?!"));
+
+    let mut t = Url::parse_target("/a%3bb%2a?x=%2f").unwrap();
+    t.normalize().unwrap();
+    assert_eq!(t, "/a%3Bb%2A?x=%2F");
+
+    assert_eq!(
+        url("http://h/%41%7e%2d%2E%5f?%61#%30"),
+        "http://h/A~-._?a#0"
+    );
+}
+
+/// STATEMENT: `push_segments` resolves dot segments only within the appended segments.
+///
+/// HOW:
+/// - Append `..`, `.` and mixed dot segments to a URL with a multi-segment path.
+/// - Assert the base path is never shortened and dots inside the appended part still resolve.
+/// - Assert an empty segment list leaves the path unchanged and drops query and fragment.
+#[test]
+fn push_segments_keeps_base_path() {
+    let u = url("http://h/api/users?q#f");
+    assert_eq!(u.push_segments(["../admin"]), "http://h/api/users/admin");
+    assert_eq!(u.push_segments([".."]), "http://h/api/users/");
+    assert_eq!(u.push_segments(["..", "..", "x"]), "http://h/api/users/x");
+    assert_eq!(&u / "a/../b", "http://h/api/users/b");
+    assert_eq!(&u / "a" / "." / "b", "http://h/api/users/a/b");
+    assert_eq!(u.push_segments(["a/b/.."]), "http://h/api/users/a/");
+    assert_eq!(u.push_segments(["..."]), "http://h/api/users/...");
+    assert_eq!(u.push_segments(Vec::<&str>::new()), "http://h/api/users");
+    assert_eq!(url("a/b").push_segments(["../c"]), "a/b/c");
+}
+
+/// STATEMENT: The default port of a known scheme is removed whenever a URL is normalized or rebuilt.
+///
+/// HOW:
+/// - Parse URLs with default, zero-padded default and non-default ports and compare with portless forms.
+/// - Assert `port` is `None`, `port_or_known_default` still reports the default, and hashes match.
+/// - Rebuild via `set_port`, `set_scheme`, `set_authority`, `join`, `origin` and `Builder`.
+/// - Assert a raw `parse_target` keeps the port until `normalize`.
+#[test]
+fn default_port_is_removed() {
+    let state = RandomState::new();
+    let hash = |u: &Url| state.hash_one(u);
+    for (src, expected) in [
+        ("https://h:443/", "https://h/"),
+        ("http://h:80/a", "http://h/a"),
+        ("HTTP://u@H:0080", "http://u@h/"),
+        ("ws://[::1]:80/", "ws://[::1]/"),
+        ("wss://h:443", "wss://h/"),
+        ("mqtt://h:1883", "mqtt://h"),
+        ("http://h:443/", "http://h:443/"),
+        ("https://h:80/", "https://h:80/"),
+        ("foo://h:80/", "foo://h:80/"),
+        ("//h:80/", "//h:80/"),
+    ] {
+        let u = url(src);
+        assert_eq!(u, expected, "{src}");
+        assert_eq!(u, url(expected), "{src}");
+        assert_eq!(hash(&u), hash(&url(expected)), "{src}");
+    }
+    let u = url("https://h:443/");
+    assert_eq!(u.port(), None);
+    assert_eq!(u.port_or_known_default(), Some(443));
+    assert!(u.is_default_port());
+
+    let mut u = url("https://h:8443/a");
+    u.set_port(Some(443)).unwrap();
+    assert_eq!(u, "https://h/a");
+    u.set_port(Some(80)).unwrap();
+    assert_eq!(u, "https://h:80/a");
+    u.set_scheme("http").unwrap();
+    assert_eq!(u, "http://h/a");
+    u.set_authority(Some("u@g:80")).unwrap();
+    assert_eq!(u, "http://u@g/a");
+    assert_eq!(url("https://a/").join("//h:443/x").unwrap(), "https://h/x");
+    assert_eq!(url("https://h:443/a").origin().unwrap(), "https://h/");
+    let b = Builder::from(url("https://h/")).port(443).build().unwrap();
+    assert_eq!(b, "https://h/");
+
+    let mut t = Url::parse_target("http://h:80/a").unwrap();
+    assert_eq!(t, "http://h:80/a");
+    t.normalize().unwrap();
+    assert_eq!(t, "http://h/a");
 }

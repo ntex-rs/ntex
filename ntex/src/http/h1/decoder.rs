@@ -1507,7 +1507,7 @@ mod tests {
         assert!(reader.decode(&mut buf).unwrap().is_none());
         buf.extend_from_slice(b"%74est?q=%7e HTTP/1.1\r\n\r\n");
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(req.uri().as_str(), "https://example.com:443/test?q=~");
+        assert_eq!(req.uri().as_str(), "https://example.com/test?q=~");
 
         let target = format!("/{}", "[".repeat(22000));
         let mut buf = BytesMut::from(format!("GET {target} HTTP/1.1\r\n\r\n").as_str());

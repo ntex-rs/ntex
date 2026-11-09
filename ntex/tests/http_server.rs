@@ -167,7 +167,7 @@ async fn test_h1_request_target_normalization() {
                         .filter(async move |req: WebRequest<()>| {
                             assert_eq!(req.uri().path_and_query(), expected);
                             if req.uri().authority().is_some() {
-                                assert_eq!(req.connection_info().host(), "example.com:443");
+                                assert_eq!(req.connection_info().host(), "example.com");
                                 assert_eq!(req.connection_info().scheme(), "https");
                             }
                             Ok::<_, Infallible>(req)

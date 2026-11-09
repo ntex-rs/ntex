@@ -1,9 +1,10 @@
-//! Percent-encoding with the same rules as Python's yarl.
+//! Percent-encoding inspired by Python's yarl.
 //!
 //! * [`quote`] encodes a literal value: every character that isn't allowed in the
 //!   component, including `%`, is percent-encoded.
 //! * [`requote`] normalizes an already-encoded value: valid `%XX` escapes are kept
-//!   (uppercased, or decoded when they encode an unreserved character), any other
+//!   (uppercased, or decoded when they encode an unreserved character `A-Z a-z
+//!   0-9 - . _ ~`), any other
 //!   disallowed character is percent-encoded.
 //! * [`unquote`] decodes a value. Escapes that don't form valid UTF-8 are kept as is.
 //!
@@ -28,7 +29,7 @@ use crate::chars::{ALLOWED, HEX_UPPER, NONE, QS, Set, UNRESERVED, pct_at, push_p
 pub enum Component {
     /// User name or password. `:` and `@` are encoded.
     UserInfo,
-    /// Path. `/` is kept; requoting never decodes `%2F`.
+    /// Path. `/` is kept.
     Path,
     /// Whole query string. `&`, `=`, `+` and `;` are kept; space is encoded as `+`.
     Query,
@@ -43,44 +44,36 @@ pub enum Component {
 
 struct Quoter {
     safe: Set,
-    protected: Set,
     qs: bool,
 }
 
 static USERINFO: Quoter = Quoter {
     safe: ALLOWED.union(QS),
-    protected: NONE,
     qs: false,
 };
 static PATH: Quoter = Quoter {
     safe: ALLOWED.union(QS).union(Set::new(b"@:/+")),
-    protected: Set::new(b"/+"),
     qs: false,
 };
 static QUERY: Quoter = Quoter {
     safe: ALLOWED.union(Set::new(b"?/:@=+&;")),
-    protected: QS,
     qs: true,
 };
 // a literal `+` in a query would be decoded as space
 static QUERY_LITERAL: Quoter = Quoter {
     safe: QUERY.safe.without(b'+'),
-    protected: QS,
     qs: true,
 };
 static QUERY_PART: Quoter = Quoter {
     safe: ALLOWED.union(Set::new(b"?/:@")),
-    protected: NONE,
     qs: true,
 };
 static FRAGMENT: Quoter = Quoter {
     safe: ALLOWED.union(QS).union(Set::new(b"?/:@")),
-    protected: NONE,
     qs: false,
 };
 static OPAQUE: Quoter = Quoter {
     safe: UNRESERVED,
-    protected: NONE,
     qs: false,
 };
 
@@ -140,7 +133,7 @@ fn quote_with<const REQUOTE: bool>(src: &str, component: Component) -> Cow<'_, s
             && let Some(v) = pct_at(bytes, i)
             && !bytes[i + 1].is_ascii_lowercase()
             && !bytes[i + 2].is_ascii_lowercase()
-            && (q.protected.contains(v) || !q.safe.contains(v))
+            && !UNRESERVED.contains(v)
         {
             i += 3;
             continue;
@@ -187,7 +180,7 @@ fn quote_into<const REQUOTE: bool, const BULK: bool>(
             out.push(b as char);
             i += 1;
         } else if REQUOTE && let Some(v) = pct_at(bytes, i) {
-            if q.protected.contains(v) || !q.safe.contains(v) {
+            if !UNRESERVED.contains(v) {
                 push_pct(out, v);
             } else {
                 out.push(v as char);

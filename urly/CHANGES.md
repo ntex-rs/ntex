@@ -1,6 +1,16 @@
 # Changes
 
-## [1.2.2] - 2026-11-09
+## [1.3.0] - 2026-11-xx
+
+* Requoting decodes only unreserved escapes (`A-Z a-z 0-9 - . _ ~`); escapes of
+  reserved characters such as `%2F` and `%3B` are kept, so decoding can no longer
+  change how a path or query is split
+
+* Normalization removes the scheme's default port, so `https://h:443/` and
+  `https://h/` are equal. `Url::parse_target()` keeps the port as received
+
+* `Url::push_segments()` and `Url / segment` resolve `.` and `..` only within the
+  appended segments, so they can no longer escape the base path
 
 * Return `ErrorKind::TooLong` from `Builder::build` instead of panicking when
   the path, query or fragment makes the URL longer than 65535 bytes

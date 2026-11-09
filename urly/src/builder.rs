@@ -26,7 +26,7 @@ use crate::{parse, path::PathAndQuery, query::Fragment, scheme::Scheme, url::Url
 /// assert_eq!(url, "https://user:p%40ss@example.com:8443/search?q=a+b#top");
 ///
 /// let url = urly::Builder::from(url).port(443).fragment("").build().unwrap();
-/// assert_eq!(url, "https://user:p%40ss@example.com:443/search?q=a+b#");
+/// assert_eq!(url, "https://user:p%40ss@example.com/search?q=a+b#");
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct Builder {
