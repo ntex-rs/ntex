@@ -2,6 +2,12 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* HTTP/1 streaming bodies sent without chunked coding (`no_chunking()` or
+  HTTP/1.0) are framed by a declared `Content-Length`: extra bytes are dropped,
+  a short body fails with `EncodeError::UnexpectedEof`, and keep-alive is
+  preserved. Repeated or non-numeric values fail with the new
+  `EncodeError::InvalidLength`. Applies to server responses and client requests
+
 * `ws::WsClient` rejects `wss` and `https` URIs with the new
   `WsConfigError::TlsRequired` when no TLS or custom connector is installed;
   previously the handshake silently ran over plain TCP

@@ -74,6 +74,11 @@ pub enum EncodeError {
     /// A streaming request body has neither chunked coding nor `Content-Length`.
     #[error("Request body length is unknown")]
     UnknownLength,
+
+    /// A streaming body sent without chunked coding declares a repeated or
+    /// non-numeric `Content-Length`.
+    #[error("Invalid Content-Length header")]
+    InvalidLength,
 }
 
 /// Errors that can occur while parsing HTTP streams.

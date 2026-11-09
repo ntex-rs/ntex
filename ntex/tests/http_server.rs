@@ -1344,6 +1344,50 @@ async fn test_h1_body_chunked_implicit() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
+/// STATEMENT: An unchunked HTTP/1 response stream is framed by its declared
+/// `Content-Length`, so extra bytes cannot corrupt a keep-alive connection.
+///
+/// HOW:
+/// - Respond with `no_chunking()`, `content_length(3)` and a stream yielding `ab`, `cd`.
+/// - Pipeline two requests on one raw TCP connection.
+/// - Check both responses arrive with body `abc`, and the first keeps the connection open.
+#[ntex::test]
+async fn test_h1_stream_declared_length() {
+    let srv = test_server(async |_| {
+        HttpService::h1(async |_| {
+            let body = futures_util::stream::iter(
+                ["ab", "cd"].map(|c| Ok::<_, io::Error>(Bytes::from_static(c.as_bytes()))),
+            );
+            Ok::<_, io::Error>(
+                Response::Ok()
+                    .no_chunking()
+                    .content_length(3)
+                    .streaming(body),
+            )
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
+    stream
+        .write_all(
+            b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n\
+              GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
+        )
+        .unwrap();
+    let mut data = String::new();
+    stream.read_to_string(&mut data).unwrap();
+
+    let responses: Vec<_> = data.split("HTTP/1.1 200 OK\r\n").skip(1).collect();
+    assert_eq!(responses.len(), 2, "{data:?}");
+    for res in &responses {
+        assert!(res.contains("content-length: 3\r\n"), "{data:?}");
+        assert!(res.ends_with("\r\n\r\nabc"), "{data:?}");
+    }
+    assert!(!responses[0].contains("connection: close"), "{data:?}");
+    assert!(data.starts_with("HTTP/1.1 200 OK\r\n"), "{data:?}");
+}
+
 /// STATEMENT: An invalid HTTP/1 response header becomes an internal-server-error response.
 ///
 /// HOW:
