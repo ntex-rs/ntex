@@ -218,9 +218,10 @@ does depends on the backend:
 
 - **rustls** checks server certificates against the webpki root
   certificates, as you would expect.
-- **OpenSSL** does **not** verify certificates by default. That is handy
-  when testing against a server with a self-signed certificate, but it is not
-  safe in production. Give the client your own configuration instead.
+- **OpenSSL** checks server certificates against OpenSSL's default trust
+  store (the system roots) and checks that the certificate matches the
+  request host. To trust a private root, or to accept a self-signed
+  certificate while testing, give the client your own configuration.
 
 If both features are enabled, OpenSSL wins. If neither is, `https` requests
 fail with `ConnectError::SslIsNotSupported`.
@@ -728,8 +729,9 @@ simply build the request again.
   connection pools.
 - Tune the client with `ClientConfig`, `IoConfig`, and friends in a
   `SharedCfg`. Always set a connect timeout.
-- With OpenSSL, provide your own TLS configuration so certificates are
-  verified, and set ALPN if you want HTTP/2.
+- The default secure connector verifies certificates. Provide your own TLS
+  configuration for private roots or testing, and set ALPN on it if you want
+  HTTP/2.
 - Pick the body format by picking the method: `send`, `send_body`,
   `send_json`, `send_form`, or `send_stream`.
 - Buffer small bodies with `body()` or `json()`, and stream large ones.

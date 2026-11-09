@@ -2,6 +2,11 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* Security: the default OpenSSL HTTP client (`Client::new()`, `ClientBuilder::new()`) now
+  verifies server certificates against the system trust store and checks the hostname;
+  previously it accepted any certificate. To trust a private root or a self-signed test
+  certificate, pass your own `SslConnector` to `ClientBuilder::openssl()`
+
 * Document that `HttpService` application and control factories are
   instantiated per connection; build expensive or shared state per worker
 

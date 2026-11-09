@@ -505,9 +505,10 @@ fn client() -> ntex::client::Client {
 Do not confuse this with `ClientBuilder::connector`: that method configures
 **unsecured** connections and leaves the HTTPS connector unchanged.
 
-> **Configure verification explicitly.** The built-in default OpenSSL HTTP
-> connector currently disables certificate verification. Supply a verifying
-> configuration, such as the OpenSSL configuration above, instead.
+The built-in default OpenSSL connector verifies server certificates against
+OpenSSL's default trust store (the system roots) and checks the request host.
+To trust a private root, supply your own configuration, such as the OpenSSL
+configuration above.
 
 The default rustls configuration uses webpki roots and sends no client identity.
 If you enable both backend features, the default HTTP client selects OpenSSL.

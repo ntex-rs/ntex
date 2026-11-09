@@ -36,6 +36,18 @@ impl Default for ClientBuilder<Identity> {
 impl ClientBuilder<Identity> {
     #[must_use]
     /// Creates a client builder with default connectors.
+    ///
+    /// # TLS defaults
+    ///
+    /// With the `openssl` feature enabled (it takes precedence over `rustls`),
+    /// HTTPS connections verify the peer certificate against OpenSSL's default
+    /// trust store (the system roots) and check that it matches the request
+    /// host. With only the `rustls` feature, peers are verified against the
+    /// bundled `webpki-roots`. Without either feature, HTTPS is unavailable.
+    ///
+    /// To trust private roots, or to skip verification for testing, pass your
+    /// own configuration to [`openssl`](Self::openssl),
+    /// [`rustls`](Self::rustls) or [`secure_connector`](Self::secure_connector).
     pub fn new() -> Self {
         let svc = ConnectorPipeline::new(
             apply_fn(TcpConnector::new(), async move |msg: Connect, svc| {
@@ -59,7 +71,6 @@ impl ClientBuilder<Identity> {
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
                 .map_err(|e| log::error!("Cannot set ALPN protocol: {e:?}"));
-            ssl.set_verify(tls_openssl::ssl::SslVerifyMode::NONE);
 
             builder.openssl(ssl.build())
         }
@@ -89,6 +100,11 @@ impl<M> ClientBuilder<M> {
     #[must_use]
     #[cfg(feature = "openssl")]
     /// Uses an OpenSSL connector for secure connections.
+    ///
+    /// The connector's verification settings are used as given. Hostname
+    /// verification follows the connector's `configure()` defaults, so it is
+    /// enabled unless `set_verify(SslVerifyMode::NONE)` disables verification
+    /// altogether.
     pub fn openssl(self, config: OpensslConnector) -> Self {
         use crate::connect::openssl::SslConnector;
 
