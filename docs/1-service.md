@@ -177,6 +177,10 @@ is ready, so a slow step at the end holds back new work at the front. Readiness
 can also fail, which tells the caller that the service cannot accept requests
 at all.
 
+The [readiness example](https://github.com/ntex-rs/examples/tree/main/service/readiness)
+shows both cases with console output: a concurrency limit that holds back new
+work and a gate whose readiness fails while it is closed.
+
 ### Services Come from Factories
 
 Services often need some setup before the first request. They may need to read

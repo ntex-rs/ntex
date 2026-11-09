@@ -434,6 +434,11 @@ fn release(&self) {
 }
 ```
 
+The [readiness example](https://github.com/ntex-rs/examples/tree/main/service/readiness)
+builds a concurrency limit and a gate on top of `ReadyNotifier`, and prints
+each readiness change so you can follow the scope being invalidated and
+re-checked.
+
 ### Observing Readiness Notifications
 
 Use a reusable
