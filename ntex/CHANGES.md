@@ -2,6 +2,10 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `ws::WsClient` rejects `wss` and `https` URIs with the new
+  `WsConfigError::TlsRequired` when no TLS or custom connector is installed;
+  previously the handshake silently ran over plain TCP
+
 * With request-target normalization enabled, absolute-form targets lose the
   scheme's default port (`https://h:443/` becomes `https://h/`) and escapes of
   reserved characters such as `%3B` are no longer decoded (urly 1.3.0)

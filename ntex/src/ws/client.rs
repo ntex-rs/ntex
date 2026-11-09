@@ -44,6 +44,8 @@ pub struct WsClient<F> {
     cfg: Cfg<WsClientConfig>,
     http_cfg: Cfg<ClientConfig>,
     connector: Pipeline<Connect<Url>, Io<F>, Error<ConnectError>>,
+    // the connector is the default plain tcp connector
+    plain: bool,
     filter: marker::PhantomData<F>,
 }
 
@@ -68,6 +70,10 @@ impl WsClient<Base> {
     ///
     /// URI conversion and validation errors are stored and returned by
     /// [`connect`](Self::connect).
+    ///
+    /// The default connector is plain TCP, so `wss` and `https` URIs fail with
+    /// [`WsConfigError::TlsRequired`] unless a TLS connector is installed
+    /// with `openssl()`, `rustls()` or [`connector`](WsClient::connector).
     pub fn new<U>(uri: U, cfg: impl Into<Cfg<WsClientConfig>>) -> Self
     where
         Url: TryFrom<U>,
@@ -95,6 +101,7 @@ impl WsClient<Base> {
             cfg,
             http_cfg: shared.get(),
             connector: Pipeline::new(shared, Connector::<Url>::new()),
+            plain: true,
             filter: marker::PhantomData,
         }
     }
@@ -102,6 +109,9 @@ impl WsClient<Base> {
 
 impl<F> WsClient<F> {
     /// Replaces the network connector used to establish the connection.
+    ///
+    /// The connector is used for every scheme; it is responsible for applying
+    /// TLS to `wss` and `https` URIs.
     pub fn connector<U, S>(self, f: impl IntoService<S, SharedCfg, Connect<Url>>) -> WsClient<U>
     where
         U: Filter + 'static,
@@ -114,6 +124,7 @@ impl<F> WsClient<F> {
             cfg: self.cfg,
             http_cfg: self.http_cfg,
             connector: Pipeline::new(shared, f.into_service()),
+            plain: false,
             filter: marker::PhantomData,
         }
     }
@@ -147,6 +158,12 @@ where
     pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
         if let Some(err) = self.err.clone() {
             return Err(Error::from(WsClientError::Config(err)).with_service(self.cfg.service()));
+        }
+        if self.plain && matches!(self.uri.scheme_str(), Some("https" | "wss")) {
+            return Err(
+                Error::from(WsClientError::Config(WsConfigError::TlsRequired))
+                    .with_service(self.cfg.service()),
+            );
         }
 
         let mut head = self.request_head();
@@ -821,6 +838,46 @@ mod tests {
         assert!(matches!(
             err.into_error(),
             WsClientError::Config(WsConfigError::MissingHost)
+        ));
+    }
+
+    /// STATEMENT: Secure schemes are rejected over the default plain connector,
+    /// but are passed to a replacement connector.
+    ///
+    /// HOW:
+    /// - Connect to `wss` and `https` URIs with the default connector and check for
+    ///   `WsConfigError::TlsRequired`.
+    /// - Install a custom connector and check that it receives the `wss` request.
+    #[crate::rt_test]
+    async fn secure_scheme_requires_tls_connector() {
+        for uri in ["wss://localhost/", "https://localhost/"] {
+            let err = WsClient::new(uri, SharedCfg::new("WS"))
+                .connect()
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(
+                err.into_error(),
+                WsClientError::Config(WsConfigError::TlsRequired)
+            ));
+        }
+
+        let called = std::rc::Rc::new(std::cell::Cell::new(false));
+        let called2 = called.clone();
+        let err = WsClient::new("wss://localhost/", SharedCfg::new("WS"))
+            .connector(fn_service(async move |req: Connect<Url>| {
+                assert_eq!(req.host(), "localhost");
+                called2.set(true);
+                Err::<Io<Base>, _>(Error::from(ConnectError::Unresolved))
+            }))
+            .connect()
+            .await
+            .err()
+            .unwrap();
+        assert!(called.get());
+        assert!(matches!(
+            err.into_error(),
+            WsClientError::Connect(ConnectError::Unresolved)
         ));
     }
 
