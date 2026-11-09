@@ -20,6 +20,10 @@ use crate::util::{Bytes, HashMap};
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
 /// An HTTP/2 transport service.
+///
+/// Construct this service with [`HttpService::h2`](crate::http::HttpService::h2).
+/// The application and control factories are instantiated for every accepted
+/// connection; see [factory scope](crate::http::HttpService#factory-scope).
 #[derive(derive_more::Debug)]
 #[debug("H2Service")]
 pub struct H2Service<F, Req: RequestState<Io<F>>, Err> {

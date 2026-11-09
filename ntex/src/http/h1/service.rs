@@ -14,6 +14,9 @@ use super::dispatcher::Dispatcher;
 /// Request handling is delegated to the configured application service, while
 /// connection lifecycle events get their default action unless a control
 /// service is provided with [`control`](Self::control).
+///
+/// The application and control factories are instantiated for every accepted
+/// connection; see [factory scope](crate::http::HttpService#factory-scope).
 #[derive(derive_more::Debug)]
 #[debug("H1Service")]
 pub struct H1Service<F, Req: RequestState<Io<F>>, Err> {

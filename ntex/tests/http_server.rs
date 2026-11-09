@@ -113,6 +113,41 @@ async fn test_h1_shuts_down_connection_services() {
         .unwrap();
 }
 
+/// STATEMENT: `HttpService` instantiates its application factory per connection,
+/// while the server factory that builds the `HttpService` runs once per worker.
+///
+/// HOW:
+/// - Count server factory calls and application `ServiceFactory::create` calls.
+/// - Send two requests with keep-alive disabled, so each uses a new connection.
+/// - Check the application was created twice and the server factory ran once.
+#[ntex::test]
+async fn test_http_service_factory_per_connection() {
+    let workers = Arc::new(AtomicUsize::new(0));
+    let creates = Arc::new(AtomicUsize::new(0));
+    let (workers2, creates2) = (workers.clone(), creates.clone());
+
+    let srv = test::server_with_config(
+        async move |_| {
+            workers2.fetch_add(1, Ordering::Relaxed);
+            let creates = creates2.clone();
+            HttpService::new(ntex::service::fn_factory(async move |_: &_| {
+                creates.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, io::Error>(fn_service(async |_: Request| {
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }))
+            }))
+        },
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
+    );
+
+    for _ in 0..2 {
+        let response = srv.request(Method::GET, "/").send().await.unwrap();
+        assert!(response.status().is_success());
+    }
+    assert_eq!(creates.load(Ordering::Relaxed), 2);
+    assert_eq!(workers.load(Ordering::Relaxed), 1);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TargetMode {
     Raw,

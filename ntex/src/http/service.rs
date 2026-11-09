@@ -12,6 +12,17 @@ use super::{Request, Response, config::DispatcherConfig, h1, h2};
 /// [`HttpProtocol`](crate::http::HttpProtocol) metadata attached to the I/O
 /// stream, normally by a TLS ALPN acceptor. Connections without HTTP/2
 /// metadata are handled as HTTP/1.
+///
+/// # Factory scope
+///
+/// The application and control service factories are instantiated once per
+/// accepted connection: [`ServiceFactory::create`] runs for every connection
+/// and the resulting services are dropped when it closes. Do not perform
+/// expensive initialization or keep state that must outlive a connection in
+/// these factories. Build such state once per worker instead, for example in
+/// the server factory closure that constructs this `HttpService` (or the
+/// `web::HttpServer` application closure), or in the worker state passed to
+/// `create`, and share it by cloning an `Rc` or `Arc` into the factory.
 #[derive(derive_more::Debug)]
 #[debug("HttpService")]
 pub struct HttpService<F, Req: RequestState<Io<F>>, Err> {
@@ -31,6 +42,9 @@ where
 {
     #[must_use]
     /// Creates a service that supports HTTP/1.1 and HTTP/2.
+    ///
+    /// `sf` is instantiated for every accepted connection; see
+    /// [factory scope](Self#factory-scope).
     pub fn new<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> Self
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
@@ -51,6 +65,9 @@ where
 
     #[must_use]
     /// Creates an HTTP/1-only service.
+    ///
+    /// `sf` is instantiated for every accepted connection; see
+    /// [factory scope](Self#factory-scope).
     pub fn h1<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> h1::H1Service<F, Req, Err>
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
@@ -62,6 +79,9 @@ where
 
     #[must_use]
     /// Creates an HTTP/2-only service.
+    ///
+    /// `sf` is instantiated for every accepted connection; see
+    /// [factory scope](Self#factory-scope).
     pub fn h2<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> h2::H2Service<F, Req, Err>
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
@@ -83,7 +103,8 @@ where
     ///
     /// The service receives the lifecycle events described by
     /// [`h1::Control`]. Unless this method is called, the default action is
-    /// applied to each event without a service call.
+    /// applied to each event without a service call. Like the application
+    /// factory, `ctl` is instantiated for every HTTP/1 connection.
     pub fn h1_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h1::Control<F, Err>>,
@@ -109,7 +130,8 @@ where
     /// Provides the HTTP/2 control service.
     ///
     /// A default service that acknowledges each HTTP/2 control event is used
-    /// unless this method is called.
+    /// unless this method is called. Like the application factory, `ctl` is
+    /// instantiated for every HTTP/2 connection.
     pub fn h2_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h2::Control<Error<H2Error>>>,
