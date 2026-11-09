@@ -7,6 +7,12 @@
   previously it accepted any certificate. To trust a private root or a self-signed test
   certificate, pass your own `SslConnector` to `ClientBuilder::openssl()`
 
+* Client `body()` and `json()` no longer check `Content-Length` for bodiless
+  responses (`HEAD` requests, `204`, `304`). They now return an empty body
+  instead of failing with `Overflow` or `UnknownLength`. With response
+  decompression enabled, such responses also keep their `Content-Encoding` and
+  `Content-Length` headers
+
 * Document that `HttpService` application and control factories are
   instantiated per connection; build expensive or shared state per worker
 

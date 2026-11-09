@@ -172,7 +172,8 @@ impl ClientResponse {
     /// [`json()`](Self::json), [`take_payload()`](Self::take_payload) or the
     /// response stream, a later `body()` fails with
     /// [`PayloadError::AlreadyTaken`]. A response without a body still yields
-    /// empty bytes.
+    /// empty bytes. That includes bodiless responses (`HEAD` requests, `204`,
+    /// `304`): their `Content-Length` is not checked against the limit.
     ///
     /// To keep the raw body when JSON parsing fails, buffer it once and parse
     /// the retained bytes:
@@ -500,7 +501,19 @@ where
 }
 
 /// Parses the response `Content-Length` header.
+///
+/// Returns `None` for bodiless responses (`HEAD` requests, `1xx`, `204`,
+/// `304`), which the protocol layer marks with [`Payload::None`]. Their
+/// `Content-Length` describes a representation that is not sent, so it must
+/// not be checked against the payload limit.
 fn content_length(res: &ClientResponse) -> Result<Option<usize>, ClientPayloadError> {
+    let payload = res.payload.take();
+    let bodiless = matches!(payload, Some(Payload::None));
+    res.payload.set(payload);
+    if bodiless {
+        return Ok(None);
+    }
+
     res.headers()
         .get(&CONTENT_LENGTH)
         .map(|l| {
@@ -645,6 +658,29 @@ mod tests {
             }
             JsonPayloadError::ContentType => matches!(other, JsonPayloadError::ContentType),
             _ => false,
+        }
+    }
+
+    /// STATEMENT: Bodiless responses skip the declared `Content-Length` checks.
+    ///
+    /// HOW:
+    /// - Build responses with an oversized or malformed `Content-Length` and
+    ///   replace their payload with `Payload::None`.
+    /// - Assert `body()` returns empty bytes and `json()` fails while parsing
+    ///   instead of with `Overflow` or `UnknownLength`.
+    #[crate::rt_test]
+    async fn test_bodiless_response_ignores_content_length() {
+        for len in ["1000000", "xxxx"] {
+            let res = TestResponse::with_header(header::CONTENT_LENGTH, len).build();
+            res.set_payload(Payload::None);
+            assert_eq!(res.body().await.unwrap(), Bytes::new());
+
+            let res = TestResponse::with_header(header::CONTENT_LENGTH, len)
+                .header(header::CONTENT_TYPE, "application/json")
+                .build();
+            res.set_payload(Payload::None);
+            let err = res.json::<MyObject>().await.unwrap_err();
+            assert!(matches!(&*err, JsonPayloadError::Deserialize(_)), "{err:?}");
         }
     }
 

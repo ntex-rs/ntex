@@ -46,8 +46,8 @@ impl ClientBuilder<Identity> {
     /// bundled `webpki-roots`. Without either feature, HTTPS is unavailable.
     ///
     /// To trust private roots, or to skip verification for testing, pass your
-    /// own configuration to [`openssl`](Self::openssl),
-    /// [`rustls`](Self::rustls) or [`secure_connector`](Self::secure_connector).
+    /// own configuration to `openssl()`, `rustls()` or
+    /// [`secure_connector`](Self::secure_connector).
     pub fn new() -> Self {
         let svc = ConnectorPipeline::new(
             apply_fn(TcpConnector::new(), async move |msg: Connect, svc| {
