@@ -121,8 +121,13 @@ impl ClientRequest {
 
     /// Sets the request HTTP version.
     ///
-    /// By default, the version is selected from the negotiated transport
-    /// protocol.
+    /// The version does not select the transport protocol. On an HTTP/1
+    /// connection, `HTTP/1.0` is sent as requested and any other version is
+    /// sent as `HTTP/1.1`. An HTTP/2 connection always uses `HTTP/2`.
+    ///
+    /// An `HTTP/1.0` request closes the connection after the response unless
+    /// keep-alive is requested, and a streaming body needs a `Content-Length`
+    /// header because chunked coding is not available.
     #[inline]
     #[must_use]
     pub fn version(mut self, version: Version) -> Self {
@@ -239,7 +244,10 @@ impl ClientRequest {
     /// Sets the request connection type.
     ///
     /// See [`RequestHead::set_connection_type()`](crate::http::RequestHead::set_connection_type)
-    /// for how repeated calls are resolved.
+    /// for how repeated calls are resolved. On HTTP/1 connections, the `close`,
+    /// `keep-alive` and `upgrade` options of a `Connection` header set with
+    /// [`header`](Self::header) are applied the same way. HTTP/2 connections
+    /// ignore the connection type.
     pub fn set_connection_type(mut self, ctype: ConnectionType) -> Self {
         self.request.head.set_connection_type(ctype);
         self
@@ -278,6 +286,11 @@ impl ClientRequest {
     }
 
     /// Sets the request content length.
+    ///
+    /// A streaming body (see [`send_stream`](Self::send_stream)) is sent with
+    /// this length instead of chunked coding on HTTP/1 connections. Sending
+    /// fails if the stream ends early or produces more data. A body with a known
+    /// size is sent with its actual size and this value is ignored.
     #[inline]
     #[must_use]
     pub fn content_length(self, len: u64) -> Self {

@@ -256,6 +256,15 @@ impl Encoder for ClientCodec {
                 )?;
             }
             Message::Chunk(Some(bytes)) => {
+                // a request body longer than its declared length would be cut
+                if self
+                    .inner
+                    .encoder
+                    .remaining_length()
+                    .is_some_and(|rem| bytes.len() as u64 > rem)
+                {
+                    return Err(EncodeError::InvalidLength);
+                }
                 self.inner.encoder.encode_chunk(bytes, dst);
             }
             Message::Chunk(None) => {
