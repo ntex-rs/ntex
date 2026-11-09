@@ -2,6 +2,10 @@
 
 ## [4.9.0] - Unreleased
 
+* Document that `mpsc::Receiver`, `Sender::closed`, `Sleep`, `Deadline` and
+  `TimerHandle` wake only the most recently polled task; wait from one task at
+  a time
+
 * `TimerHandle` is neither `Send` nor `Sync`, and neither are `Sleep`,
   `Deadline`, `Interval`, and `Timeout`; a handle indexes the current thread's
   timer wheel, so using or dropping it on another thread panicked or touched an

@@ -100,7 +100,8 @@ impl<T> Sender<T> {
 
     /// Waits until the channel is closed or the receiver has been dropped.
     ///
-    /// See [`poll_closed`](Self::poll_closed).
+    /// Only one task may wait at a time, across this sender and all of its
+    /// clones; see [`poll_closed`](Self::poll_closed).
     pub async fn closed(&self) {
         poll_fn(|cx| self.poll_closed(cx)).await;
     }
@@ -137,6 +138,14 @@ impl<T> Drop for Sender<T> {
 /// The receiving end of a channel which implements the `Stream` trait.
 ///
 /// This is created by the `channel` function.
+///
+/// # Single waiter
+///
+/// The receiver stores one waker. [`recv`](Self::recv),
+/// [`poll_recv`](Self::poll_recv) and [`Stream::poll_next`] take `&self`, but
+/// only the task that polled most recently is woken. Wait for messages from
+/// one task at a time; an earlier concurrent waiter may stay pending even
+/// while messages are buffered.
 #[derive(Debug)]
 pub struct Receiver<T> {
     shared: Cell<Shared<T>>,
@@ -170,6 +179,8 @@ impl<T> Receiver<T> {
     ///
     /// Returns `None` once the channel is closed or every sender has been
     /// dropped, and every buffered message has been received.
+    ///
+    /// Only one task may wait at a time; see [single waiter](Self#single-waiter).
     pub async fn recv(&self) -> Option<T> {
         poll_fn(|cx| self.poll_recv(cx)).await
     }
@@ -178,6 +189,9 @@ impl<T> Receiver<T> {
     ///
     /// Returns `Ready(None)` once the channel is closed or every sender has
     /// been dropped, and every buffered message has been received.
+    ///
+    /// A pending poll replaces the previously registered waker; see
+    /// [single waiter](Self#single-waiter).
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
         if let Poll::Ready(msg) = self.try_recv() {
             return Poll::Ready(msg);
@@ -386,6 +400,47 @@ mod tests {
         tx.close();
         assert!(!tx.shared.get_ref().closed.is_set());
         tx2.closed().await;
+    }
+
+    /// STATEMENT: A receiver and the closure state shared by sender clones each wake
+    /// only the most recently registered task, and a superseded waiter still
+    /// observes the result when polled again.
+    ///
+    /// HOW:
+    /// - Poll `poll_recv` with two distinct counted wakers, then send two messages.
+    /// - Check only the second waker was woken once, and re-polling with the first
+    ///   returns the first message.
+    /// - Poll `poll_closed` on two sender clones with distinct wakers, drop the
+    ///   receiver, and check only the second waker was woken while both polls are ready.
+    #[test]
+    fn single_waiter_wakes_latest_task_only() {
+        use crate::task::hooks::counted_waker;
+
+        let (tx, rx) = channel::<u32>();
+        let (first, first_waker) = counted_waker();
+        let (second, second_waker) = counted_waker();
+        let mut first_cx = Context::from_waker(&first_waker);
+        let mut second_cx = Context::from_waker(&second_waker);
+
+        assert_eq!(rx.poll_recv(&mut first_cx), Poll::Pending);
+        assert_eq!(rx.poll_recv(&mut second_cx), Poll::Pending);
+        tx.send(1).unwrap();
+        tx.send(2).unwrap();
+        assert_eq!((first.get(), second.get()), (0, 1));
+        assert_eq!(rx.poll_recv(&mut first_cx), Poll::Ready(Some(1)));
+
+        let tx2 = tx.clone();
+        let (first, first_waker) = counted_waker();
+        let (second, second_waker) = counted_waker();
+        let mut first_cx = Context::from_waker(&first_waker);
+        let mut second_cx = Context::from_waker(&second_waker);
+
+        assert_eq!(tx.poll_closed(&mut first_cx), Poll::Pending);
+        assert_eq!(tx2.poll_closed(&mut second_cx), Poll::Pending);
+        drop(rx);
+        assert_eq!((first.get(), second.get()), (0, 1));
+        assert_eq!(tx.poll_closed(&mut first_cx), Poll::Ready(()));
+        assert_eq!(tx2.poll_closed(&mut second_cx), Poll::Ready(()));
     }
 
     /// STATEMENT: Dropping an MPSC receiver safely rejects reentrant sends from message destructors.
