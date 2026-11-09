@@ -1,6 +1,13 @@
 # Changes
 
-## [1.15.0] - 2026-11-07
+## [1.15.0] - 2026-11-09
+
+* `BytesMut::with_page_size()`, `with_page_size_in()` and new `BytePages` pages
+  take a cached page of the next smaller size if the page cache has none of
+  the requested size; buffer growth still uses pages of the exact size
+
+* Add `PageCacheStats::fallbacks`, a fallback is counted as a miss of the
+  requested size and a hit of the smaller size
 
 * Remove the unsound `AsMut<[MaybeUninit<u8>]>` impl for `UninitSlice`, safe
   code could write uninitialized bytes into initialized memory. Use the

@@ -961,14 +961,21 @@ mod tests {
     }
 
     /// STATEMENT: Cancelling a request inside `B` does not affect later turns.
-    /// HOW: Time out the first request while `B::call` sleeps.
+    ///
+    /// HOW:
+    /// - Start the first request with a 10ms timeout; it enters `B::call`, which
+    ///   sleeps far longer, so the timeout always wins even on a slow runner.
+    /// - Start two more requests with a short `B` delay.
+    /// - Confirm the first times out and the later ones complete in order.
     #[ntex::test]
     async fn cancel_in_b() {
         let sink = Sink::default();
-        sink.0.delay.set(30);
+        sink.0.delay.set(10_000);
         let pl = ordered(&sink);
 
         let h1 = start(timeout(Millis(10), pl.call_static(Msg::new(1, 0)))).await;
+        assert_eq!(sink.entered(), vec![1]);
+        sink.0.delay.set(30);
         let h2 = start(pl.call_static(Msg::new(2, 20))).await;
         let h3 = start(pl.call_static(Msg::new(3, 0))).await;
 

@@ -60,9 +60,22 @@ impl StorageVec {
         StorageVec(Header::create(capacity, &[]))
     }
 
-    /// Create new empty storage with specified size category
+    /// Create new empty storage for a new buffer of the specified size
+    /// category.
+    ///
+    /// A cached page of the next smaller category is used if the cache has
+    /// no page of `size`.
     pub(crate) fn sized(size: BytePageSize) -> StorageVec {
-        cache::take_page(size).unwrap_or_else(|| StorageVec(Header::create(size.capacity(), &[])))
+        cache::take_page_or_prev(size).unwrap_or_else(|| Self::alloc_page(size))
+    }
+
+    /// Create new empty storage of exactly the specified size category.
+    pub(crate) fn sized_exact(size: BytePageSize) -> StorageVec {
+        cache::take_page(size).unwrap_or_else(|| Self::alloc_page(size))
+    }
+
+    fn alloc_page(size: BytePageSize) -> StorageVec {
+        StorageVec(Header::create(size.capacity(), &[]))
     }
 
     /// Create new empty storage with specified size category, charged
@@ -404,7 +417,7 @@ impl StorageVec {
     /// Copies the data into a page of `size`, the old buffer is released.
     fn move_to_page(&mut self, size: BytePageSize) {
         let len = self.len();
-        let mut st = StorageVec::sized(size);
+        let mut st = StorageVec::sized_exact(size);
         unsafe {
             ptr::copy_nonoverlapping(self.as_ptr(), st.as_ptr(), len);
             st.set_len(len);
@@ -774,7 +787,7 @@ mod tests {
     /// STATEMENT: Page storage allocation layouts match their size categories including metadata.
     ///
     /// HOW:
-    /// - Allocate `Size4`, `Size16`, `Size64`, `Size128`, and `Size256` storage and check usable capacities and full layout sizes.
+    /// - Allocate `Size4`, `Size16`, `Size64`, `Size128`, and `Size256` storage with `StorageVec::sized_exact` and check usable capacities and full layout sizes.
     #[test]
     fn page_allocation_is_category_size() {
         for (size, alloc) in [
@@ -784,7 +797,7 @@ mod tests {
             (BytePageSize::Size128, 128 * 1024),
             (BytePageSize::Size256, 256 * 1024),
         ] {
-            let st = StorageVec::sized(size);
+            let st = StorageVec::sized_exact(size);
             assert_eq!(st.capacity(), size.capacity());
             let layout = shared_vec_layout(st.capacity()).unwrap();
             assert_eq!(layout.size(), alloc, "{size:?}");
@@ -901,6 +914,28 @@ mod tests {
         assert_eq!(st2.0, page);
         drop(st);
         assert_eq!(cache::cached_pages(BytePageSize::Size16), 1);
+    }
+
+    /// STATEMENT: Growing a page takes a page of exactly the new size, never a cached page one size smaller.
+    ///
+    /// HOW:
+    /// - Fill a `Size8` page while another `Size8` page is cached and no `Size16` page is.
+    /// - Reserve one byte and check the buffer moved to a `Size16` page with its data, and both `Size8` pages are cached.
+    #[test]
+    fn reserve_pooled_page_does_not_fall_back() {
+        cache::reset();
+
+        let mut st = StorageVec::sized(BytePageSize::Size8);
+        drop(StorageVec::sized_exact(BytePageSize::Size8));
+        assert_eq!(cache::cached_pages(BytePageSize::Size8), 1);
+
+        let data = pattern(st.capacity());
+        assert_eq!(st.put_slice_partial(&data), data.len());
+        st.reserve(1);
+        assert_eq!(st.page_size(), BytePageSize::Size16);
+        assert_eq!(st.as_ref(), &data[..]);
+        assert_eq!(cache::cached_pages(BytePageSize::Size8), 2);
+        cache::reset();
     }
 
     /// STATEMENT: Pooled reservation skips to a fitting size class but never shrinks the current class.

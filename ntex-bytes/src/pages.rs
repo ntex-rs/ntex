@@ -32,7 +32,9 @@ const APPEND_COPY_LIMIT: usize = 4096;
 impl BytePages {
     /// Creates a new `BytePages` with the specified page size.
     ///
-    /// Pages are allocated lazily using the specified capacity category.
+    /// Pages are allocated lazily using the specified capacity category. Like
+    /// [`BytesMut::with_page_size`], a new page can be a cached page of the
+    /// next smaller size.
     ///
     /// # Panics
     ///

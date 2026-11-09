@@ -89,6 +89,34 @@ pub(crate) fn take_page(size: BytePageSize) -> Option<StorageVec> {
     .flatten()
 }
 
+/// Takes a page for a new buffer of page size `size` from the cache.
+///
+/// If no page of `size` is cached, a cached page of the next smaller size
+/// is taken instead. Growing buffers use [`take_page`], they need the exact
+/// size.
+#[inline]
+pub(crate) fn take_page_or_prev(size: BytePageSize) -> Option<StorageVec> {
+    let class = size as usize;
+    with_cache(|cst| {
+        if let Some(page) = cst.pages[class].pop() {
+            cst.metrics.hit(class);
+            return Some(page);
+        }
+        cst.metrics.miss(class);
+
+        let prev = size.prev() as usize;
+        if prev != class
+            && let Some(page) = cst.pages[prev].pop()
+        {
+            cst.metrics.hit(prev);
+            cst.metrics.fallback(class);
+            return Some(page);
+        }
+        None
+    })
+    .flatten()
+}
+
 /// Puts a released page of size `size` to the cache.
 ///
 /// Returns `false` if the page is not cached and must be freed.
@@ -131,8 +159,14 @@ pub(crate) fn set_page_cache_size(size: BytePageSize, count: usize) {
 
 #[cfg(test)]
 /// Replaces the cache of the current thread with an empty one.
+///
+/// The old cache is taken out first, so its pages are freed rather than
+/// returned to the new cache.
 pub(crate) fn reset() {
-    CACHE.with(|c| c.set(Some(Box::default())));
+    CACHE.with(|c| {
+        drop(c.take());
+        c.set(Some(Box::default()));
+    });
 }
 
 #[cfg(test)]
@@ -166,6 +200,7 @@ pub struct PageCacheMetrics {
 struct Class {
     hits: AtomicU64,
     misses: AtomicU64,
+    fallbacks: AtomicU64,
     cached: AtomicU64,
     freed: AtomicU64,
     // pages that entered or left the cache other than by `cached` and `hits`,
@@ -186,10 +221,17 @@ pub struct PageCacheSnapshot {
 pub struct PageCacheStats {
     /// Page size, [`BytePageSize::Unset`] for the totals of all page sizes.
     pub size: BytePageSize,
-    /// Number of pages taken from the cache.
+    /// Number of pages of this size taken from the cache, including pages
+    /// taken in place of the next larger size, see `fallbacks`.
     pub hits: u64,
-    /// Number of pages allocated because the cache was empty.
+    /// Number of requests for this page size that found no cached page of
+    /// this size.
+    ///
+    /// `misses - fallbacks` pages were allocated.
     pub misses: u64,
+    /// Number of misses of a new buffer served with a cached page of the
+    /// next smaller size, which is counted as a hit of that size.
+    pub fallbacks: u64,
     /// Number of released pages returned to the cache.
     pub cached: u64,
     /// Number of released pages freed because the cache was full.
@@ -235,6 +277,7 @@ impl PageCacheMetrics {
         for (stats, class) in snapshot.sizes.iter_mut().zip(&self.classes) {
             stats.hits = class.hits.load(Relaxed);
             stats.misses = class.misses.load(Relaxed);
+            stats.fallbacks = class.fallbacks.load(Relaxed);
             stats.cached = class.cached.load(Relaxed);
             stats.freed = class.freed.load(Relaxed);
             let removed = class.removed.load(Relaxed);
@@ -253,6 +296,10 @@ impl PageCacheMetrics {
 
     pub(crate) fn miss(&self, class: usize) {
         inc(&self.classes[class].misses, 1);
+    }
+
+    pub(crate) fn fallback(&self, class: usize) {
+        inc(&self.classes[class].fallbacks, 1);
     }
 
     pub(crate) fn cached(&self, class: usize) {
@@ -305,6 +352,7 @@ impl PageCacheSnapshot {
             |mut total, s| {
                 total.hits += s.hits;
                 total.misses += s.misses;
+                total.fallbacks += s.fallbacks;
                 total.cached += s.cached;
                 total.freed += s.freed;
                 total.pages += s.pages;
@@ -625,5 +673,116 @@ mod tests {
             let expected = usize::from(size == BytePageSize::Size64);
             assert_eq!(cached_pages(size), expected);
         }
+    }
+
+    /// STATEMENT: A new page request with no cached page of its size takes a cached page one size smaller, and the metrics record the fallback.
+    ///
+    /// HOW:
+    /// - Cache a `Size8` page, request `Size16`, and check the same `Size8` page is returned, counted as a `Size16` miss and fallback and a `Size8` hit.
+    /// - Request `Size16` again with an empty cache and check a `Size16` page is allocated, counted as a miss only.
+    /// - Check the totals include the fallback.
+    #[test]
+    fn new_page_falls_back_to_smaller_size() {
+        reset();
+        let metrics = PageCacheMetrics::current();
+        let (s8, s16) = (BytePageSize::Size8, BytePageSize::Size16);
+
+        let st = StorageVec::sized(s8);
+        let addr = st.0;
+        drop(st);
+
+        let st = StorageVec::sized(s16);
+        assert_eq!(st.0, addr);
+        assert_eq!(st.page_size(), s8);
+        assert_eq!(cached_pages(s8), 0);
+        let snapshot = metrics.snapshot();
+        let s = *snapshot.get(s16).unwrap();
+        assert_eq!((s.hits, s.misses, s.fallbacks, s.pages), (0, 1, 1, 0));
+        let s = *snapshot.get(s8).unwrap();
+        assert_eq!(
+            (s.hits, s.misses, s.fallbacks, s.cached, s.pages),
+            (1, 1, 0, 1, 0)
+        );
+
+        let st2 = StorageVec::sized(s16);
+        assert_eq!(st2.page_size(), s16);
+        let snapshot = metrics.snapshot();
+        let s = *snapshot.get(s16).unwrap();
+        assert_eq!((s.hits, s.misses, s.fallbacks), (0, 2, 1));
+        let total = snapshot.total();
+        assert_eq!((total.hits, total.misses, total.fallbacks), (1, 3, 1));
+        drop((st, st2));
+        reset();
+    }
+
+    /// STATEMENT: The fallback goes exactly one page size down and only when the requested size has no cached page.
+    ///
+    /// HOW:
+    /// - Cache a `Size4` page and check a `Size16` request allocates `Size16` and leaves the `Size4` page cached.
+    /// - Cache `Size8` and `Size16` pages and check a `Size16` request takes the `Size16` page and leaves the `Size8` page cached.
+    #[test]
+    fn new_page_falls_back_one_size_only() {
+        reset();
+        let (s4, s8, s16) = (
+            BytePageSize::Size4,
+            BytePageSize::Size8,
+            BytePageSize::Size16,
+        );
+
+        drop(StorageVec::sized_exact(s4));
+        let st = StorageVec::sized(s16);
+        assert_eq!(st.page_size(), s16);
+        assert_eq!(cached_pages(s4), 1);
+
+        let p8 = StorageVec::sized_exact(s8);
+        drop(st);
+        drop(p8);
+        let st = StorageVec::sized(s16);
+        assert_eq!(st.page_size(), s16);
+        assert_eq!((cached_pages(s8), cached_pages(s16)), (1, 0));
+        drop(st);
+        reset();
+    }
+
+    /// STATEMENT: New `BytesMut` buffers and new `BytePages` pages take a cached page one size smaller, `Unset` falls back from `Size64` to `Size48`.
+    ///
+    /// HOW:
+    /// - Cache a `Size8` page and check `BytesMut::with_page_size(Size16)` returns it with `Size8` capacity.
+    /// - Cache a `Size48` page and check `BytesMut::with_page_size(Unset)` returns it.
+    /// - With the `tracker` feature, check `BytesMut::with_page_size_in` falls back too.
+    /// - Cache a `Size8` page, write to a `Size16` `BytePages`, and check the page left the cache as a `Size16` fallback.
+    #[test]
+    fn new_buffers_fall_back_to_smaller_page() {
+        reset();
+        let metrics = PageCacheMetrics::current();
+        let (s8, s16) = (BytePageSize::Size8, BytePageSize::Size16);
+
+        drop(StorageVec::sized_exact(s8));
+        let buf = BytesMut::with_page_size(s16);
+        assert_eq!(buf.page_size(), s8);
+        assert_eq!(buf.capacity(), s8.capacity());
+        drop(buf);
+
+        drop(StorageVec::sized_exact(BytePageSize::Size48));
+        let buf = BytesMut::with_page_size(BytePageSize::Unset);
+        assert_eq!(buf.page_size(), BytePageSize::Size48);
+        drop(buf);
+
+        #[cfg(feature = "tracker")]
+        {
+            let tracker = BytesTracker::new();
+            let buf = BytesMut::with_page_size_in(s16, &tracker);
+            assert_eq!(buf.page_size(), s8);
+            assert_eq!(tracker.snapshot().live_bytes, s8.alloc_size());
+        }
+
+        assert_eq!(cached_pages(s8), 1);
+        let mut pages = BytePages::new(s16);
+        pages.put_slice(b"hello");
+        assert_eq!(cached_pages(s8), 0);
+        let expected = if cfg!(feature = "tracker") { 3 } else { 2 };
+        assert_eq!(metrics.snapshot().get(s16).unwrap().fallbacks, expected);
+        drop(pages);
+        reset();
     }
 }
