@@ -20,7 +20,6 @@ workspace = true
 [dependencies]
 ntex-bytes = { workspace = true }
 serde = { workspace = true }
-log = { workspace = true }
 regex = { workspace = true }
 urly = { workspace = true }
 

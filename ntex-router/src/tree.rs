@@ -726,12 +726,14 @@ impl Tree {
                                     (ctx.base_skip + (skip + seg.len()) as isize) as u32,
                                 )
                             };
-                            ctx.segments.push((names[0], item));
+                            ctx.segments.push((names[0].0, item));
                             true
                         }
                     } else if let Some(captures) = pattern.captures(seg) {
+                        // groups of custom regexes may not participate in the
+                        // match, they are left out of the segments
                         let mut is_match = true;
-                        for name in names {
+                        for &(name, required) in names {
                             if let Some(m) = captures.name(name) {
                                 let item = if quoted {
                                     PathItem::Segment(m.as_str().to_string())
@@ -742,10 +744,7 @@ impl Tree {
                                     )
                                 };
                                 ctx.segments.push((name, item));
-                            } else {
-                                log::error!(
-                                    "Dynamic path match but not all segments found: {name}"
-                                );
+                            } else if required {
                                 is_match = false;
                                 break;
                             }
