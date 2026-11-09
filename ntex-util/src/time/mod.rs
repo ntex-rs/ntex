@@ -94,6 +94,14 @@ where
 ///     println!("100 ms have elapsed");
 /// }
 /// ```
+///
+/// # Single waiter
+///
+/// A timer stores one waker. [`wait`](Self::wait) and
+/// [`poll_elapsed`](Self::poll_elapsed) take `&self`, but only the task that
+/// polled most recently is woken when the timer elapses. Wait from one task at
+/// a time; an earlier concurrent waiter may stay pending after the deadline.
+/// The same applies to [`Deadline`] and [`TimerHandle`].
 #[derive(Debug)]
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Sleep {
@@ -137,12 +145,17 @@ impl Sleep {
 
     #[inline]
     /// Waits until this timer has elapsed.
+    ///
+    /// Only one task may wait at a time; see [single waiter](Self#single-waiter).
     pub async fn wait(&self) {
         poll_fn(|cx| self.hnd.poll_elapsed(cx)).await;
     }
 
     #[inline]
     /// Polls until this timer has elapsed.
+    ///
+    /// A pending poll replaces the previously registered waker; see
+    /// [single waiter](Self#single-waiter).
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         self.hnd.poll_elapsed(cx)
     }
@@ -194,6 +207,9 @@ impl Deadline {
 
     #[inline]
     /// Waits until this deadline has elapsed.
+    ///
+    /// Only one task may wait at a time; see
+    /// [single waiter](Sleep#single-waiter).
     pub async fn wait(&self) {
         poll_fn(|cx| self.poll_elapsed(cx)).await;
     }
@@ -231,7 +247,9 @@ impl Deadline {
     #[inline]
     /// Polls until this deadline has elapsed.
     ///
-    /// A zero-duration deadline remains pending until it is reset.
+    /// A zero-duration deadline remains pending until it is reset. A pending
+    /// poll replaces the previously registered waker; see
+    /// [single waiter](Sleep#single-waiter).
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         self.hnd
             .as_ref()
@@ -694,5 +712,37 @@ mod tests {
             crate::time::timeout(Millis(20), hnd.wait()).await.is_err(),
             "zero deadline never completes"
         );
+    }
+
+    /// STATEMENT: `Sleep` and `Deadline` wake only the most recently registered task
+    /// when they elapse, and a superseded waiter still observes completion.
+    ///
+    /// HOW:
+    /// - Poll each long timer with two distinct counted wakers, then `elapse` it.
+    /// - Check only the second waker was woken once and re-polling with the first
+    ///   is ready.
+    #[ntex::test]
+    async fn single_waiter_wakes_latest_task_only() {
+        use crate::task::hooks::counted_waker;
+
+        let poll_pair = |poll: &dyn Fn(&mut task::Context<'_>) -> Poll<()>, elapse: &dyn Fn()| {
+            let (first, first_waker) = counted_waker();
+            let (second, second_waker) = counted_waker();
+            let mut first_cx = task::Context::from_waker(&first_waker);
+            let mut second_cx = task::Context::from_waker(&second_waker);
+
+            assert_eq!(poll(&mut first_cx), Poll::Pending);
+            assert_eq!(poll(&mut second_cx), Poll::Pending);
+            elapse();
+            assert_eq!((first.get(), second.get()), (0, 1));
+            assert_eq!(poll(&mut first_cx), Poll::Ready(()));
+        };
+
+        let slp = Sleep::new(Millis(10_000));
+        poll_pair(&|cx| slp.poll_elapsed(cx), &|| slp.elapse());
+
+        let dl = Deadline::new(Millis(10_000));
+        let hnd = dl.hnd.as_ref().unwrap();
+        poll_pair(&|cx| dl.poll_elapsed(cx), &|| hnd.elapse());
     }
 }

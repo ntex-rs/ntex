@@ -193,6 +193,9 @@ impl TimerHandle {
     }
 
     /// Polls until this timer has elapsed.
+    ///
+    /// The timer stores one waker: a pending poll replaces the previously
+    /// registered one, so only the most recent waiter is woken.
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         TIMER.with(|t| {
             t.with_wheel(|w| {

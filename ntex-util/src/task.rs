@@ -262,6 +262,28 @@ pub(crate) mod hooks {
         );
         unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &HOOK_VTABLE)) }
     }
+
+    /// Wake counter for wakers created by [`counted_waker`].
+    #[derive(Default)]
+    pub(crate) struct WakeCount(pub(crate) std::sync::atomic::AtomicUsize);
+
+    impl std::task::Wake for WakeCount {
+        fn wake(self: std::sync::Arc<Self>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    impl WakeCount {
+        pub(crate) fn get(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    /// Returns a distinct waker and the counter of its wake-ups.
+    pub(crate) fn counted_waker() -> (std::sync::Arc<WakeCount>, Waker) {
+        let count = std::sync::Arc::new(WakeCount::default());
+        (count.clone(), Waker::from(count))
+    }
 }
 
 #[cfg(test)]
