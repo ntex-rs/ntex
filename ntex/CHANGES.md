@@ -2,6 +2,11 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `HttpServiceConfig::set_max_headers` is enforced for HTTP/2 requests: a
+  stream with too many header fields (repeated names count separately) is
+  answered with `431 Request Header Fields Too Large` and the connection stays
+  open. `h2::Http2ServiceConfig::set_max_headers` still applies first
+
 * HTTP/1 streaming bodies sent without chunked coding (`no_chunking()` or
   HTTP/1.0) are framed by a declared `Content-Length`: extra bytes are dropped,
   a short body fails with `EncodeError::UnexpectedEof`, and keep-alive is
