@@ -235,6 +235,14 @@ impl<T: MessageType> MessageEncoder<T> {
         self.te.get().kind == TransferEncodingKind::Length(0)
     }
 
+    /// Returns the number of bytes left in a length-delimited body.
+    pub(crate) fn remaining_length(&self) -> Option<u64> {
+        match self.te.get().kind {
+            TransferEncodingKind::Length(rem) => Some(rem),
+            _ => None,
+        }
+    }
+
     pub(crate) fn encode(
         &self,
         dst: &mut BytePages,

@@ -1365,3 +1365,175 @@ async fn client_pool_respects_address_override() {
     }
     assert_eq!(accepted.load(Ordering::Relaxed), 1);
 }
+
+/// Requests recorded by `capture_server` as `(connection, request)` pairs.
+type Captured = Arc<std::sync::Mutex<Vec<(usize, String)>>>;
+
+/// Starts a raw keep-alive server that records `(connection, request)` pairs.
+///
+/// A request ends after its head and its `Content-Length` bytes, or after the
+/// last chunk of a chunked body. Each request is answered with an empty `200`.
+fn capture_server() -> (net::SocketAddr, Captured) {
+    let addr = ntex::server::TestServer::unused_addr();
+    let lst = std::net::TcpListener::bind(addr).unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen2 = seen.clone();
+    std::thread::spawn(move || {
+        for (conn, mut stream) in lst.incoming().flatten().enumerate() {
+            let seen = seen2.clone();
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let mut b = [0; 1024];
+                loop {
+                    let Some(head_end) =
+                        buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                    else {
+                        match stream.read(&mut b) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&b[..n]),
+                        }
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&buf[..head_end]).to_lowercase();
+                    let body_len = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length: "))
+                        .map(|v| v.trim().parse::<usize>().unwrap());
+                    let end = if let Some(len) = body_len {
+                        (buf.len() >= head_end + len).then_some(head_end + len)
+                    } else if head.contains("transfer-encoding: chunked") {
+                        buf.windows(5)
+                            .position(|w| w == b"0\r\n\r\n")
+                            .map(|p| p + 5)
+                    } else {
+                        Some(head_end)
+                    };
+                    let Some(end) = end else {
+                        match stream.read(&mut b) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&b[..n]),
+                        }
+                        continue;
+                    };
+                    let req: Vec<u8> = buf.drain(..end).collect();
+                    seen.lock()
+                        .unwrap()
+                        .push((conn, String::from_utf8_lossy(&req).into_owned()));
+                    if stream
+                        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (addr, seen)
+}
+
+/// STATEMENT: An HTTP/1 request is sent with the requested `HTTP/1.0` version,
+/// and versions that HTTP/1 cannot carry are sent as `HTTP/1.1`.
+///
+/// HOW:
+/// - Send `version(HTTP_10)` and `version(HTTP_2)` requests to `capture_server`.
+/// - Assert the request lines are `GET / HTTP/1.0` and `GET / HTTP/1.1`.
+#[ntex::test]
+async fn client_request_version_is_honored() {
+    let (addr, seen) = capture_server();
+    let client = Client::new();
+
+    for version in [ntex::http::Version::HTTP_10, ntex::http::Version::HTTP_2] {
+        let res = client
+            .get(format!("http://{addr}/"))
+            .version(version)
+            .send()
+            .await
+            .unwrap();
+        assert!(res.status().is_success());
+    }
+
+    let seen = seen.lock().unwrap();
+    assert!(seen[0].1.starts_with("GET / HTTP/1.0\r\n"), "{}", seen[0].1);
+    assert!(seen[1].1.starts_with("GET / HTTP/1.1\r\n"), "{}", seen[1].1);
+}
+
+/// STATEMENT: A raw `Connection: close` request header closes the HTTP/1
+/// connection like `force_close`.
+///
+/// HOW:
+/// - Send two plain requests to the keep-alive `capture_server`, then two with
+///   `header("connection", "Keep-Alive, Close")`.
+/// - Assert the plain requests share one connection and send no `Connection`
+///   header, and each raw-header request sends `connection: close`.
+/// - Assert the first raw-header request reuses the pooled connection and
+///   closes it, so the second one opens a new connection.
+#[ntex::test]
+async fn client_raw_connection_header_is_honored() {
+    let (addr, seen) = capture_server();
+    let client = Client::new();
+
+    for close in [false, false, true, true] {
+        let mut req = client.get(format!("http://{addr}/"));
+        if close {
+            req = req.header("connection", "Keep-Alive, Close");
+        }
+        assert!(req.send().await.unwrap().status().is_success());
+    }
+
+    let seen = seen.lock().unwrap();
+    let conns: Vec<_> = seen.iter().map(|(c, _)| *c).collect();
+    assert_eq!(conns, vec![0, 0, 0, 1]);
+    assert!(!seen[1].1.to_lowercase().contains("connection:"));
+    for (_, req) in &seen[2..] {
+        assert!(req.contains("connection: close\r\n"), "{req}");
+    }
+}
+
+/// STATEMENT: A streaming request body with a `Content-Length` header is sent
+/// with that length instead of chunked coding, and a stream that does not
+/// match the length fails.
+///
+/// HOW:
+/// - Stream `hello` in two chunks with `content_length(5)` to `capture_server`,
+///   assert the request has `content-length: 5`, no `transfer-encoding` and
+///   ends with `hello`.
+/// - Stream `hi` and then `hello world` with `content_length(5)`, assert both
+///   sends fail and no further request reaches the server.
+#[ntex::test]
+async fn client_stream_uses_declared_content_length() {
+    let (addr, seen) = capture_server();
+    let client = Client::new();
+    let stream = |chunks: Vec<&'static [u8]>| {
+        futures_util::stream::iter(
+            chunks
+                .into_iter()
+                .map(|c| Ok::<_, io::Error>(Bytes::from_static(c))),
+        )
+    };
+
+    let res = client
+        .post(format!("http://{addr}/"))
+        .content_length(5)
+        .send_stream(stream(vec![b"hel", b"lo"]))
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+    {
+        let seen = seen.lock().unwrap();
+        let req = seen[0].1.to_lowercase();
+        assert!(req.contains("\r\ncontent-length: 5\r\n"), "{req}");
+        assert!(!req.contains("transfer-encoding"), "{req}");
+        assert!(req.ends_with("\r\n\r\nhello"), "{req}");
+    }
+
+    for chunks in [vec![&b"hi"[..]], vec![b"hello world"]] {
+        let res = client
+            .post(format!("http://{addr}/"))
+            .content_length(5)
+            .send_stream(stream(chunks.clone()))
+            .await;
+        assert!(res.is_err(), "{chunks:?}");
+    }
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}

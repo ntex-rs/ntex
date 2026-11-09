@@ -7,8 +7,10 @@ use urly::Url;
 use crate::error::{Error, ErrorMapping, with_service};
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::error::PayloadError;
-use crate::http::header::{HOST, HeaderValue};
-use crate::http::{Payload, PayloadStream, ResponseHead, h1};
+use crate::http::header::{
+    CONNECTION, CONTENT_LENGTH, HOST, HeaderName, HeaderValue, TRANSFER_ENCODING,
+};
+use crate::http::{ConnectionType as HttpConnectionType, Payload, PayloadStream, ResponseHead, h1};
 use crate::io::{IoBoxed, RecvError};
 use crate::service::cfg::Configuration;
 use crate::time::{Millis, timeout_checked};
@@ -47,6 +49,7 @@ async fn send_request_inner(
     {
         req.head.headers.insert(HOST, value);
     }
+    apply_framing_headers(&mut req, body.size());
 
     log::trace!(
         "{}: sending http1 request {req:?} body size: {:?}",
@@ -128,6 +131,46 @@ pub(crate) fn host_port(uri: &Url) -> Option<(&str, Option<u16>)> {
     let host = uri.host()?;
     let default_port = uri.scheme().and_then(urly::Scheme::default_port);
     Some((host, uri.port_u16().filter(|p| Some(*p) != default_port)))
+}
+
+/// Applies framing requested with raw headers.
+///
+/// The encoder writes `Connection` itself, so its `close`, `keep-alive` and
+/// `upgrade` options become the connection type. A streaming body with a
+/// `Content-Length` header and no `Transfer-Encoding` header is framed by that
+/// length instead of chunked coding.
+fn apply_framing_headers(req: &mut ClientRawRequest, size: BodySize) {
+    let extra = req.headers.as_ref();
+    let has = |name: &HeaderName| {
+        req.head.headers.contains_key(name) || extra.is_some_and(|h| h.contains_key(name))
+    };
+    let no_chunking = size == BodySize::Stream && has(&CONTENT_LENGTH) && !has(&TRANSFER_ENCODING);
+
+    let mut ctypes = Vec::new();
+    let values = req
+        .head
+        .headers
+        .get_all(CONNECTION)
+        .chain(extra.into_iter().flat_map(|h| h.get_all(CONNECTION)));
+    for value in values {
+        for token in value.as_bytes().split(|b| *b == b',') {
+            let token = token.trim_ascii();
+            if token.eq_ignore_ascii_case(b"close") {
+                ctypes.push(HttpConnectionType::Close);
+            } else if token.eq_ignore_ascii_case(b"keep-alive") {
+                ctypes.push(HttpConnectionType::KeepAlive);
+            } else if token.eq_ignore_ascii_case(b"upgrade") {
+                ctypes.push(HttpConnectionType::Upgrade);
+            }
+        }
+    }
+
+    for ctype in ctypes {
+        req.head.set_connection_type(ctype);
+    }
+    if no_chunking {
+        req.head.no_chunking(true);
+    }
 }
 
 /// Builds the `Host` header value, the port is omitted if it is the scheme's default.

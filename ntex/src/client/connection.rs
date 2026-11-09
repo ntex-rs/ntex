@@ -73,7 +73,11 @@ impl Connection {
     ) -> Result<(ResponseHead, Payload), Error<ClientError>> {
         match self.io.take().unwrap() {
             ConnectionType::H1(io) => {
-                req.head.version = Version::HTTP_11;
+                // HTTP/1.0 is kept as requested, other versions are not
+                // spoken on an HTTP/1 connection
+                if req.head.version != Version::HTTP_10 {
+                    req.head.version = Version::HTTP_11;
+                }
                 h1proto::send_request(io, req, body, self.created, timeout, self.pool).await
             }
             ConnectionType::H2(io) => {

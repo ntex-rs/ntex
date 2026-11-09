@@ -12,6 +12,15 @@
   with another address (or none) no longer reuses a connection to a
   different server
 
+* HTTP/1 client requests now honor settings that were silently ignored:
+  `version(Version::HTTP_10)` is sent as `HTTP/1.0` (other versions are sent
+  as `HTTP/1.1`; HTTP/2 connections always use `HTTP/2`); the `close`,
+  `keep-alive` and `upgrade` options of a raw `Connection` header set the
+  connection type like `set_connection_type()`; and a streaming body with a
+  `Content-Length` header is sent with that length instead of chunked coding.
+  A request body longer than its declared length now fails with
+  `EncodeError::InvalidLength` instead of being cut off
+
 * Client `body()` and `json()` no longer check `Content-Length` for bodiless
   responses (`HEAD` requests, `204`, `304`). They now return an empty body
   instead of failing with `Overflow` or `UnknownLength`. With response
