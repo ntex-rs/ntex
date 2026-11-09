@@ -2,6 +2,11 @@
 
 ## [4.7.0] - 2026-11-xx
 
+* `middleware::DefaultHeaders` no longer implements `Clone`, and configuring it
+  after creating a middleware from it no longer panics. A header set several
+  times now emits all its values when the response lacks that name; previously
+  only the first value was sent
+
 * `ResponseBuilder::cookie()` and `del_cookie()` identify cookies by name, path,
   and domain, so same-name cookies with different scopes are all sent; cookies
   are emitted in insertion order. `del_cookie()` keeps the cookie's path and

@@ -9,6 +9,8 @@ use crate::web::{WebRequest, WebResponse};
 /// `Middleware` for setting default response headers.
 ///
 /// This middleware does not set header if response headers already contains it.
+/// A header name configured with several values gets all of them when the
+/// response does not contain that name.
 ///
 /// ```rust
 /// use ntex::http;
@@ -24,12 +26,12 @@ use crate::web::{WebRequest, WebResponse};
 ///         );
 /// }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DefaultHeaders {
     inner: Rc<Inner>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Inner {
     ct: bool,
     headers: HeaderMap,
@@ -55,6 +57,8 @@ impl DefaultHeaders {
 
     #[must_use]
     /// Set a header.
+    ///
+    /// Calling it again with the same name adds another value.
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -66,10 +70,7 @@ impl DefaultHeaders {
         match HeaderName::try_from(key) {
             Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => {
-                    Rc::get_mut(&mut self.inner)
-                        .expect("Multiple copies exist")
-                        .headers
-                        .append(key, value);
+                    Rc::make_mut(&mut self.inner).headers.append(key, value);
                 }
                 Err(_) => panic!("Cannot create header value"),
             },
@@ -83,9 +84,7 @@ impl DefaultHeaders {
     ///
     /// The header is set to `application/octet-stream`.
     pub fn content_type(mut self) -> Self {
-        Rc::get_mut(&mut self.inner)
-            .expect("Multiple copies exist")
-            .ct = true;
+        Rc::make_mut(&mut self.inner).ct = true;
         self
     }
 }
@@ -120,9 +119,11 @@ where
         let mut res = ctx.call(&self.service, r).await?;
 
         // set response headers
-        for (key, value) in &self.inner.headers {
+        for key in self.inner.headers.keys() {
             if !res.headers().contains_key(key) {
-                res.headers_mut().insert(key.clone(), value.clone());
+                for value in self.inner.headers.get_all(key) {
+                    res.headers_mut().append(key.clone(), value.clone());
+                }
             }
         }
         // default content-type
@@ -184,6 +185,53 @@ mod tests {
         );
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
+    }
+
+    /// STATEMENT: A default header configured with several values emits all of them
+    /// unless the response already has that name, and configuring after `create`
+    /// does not affect the created middleware.
+    ///
+    /// HOW:
+    /// - Configure `x-multi` with `one` and `two`, create the middleware, then add
+    ///   `three` to the same builder.
+    /// - Call a service without `x-multi` and assert exactly `one`, `two` are emitted.
+    /// - Call a service returning `x-multi: own` and assert only `own` remains.
+    #[crate::rt_test]
+    async fn test_multi_value_header() {
+        let dh = DefaultHeaders::new()
+            .header("x-multi", "one")
+            .header("x-multi", "two");
+        let mw = Pipeline::new((), Middleware::create(&dh, &(), ok_service()));
+        let _ = dh.header("x-multi", "three");
+
+        let resp = mw
+            .call(TestRequest::default().to_srv_request())
+            .await
+            .unwrap();
+        let values: Vec<_> = resp.headers().get_all("x-multi").collect();
+        assert_eq!(values, ["one", "two"]);
+
+        let srv = fn_service(async move |req: WebRequest<()>| {
+            Ok::<_, Infallible>(
+                req.into_response(HttpResponse::Ok().header("x-multi", "own").build()),
+            )
+        });
+        let mw = Pipeline::new(
+            (),
+            Middleware::create(
+                &DefaultHeaders::new()
+                    .header("x-multi", "one")
+                    .header("x-multi", "two"),
+                &(),
+                srv,
+            ),
+        );
+        let resp = mw
+            .call(TestRequest::default().to_srv_request())
+            .await
+            .unwrap();
+        let values: Vec<_> = resp.headers().get_all("x-multi").collect();
+        assert_eq!(values, ["own"]);
     }
 
     /// STATEMENT: Configuring an invalid default header name panics with a descriptive error.
