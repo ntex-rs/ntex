@@ -275,8 +275,15 @@ impl<T: MessageType> MessageEncoder<T> {
                 BodySize::Empty | BodySize::None => TransferEncoding::empty(),
                 BodySize::Sized(len) => TransferEncoding::length(len),
                 BodySize::Stream => {
-                    if message.chunked() && !stream {
+                    if stream {
+                        TransferEncoding::eof()
+                    } else if message.chunked() {
                         TransferEncoding::chunked()
+                    } else if let Some(len) =
+                        declared_length(message.headers(), extra_headers.as_ref())?
+                    {
+                        // an unchunked stream is framed by its declared length
+                        TransferEncoding::length(len)
                     } else {
                         TransferEncoding::eof()
                     }
@@ -311,6 +318,34 @@ impl<T: MessageType> MessageEncoder<T> {
         message.encode_headers(dst, version, length, ctype, extra_headers)?;
         Ok(ctype)
     }
+}
+
+/// Returns the `Content-Length` declared by `extra` or, if absent, by `headers`.
+///
+/// Multiple or non-numeric values are rejected, see RFC 9110 section 8.6.
+fn declared_length(
+    headers: &HeaderMap,
+    extra: Option<&HeaderMap>,
+) -> Result<Option<u64>, EncodeError> {
+    let headers = extra
+        .filter(|h| h.contains_key(CONTENT_LENGTH))
+        .unwrap_or(headers);
+    let mut values = headers.get_all(CONTENT_LENGTH);
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(EncodeError::InvalidLength);
+    }
+    let value = value.as_bytes();
+    if !value.iter().all(u8::is_ascii_digit) {
+        return Err(EncodeError::InvalidLength);
+    }
+    std::str::from_utf8(value)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Some)
+        .ok_or(EncodeError::InvalidLength)
 }
 
 /// Returns `true` for statuses that never have a response body:
@@ -788,6 +823,91 @@ mod tests {
             encode(Version::HTTP_11, false, false),
             Err(EncodeError::UnknownLength)
         ));
+    }
+
+    /// STATEMENT: An unchunked streaming body is framed by its declared
+    /// `Content-Length`, and invalid declarations are rejected.
+    ///
+    /// HOW:
+    /// - Encode an unchunked response stream declaring 3 bytes, write 4 bytes and
+    ///   check only 3 are sent and the connection stays alive.
+    /// - Check a 2-byte body fails at eof with `UnexpectedEof`.
+    /// - Check extra headers override the message length only when they carry
+    ///   `Content-Length`, tunnels stay close-delimited, and repeated, non-numeric or overflowing values fail
+    ///   with `InvalidLength`.
+    #[crate::rt_test]
+    async fn test_stream_declared_length() {
+        let encode =
+            |cl: &[&'static str], extra: Option<(HeaderName, &'static str)>, stream: bool| {
+                let mut res = Response::with_body(StatusCode::OK, ());
+                res.head_mut().no_chunking(true);
+                for v in cl {
+                    res.headers_mut()
+                        .append(CONTENT_LENGTH, HeaderValue::from_static(v));
+                }
+                let extra = extra.map(|(n, v)| {
+                    let mut h = HeaderMap::new();
+                    h.insert(n, HeaderValue::from_static(v));
+                    h
+                });
+                let mut bytes = BytePages::default();
+                let enc = MessageEncoder::<Response<()>>::default();
+                let ctype = enc.encode(
+                    &mut bytes,
+                    &res,
+                    false,
+                    stream,
+                    Version::HTTP_11,
+                    BodySize::Stream,
+                    ConnectionType::KeepAlive,
+                    extra,
+                )?;
+                let _ = bytes.take();
+                Ok::<_, EncodeError>((enc, bytes, ctype))
+            };
+        let body = |enc: &MessageEncoder<Response<()>>, bytes: &mut BytePages, data| {
+            enc.encode_chunk(Bytes::from_static(data), bytes);
+            bytes.take().map(|b| b.to_vec()).unwrap_or_default()
+        };
+
+        let (enc, mut bytes, ctype) = encode(&["3"], None, false).unwrap();
+        assert_eq!(ctype, ConnectionType::KeepAlive);
+        assert_eq!(body(&enc, &mut bytes, b"abcd"), b"abc");
+        assert_eq!(body(&enc, &mut bytes, b"e"), b"");
+        enc.encode_eof(&mut bytes).unwrap();
+
+        let (enc, mut bytes, _) = encode(&["3"], None, false).unwrap();
+        assert_eq!(body(&enc, &mut bytes, b"ab"), b"ab");
+        assert!(matches!(
+            enc.encode_eof(&mut bytes),
+            Err(EncodeError::UnexpectedEof)
+        ));
+
+        let (enc, mut bytes, _) = encode(&["3"], Some((CONTENT_LENGTH, "1")), false).unwrap();
+        assert_eq!(body(&enc, &mut bytes, b"abcd"), b"a");
+
+        let (enc, mut bytes, _) = encode(&["3"], Some((DATE, "x")), false).unwrap();
+        assert_eq!(body(&enc, &mut bytes, b"abcd"), b"abc");
+
+        let (enc, mut bytes, ctype) = encode(&["3"], None, true).unwrap();
+        assert_eq!(ctype, ConnectionType::KeepAlive);
+        assert_eq!(body(&enc, &mut bytes, b"abcd"), b"abcd");
+
+        for (cl, extra) in [
+            (&["3", "3"][..], None),
+            (&["+3"][..], None),
+            (&[""][..], None),
+            (&["99999999999999999999"][..], None),
+            (&["3"][..], Some((CONTENT_LENGTH, "x"))),
+        ] {
+            assert!(
+                matches!(
+                    encode(cl, extra.clone(), false),
+                    Err(EncodeError::InvalidLength)
+                ),
+                "{cl:?} {extra:?}"
+            );
+        }
     }
 
     /// STATEMENT: Decimal length encoding preserves values across digit widths and optional line termination.
