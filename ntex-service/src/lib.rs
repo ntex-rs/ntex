@@ -119,6 +119,28 @@ pub use crate::state::{RequestState, State};
 /// # }
 /// ```
 ///
+/// # Wrapping services
+///
+/// The default [`Self::bind`], [`Self::ready`], and [`Self::shutdown`] bodies
+/// are only suitable for leaf services. A wrapper that owns another service and
+/// implements only [`Self::call`] still compiles, but its child is never bound,
+/// child readiness errors and capacity limits are bypassed, child readiness
+/// notifications never invalidate the wrapper's cached readiness, and the child
+/// is never shut down.
+///
+/// Prefer helpers that forward the whole lifecycle:
+///
+/// - [`fn_layer`] or [`apply_fn`] for wrappers that only adapt calls;
+///   `ntex::web::middleware::from_fn` is the equivalent for web middleware.
+/// - [`forward!`] for manual implementations with one or several service fields.
+/// - [`Pipeline::bind_to`] in [`Self::bind`] for [`Pipeline`] fields.
+///
+/// Otherwise implement all three methods: bind every child with
+/// [`BindCtx::bind`], check each child with [`Ctx::ready`], and shut each child
+/// down with [`Ctx::shutdown`]. A wrapper that adds its own readiness, such as a
+/// capacity limit, must also subscribe a [`ReadyNotifier`] in [`Self::bind`] and
+/// notify it on every change; waking a task does not invalidate cached success.
+///
 /// # Framework guide
 ///
 /// - [Service Model](https://docs.ntex.rs/1-service.html)
