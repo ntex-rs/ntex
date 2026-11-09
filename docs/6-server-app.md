@@ -1,41 +1,40 @@
 # Worker and request state
 
-Each ntex worker runs its own single-threaded runtime. To make use of multiple
-CPU cores, the server starts several workers and distributes incoming
-connections among them. Each worker then creates and runs its own application
-instance.
+A database client is usually worth reusing across requests. The current
+user's identity usually belongs to the request instead. Choose where to keep
+state based on which requests or connections need to share it. A worker can
+reuse long-lived resources while each request carries its own information.
 
-Starting an application usually happens in two stages.
+Each ntex worker runs its own single-threaded runtime and application instance.
+To use multiple CPU cores, the server starts several workers and distributes
+incoming connections among them.
 
-First, the server loads configuration that is shared across the entire process.
-This normally happens on the main thread and may include reading environment
-variables, parsing command-line arguments, loading configuration files, or
-fetching settings from an external service.
+Application startup usually has two stages. First, you load configuration for
+the whole process, normally on the main thread. You might read environment
+variables, parse command-line arguments, load configuration files, or fetch
+settings from an external service.
 
-Next, ntex uses that configuration to initialize each worker. The
-`ServerAppConfig` trait controls this part of the process. You provide the
-server with an object that implements `ServerAppConfig`, and the server calls
-its `create()` method inside each worker every time that worker starts. If a
-worker fails and is restarted, `create()` runs again and the restarted worker
-gets fresh state.
+Next, ntex uses that configuration to initialize each worker. You provide an
+object that implements `ServerAppConfig`. The server calls its `create()`
+method inside each worker whenever that worker starts. If a worker fails and
+restarts, `create()` runs again to give it fresh state.
 
-The configuration object must implement `Send + Sync` because the server shares
-it across worker threads. The state returned by `create()` is different: it
-belongs to one worker and stays on that worker's thread. As a result, worker
-state can contain single-threaded types such as `Rc` and `RefCell`.
+The configuration object must implement `Send + Sync` because the server
+shares it across worker threads. The state returned by `create()` belongs to
+one worker and stays on its thread. You can use single-threaded types such as
+`Rc` and `RefCell` in that state.
 
-Worker state must also implement `Clone`. The server clones it for every
-listener, and servers such as `web::server_with_config()` clone it again for
-every connection. Put data that should be shared by all connections of a worker
-behind a shared handle, such as `Rc<RefCell<T>>` or `Rc<Cache>`, so that
-the clones refer to the same value. Plain fields are copied, and changes to
-them are not visible to other clones.
+Worker state must also implement `Clone`: the server clones it when building
+listener services. Servers such as `web::server_with_config()` clone it again
+for every connection. To make those clones share a worker's data, put that
+data behind a shared handle, such as `Rc<RefCell<T>>` or `Rc<Cache>`. Each
+handle then refers to the same value. Cloning a plain field does not by itself
+share later changes with other clones.
 
-The `create()` method is asynchronous, so it can do more than simply construct
-a struct. It can open database connections, create client instances, initialize
-caches, or prepare any other resources the worker needs. If something goes
-wrong, it can return an error rather than starting the worker with invalid
-state.
+The asynchronous `create()` method can prepare resources the worker needs.
+You can open database connections, create clients, or initialize caches there.
+If initialization fails, return an error rather than start the worker with
+invalid state.
 
 ```rust
 struct AppBuilder {
@@ -59,9 +58,8 @@ impl ServerAppConfig for AppBuilder {
 }
 ```
 
-A separate type is not always necessary. `ServerAppConfig` is also implemented
-for async closures that return `io::Result<State>`, and `NoConfig` provides
-unit state for servers that do not need any:
+You do not always need a separate configuration type. `ServerAppConfig` also
+supports async closures that return `io::Result<State>`:
 
 ```rust
 let server = ntex::server::build_with_config(async || {
@@ -71,11 +69,14 @@ let server = ntex::server::build_with_config(async || {
 });
 ```
 
+For servers that need no state, `NoConfig` provides unit state.
+
 ## Creating the Worker Application
 
-Once the worker state is ready, the server calls an application factory to
-build the worker's application instance. The factory runs once per worker and
-receives a reference to the state created by `ServerAppConfig::create()`.
+Once a worker has its resources, it can build the application that uses them.
+The server calls each registered application factory in each worker, after
+`ServerAppConfig::create()` finishes, and passes a reference to the worker's
+state.
 
 ```rust
 #[ntex::main]
@@ -98,49 +99,31 @@ async fn main() -> std::io::Result<()> {
 }
 ```
 
-Here, `AppBuilder` holds the process-wide configuration and implements
-`ServerAppConfig`. For every worker, ntex calls `AppBuilder::create()` to
-produce a new `AppState`. It then passes that state to the application factory,
-which builds the worker's `web::App` factory. The `App` service itself is
-created for each connection, with its own clone of the worker state.
+Here, `AppBuilder` implements `ServerAppConfig`, so its `create()` method
+produces a fresh `AppState` for each worker. The application factory receives
+that state and builds the worker's `web::App` factory.
 
-The factory can use the state while setting up the application and its
-services. The same state is also available to the worker's connection-handler
-pipelines throughout their lifecycle.
+There are two kinds of factory at work here. The application factory runs
+during worker setup; the resulting `App` creates a service for each connection,
+with its own clone of the worker state. You can therefore use state both when
+setting up the application and its services, and throughout the lifecycle of
+the worker's connection-handler pipelines.
 
 ## Worker-Local and Process-Wide State
 
-A worker creates its state once and reuses it for every connection it handles.
-It does not call `create()` for every connection. Connections receive clones of
-the worker state, so values behind `Rc` are shared by every connection of that
-worker.
-
-This means that connections handled by the same worker see the same shared data.
-Connections handled by different workers, however, use different state
-instances. Updating local state in one worker does not automatically update the
-state in another worker.
-
-This separation is often useful. Because worker-local state never crosses
-thread boundaries, it can use simple single-threaded data structures without
-paying the cost of synchronization.
-
-Sometimes state really does need to be shared across all workers. In that case,
-it must be shared explicitly. One common approach is to wrap the shared value in
-an `Arc` and clone it into each worker state. If the value is mutable, it will
-also need a suitable synchronization mechanism, such as an atomic type,
-`Mutex`, or `RwLock`.
-
-The best choice depends on how the data is used. Prefer worker-local state when
-workers do not need to coordinate. Use process-wide shared state only when
-changes must be visible across workers.
+An `Rc` shares data within one worker, not across the whole server. For a
+value that every worker must see, make process-wide sharing explicit: wrap
+the value in an `Arc` and clone it into each worker's state. Mutable values
+also need suitable synchronization, such as an atomic type, `Mutex`, or
+`RwLock`.
 
 [Complete process/worker configuration example](https://github.com/ntex-rs/examples/tree/main/state/process)
 
 ## Service and Pipeline State
 
-ntex-service 5 adds a state parameter to the `Service` trait. This gives every
-service access to state while it is checking readiness, handling requests, or
-shutting down.
+A service may need state before it accepts a request or after it finishes one.
+The state parameter on `Service` makes state available while the service
+checks readiness, handles requests, and shuts down.
 
 A simplified version of the trait looks like this:
 
@@ -164,18 +147,17 @@ trait Service<St, Req> {
 }
 ```
 
-Here, `St` is the type of state the service expects. Since it is part of the
-`Service` definition, Rust can check that a service is always used with the
-right kind of state.
+`St` names the state type the service expects. Because it is part of the
+`Service` definition, Rust checks that you use the service with the right
+kind of state.
 
-The same state is available in all three lifecycle methods:
+The same state is available throughout the lifecycle: `ready()` uses it while
+checking whether the service can accept more work, `call()` while handling a
+request, and `shutdown()` while stopping. It is not limited to request
+handling.
 
-- `ready()` can use it while checking whether the service is ready for more work.
-- `call()` can use it while handling a request.
-- `shutdown()` can use it while the service is stopping.
-
-You can think of a stateful service as an asynchronous function that receives
-both the state and the request:
+For the request-handling part, a stateful service works like an asynchronous
+function that receives both the state and the request:
 
 ```rust
 async fn my_service(
@@ -186,31 +168,34 @@ async fn my_service(
 }
 ```
 
-The `Service` trait does not pass state as a separate argument. Instead, it
-provides state through `Ctx`. The context also connects the service to its
-pipeline, which manages readiness, request processing, and shutdown.
+The `Service` trait provides state through `Ctx`, rather than a separate
+argument. The context also connects the service to its pipeline. That
+pipeline manages readiness, request processing, and shutdown.
 
 ### Constructing a Pipeline
 
-To call a service, you first place it in a `Pipeline`. A pipeline keeps the
-service and its state together. It can contain a single service or a chain of
-services, all of which can use the same state.
-
-Here is a small example:
+To call a service, place it in a `Pipeline` with its state. A pipeline can
+hold one service or a chain of services that use the same state.
 
 ```rust
+use std::io;
+
+struct AppState {
+    prefix: &'static str,
+}
+
 async fn my_service(
     state: &AppState,
     req: usize,
 ) -> Result<String, io::Error> {
-    // Use the pipeline state to handle the request.
-    todo!()
+    Ok(format!("{} {req}", state.prefix))
 }
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
     // Create a pipeline containing one state instance and one service.
-    let svc = ntex::Pipeline::new(AppState::new(), my_service);
+    let state = AppState { prefix: "request" };
+    let svc = ntex::Pipeline::new(state, my_service);
 
     // Both calls use the same AppState instance.
     let first = svc.call(1).await?;
@@ -222,24 +207,19 @@ async fn main() -> io::Result<()> {
 }
 ```
 
-The `AppState` is created when the pipeline is built. It stays with the pipeline
-and is reused for every call. Calling `svc.call()` does not create a new state
-instance.
+This example creates `AppState` when it builds the pipeline. Both calls reuse
+that instance; `svc.call()` does not create new state.
 
-If the pipeline contains a chain of services, each compatible service can
-access the same state. This makes it easy to share resources across a service
-chain without adding a copy of those resources to every service.
+In a chain, each compatible service can access the same state. You can share
+resources across the chain without storing a copy in every service.
 
 ### Worker state
 
-Earlier, we saw that ntex creates a separate state instance for each server
-worker. That state also becomes the state of the worker's connection-handler
-pipeline.
-
-When a worker starts, the server calls the application factory and passes it a
-reference to the worker state. The factory builds a connection-handler service,
-and the server places that service in a pipeline together with the worker
-state.
+The server builds the same service-and-state pairing for incoming connections.
+When a worker starts, it passes a reference to that worker's state to the
+application factory. The factory builds a connection-handler service, which
+the server places in a pipeline with the state. Each worker has its own
+instance, so this is a worker-local pipeline rather than a process-wide one.
 
 ```rust
 /// Handles an I/O connection using worker-local state.
@@ -273,35 +253,24 @@ async fn main() -> std::io::Result<()> {
 }
 ```
 
-The factory is called once for each worker and receives that worker's
-`AppState`. It can use the state to configure the service during construction.
-
-The server places the returned service and a clone of the worker state in a
-pipeline. When
-a connection is dispatched to `handle_io` service, the pipeline passes access to the
-same `AppState` instance alongside the connection.
-
-Each worker has its own state. Connections handled by the same worker share the
-data behind the state's shared handles, but connections handled by different
-workers do not automatically share state.
-
 ## State Accumulation
 
-The state we have discussed so far is long-lived. Worker state lives for as long
-as the worker, and pipeline state lives for as long as the pipeline. In both
-cases, the state is created once and reused across many calls.
+A request or connection may need to collect information as it moves through a
+service chain. Each service can inspect the information so far, add to it, and
+pass the updated state to the next service.
 
-Sometimes we need state with a shorter lifetime. In particular, we may want to
-collect information while a request or connection moves through a service
-chain. Each service can inspect what has already been collected, add more
-information, and pass the updated state to the next service.
+Unlike worker and pipeline state, accumulated state travels with the item
+being processed. Worker state lasts for the worker's lifetime, and pipeline
+state for the pipeline's lifetime; both are created once and reused across
+many calls. Accumulated state belongs to one request, or to one connection
+when the chain processes connections.
 
-Imagine a pipeline that accepts an incoming connection. The first service might
-record basic details such as the connection ID and peer address. The next
-service could read the TLS `ClientHello` and extract the Server Name Indication
-(SNI). Other services might load configuration for that server name, validate
-the client, calculate resource usage, apply throttling, and finally perform the
-TLS handshake before handing the connection to an HTTP server.
+For example, the first service handling an incoming connection might record
+its ID and peer address. The next could read the TLS `ClientHello` and extract
+the Server Name Indication (SNI). Later services could load configuration for
+that server name, validate the client, calculate resource usage, and apply
+throttling. Finally, a service performs the TLS handshake before passing the
+connection to an HTTP server.
 
 The pipeline might look like this:
 
@@ -315,27 +284,23 @@ accept connection
     → handle HTTP
 ```
 
-ntex-service provides the `RequestState` trait and the `State` type for this
-kind of state. Together, they let us pass a message and its accumulated state
-through a service chain.
+The `ntex-service` crate provides the `RequestState` trait for passing a
+message and its accumulated state through a service chain. `State<St, Req>`
+is the most common implementation: it keeps the state and message together
+as they move from one service to the next.
 
-`State` and types that implement `RequestState` are different from pipeline state.
-Pipeline state is shared across calls, while accumulated state belongs to
-a single request. Every connection moving through the pipeline carries
-its own state.
-
-`State<St, Req>` is the most common implementation, but it is not the only
-one. A `(St, Req)` tuple also implements `RequestState`, which is convenient
-for small services. `Io` and `IoBoxed` implement it with `()` state, so a plain
-connection can be passed to any service that expects a `RequestState`.
+You can also use a `(St, Req)` tuple, which is convenient for small services.
+`Io` and `IoBoxed` implement `RequestState` with `()` state. A plain connection
+can therefore go to any service that expects a `RequestState`.
 
 The ntex protocol servers support `RequestState`, including `ntex::http`,
 ntex-h2, ntex-mqtt, and ntex-amqp.
 
 ### Collecting Connection Information
 
-Let's start with a service that receives a raw I/O connection and collects some
-basic information about it:
+Start by wrapping the raw I/O connection with the information you want later
+services to use. This service records a connection ID, creation time, and
+peer address:
 
 ```rust
 use std::{io, net::SocketAddr, time::Instant};
@@ -362,8 +327,8 @@ async fn connect(_: &AppState, io: Io) -> io::Result<State<Connection, Io>> {
 }
 ```
 
-The next service can unpack these values, perform the TLS handshake, and add
-more information:
+The next service unpacks those values, performs the TLS handshake, and adds
+the server name:
 
 ```rust
 use ntex::service::{RequestState, State};
@@ -393,17 +358,17 @@ async fn tls(_: &AppState, msg: State<Connection, Io>) -> io::Result<State<Conne
 }
 ```
 
-This service changes both parts of the input. It turns the raw `Io` connection
-into a TLS-enabled `TlsIo`, and it extends the connection state with the server
-name extracted during TLS negotiation.
-
-The connection ID, creation time, and peer address are carried forward. By the
-time the connection reaches the HTTP server, its state contains everything
-collected by the earlier services.
+The TLS service changes both parts of the input. It replaces the raw `Io`
+connection with a TLS-enabled `TlsIo` and extends the state with the server
+name extracted during TLS negotiation. The connection ID, creation time, and
+peer address carry forward too, so the HTTP server receives everything the
+earlier services collected.
 
 ### Passing Connection State to the HTTP Service
 
-We can now connect these services into a single chain:
+Connect the services in a chain to pass the collected state to the HTTP
+handler. In this example, the handler uses the server name added by the TLS
+service:
 
 ```rust
 use ntex::{server, service, SharedCfg};
@@ -441,43 +406,25 @@ async fn main() -> io::Result<()> {
 }
 ```
 
-The worker's `AppState` is still available to `connect` and `tls`. It contains
-worker-level resources that can be reused across many connections. At the same
-time, each connection carries its own state.
-
 [Complete state accumulation example](https://github.com/ntex-rs/examples/tree/main/state/state-accumulation)
 
 ## Implementation Details
 
-ntex supports several network protocols, and each one handles state a little
-differently. The important distinction is between state that belongs to a
-connection and state that belongs to a single request.
+The connection chain above collects information once, but a connection may
+carry many requests. Keep that distinction in mind when choosing where to
+store state. Each ntex protocol exposes connection and per-request state a
+little differently.
 
 ### `ntex::http`
 
-`HttpService` expects a handler with roughly the following shape:
-
-```rust
-async fn handler(state: &St, req: http::Request) -> Result<http::Response, Err> {
-    // ...
-}
-```
-
-Here, `state` is the state of the HTTP connection. It is extracted from the
-value passed to `HttpService` through the `RequestState` trait.
-
-For example, an earlier service can return a `State<ConnectionWithTls, Io>`.
-When `HttpService` receives that value, it separates the connection state
-from the I/O stream. The I/O stream is used to run the HTTP protocol,
-while `ConnectionWithTls` becomes the state provided to the HTTP request handler.
-
-This is the mechanism used in the previous section to make connection-specific
-information, such as the peer address and TLS server name, available while
-handling HTTP requests.
+`HttpService` passes connection state to the request handler while it runs
+the HTTP protocol on the I/O stream. It separates its input into those two
+parts using `RequestState`.
 
 ### `ntex::web`
 
-A `web::App` can act as the handler for `HttpService`. When it does, the state
+A web application can use both long-lived state and state collected for one
+request. When a `web::App` serves as the handler for `HttpService`, the state
 extracted by `HttpService` becomes the application's state.
 
 A web service looks roughly like this:
@@ -488,25 +435,18 @@ async fn handler(state: &St, req: web::WebRequest) -> Result<web::WebResponse, E
 }
 ```
 
-The `state` argument contains the long-lived application or connection state.
-The request can also carry its own state through the generic
-parameter of `WebRequest`:
+The `state` argument holds the long-lived application or connection state.
+The generic parameter of `WebRequest` holds state for one request:
 
 ```rust
 web::WebRequest<RequestState>
 ```
 
-This gives a web application two separate kinds of state:
-
-- `St` is provided by the service pipeline and remains available across
-  requests.
-- `RequestState` belongs to one request and moves through the request-processing
-  chain.
-
-A filter or middleware can inspect a `WebRequest`, perform some work, and
-return a new `WebRequest` with a different state type. This makes it possible
-to build up request-specific information as the request moves through
-the application.
+That means `St` comes from the service pipeline and remains available across
+requests, while `RequestState` belongs to one request and moves through its
+processing chain. A filter or middleware can inspect a `WebRequest`, do some
+work, and return a new `WebRequest` with a different state type. This lets you
+collect request-specific information without putting it in long-lived state.
 
 For example, a request-processing chain might look like this:
 
@@ -517,32 +457,18 @@ validate request
     → call the handler
 ```
 
-The request starts without any additional state:
+The request starts without additional state:
 
 ```rust
 web::WebRequest<()>
 ```
 
-After the authentication service loads and verifies the user, it can return:
+After loading and verifying the user, the authentication service can return:
 
 ```rust
 web::WebRequest<AuthenticatedUser>
 ```
 
-The next service can then require `WebRequest<AuthenticatedUser>`. This means it
-cannot be called until authentication has completed and the request contains an
+The next service can require `WebRequest<AuthenticatedUser>`. It cannot be
+called until authentication has completed and the request contains an
 authenticated user.
-
-Another service could validate the request and return a different state type:
-
-```rust
-web::WebRequest<ValidatedRequest>
-```
-
-In this way, the request type shows how far the request has moved through the
-processing chain. Each service declares the state it expects and the state it
-produces, and Rust checks that the services are connected in the right order.
-
-Keeping pipeline state and request state separate lets the application reuse
-connection-level resources while building up request-specific information as
-each request moves through the service chain.

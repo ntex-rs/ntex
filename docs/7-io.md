@@ -1,103 +1,120 @@
 # I/O Abstraction Layer
 
-ntex provides an I/O abstraction layer that keeps protocol and service code
-independent of a specific runtime or reactor implementation, such as Tokio,
-Compio, or Neon.
-
-In addition to presenting a consistent interface across these backends, the
-I/O layer provides the building blocks needed to manage buffered reads and
+You can write protocol and service code without tying it to a runtime or
+reactor such as Tokio, Compio, or Neon. The ntex I/O layer gives that code a
+common interface to the connection. It also handles buffered reads and
 writes, backpressure, timeouts, and graceful shutdown.
 
 ## Socket abstractions
 
-ntex achieves independence from the underlying socket implementation through
-dependency inversion. The I/O subsystem does not call Tokio, Compio, or Neon
-socket APIs directly. Instead, a runtime adapter moves bytes between its socket
-and the buffers owned by [`Io`]. One way to picture it: the read half carries
-bytes from the transport to the application and the write half carries them
-back, with `Io` sitting between the two. Each half is an in-memory buffer that
-`Io` owns, which is what lets it apply backpressure and run filter
-transformations on bytes as they pass through.
+Protocol code works with [`Io`] rather than a concrete socket type. A runtime
+adapter moves bytes between its socket and buffers owned by `Io`. The I/O
+subsystem does not call Tokio, Compio, or Neon socket APIs directly.
 
-An active connection has three cooperating execution responsibilities:
+Each direction has an in-memory buffer owned by `Io`. The read half carries
+bytes from the transport to the application, and the write half carries them
+back. Owning the buffers lets `Io` apply backpressure and run filters as
+bytes pass through.
+
+You normally pass an `Io` to a protocol service such as
+[`ntex::http::HttpService`] or `ntex_mqtt::Server`. The service decodes input
+into protocol messages and encodes responses into the write buffer. It does
+not depend on the concrete socket type. The [`ntex-net`] crate provides the
+runtime-specific implementations for Tokio, Compio, and Neon.
+
+You only need to work below this interface when integrating a transport. If
+you use an existing backend, you can move on to
+[configuration and timeouts](#configuration-and-timeouts).
+
+To integrate a socket type, implement [`IoStream`]. Its `start()` method
+receives an [`IoContext`] and starts the transport-specific tasks. It returns
+a [`Handle`] for controlling or querying the transport.
+
+The work on an active connection falls into these roles:
 
 1. A protocol or dispatcher task consumes decoded input and queues encoded
-   output through `Io` or [`IoRef`]. This task typically runs the protocol
-   service and, indirectly, application code.
-2. A transport read task waits for read readiness, reads bytes from the socket,
-   and submits them to the I/O subsystem.
-3. A transport write task takes queued bytes from the I/O subsystem and writes
-   them to the socket.
+   output through `Io` or [`IoRef`]. It typically runs the protocol service
+   and, indirectly, application code.
+2. A transport read task waits for read readiness, reads bytes from the
+   socket, and submits them to the I/O subsystem.
+3. A transport write task takes queued bytes from the I/O subsystem and
+   writes them to the socket.
 
-The runtime adapter decides how to schedule these responsibilities. The
-built-in adapters typically use cooperating read and write tasks, but this is
-an implementation detail rather than part of the `IoStream` contract.
+The runtime adapter decides how to schedule this work. Built-in adapters
+usually use cooperating read and write tasks. That scheduling is an
+implementation detail, not a requirement of `IoStream`.
 
-The read task cooperates with ntex backpressure. It reads only while
-[`IoContext::poll_read_ready`] permits more input. It takes a buffer through
-[`IoContext::take_read_buf`] and releases it with the result through
-[`IoContext::release_read_buf`]. This allows the I/O
-subsystem to process filters, wake the dispatcher, and pause further reads when
-the configured high-water mark is reached.
+The read task first waits for [`IoContext::poll_read_ready`] to permit more
+input. This keeps socket reads in step with ntex backpressure.
 
-A backend that reads synchronously, without holding the buffer across an await,
-should use [`IoContext::with_read_buf`] instead. It combines the two steps and
-borrows the read buffer in place, so no buffer is detached and appended back.
+Use [`IoContext::take_read_buf`] to obtain the buffer for a read. After the
+read, pass the buffer and result to [`IoContext::release_read_buf`]. ntex then
+processes filters, wakes the dispatcher, and pauses further reads when the
+configured high-water mark is reached.
 
-The write task follows the same pattern. It waits for
-[`IoContext::poll_write_ready`], obtains queued data with
-[`IoContext::with_write_dst`], and reports through
-[`IoContext::update_write_status`] how many bytes reached the peer. ntex can
-then apply write backpressure, resume waiting services, and coordinate
-graceful shutdown.
+For synchronous reads that do not hold the buffer across an await, use
+[`IoContext::with_read_buf`] instead. It combines taking and releasing the
+buffer into one call. It borrows the buffer in place, without detaching it and
+appending it back.
 
-A transport does not have to write the bytes before it reports. Completion
-based backends take ownership of whole pages and keep them until the operation
-completes. Those bytes leave the write buffer but have not reached the peer, so
-ntex counts them as outstanding output until the transport either reports them
-as written or returns them to the buffer. Flush completion, write backpressure,
-and the shutdown drain all account for them.
+The write task waits for [`IoContext::poll_write_ready`] before working on
+output. Use [`IoContext::with_write_dst`] to access the queued data. Then
+report how many bytes reached the peer through
+[`IoContext::update_write_status`]. ntex uses that report to manage write
+backpressure, resume waiting services, and coordinate graceful shutdown.
 
-Both methods return an [`IoTaskStatus`]. `Io` means work remains, not that the
-transport is ready, so a task re-arms transport readiness before its next
-operation. On the write side it is returned whenever output is still buffered,
-including after an attempt that made no progress. Output the transport already
-owns does not keep the task running, because its completion wakes the task
-again.
+A transport can also report bytes it has taken before it writes them.
+Completion-based backends take ownership of whole pages until an operation
+completes. Those bytes have left the write buffer, but they still count as
+outstanding output. They remain outstanding until the transport reports them
+as written or returns them to the buffer. Flush completion, write
+backpressure, and the shutdown drain all include those bytes.
 
-Both readiness methods resolve to a [`Readiness`] value rather than a plain
-ready signal. `Readiness::Ready` allows the task to perform its next operation.
-`Readiness::Close` means the connection must be taken down: the task closes
-both directions and releases the socket, cancelling anything still in flight.
-For a socket this is `shutdown(SHUT_RDWR)` followed by `close()`. Whatever the
-peer still has in the receive queue should be discarded first, because closing
-a socket with unread input aborts the connection with an RST and loses the
-output that was just drained.
+### Readiness and transport teardown
 
-`Readiness::Close` covers a graceful shutdown as well as a connection that ends
-because of an I/O failure, a filter failure, or an expired shutdown deadline.
-On the graceful path the I/O subsystem reports it only once buffered output
-has been drained, so nothing is left to flush.
+An adapter must distinguish queued work from a socket that is ready to do it.
+The buffer-release and write-status methods return an [`IoTaskStatus`]. Its
+`Io` status means work remains, not that the transport is ready. Re-arm
+transport readiness before the next operation.
 
-`Readiness::Terminate` is reported only for an explicit force close through
-[`IoRef::terminate`]. Whatever is still buffered is discarded on purpose, and
-the task must not close gracefully: no receive queue drain and no
-`shutdown(SHUT_RDWR)`. It aborts the connection instead, for a socket by
-setting `SO_LINGER` to zero before `close()`, so that the peer sees an RST and
-cannot mistake a truncated stream for a complete one.
+On writes, the status is `Io` whenever output remains buffered, even if the
+last attempt made no progress. Output already owned by the transport does not
+keep the task running. Its completion wakes the task again.
 
-Teardown is reported back through two methods. A transport that fails or
-decides to abort calls [`IoContext::stop`] with the error, which terminates the
-connection without draining pending work. Once transport teardown has actually
-finished, and regardless of which side initiated it, the task calls
-[`IoContext::stopped`]. That is what completes [`Io::shutdown`], which resolves
-only after the backend reports the connection stopped, not merely when filter
-shutdown and flushing are done.
+The two `IoContext` readiness methods instead return a [`Readiness`] value.
+`Readiness::Ready` lets the task perform its next operation; the other values
+tell it how to tear down the connection.
 
-Socket types integrate with the I/O subsystem by implementing [`IoStream`].
-Its `start()` method receives an [`IoContext`], starts the transport-specific
-tasks, and returns a [`Handle`] used to control or query the transport.
-A simplified Tokio-style adapter looks like this:
+`Readiness::Close` tells the task to close both directions and release the
+socket, cancelling any operations still in flight. It covers graceful
+shutdown, I/O or filter failure, and an expired shutdown deadline. On the
+graceful path, ntex reports it only after draining buffered output, so nothing
+remains to flush.
+
+For a socket, closing means `shutdown(SHUT_RDWR)` followed by `close()`.
+Discard any data left in the receive queue first. Closing with unread input
+aborts the connection with an RST and loses the output that was just drained.
+
+`Readiness::Terminate` occurs only after an explicit force close through
+[`IoRef::terminate`]. It deliberately discards buffered data. The task must
+abort the connection rather than close gracefully, without draining the
+receive queue or calling `shutdown(SHUT_RDWR)`.
+
+For a socket, set `SO_LINGER` to zero before `close()`. The peer then sees an
+RST and cannot mistake a truncated stream for a complete one.
+
+If a transport fails or decides to abort, call [`IoContext::stop`] with the
+error. This terminates the connection without draining pending work.
+
+Once transport teardown finishes, call [`IoContext::stopped`], regardless of
+which side initiated it. That report completes [`Io::shutdown`]. Finishing
+filter shutdown and flushing alone does not complete it; the backend must
+report that the connection has stopped.
+
+The following example sketches a Tokio-style adapter. Real adapters use their
+runtime's native readiness and buffer APIs. Only the adapter accesses the
+socket; application and protocol code use `Io` and `IoRef`. Buffer limits and
+read/write backpressure apply consistently across supported runtimes.
 
 ```rust,ignore
 impl IoStream for TcpStream {
@@ -163,17 +180,6 @@ async fn write_task(socket: Rc<TcpStream>, ctx: IoContext) {
 }
 ```
 
-The example is illustrative; runtime adapters use their native readiness and
-buffer APIs. The important boundary is that only the adapter accesses the
-socket, while the application and protocol layers interact with `Io` and
-`IoRef`. Buffer limits and read/write backpressure are therefore applied
-consistently across all supported runtimes.
-
-An `Io` object is normally passed to a protocol service such as
-[`ntex::http::HttpService`] or `ntex_mqtt::Server`. The protocol service
-decodes incoming bytes into protocol messages and encodes its responses back
-into the I/O write buffer without depending on the concrete socket type.
-
 [`Handle`]: https://docs.ntex.rs/api/ntex/io/trait.Handle.html
 [`Io`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html
 [`IoContext`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html
@@ -192,23 +198,18 @@ into the I/O write buffer without depending on the concrete socket type.
 [`Readiness`]: https://docs.ntex.rs/api/ntex/io/enum.Readiness.html
 [`ntex::http::HttpService`]: https://docs.ntex.rs/api/ntex/http/struct.HttpService.html
 
-The runtime-specific implementations are provided by the [`ntex-net`] crate,
-which supports Tokio, Compio, and Neon backends.
-
 [`ntex-net`]: https://docs.ntex.rs/api/ntex_net/index.html
 
 ### Transport handles and metadata
 
-Because the underlying socket is hidden behind the I/O abstraction, code using
-`Io` cannot access transport-specific methods directly. The [`Handle`] returned
-by `IoStream::start()` provides the bridge to the underlying transport. It can
-resume the transport write operation on request and expose transport-specific
-metadata through typed queries.
+You may need transport information even though `Io` hides the socket. The
+[`Handle`] returned by `IoStream::start()` exposes metadata through typed
+queries. It can also resume transport writes on request.
 
-Each backend decides which query types it supports. For example, the built-in
-network backends expose the remote socket address as [`PeerAddr`].
-[`IoRef::query`] is also available on `Io` through dereferencing and returns a
-[`QueryItem`], from which the value can be retrieved with `get()`:
+Each backend chooses which query types to support. The built-in network
+backends expose the remote socket address as [`PeerAddr`]. Use
+[`IoRef::query`] to request it; you can also call this method on `Io` through
+dereferencing. The returned [`QueryItem`] provides the value through `get()`:
 
 ```rust
 use ntex::io::{Io, types::PeerAddr};
@@ -220,8 +221,8 @@ fn log_peer_addr(io: &Io) {
 }
 ```
 
-Queries travel through the filter stack before reaching the transport handle,
-so filters may also expose their own typed metadata.
+A query passes through the filter stack before it reaches the transport
+handle. Filters can expose their own typed metadata along the way.
 
 [`IoRef::query`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.query
 [`PeerAddr`]: https://docs.ntex.rs/api/ntex/io/types/struct.PeerAddr.html
@@ -229,9 +230,13 @@ so filters may also expose their own typed metadata.
 
 ## Configuration and timeouts
 
-I/O settings are stored in [`IoConfig`] and are normally added to a
-[`SharedCfg`]. `Io::new()` retrieves the `IoConfig` from that shared
-configuration, using the default settings when it is not present.
+Start with the default buffering and timeouts, then use [`IoConfig`] when a
+workload needs different limits. You normally add it to a [`SharedCfg`]. When
+you create a connection, `Io::new()` reads the `IoConfig` from that shared
+configuration, or uses defaults if it is absent.
+
+This example combines the settings in one place; you rarely need to change
+all of them:
 
 ```rust
 use ntex::{
@@ -257,64 +262,71 @@ let cfg = SharedCfg::new("my-protocol")
     .build();
 ```
 
-These settings are used by different parts of the stack:
+### Timeouts
 
-- The connection timeout is applied by `ntex-net` while resolving and opening
-  an outgoing connection.
-- The keep-alive timeout and frame read-rate limits are interpreted by
-  protocol dispatchers. A frame read-rate limit protects a decoder from peers
-  that send one incomplete frame too slowly. It also applies to the first
-  frame of a new connection, so a peer that connects and stays silent is
-  closed once the limit expires. A write timeout protects against peers
-  that stop reading: it bounds how long write backpressure may stay enabled,
-  from the moment it is enabled until it is disabled, before the dispatcher
-  stops with a write timeout. Keep-alive and read-rate timers do not run
-  during that time. Output left after backpressure is disabled is bounded
-  only by keep-alive. The HTTP/1 dispatcher does not use these settings; it is
-  configured by [`HttpServiceConfig`], including its own
-  `set_write_timeout()`.
-- The graceful-shutdown timeout bounds both phases of shutdown together: the
-  filter shutdown and the transport drain of pending output. It cannot be
-  disabled; a zero timeout is rejected.
-- The read and write high-water marks enable backpressure. Write backpressure
-  is released after outstanding output falls to half its high-water mark,
-  counting both buffered output and output a transport has taken ownership of
-  but not yet written to the peer.
-- The min and max read page sizes bound the adaptive page size of new read
-  buffers. Before another socket read, a buffer grows once less than
-  [`BytePageSize::low`] of its page remains free. Output is held in
-  [`BytePages`] of the write page
-  size, so the write backpressure setting takes only a high-water mark.
-- The write buffer page size controls newly allocated [`BytePages`], while the
-  write threshold controls when supported transports attempt an early direct
-  write.
+Timeouts protect different stages of a connection. The `ntex-net` crate uses
+the connection timeout while resolving and opening an outgoing connection.
+Once connected, protocol dispatchers handle the keep-alive timeout and frame
+read-rate limits. A read-rate limit protects a decoder from peers that send
+an incomplete frame too slowly. It also covers the first frame, so a peer
+that connects and stays silent is closed when the limit expires.
 
-Connection and keep-alive timeouts are disabled by default. Frame read-rate
-limits and the write timeout are also disabled. The default graceful-shutdown
-timeout is one second, and the default read and write high-water marks are
-approximately 32 KiB and 16 KiB.
+A peer can also stop reading your output. The write timeout bounds how long
+write backpressure can remain enabled before the dispatcher stops with a
+write timeout. Its timer runs from the moment backpressure is enabled until
+it is disabled; keep-alive and read-rate timers do not run during that time.
+After backpressure is disabled, only keep-alive bounds any remaining output
+in the dispatcher. Set a write timeout especially for untrusted peers:
+without one, a peer that stops reading can keep a backpressured connection
+and its output alive indefinitely.
 
-Start with those defaults. Change one setting because of an observed workload,
-not because larger values sound faster:
+When you use `Io` directly, the write timeout also bounds each wait in
+`send()`, `flush()`, and `write_ready()`. If it expires, the wait fails and
+leaves the connection open for you to close.
 
-- Read page sizes control allocation and read-call frequency, not the amount of
-  unread data a connection may queue. Increase the maximum for sustained large
-  frames or bodies; keep the minimum small when many mostly idle connections
-  are expected.
-- Backpressure watermarks control when producers or transports should pause.
-  They are not hard memory limits: one socket read or one encoded item can
-  cross a watermark.
-- The write threshold is a latency hint for starting transport work earlier.
-  It does not flush data and does not replace write backpressure.
-- A write timeout is especially important for untrusted peers. Without one, a
-  peer that stops reading can keep a backpressured connection and its output
-  alive indefinitely.
+The HTTP/1 dispatcher has its own keep-alive, read-rate, and write timeout
+settings. Configure those through [`HttpServiceConfig`], including its own
+`set_write_timeout()`, rather than the corresponding `IoConfig` settings.
 
-An established connection can switch to another shared configuration with
-[`Io::set_config`]. This is useful when a protocol upgrade changes timeout or
-buffer requirements. The method is `unsafe`: replacing the configuration may
-release the allocation that [`IoRef::cfg`] hands out, so no reference obtained
-from it may be live across the call or used afterwards.
+Finally, the graceful-shutdown timeout covers filter shutdown and the
+transport drain of pending output together. You cannot disable it: a zero
+value is rejected. It defaults to one second. Connection, keep-alive, and
+write timeouts and frame read-rate limits are all disabled by default.
+
+### Buffer limits
+
+Buffering has two separate controls: page sizes govern allocation, while
+high-water marks tell producers or transports when to pause. A watermark is
+not a hard memory limit, because one socket read or encoded item can cross
+it. The default read and write high-water marks are about 32 KiB and 16 KiB,
+respectively.
+
+Write backpressure ends when outstanding output falls to half its high-water
+mark. This count includes both buffered output and bytes owned by the
+transport but not yet written to the peer.
+
+The minimum and maximum read page sizes bound the adaptive size of new read
+buffers. They control allocation and read-call frequency, not how much unread
+data a connection can queue. Increase the maximum for sustained large frames
+or bodies; keep the minimum small for many mostly idle connections. Before
+another socket read, a buffer grows when less than [`BytePageSize::low`] of
+its page remains free.
+
+On the write side, the page size controls newly allocated [`BytePages`], which
+hold output; write backpressure takes only a high-water mark. The write
+threshold tells supported transports when to attempt an early direct write.
+It is a latency hint for starting transport work earlier, not a flush or a
+replacement for write backpressure.
+
+### Reconfiguring a connection
+
+A protocol upgrade may change a connection's timeout or buffer requirements.
+Use [`Io::set_config`] to switch an established connection to another shared
+configuration.
+
+The method is `unsafe`. Replacing the configuration may release the
+allocation behind references returned by [`IoRef::cfg`]. No such reference
+may remain live across the call or be used afterwards.
 
 [`Io::set_config`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.set_config
 [`IoRef::cfg`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.cfg
@@ -322,22 +334,21 @@ from it may be live across the call or used afterwards.
 
 ## Filter subsystem
 
-Applications often need to transform a byte stream before a protocol service
-processes it. TLS must decrypt incoming records and encrypt outgoing data. A
-protocol may also be tunneled through another framing layer, such as MQTT over
-WebSocket.
+A protocol service may need a transformed byte stream rather than raw socket
+bytes. TLS decrypts incoming records and encrypts outgoing data. A protocol
+can also run inside another framing layer, as MQTT does over WebSocket.
 
-ntex implements these transformations with [`FilterLayer`]. A filter operates
-on in-memory byte buffers: [`FilterLayer::process_read_buf`] transforms data
-received from the next inner layer, while [`FilterLayer::process_write_buf`]
-transforms data queued by the application before passing it toward the
-transport. Filters do not perform socket I/O themselves, so the same filter
-can be used with any supported runtime backend.
+Use [`FilterLayer`] for these transformations. Filters work on in-memory
+buffers and do not perform socket I/O. You can use the same filter with any
+supported runtime backend.
 
-Filters are composable. [`Io::add_filter`] adds a layer and allocates the
-intermediate read and write buffers that separate it from adjacent layers. For
-example, an MQTT service can receive its byte stream through either of these
-stacks:
+[`FilterLayer::process_read_buf`] transforms bytes received from the next
+inner layer. [`FilterLayer::process_write_buf`] transforms application output
+before passing it toward the transport.
+
+You can compose filters with [`Io::add_filter`]. It adds a layer and allocates
+the intermediate read and write buffers between adjacent layers. For
+example, an MQTT service can use either of these stacks:
 
 ```text
 socket <-> TLS <-> MQTT
@@ -345,76 +356,78 @@ socket <-> TLS <-> MQTT
 socket <-> TLS <-> WebSocket <-> MQTT
 ```
 
-On reads, bytes move from the socket through the inner filters toward the
-application. On writes, they move in the opposite direction. In the second
-stack, the WebSocket filter removes and creates WebSocket framing, while the
-TLS filter decrypts and encrypts the resulting byte stream. The MQTT service
-still reads and writes MQTT bytes and does not need to know which transport
-filters are installed below it.
+Read bytes move from the socket through the inner filters toward the
+application. Write bytes move in the opposite direction. In the second stack,
+the WebSocket filter removes and creates WebSocket framing. The TLS filter
+decrypts and encrypts the resulting stream.
 
-The [TLS chapter](10-tls.md) applies this model to HTTP clients,
-WebSocket clients, and servers, including backend configuration and peer
-certificate authentication.
+The MQTT service still reads and writes MQTT bytes. It does not need to know
+which filters sit below it. The [TLS chapter](10-tls.md) shows this model in
+HTTP clients, WebSocket clients, and servers. It also covers backend
+configuration and peer certificate authentication.
 
-Filters may maintain protocol state, expose typed metadata through `query()`,
-emit output while processing input, and participate in graceful shutdown. For
-example, a TLS filter can expose the negotiated protocol or peer certificate,
-and a WebSocket filter can generate a close frame during shutdown. Output a
-filter writes while processing a read is pushed toward the transport as soon as
-that processing finishes, without waiting for the application to write.
+Filters can keep protocol state and expose typed metadata through `query()`.
+A TLS filter, for example, can expose the negotiated protocol or peer
+certificate. Filters also participate in graceful shutdown; a WebSocket
+filter can generate a close frame then.
+
+A filter can emit output while processing input. ntex pushes that output
+toward the transport as soon as read processing finishes, without waiting for
+the application to write.
 
 [`FilterLayer`]: https://docs.ntex.rs/api/ntex/io/trait.FilterLayer.html
 [`FilterLayer::process_read_buf`]: https://docs.ntex.rs/api/ntex/io/trait.FilterLayer.html#tymethod.process_read_buf
 [`FilterLayer::process_write_buf`]: https://docs.ntex.rs/api/ntex/io/trait.FilterLayer.html#tymethod.process_write_buf
 [`Io::add_filter`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.add_filter
 
-Most byte transformations only need [`FilterLayer`]. Lower-level concerns that
-must observe or control the entire filter chain can instead wrap the current
-chain with [`Filter`] by using [`Io::map_filter`].
+Most byte transformations need only `FilterLayer`. To observe or control the
+whole chain, wrap it with a lower-level [`Filter`] through
+[`Io::map_filter`].
 
-In addition to processing buffers, queries, and shutdown, `Filter` participates
-in read and write readiness decisions. A wrapper can therefore delay readiness
-to implement custom throttling and wake the I/O tasks when work may resume. It
-can also observe buffer processing for metrics or accounting without changing
-the byte stream.
+`Filter` handles buffer processing, queries, and shutdown. It also takes part
+in read and write readiness decisions. A wrapper can delay readiness to
+throttle traffic, then wake the I/O tasks when work can resume. It can also
+observe buffer processing for metrics or accounting without changing bytes.
 
-A custom `Filter` normally stores the filter it wraps and delegates every
-operation it does not intentionally override. ntex provides forwarding macros
-for readiness, queries, and shutdown to make this pattern less error-prone.
+A custom `Filter` normally stores the filter it wraps. Delegate each operation
+you do not intend to override. ntex provides forwarding macros for readiness,
+queries, and shutdown to make this less error-prone.
 
 [`Filter`]: https://docs.ntex.rs/api/ntex/io/trait.Filter.html
 [`Io::map_filter`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.map_filter
 
 ### Typed versus erased filter stacks
 
-The filter stack is encoded in the type parameter of [`Io`]. A new connection
-starts as `Io<Base>`, using the [`Base`] filter. Calling `add_filter(layer)`
-consumes the current value and returns `Io<Layer<U, F>>`, where the [`Layer`]
-marker pairs the new outer layer `U` with the previous stack `F`. Keeping this
-concrete type provides static dispatch and allows [`Io::filter`] to return the
-concrete outer filter.
+Keep a concrete filter stack type while building a connection. At a service
+boundary, you may need one I/O type for connections with different stacks.
+Type erasure gives you that common type without changing connection behavior.
+
+[`Io`] stores the stack in its type parameter. A new connection starts as
+`Io<Base>`, with the [`Base`] filter. Calling `add_filter(layer)` consumes the
+value and returns `Io<Layer<U, F>>`. The [`Layer`] marker pairs the new outer
+layer `U` with the previous stack `F`.
+
+The concrete type provides static dispatch. [`Io::filter`] can also return
+the concrete outer filter:
 
 ```rust,ignore
 let io: Io<Base> = create_io();
 let io: Io<Layer<MyFilter, Base>> = io.add_filter(MyFilter::new());
 ```
 
-At service boundaries, different connections may have different concrete
-filter stacks. [`Io::seal`] erases the stack type and returns `Io<Sealed>`,
-using the [`Sealed`] marker, while [`Io::boxed`] returns the [`IoBoxed`]
-convenience wrapper. Both operations consume the original `Io` value and retain
-the same connection state and filter behavior behind a dynamically dispatched
-`Filter`.
+Use [`Io::seal`] to erase the stack type and get `Io<Sealed>`, using the
+[`Sealed`] marker. [`Io::boxed`] returns the [`IoBoxed`] convenience wrapper.
+Both consume the original `Io` and keep the same connection state and filter
+behavior behind a dynamically dispatched `Filter`.
 
 ```rust,ignore
 let io: IoBoxed = io.boxed();
 start_protocol(io);
 ```
 
-Additional typed layers can still be added to a sealed stream and the result
-can be erased again when necessary. Type erasure is therefore normally
-performed at the boundary where a protocol or service needs one uniform I/O
-type, rather than while constructing the filter stack.
+You can add typed layers to a sealed stream and erase the result again.
+Normally, erase the type where a protocol or service needs uniform I/O,
+rather than while you are building the stack.
 
 [`Base`]: https://docs.ntex.rs/api/ntex/io/struct.Base.html
 [`Io::boxed`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.boxed
@@ -426,91 +439,108 @@ type, rather than while constructing the filter stack.
 
 ## Read/write streams
 
-Incoming and outgoing bytes use separate buffer paths.
+Choose read and write APIs based on how your protocol handles messages.
+Incoming and outgoing bytes follow separate buffer paths. Queuing bytes and
+waiting for transport progress are separate operations.
 
 ### Reading
 
-The transport adapter places bytes read from the socket into a [`BytesMut`].
-The bytes pass through the filter chain and arrive in the application-facing
-read buffer, where a codec or protocol service can inspect and consume them.
+A codec or protocol service reads from the application-facing buffer. The
+transport adapter fills a [`BytesMut`] with socket input, then the bytes pass
+through the filter chain into that buffer.
 
-`BytesMut` is a contiguous, growable buffer. A decoder can split immutable
-[`Bytes`] values from it without copying larger payloads; short values are
-copied into the `Bytes` handle itself. This is useful when a decoded message
-must retain part of the input after the decoder continues processing later
-data.
-
-Read buffers are `ntex-bytes` pages. Each connection picks the page size of
-new read buffers between the min and max set with
-[`IoConfig::set_read_size`], `Size4` and `Size64` by default. It starts at the
-min, so idle and light connections pin small pages. Consecutive reads that
-fill their buffer form one batch with the read that ends it; a batch larger
-than the page grows the page size to fit it, up to the max. After four
-batches in a row that fit in half of the next smaller page, the page size
-shrinks by one step, down to the min. [`Io::set_config`] restarts it at the
-min. Equal min and max sizes fix the page size.
-
-The page size does not affect read backpressure: the read high-water mark is
-the `Size32` capacity, 32,752 bytes, by default;
-[`IoConfig::set_read_backpressure`] sets another one. An empty buffer goes
-back to the per-thread page cache of its size, shared with write pages and any
-other pooled `BytesMut`; [`set_page_cache_size`] tunes it. A frame split from
-the read buffer keeps the page alive, the page returns to the cache once the
-last frame is dropped. Before another socket read, the adapter obtains a
-buffer from `IoContext`. ntex calls [`BytesMut::reserve_more`] once less than
-[`BytePageSize::low`] of the page remains free, compacting the data within its
-page when it still fits there. If larger input must be buffered, the buffer moves to
-bigger page sizes and, past the largest one, to a plain allocation that is
-freed instead of cached.
-
-Read backpressure is based on the size of the application-facing read buffer.
-When it reaches the configured high-water mark, ntex pauses the transport read
-task. Consuming input through [`IoRef::decode`], [`IoRef::with_buf`],
-[`IoRef::with_read_src`] or [`IoRef::with_read_dst`] wakes the read task once
-the buffered input falls to half that mark.
-[`Io::recv`] and [`Io::read_exact`] wait for more input, so they release
-backpressure regardless of how much is still buffered.
-
-Choose the highest-level read API that matches the protocol:
+Choose the highest-level read API that fits your protocol:
 
 - Use `recv(codec)` for framed messages. It decodes buffered input and waits
-  when the codec says the frame is incomplete.
+  when the codec reports an incomplete frame.
 - Use `read_exact()` for a fixed-size header or field.
-- For a custom parser, inspect or consume the read buffer through `IoRef`, and
-  call [`Io::read_more`] only after deciding that more bytes are required.
-  `read_more()` is an active request: it resumes transport reads and releases
-  read backpressure even if the buffer is still large. [`IoRef::read_dst_size`]
-  is the passive size check.
+- For a custom parser, inspect or consume the buffer through `IoRef`. Call
+  [`Io::read_more`] only when you have decided that you need more bytes.
+  It actively resumes transport reads and releases read backpressure, even
+  if the buffer is still large. Use [`IoRef::read_dst_size`] for a passive
+  size check.
+
+Read backpressure depends on the size of the application-facing buffer.
+When it reaches the configured high-water mark, ntex pauses the transport
+read task. Consuming input through these methods wakes the task once the
+buffer falls to half that mark:
+
+- [`IoRef::decode`]
+- [`IoRef::with_buf`]
+- [`IoRef::with_read_src`]
+- [`IoRef::with_read_dst`]
+
+[`Io::recv`] and [`Io::read_exact`] wait for more input. They release
+backpressure regardless of how much input remains buffered.
+
+`BytesMut` is contiguous and growable. A decoder can split immutable [`Bytes`]
+values from it without copying larger payloads. Short values are copied into
+the `Bytes` handle itself. A decoded message can therefore retain part of the
+input while the decoder continues with later data.
+
+The remaining read-buffer details matter when tuning allocation. Read
+buffers use `ntex-bytes` pages, with each connection choosing new buffers'
+page size between the minimum and maximum set by [`IoConfig::set_read_size`].
+The defaults are `Size4` and `Size64`. A connection starts at the minimum, so
+idle and light connections pin small pages.
+
+Consecutive reads that fill their buffer form a batch, together with the read
+that ends the sequence. If a batch is larger than the page, the page size
+grows to fit it, up to the maximum.
+
+Once traffic becomes lighter, the page size shrinks by one step after four
+consecutive batches fit in half of the next smaller page. It never shrinks
+below the minimum. [`Io::set_config`] restarts it at the minimum. If you want
+a fixed page size instead, set equal minimum and maximum sizes.
+
+Page size does not affect read backpressure. The default read high-water mark
+is the `Size32` capacity, 32,752 bytes. Use
+[`IoConfig::set_read_backpressure`] to change it.
+
+An empty buffer returns to the per-thread page cache for its size. Write
+pages and other pooled `BytesMut` buffers share that cache; configure it with
+[`set_page_cache_size`]. A frame split from the read buffer keeps the page
+alive. The page returns to the cache when the last frame is dropped.
+
+Before another socket read, the adapter obtains a buffer from `IoContext`.
+ntex calls [`BytesMut::reserve_more`] when less than [`BytePageSize::low`] of
+the page remains free. It compacts data within the page if the data still fits.
+
+If larger input must be buffered, the buffer moves to bigger page sizes.
+Beyond the largest page size, it uses a plain allocation. That allocation is
+freed rather than cached.
 
 ### Writing
 
-Application output is queued in [`BytePages`], a growable collection of
-byte pages. Internally allocated pages use the size configured by [`IoConfig`].
-Owned buffers passed to [`IoRef::encode_bytes`] can also become pages directly,
-avoiding a copy when their storage can be retained. Write filters consume the
-pages in order, transform their contents, and place the result into the next
-buffer toward the transport.
+Queue output first, then decide how long to wait for it. Encoding methods make
+bytes available to the transport write task; they do not wait for every byte
+to reach the socket.
 
-[`IoRef::encode`], [`IoRef::encode_slice`], and [`IoRef::encode_bytes`] queue
-output but do not wait for every byte to reach the socket. Queueing makes the
-data available to the transport write task and schedules that task when it
-needs to be resumed. On transports that support direct writes, the configured
-write threshold can trigger an earlier write while the application is still
-producing output, reducing latency for large responses.
+Use [`IoRef::encode`] to queue codec-encoded output. [`IoRef::encode_slice`]
+and [`IoRef::encode_bytes`] also queue output. Queueing schedules the
+transport write task when it needs to resume.
 
-Use [`Io::flush`] to apply the configured write wait policy. `flush(false)` is
-a backpressure wait, not a request to drain everything: it returns immediately
-while the outstanding output is below the high-water mark. If the high-water
-mark has been reached, it waits until the outstanding output falls to half that
-mark. `flush(true)` waits until all queued data has reached the peer, including
-data a transport has taken ownership of but not yet written. [`Io::send`]
-combines codec encoding with a full flush.
+On transports that support direct writes, the write threshold can trigger a
+write while your application is still producing output. This can reduce
+latency for large responses.
 
-Write backpressure is advisory. The `encode` methods still accept more output
-after the high-water mark is reached, because refusing half of a protocol
-message would be difficult to recover from. A producer that is not managed by
-a dispatcher should await [`IoRef::write_ready`] before queueing each next
-chunk, or use `flush(false)` between batches:
+Use [`Io::flush`] to choose the write wait policy:
+
+- `flush(false)` waits for backpressure to ease, rather than draining all
+  output. It returns immediately below the high-water mark. Once that mark
+  is reached, it waits until outstanding output falls to half the mark.
+- `flush(true)` waits until all queued data reaches the peer. This includes
+  bytes owned by the transport but not yet written.
+
+[`Io::send`] combines codec encoding with a full flush.
+
+Write backpressure is advisory. The `encode` methods keep accepting output
+after the high-water mark is reached. Refusing half of a protocol message
+would be difficult to recover from.
+
+If a dispatcher does not manage your producer, await [`IoRef::write_ready`]
+before queueing each next chunk. You can also use `flush(false)` between
+batches:
 
 ```rust
 use ntex::{
@@ -524,13 +554,17 @@ async fn queue_chunk(io: &Io, chunk: Bytes) -> std::io::Result<()> {
 }
 ```
 
-This bounds normal streaming output around the configured watermark. It does
-not split a single large chunk or turn the watermark into a strict
-per-connection memory cap.
+This keeps normal streaming output around the configured watermark. It does
+not split a large chunk or make the watermark a strict per-connection memory
+cap.
 
-This separation allows codecs and application services to work with bytes
-without depending on socket readiness, while the I/O subsystem coordinates
-buffering and backpressure.
+These APIs all queue output in [`BytePages`], a growable collection of byte
+pages. Newly allocated pages use the size configured by [`IoConfig`]. Owned
+buffers passed to `IoRef::encode_bytes` can become pages directly when their
+storage can be retained, avoiding a copy.
+
+Write filters consume the pages in order. They transform the contents and
+place the result in the next buffer toward the transport.
 
 [`BytePages`]: https://docs.ntex.rs/api/ntex/util/struct.BytePages.html
 [`BytePageSize::low`]: https://docs.ntex.rs/api/ntex/util/enum.BytePageSize.html#method.low
@@ -559,78 +593,75 @@ buffering and backpressure.
 
 ## Connection lifecycle and shutdown
 
-A connection stays usable until the application closes it, the peer
-disconnects, or the transport reports an error.
+A protocol service needs to notice connection changes even while it waits on
+a dependency or a slow response. It also needs to give pending output a
+chance to reach the peer when closing. A connection stays usable until the
+application closes it, the peer disconnects, or the transport reports an
+error.
 
-A service that is waiting on something other than input, such as an unready
-dependency or a slow response, still needs to notice that the connection
-requires attention. [`Io::poll_status_update`] reports the next status as an
-[`IoStatusUpdate`] value:
+Use [`Io::poll_status_update`] while waiting on work other than input. It
+reports an [`IoStatusUpdate`] value:
 
-- `Timeout` when the dispatcher timer has expired, for example the configured
-  keep-alive timeout.
-- `WriteBackpressure` when outstanding output has reached the write
-  high-water mark, so the producer should stop and flush.
-- `PeerGone` once the connection has closed, whether the peer disconnected,
-  the transport failed, or the shutdown was started locally. It carries the
-  transport error if one occurred, and `None` after a clean close.
+- `Timeout` means the dispatcher timer expired, such as the keep-alive timer.
+- `WriteBackpressure` means outstanding output reached the write high-water
+  mark. Stop producing output and flush.
+- `PeerGone` means the connection closed, whether the peer disconnected,
+  the transport failed, or shutdown started locally. It carries the
+  transport error if one occurred, or `None` after a clean close.
 
-Use [`Io::poll_read_pause`] instead when the service should also stop accepting
-more transport input while it waits. The pause is cooperative: decoding,
-touching the application read buffer, or explicitly asking for more input
-resumes reads. This makes it suitable for a dispatcher waiting on readiness,
-not for permanently disabling the read half.
+Use [`Io::poll_read_pause`] if you also want to stop accepting transport input
+while waiting. The pause is cooperative. Decoding, accessing the application
+read buffer, or explicitly requesting more input resumes reads. Use it while
+a dispatcher waits on readiness, not to disable the read half permanently.
 
-The same conditions reach a codec-driven service as [`RecvError`] from
-[`Io::poll_recv`], which additionally reports decoder failures. Unlike the
-status update, `RecvError::PeerGone` also reports a stream truncated mid-frame:
-a clean peer EOF that leaves undecodable bytes carries an
-`io::ErrorKind::UnexpectedEof` error instead of `None`. Code that only
-needs to be woken when the connection goes away can await the [`Waiter`]
-future returned by [`IoRef::on_disconnect`]. [`IoRef::is_active`] becomes
-false as soon as closing starts; [`IoRef::is_closed`] becomes true only after
-the backend has released the transport and teardown has finished.
+A codec-driven service receives the same conditions as [`RecvError`] from
+[`Io::poll_recv`]. It also receives decoder failures. Unlike the status
+update, `RecvError::PeerGone` reports a stream truncated mid-frame. If clean
+peer EOF leaves undecodable bytes, it carries an
+`io::ErrorKind::UnexpectedEof` error rather than `None`.
 
-A clean EOF from the peer ends the read direction but leaves the write half
-open, so a service can still finish encoding and flushing its response before
-closing.
+If you only need to wake when the connection goes away, await the [`Waiter`]
+returned by [`IoRef::on_disconnect`]. To check whether closing has started,
+use [`IoRef::is_active`], which becomes false at that point.
+[`IoRef::is_closed`] becomes true only after the backend releases the
+transport and finishes teardown.
 
-[`IoRef::close`] requests a graceful shutdown and returns immediately.
-[`Io::shutdown`] drives that shutdown to completion, in two phases.
+Clean peer EOF ends the read direction but leaves the write half open. Your
+service can finish encoding and flushing its response before closing.
 
-In the first phase both directions stay open and every filter gets a chance to
-emit its own closing data through [`FilterLayer::shutdown`], such as a TLS
-`close_notify` or a WebSocket close frame. Reads keep running and are processed
-normally, so closing data sent by the peer still reaches the filters. A read
-failure does not abort the shutdown; it only means the filter handshake cannot
-finish.
+When you have finished the response, call [`IoRef::close`] to request
+graceful shutdown and return immediately, or await [`Io::shutdown`] to drive
+it to completion. Graceful shutdown gives both filters and the transport time
+to finish, in two phases.
 
-The second phase belongs to the transport. It drains the remaining output into
-the connection and then closes both directions. The read side is paused: the
-filters are done, so no further input can be used, and the transport discards
-whatever is left in the receive queue just before it closes.
-Input is no longer delivered to the application in this phase.
+During the first phase, both directions stay open. Each filter can emit
+closing data through [`FilterLayer::shutdown`], such as TLS `close_notify` or
+a WebSocket close frame. Reads continue normally, so the peer's closing data
+still reaches the filters. A read failure does not abort shutdown, but it
+means the filter handshake cannot finish.
 
-A single deadline bounds both phases. If the filters finish early, the
-transport drain gets the remaining time. If the deadline expires while filters
-are still pending, ntex ends that phase and still runs transport shutdown with
-the already-expired deadline; when the transport phase observes it, undrained
-output is discarded. [`Io::shutdown`] reports the timed-out error after
-transport teardown.
-[`IoRef::terminate`] skips the process entirely and drops the connection
-without flushing pending output.
+During the second phase, the transport drains remaining output into the
+connection, then closes both directions. The read side pauses because the
+filters have finished and cannot use more input. The transport discards any
+data left in the receive queue just before closing. The application receives
+no more input in this phase.
 
-A graceful close, including one forced forward by a timeout or failure, reaches
-the transport as [`Readiness::Close`]. An explicit [`IoRef::terminate`] reaches
-it as `Readiness::Terminate`, so a socket backend can abort rather than send a
-clean end-of-stream. The transport reports either teardown through
-[`IoContext::stopped`], which is what allows `Io::shutdown` to resolve.
+One deadline covers both phases. If the filters finish early, the transport
+gets the remaining time to drain output.
 
-Dropping the owning `Io` value is not a substitute for awaiting shutdown. If
-no output would be lost, dropping it starts a normal close. If buffered output
-can no longer be delivered because the filter stack is being dropped, ntex
-aborts the transport so the peer does not mistake a truncated stream for a
-complete one. Call `shutdown().await` when delivery and a clean close matter.
+If the deadline expires while filters are pending, ntex ends the filter phase
+and starts transport shutdown with the already-expired deadline. When the
+transport observes it, it discards undrained output. `Io::shutdown` reports
+the timeout error after transport teardown.
+
+[`IoRef::terminate`] skips graceful shutdown and drops the connection without
+flushing pending output.
+
+Dropping the owning `Io` does not replace awaiting shutdown. If no output
+would be lost, dropping it starts a normal close. If dropping the filter stack
+prevents buffered output from being delivered, ntex aborts the transport.
+The peer then cannot mistake a truncated stream for a complete one. Call
+`shutdown().await` when delivery and a clean close matter.
 
 [`FilterLayer::shutdown`]: https://docs.ntex.rs/api/ntex/io/trait.FilterLayer.html#method.shutdown
 [`Io::poll_recv`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.poll_recv
@@ -643,17 +674,17 @@ complete one. Call `shutdown().await` when delivery and a clean close matter.
 [`IoRef::on_disconnect`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.on_disconnect
 [`IoRef::terminate`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.terminate
 [`IoStatusUpdate`]: https://docs.ntex.rs/api/ntex/io/enum.IoStatusUpdate.html
-[`Readiness::Close`]: https://docs.ntex.rs/api/ntex/io/enum.Readiness.html#variant.Close
 [`RecvError`]: https://docs.ntex.rs/api/ntex/io/enum.RecvError.html
 [`Waiter`]: https://docs.ntex.rs/api/ntex/io/struct.Waiter.html
 
 ## Testing
 
-[`IoTest`] provides a pair of interconnected in-memory transports for testing
-codecs, filters, and protocol services without opening sockets. Each endpoint
-implements `IoStream` and can be wrapped in `Io`. Writing to one `IoTest`
-endpoint supplies input to the other endpoint, while `read()` collects bytes
-written back by the peer.
+Use [`IoTest`] to test a codec, filter, or protocol service without opening
+sockets. It creates two connected in-memory transports. Each endpoint
+implements `IoStream`, so you can wrap it in `Io`.
+
+Writing to one endpoint supplies input to the other. The `read()` method
+collects bytes written back by the peer:
 
 ```rust
 use ntex::codec::BytesCodec;
@@ -680,8 +711,8 @@ async fn protocol_io() {
 }
 ```
 
-Tests can also force pending reads, inject read or write errors, close either
-side, constrain write capacity to exercise backpressure, and attach a
-`PeerAddr` value for transport-query tests.
+You can also force pending reads or inject read and write errors. Close either
+side, or constrain write capacity to exercise backpressure. For
+transport-query tests, attach a `PeerAddr` value.
 
 [`IoTest`]: https://docs.ntex.rs/api/ntex/io/testing/struct.IoTest.html

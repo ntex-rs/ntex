@@ -2,6 +2,7 @@
 
 [Introduction](index.md)
 
+- [Getting Started](getting-started.md)
 - [Service Model](1-service.md)
 - [Service Pipelines](2-pipeline.md)
 - [Service State](3-state.md)
@@ -16,6 +17,7 @@
   - [Extractors and Responders](8.4-web-app.md)
   - [Error Handling](8.5-web-app.md)
   - [WebSocket Support](8.6-web-app.md)
+- [Testing](testing.md)
 - [Integrations]()
   - [HTTP Client](13-client.md)
   - [HTTP/2 Client and Server](14-h2.md)
@@ -24,6 +26,7 @@
 - [Securing Connections with TLS](10-tls.md)
 - [Byte Buffers](9-bytes.md)
 - [Timers and Time Utilities](12-time.md)
+- [Cookbook](cookbook.md)
 
 # Migration
 

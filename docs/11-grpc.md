@@ -1,54 +1,34 @@
 # Building gRPC Services and Clients
 
-Once a system grows past a single process, its parts need a way to call each
-other. [gRPC] is one of the most common answers. You describe an API once, in
-a `.proto` file, and clients and servers written in any language can talk to
-each other through it. Messages are compact Protocol Buffers, calls travel
-over HTTP/2, and one connection carries many calls at the same time.
+[gRPC] lets processes call each other through an API described in a `.proto`
+file. Clients and servers written in any language can use that API. Calls
+carry compact Protocol Buffers messages over HTTP/2, with many calls sharing
+one connection.
 
-[ntex-grpc] brings gRPC to ntex. It is a separate crate, built on the
-[service model](1-service.md) you already know and on [`ntex-h2`], the ntex
-HTTP/2 implementation. A gRPC client is a service you call, and a gRPC server
-is a service the ntex [server](5-server.md) runs for every connection.
+[ntex-grpc] is a separate crate built on the ntex
+[service model](1-service.md). It uses [`ntex-h2`] for HTTP/2. A gRPC client
+is a service you call. A gRPC server is a service that the ntex
+[server](5-server.md) runs for each connection.
 
-ntex-grpc takes a different route from most gRPC libraries: **it does not use
-derive macros or build scripts.** The protocol is described with ordinary
-traits, and Rust's type system does the wiring. A message knows how to encode
-itself because each of its fields does. A method is a type that knows its
-request path and its input and output messages. A client is generic over the
-transport that carries its calls. What remains is boilerplate: one struct per
-message, one type per method, a typed client per service. A code generator,
-`ntex-grpc-codegen`, writes that for you once. You commit its output and read
-it like the rest of your code. Nothing is generated during the build. The only
-macro you will meet is the `#[server]` attribute, a thin layer that connects
+ntex-grpc describes the protocol with ordinary traits. It does not use
+derive macros or build scripts. Each message field knows how to encode
+itself, and the message uses those implementations. A method type defines
+its request path and its input and output messages. A client is generic
+over the transport that carries its calls.
+
+The `ntex-grpc-codegen` generator writes the boilerplate: a struct for each
+message, a type for each method, and a typed client for each service. You
+commit the output and read it like the rest of your code. Nothing is
+generated during the build. The only macro is `#[server]`, which connects
 the methods of a `.proto` service to the methods of your type.
 
-Because every piece is a trait, every piece can be replaced. You can use your
-own Rust types for message fields, put your own transport between a client
-and the network, or handle raw, undecoded calls on the server.
-
-This chapter starts with a running example, then follows a call from the
-`.proto` file through the client to the server. Depending on where you are
-starting from:
-
-- **New to ntex-grpc?** Run the [quick start](#quick-start-hello-grpc), skim
-  [gRPC in a nutshell](#grpc-in-a-nutshell), then read
-  [from .proto to Rust](#from-proto-to-rust) and
-  [implementing a service](#implementing-a-service).
-- **Want stricter types in your messages?** Read
-  [using your own field types](#using-your-own-field-types).
-- **Calling gRPC services from ntex?** Start with
-  [calling services](#calling-services) and
-  [errors, deadlines and retries](#errors-deadlines-and-retries).
-- **Running a server in production?** Read
-  [tuning the server](#tuning-the-server) and
-  [running over TLS](#running-over-tls), then go through the
-  [checklist](#production-checklist).
-- **Something does not work?** See [troubleshooting](#troubleshooting).
+These traits let you replace each part. You can use your own Rust types for
+message fields, put a custom transport between a client and the network,
+or handle raw, undecoded calls on the server.
 
 The snippets come from the [gRPC examples][examples]. Each example is a
-complete program, and its README has the run commands and a `grpcurl`
-session to try:
+complete program. Its README includes run commands and a `grpcurl` session
+you can try.
 
 | Example | What it shows |
 | --- | --- |
@@ -60,8 +40,8 @@ session to try:
 
 ## Quick start: hello, gRPC
 
-The helloworld example is a greeting service with a single method. Clone the
-examples repository and start the server:
+The helloworld example gives you a greeting service with one method. Clone
+the examples repository and start the server:
 
 ```sh
 git clone https://github.com/ntex-rs/examples
@@ -75,15 +55,15 @@ In a second terminal, call it:
 cargo run --bin grpc-helloworld-client -- ntex
 ```
 
-The client prints `Hello ntex!`. The server speaks standard gRPC, so other
-tools can call it too. With [grpcurl] it looks like this:
+The client prints `Hello ntex!`. The server speaks standard gRPC, so you can
+also call it with tools such as [grpcurl]:
 
 ```sh
 grpcurl -plaintext -proto helloworld.proto -d '{"name": "ntex"}' \
     127.0.0.1:50051 helloworld.Greeter/SayHello
 ```
 
-The whole service is a dozen lines:
+The service implementation is short:
 
 ```rust,no_run
 #[server(crate::helloworld::Greeter)]
@@ -98,7 +78,7 @@ impl GreeterServer {
 }
 ```
 
-and the client call is a few more:
+The client builds a request, sets a timeout, and sends it:
 
 ```rust,no_run
 let client = connect(ADDR);
@@ -110,10 +90,9 @@ let reply = req.send().await?;
 println!("{}", reply.message);
 ```
 
-`HelloRequest`, `HelloReply`, the `Greeter` service definition and the
-`say_hello` client method all come from the generated file
-`src/helloworld.rs`. The rest of the chapter explains where they come from
-and how each part works.
+The generated file `src/helloworld.rs` defines the request and reply
+messages, `HelloRequest` and `HelloReply`. It also defines the `Greeter`
+service and the client's `say_hello` method.
 
 To use ntex-grpc in your own project, add these dependencies:
 
@@ -126,28 +105,25 @@ ntex-h2 = "4"
 
 ## gRPC in a nutshell
 
-You can use ntex-grpc without knowing the wire protocol. A little of it,
-though, explains many of the choices you will make later, especially about
-errors and retries.
+You do not need to know the wire protocol to use ntex-grpc. Its basic
+structure helps you decide how to handle errors and retries.
 
-A gRPC call is an HTTP/2 request:
+A gRPC call is an HTTP/2 `POST` request. Its path identifies the RPC:
+`/{package}.{Service}/{Method}`, such as `/helloworld.Greeter/SayHello`.
+The headers identify gRPC with `content-type: application/grpc` and may
+carry a timeout in `grpc-timeout`. Your own headers travel alongside them;
+gRPC calls these *metadata*.
 
-- It is always a `POST` to `/{package}.{Service}/{Method}`, for example
-  `/helloworld.Greeter/SayHello`. The path is how a server finds the method.
-- The request headers say that this is gRPC (`content-type:
-  application/grpc`) and may carry a deadline (`grpc-timeout`). Your own
-  headers, called *metadata* in gRPC, travel next to them.
-- Each message in the body has a 5-byte prefix: a flag that says whether it
-  is compressed, and its length.
-- The response sends headers, the reply messages, and then *trailers*. The
-  trailers carry the result of the call in `grpc-status` (`0` means `OK`)
-  and an optional `grpc-message`.
+The body carries messages, each with a 5-byte prefix holding a compression
+flag and the message length. The response sends headers, reply messages,
+and then *trailers*. These carry the call's result in `grpc-status`, where
+`0` means `OK`, and may include a `grpc-message` explaining an error.
 
-The result lives in the trailers, so a failed call still has HTTP status
-200. A client knows how a call ended only after it has read the whole
-response.
+That last part matters for error handling: a gRPC failure still has HTTP
+status 200. The client must read the trailers to know how the call ended,
+not just check the HTTP status.
 
-All gRPC methods use the same request. They differ only in how many
+All gRPC methods use this request structure. They differ in how many
 messages each side sends:
 
 | Kind | `.proto` | Client sends | Server sends |
@@ -157,12 +133,14 @@ messages each side sends:
 | client streaming | `rpc M(stream Req) returns (Res)` | any number | one message |
 | bidirectional | `rpc M(stream Req) returns (stream Res)` | any number | any number |
 
-Every call is one HTTP/2 stream, so a single connection runs many calls in
-parallel, and a slow call does not block the others.
+Each call uses one HTTP/2 stream. A connection can run many calls in
+parallel without a slow call blocking the others.
 
 ## How ntex-grpc fits together
 
-Here is the path of a call through ntex-grpc:
+Generated Rust code connects your `.proto` definitions to the client and
+server. The client passes calls through a transport; the server routes
+incoming calls to your methods:
 
 ```text
            .proto ── ntex-grpc-codegen ──▶ src/helloworld.rs
@@ -173,35 +151,40 @@ client:    GreeterClient<T> ─▶ Request ─▶ Transport ─▶ ntex-h2 pool 
 server:    network ─▶ ntex Server ─▶ GrpcServer ─▶ #[server] type ─▶ your method
 ```
 
-A handful of traits hold it together:
+Start with the message itself. [`NativeType`] reads and writes one field
+value: an integer, a string, a nested message, or your own type. [`Message`]
+encodes and decodes the whole message by calling `NativeType` for each
+field. You normally use the generated implementations and only implement
+`NativeType` yourself when a field needs a custom Rust type.
 
-- [`NativeType`] reads and writes a single field value: an integer, a string,
-  a nested message, or a type of your own.
-- [`Message`] encodes and decodes a whole message. The generated
-  implementation calls `NativeType` for each field.
-- [`MethodDef`] describes one `rpc`: its request path and its input and
-  output types. Every method is a zero-sized type that implements it.
-- [`ServiceDef`] describes a `service`: its full name and its methods.
-- [`Transport`] sends a call. A generated client is generic over it, and
-  `send()` hands the request to it.
+The generated method and service types describe the API. Each RPC is a
+zero-sized type implementing [`MethodDef`], which supplies its request
+path and input and output types. [`ServiceDef`] groups those methods under
+the service's full name.
 
-Each of these is a seam you can use. The rest of the chapter goes through
-them in the order a call does.
+Finally, [`Transport`] carries the call. A generated client is generic
+over this trait, so calling `send()` hands the request to whichever
+transport you gave it. You can keep the generated API while replacing how
+calls reach the server.
 
 ## From .proto to Rust
 
+Run the code generator to turn your `.proto` definitions into Rust types.
+You keep the generated file in your project, with no code generation during
+builds.
+
 ### Running the code generator
 
-The code generator installs a command named `ntex-grpc`. It uses `protoc`,
-the Protocol Buffers compiler, to parse `.proto` files, so install `protoc`
-from your package manager first. If it is not in your `PATH`, point the
-`PROTOC` environment variable at it.
+Install `ntex-grpc-codegen` to get the `ntex-grpc` command. It uses
+`protoc`, the Protocol Buffers compiler, to parse `.proto` files. Install
+`protoc` through your package manager first. If it is outside your `PATH`,
+set the `PROTOC` environment variable to its path.
 
 ```sh
 cargo install ntex-grpc-codegen
 ```
 
-Here is the `.proto` file of the helloworld example:
+The helloworld example defines its service in this `.proto` file:
 
 ```protobuf
 syntax = "proto3";
@@ -224,17 +207,17 @@ message HelloReply {
 }
 ```
 
-You will run the generator every time the `.proto` file changes, so the
-examples keep the command in a small `generate.sh` script next to it:
+Run the generator whenever the `.proto` file changes. The examples keep
+this command in a `generate.sh` script next to the file:
 
 ```sh
 ntex-grpc helloworld.proto helloworld.rs --out-dir ./src --include-dir ./ \
     --rustfmt-path ../../rustfmt.toml
 ```
 
-The output file is named after the proto `package`, not after the second
-argument. If you generate code for the same package twice, for example with
-different options, use two output directories.
+The proto `package` determines the output file's name; the second argument
+does not. Use separate output directories if you generate the same package
+twice, for example with different options.
 
 | Option | Effect |
 | --- | --- |
@@ -246,13 +229,13 @@ different options, use two output directories.
 | `--open-enums` | generate enum fields as `i32`, so values your code does not know yet are kept |
 | `--well-known-types` | generate the `google.protobuf` types instead of using `ntex_grpc::google_types` |
 
-Commit the generated file. Reviews then show exactly how a protocol change
-affects your Rust code, and your build does not depend on `protoc`.
+Commit the generated file so builds do not depend on `protoc`.
 
 ### What gets generated
 
-Add the generated file as a module, `pub mod helloworld;`. Each `message`
-becomes a plain struct:
+Add the generated file to your project with `pub mod helloworld;`. You can
+then use its types directly. Each protobuf `message` becomes a plain Rust
+struct:
 
 ```rust,no_run
 /// The request message with the user's name.
@@ -262,15 +245,13 @@ pub struct HelloRequest {
 }
 ```
 
-Each `service` becomes three things:
+For the `Greeter` service, the generator also writes a unit struct named
+`Greeter`. It implements [`ServiceDef`] with the full service name,
+`helloworld.Greeter`. The typed client, `GreeterClient<T>`, is generic over
+its transport and has one method per `rpc`.
 
-- a unit struct, `Greeter`, that implements [`ServiceDef`] with the full
-  service name, `helloworld.Greeter`;
-- a unit struct for each `rpc` that implements [`MethodDef`];
-- a typed client, `GreeterClient<T>`, generic over its transport, with one
-  method per `rpc`.
-
-The method type is where the type system takes over:
+Each RPC gets its own unit struct implementing [`MethodDef`]. For
+`SayHello`, that definition looks like this:
 
 ```rust,no_run
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -287,14 +268,13 @@ impl ::ntex_grpc::MethodDef for GreeterSayHelloMethod {
 }
 ```
 
-`MethodDef` ties a method to its request path and its message types at
-compile time. The client uses it to know where to send a request and what to
-decode from the reply; the server uses it to decode requests and encode
-replies. Passing the wrong message to a method is a compile error, not a
-failed call.
+`MethodDef` ties a method to its request path and message types at compile
+time. The client uses it to choose the request path and decode the reply.
+The server uses it to decode requests and encode replies. If you pass the
+wrong message to a method, compilation fails.
 
-Each struct also gets a [`Message`] implementation. It is a list of
-`NativeType` calls, one per field, each with the field's tag:
+Each message struct also gets a [`Message`] implementation. It calls
+`NativeType` for each field, passing the field's tag:
 
 ```rust,no_run
 impl ::ntex_grpc::Message for HelloRequest {
@@ -311,14 +291,15 @@ impl ::ntex_grpc::Message for HelloRequest {
 }
 ```
 
-There is no reflection and no table of field descriptors at run time, only
-straight-line code the compiler can inline. It is also the hook for custom
-field types: any type that implements `NativeType` fits into the same code.
+The generated implementation is straight-line code that the compiler can
+inline. There is no runtime reflection or table of field descriptors.
+Any type that implements `NativeType` works with this code, including your
+own field types.
 
 ### How protobuf types map to Rust
 
-Fields get ntex types where ntex has one, so strings and byte fields share
-memory with the received buffer instead of being copied:
+The generator uses ntex types where they are available. String and byte
+fields share memory with the received buffer without copying:
 
 | Protobuf | Rust |
 | --- | --- |
@@ -339,7 +320,7 @@ memory with the received buffer instead of being copied:
 | `google.protobuf.Timestamp`, `Duration`, wrappers | the types in `ntex_grpc::google_types` |
 | `google.protobuf.Empty` | `()` |
 
-Here is a message that uses several of them:
+For example, this message uses enums, optional fields, a map, and a `oneof`:
 
 ```protobuf
 enum Color {
@@ -359,7 +340,7 @@ message Shape {
 }
 ```
 
-and the generated Rust:
+The generated Rust types look like this:
 
 ```rust,no_run
 pub struct Shape {
@@ -385,23 +366,27 @@ pub enum Color {
 }
 ```
 
-Two defaults are worth knowing about:
+Two generator defaults deserve attention when your API changes over time.
+By default, enums are closed: an unknown value decodes as the enum's
+default variant. A sender using a newer `.proto` file can therefore send a
+value your code cannot distinguish from the default. Use `--open-enums` to
+keep the numeric value, then convert it with `Color::from_i32()` where
+needed.
 
-- **Enums are closed.** A value that the generated enum does not have, for
-  example from a newer version of the `.proto` file, decodes as the enum's
-  default variant. If your code must keep such values, generate with
-  `--open-enums` and convert with `Color::from_i32()` where you need to.
-- **Message fields are always present.** An unset message field decodes as
-  the default message, as in proto3. If you need to tell "unset" from
-  "empty", generate with `--optional-messages`.
+Singular message fields are also always present in the default Rust
+output. An unset field decodes as the default message. Use
+`--optional-messages` if your handler needs to distinguish an unset field
+from an empty one.
 
 ### Using your own field types
 
-Protobuf has few types, and a field often means more than its wire type: a
-`bytes` field that always holds a 16-byte UUID, or a `string` that only ever
-holds product codes. With generated types, every handler has to check those
-rules again. The `--map` option replaces the Rust type of such fields, so
-the check happens once, while decoding:
+Use `--map` when a field needs stricter rules than its protobuf type
+provides. A `bytes` field might hold a 16-byte UUID, or a `string` might
+hold only product codes. With the default generated types, each handler
+must check those rules.
+
+The option replaces a field's Rust type with your own. That type checks the
+value once, during decoding:
 
 ```protobuf
 message ReserveRequest {
@@ -426,11 +411,13 @@ ntex-grpc inventory.proto inventory.rs --out-dir ./src --include-dir ./ \
     --map sku=crate::types::Sku
 ```
 
-The left side of `--map` is a field path. A path with a leading dot is fully
-qualified, such as `.inventory.ReserveRequest.sku`. A path without one
-matches by suffix: `sku` covers the field in both messages, while
-`ReserveRequest.sku` covers only one. The right side is a Rust path, copied
-into the generated code as is:
+The left side of `--map` is a field path. A leading dot makes it fully
+qualified, as in `.inventory.ReserveRequest.sku`. Without the dot, it
+matches a suffix. Here, `sku` covers both messages, while
+`ReserveRequest.sku` covers only the request.
+
+The right side is a Rust path. The generator copies it into the output
+unchanged:
 
 ```rust,no_run
 pub struct ReserveRequest {
@@ -440,17 +427,19 @@ pub struct ReserveRequest {
 }
 ```
 
-The wire format does not change, so other gRPC clients and servers still
-send plain `bytes` and `string` fields. What changes is the Rust side: the
-type decides which values are valid, and decoding fails for anything else.
-Your handler never sees a request with a malformed id or SKU, because the
-server answers `INVALID_ARGUMENT` before calling it. A `ReserveRequest` in
-your code is valid by construction.
+The wire format stays the same. Other gRPC clients and servers still send
+plain `bytes` and `string` fields. On the Rust side, your type decides which
+values are valid. Decoding fails for anything else.
+
+The server answers `INVALID_ARGUMENT` before calling your handler if an id
+or SKU is malformed. Your handler receives a `ReserveRequest` whose field
+types enforce those rules.
 
 ### Writing a custom field type
 
-A field type implements [`NativeType`]. The generated structs derive a few
-traits, so the type also needs `Default`, `PartialEq` and `Debug`.
+Implement [`NativeType`] to use your own type in a message field. The type
+also needs `Default`, `PartialEq` and `Debug` because the generated structs
+derive traits that require them.
 
 | Item | What it does |
 | --- | --- |
@@ -460,9 +449,9 @@ traits, so the type also needs `Default`, `PartialEq` and `Debug`.
 | `encode_value(&self, dst)` | write the value, without the tag and length prefix |
 | `is_default(&self)` | `true` if the value is the default, so the field is left out of the message |
 
-Here is the request id from the custom-types example. A nil UUID plays the
-role of the default value, so it is left out of the message, just like an
-empty `bytes` field:
+The custom-types example uses this request id. Its default value is a nil
+UUID. Like an empty `bytes` field, that value is left out of the encoded
+message:
 
 ```rust,no_run
 use ntex_grpc::{BytePages, Bytes, DecodeError, NativeType, WireType};
@@ -497,10 +486,9 @@ impl NativeType for RequestId {
 }
 ```
 
-You rarely need to handle the wire format yourself. A type that wraps a
-built-in one can delegate to it and add its own rules. `Sku` lets
-`ByteString` check that the bytes are valid UTF-8, then validates the
-string:
+A wrapper around a built-in type can delegate wire-format handling to that
+type. It can then add its own validation. Here, `Sku` lets `ByteString`
+check for valid UTF-8 before validating the string:
 
 ```rust,no_run
 impl NativeType for Sku {
@@ -527,31 +515,28 @@ impl NativeType for Sku {
 }
 ```
 
-A few rules keep a custom type compatible with other gRPC implementations:
+The custom type still has to obey protobuf's encoding rules. For a
+length-delimited field, `encode_value()` must write exactly `value_len()`
+bytes: the length prefix has already been written using that value. A
+mismatch corrupts the message.
 
-- **Encode exactly `value_len()` bytes.** For length-delimited types, the
-  length prefix is written from `value_len()` before `encode_value()` runs.
-  If the two disagree, the message is corrupt.
-- **Return an error from `merge`, never panic.** The error becomes
-  `INVALID_ARGUMENT` on the server and `InvalidResponse` on the client.
-- **Keep `is_default` consistent with protobuf.** Other implementations
-  treat a missing field as the protobuf default (empty, zero or `false`), so
-  your default must mean the same thing.
-- **Override `encoded_len` for types that are not length-delimited.** The
-  provided `encoded_len(tag)` adds a length prefix, which is only correct
-  for `LengthDelimited`. A `Varint` newtype, such as an id stored as a
-  `u64`, must return `key_len(tag) + value_len()` itself, as the built-in
-  integer types do; otherwise encoded messages get the wrong size.
+For types that are not length-delimited, override `encoded_len(tag)` as
+well. Its default implementation adds a length prefix, which is correct
+only for `LengthDelimited`. A `Varint` newtype, such as a `u64` id, must
+return `key_len(tag) + value_len()`, as the built-in integer types do.
+Otherwise, encoded messages get the wrong size.
 
-The custom-types example tests all of this. It generates the same `.proto`
-twice, once with `--map` and once without, and checks that the plain client
-and the typed server understand each other.
+Validation should return an error from `merge`, never panic. That error
+becomes `INVALID_ARGUMENT` on the server or `InvalidResponse` on the client.
+Also keep `is_default` consistent with protobuf: other implementations
+treat a missing field as empty, zero or `false`, so your default must mean
+the same thing.
 
 ## Calling services
 
-A generated client has one method per `rpc`. Calling that method does not
-send anything yet. It returns a request that you can configure, and then you
-send it:
+Call a generated client method to build a request. Each method corresponds
+to one `rpc`. You can configure the request before calling `send()`;
+building it sends nothing:
 
 ```rust,no_run
 use std::time::Duration;
@@ -574,14 +559,14 @@ async fn main() {
 }
 ```
 
-The request borrows the client and the message, so nothing is copied until
-the message is encoded. Everything you set on it, such as the timeout,
-headers or compression, applies to this call only.
+The request borrows the client and message. Nothing is copied until the
+message is encoded. Settings such as the timeout, headers or compression
+apply only to this call.
 
 ### Connecting to a server
 
-The usual transport is [`ntex_grpc::client::Client`]. It is a thin gRPC
-layer over an [`ntex-h2`] connection pool:
+Use [`ntex_grpc::client::Client`] to connect through an [`ntex-h2`]
+connection pool. It adds a thin gRPC layer over the pool:
 
 ```rust,no_run
 use ntex::SharedCfg;
@@ -594,14 +579,14 @@ pub fn connect(addr: impl Into<String>) -> GreeterClient<Client> {
 }
 ```
 
-The pool connects lazily. Building it does not touch the network: the first
-call opens a connection, and later calls share it, each on its own HTTP/2
-stream. When a connection closes, the pool opens a new one for the next call
-that needs it. Your code does not have to manage connections at all.
+Building the pool does not touch the network. The first call opens a
+connection. Later calls share it, each on its own HTTP/2 stream.
 
-Cloning a `Client` is cheap, and the clones share the pool. Build one
-`Client` per server and clone it into every typed client that talks to that
-server:
+When a connection closes, the pool opens a new one for the next call that
+needs it. You do not need to manage connections yourself.
+
+Cloning a `Client` is cheap, and its clones share the pool. Build one per
+server. Clone it into each typed client that talks to that server:
 
 ```rust,no_run
 let pool = h2::Client::builder(addr.into()).build(SharedCfg::new("GRPC-CLIENT"));
@@ -621,22 +606,18 @@ The pool builder controls the connections:
 | `max_streams(..)` | how many calls can share one connection |
 | `lifetime(..)` | retire connections after a while, e.g. to pick up DNS changes |
 
-HTTP/2 settings, such as window sizes and the ping interval, come from an
-`ntex_h2::ServiceConfig` added to the `SharedCfg` that you pass to
-`build()`. It works the same way as on the [server](#tuning-the-server).
+For HTTP/2 settings such as window sizes and the ping interval, use
+`ntex_h2::ServiceConfig`. Add it to the `SharedCfg` you pass to `build()`.
+This works the same way as on the [server](#tuning-the-server).
 
 ### What happens during a call
 
-A unary call has three parts:
-
-- **the request**, [`Request`], which holds the transport, the input message
-  and a [`RequestContext`] with the headers, the timeout and the limits;
-- **the transport**, which turns the request into an HTTP/2 stream;
-- **the response**, [`Response`], which holds the decoded reply, the headers
-  and the trailers.
-
-`send()` hands the request to the transport through the [`Transport`]
-trait:
+The request builder keeps your message separate from the work of sending
+it. A [`Request`] holds the transport and input message, while its
+[`RequestContext`] holds the headers, timeout and limits. Calling `send()`
+passes them through the [`Transport`] trait. The transport handles the
+HTTP/2 stream and returns a [`Response`] containing the decoded reply,
+headers and trailers:
 
 ```rust,no_run
 pub trait Transport<T: MethodDef, St = ()> {
@@ -650,35 +631,37 @@ pub trait Transport<T: MethodDef, St = ()> {
 }
 ```
 
-The trait is generic over the method `T`, so a transport knows the method's
-`PATH`, `Input` and `Output` at compile time. The built-in transports
-(`Client`, `ntex_h2::client::Client` and `ntex_h2::client::SimpleClient`)
-send a call in six steps:
+The trait is generic over the method `T`. The transport therefore knows
+the method's `PATH`, `Input` and `Output` at compile time.
 
-1. If a header set on the request was invalid, fail with `InvalidRequest`
-   without sending anything.
-2. Encode the input message with its `Message` implementation, compress it
-   if requested, and add the 5-byte message prefix.
-3. Take a connection from the pool and open a stream with `POST T::PATH`,
-   the gRPC headers (`content-type: application/grpc`, `te: trailers`, and
-   `grpc-timeout` if a timeout is set) and the headers of the request.
-4. Send the message and close the sending side of the stream.
-5. Read the response headers, the message and the trailers. Check the HTTP
-   status, the content type, the message size and `grpc-status`.
+The built-in gRPC `Client` delegates to the HTTP/2 pool client,
+`ntex_h2::client::Client`. Once it has a connection, it uses that
+connection's `ntex_h2::client::SimpleClient` to do the following:
+
+1. Check for invalid request headers. If any were set, fail with
+   `InvalidRequest` without sending anything.
+2. Encode the input with its `Message` implementation. Compress it if
+   requested, then add the 5-byte message prefix.
+3. Open a stream with `POST T::PATH`. Include the request's headers and
+   the gRPC headers: `content-type: application/grpc`, `te: trailers`, and
+   `grpc-timeout` if a timeout is set.
+4. Send the message and close the stream's sending side.
+5. Read the response headers, message and trailers. Check the HTTP status,
+   content type, message size and `grpc-status`.
 6. Decode the message as `T::Output` and return a `Response`.
 
 The timeout covers the whole call, including the wait for a connection.
-When it runs out, the stream is reset with `CANCEL` and the call fails with
-`DeadlineExceeded`.
+When it runs out, the transport resets the stream with `CANCEL`. The call
+fails with `DeadlineExceeded`.
 
-A transport can also receive per-call state. `send_with(&state)` passes a
-reference to the transport, which reads it with `ctx.request_state()`.
-`send()` is simply `send_with(&())`.
+To pass per-call state to the transport, use `send_with(&state)`. The
+transport reads the reference with `ctx.request_state()`. Calling `send()`
+is equivalent to `send_with(&())`.
 
 ### Headers, compression and message limits
 
-Request headers carry metadata such as authentication tokens or trace ids.
-Set them on the request before sending it:
+Set request headers when you need to send metadata, such as authentication
+tokens or trace ids. Configure them before sending the request:
 
 ```rust,no_run
 use ntex_grpc::encode_binary_header;
@@ -691,19 +674,22 @@ req.header("x-request-id", "42")
 let (reply, headers, trailers) = req.send().await?.into_parts();
 ```
 
-`header()` replaces a header and `append_header()` adds another value. By
-gRPC convention, header names ending in `-bin` carry binary values; encode
-them with [`encode_binary_header()`] and decode received ones with
-`decode_binary_header()`. The client sets the protocol headers itself
-(`content-type`, `te`, `grpc-timeout`, `grpc-encoding` and the others) and
-ignores your values for them. An invalid header name or value is not sent;
-the call fails with `InvalidRequest` instead.
+Use `header()` to replace a header. Use `append_header()` to add another
+value. By gRPC convention, names ending in `-bin` carry binary values.
+Encode those with [`encode_binary_header()`] and decode received values
+with `decode_binary_header()`.
 
-A successful [`Response`] derefs to the reply message. `headers()` and
-`trailers()` give the response metadata, and `into_parts()` takes all three
-apart.
+A successful [`Response`] derefs to the reply message. Read its metadata
+with `headers()` and `trailers()`. Use `into_parts()` to take the message,
+headers and trailers apart.
 
-**Compression** is optional and needs the `compression` feature:
+The client sets protocol headers itself, including `content-type`, `te`,
+`grpc-timeout` and `grpc-encoding`. It ignores any values you set for them.
+If you set an invalid header name or value, the call fails with
+`InvalidRequest` without sending it.
+
+For large messages, you can also enable optional compression with the
+`compression` feature:
 
 ```toml
 ntex-grpc = { version = "4", features = ["compression"] }
@@ -715,21 +701,24 @@ use ntex_grpc::Compression;
 req.compression(Compression::Gzip); // or Compression::Zstd
 ```
 
-Compression costs CPU on both sides, so turn it on for large, repetitive
-messages and leave it off for small ones. Empty messages are always sent
-uncompressed. A server that does not support the encoding fails the call
-with `UNIMPLEMENTED`.
+Compression costs CPU on both sides. Use it for large, repetitive messages
+and leave it off for small ones. Empty messages are always sent
+uncompressed. If the server does not support the encoding, it fails the
+call with `UNIMPLEMENTED`.
 
-**Message limits** protect the client from huge replies. On `Client`,
-`max_message_size()` limits received messages (4 MiB by default), and
-`max_send_message_size()` limits sent ones. A request can override both for
-a single call.
+Whether or not you compress, message limits protect the client from
+oversized replies. On `Client`,
+`max_message_size()` limits received messages to 4 MiB by default. Use
+`max_send_message_size()` to limit sent messages. You can override both
+limits on a request for a single call.
 
 ### Streaming calls
 
-Streaming methods return a `StreamRequest` instead. You configure it the
-same way and open it through the [`StreamTransport`] trait. The messages
-flow through a [`SendStream`] and a [`RecvStream`]:
+Use streaming methods when either side needs to send more than one
+message. These methods return a `StreamRequest`, which you configure like
+a unary request. You open it through the [`StreamTransport`] trait.
+
+A [`SendStream`] sends messages. A [`RecvStream`] receives them:
 
 ```rust,no_run
 // server streaming: one request, a stream of replies
@@ -756,21 +745,25 @@ println!("{}", res?.message);
 let (tx, mut rx) = echo.bidi_streaming_echo().open().await?;
 ```
 
-`join` is `ntex::util::join`. A client-streaming call has to send and wait
-for the reply at the same time. If you await `send()` before sending the
-messages, the call waits forever: the server answers only after the stream
-ends. After a stream ends, `rx.status()` returns its final `grpc-status`.
+The example uses `ntex::util::join` so sending messages and waiting for the
+reply can both make progress. When the server reads until the stream ends,
+`tx.close()` tells it to finish and reply. Awaiting `send()` before sending
+those messages would leave both sides waiting for each other.
+
+After a stream ends, `rx.status()` returns its final `grpc-status`.
 
 ### Writing your own transport
 
-Generated clients are generic over their transport, so anything that
-implements `Transport` (and `StreamTransport`, for streaming methods) can
-take the place of `Client`. A transport is the natural home for concerns
-that apply to every call: authentication headers, metrics, logging, retries
-or routing.
+Write a custom transport when you need behavior that applies to every
+call. You can add authentication headers, record metrics or logs, retry
+calls, or route them to different servers.
+
+Generated clients are generic over their transport. Any type implementing
+`Transport` can replace `Client`. For streaming methods, implement
+`StreamTransport` too.
 
 A custom transport usually wraps a built-in one. It adjusts the request
-context, then delegates:
+context, then delegates the call:
 
 ```rust,no_run
 use ntex::Error;
@@ -798,25 +791,25 @@ impl<M: MethodDef, St> Transport<M, St> for WithToken {
 }
 ```
 
-`GreeterClient::new(WithToken { .. })` now sends the token with every call.
-Keep the implementation generic over the request state `St`, so both
-`send()` and `send_with()` keep working.
+Pass this wrapper to `GreeterClient::new(WithToken { .. })` to send the
+token with every call. Keep the implementation generic over the request
+state `St`. This preserves support for both `send()` and `send_with()`.
 
-For streaming calls, implement `StreamTransport` the same way. Its `open()`
-returns a [`StreamCall`], the HTTP/2 stream of the call, and only the
-built-in transports can create one. A custom streaming transport therefore
-always ends by calling `open()` on a built-in transport.
+Implement `StreamTransport` the same way for streaming calls. Its `open()`
+returns a [`StreamCall`] representing the call's HTTP/2 stream. Only the
+built-in transports can create one. A custom streaming transport must
+finish by calling a built-in transport's `open()`.
 
-Generated clients own their transport. To share one transport between
-several typed clients, make it cheap to clone and keep the shared parts
-behind an `Rc` or in the pool, as `Client` does.
+Generated clients own their transport. To share one between typed clients,
+make it cheap to clone. Keep shared parts behind an `Rc` or in the pool,
+as `Client` does.
 
 ### Routing calls to different backends
 
-In larger systems, different services often live on different servers. The
-routing example puts `shop.Catalog` and `shop.Orders` on separate backends.
-A `Router` transport picks the backend for each call from the service name
-in `M::PATH`:
+A routing transport lets one client setup reach services on different
+servers. The routing example hosts `shop.Catalog` and `shop.Orders` on
+separate backends. Its `Router` transport chooses a backend from the
+service name in `M::PATH`:
 
 ```rust,no_run
 use std::{collections::HashMap, rc::Rc};
@@ -889,10 +882,10 @@ impl<M: MethodDef, St> StreamTransport<M, St> for Router {
 }
 ```
 
-Both typed clients share one router, and the clones share the routes and
-the connection pools. Use the generated `ServiceDef::NAME` constants as
-route names. If a service is renamed in the `.proto` file, the code stops
-compiling instead of failing at run time:
+Both typed clients use the same router. Its clones share the routes and
+connection pools. Use the generated `ServiceDef::NAME` constants as route
+names. If a service is renamed in the `.proto` file, these references fail
+to compile:
 
 ```rust,no_run
 let router = Router::default()
@@ -902,20 +895,21 @@ let catalog = CatalogClient::new(router.clone());
 let orders = OrdersClient::new(router);
 ```
 
-The router returns the same error type as the built-in transports, so
-callers handle a missing route like any other failed call.
+The router uses the same error type as the built-in transports. Callers
+handle a missing route like any other failed call.
 
 ### Errors, deadlines and retries
 
-Calls fail. Networks drop connections, servers restart, and requests run
-into bugs. What matters is how much your code can learn from a failure, and
-the most important question is usually: *did the server see my request?*
-The answer decides whether a retry is safe.
+A lost reply does not tell you whether the server handled the request.
+Before retrying, check what the error says about that: repeating a greeting
+is harmless, but repeating an order might not be.
 
 The built-in transports return `ntex::Error<ClientError>`. It derefs to
-[`ClientError`], so match on `&*err`. `err.status()` gives a gRPC status
-code for every variant, and `err.message()` describes the cause. Each
-variant answers that question:
+[`ClientError`], so you can match on `&*err`. Use `err.status()` for a gRPC
+status code on any variant. Use `err.message()` for a description of the
+cause.
+
+The error variant tells you what is known about the request:
 
 | Variant | Did the server see the request? | What you can do |
 | --- | --- | --- |
@@ -928,12 +922,14 @@ variant answers that question:
 | `InvalidResponse` | yes | fail the call; asking again gets the same answer |
 | `DeadlineExceeded` | maybe | the time for the call is up |
 
-`Status` is the only variant whose status came from the server, and it also
-carries the server's trailers. `NotProcessed` covers a connection that was
-already closing when the call started and streams that the server refused,
-so the request never reached your service.
+Only `Status` carries a status from the server. It also carries the
+server's trailers.
 
-With that, a retry loop for an idempotent call is short:
+`NotProcessed` means the request never reached your service. It covers
+connections that were already closing when the call started and streams
+the server refused.
+
+For an idempotent call, you can write a retry loop like this:
 
 ```rust,no_run
 use ntex_grpc::client::ClientError;
@@ -959,34 +955,40 @@ let reply = loop {
 };
 ```
 
-**Deadlines** follow the gRPC spec. The client sends `timeout()` to the
-server in the `grpc-timeout` header, rounded up so the server never gives up
-before the client does. When the deadline passes, the server stops the call
-and answers `DEADLINE_EXCEEDED`, and the client stops waiting at the same
-moment. A zero timeout fails at once, without sending anything.
+Retries also need a time limit. Set a timeout on every call; without one,
+a stalled server can hold the call and anything waiting for it as long as
+the connection lives.
 
-Without a timeout, a call waits as long as its connection lives. A server
-that hangs then holds your call, and whatever is waiting for it, forever.
-Set a timeout on every call.
+The client sends the value from `timeout()` in the `grpc-timeout` header,
+rounding up to the precision the gRPC format allows. The client enforces
+its own deadline, including time spent waiting for a connection. The
+server uses the header to limit service execution and answers
+`DEADLINE_EXCEEDED` if that limit runs out. These are separate timers, not
+a synchronized clock. A zero client timeout fails at once without sending
+anything.
 
-Streaming calls fail in the same ways. `open()` returns the errors of
-opening the stream, `recv()` returns a [`StreamError`] if the stream fails
-later, and `rx.status()` gives the final status.
+Streaming calls fail in the same ways. The stage of the call determines
+where you receive the error:
+
+- `open()` returns errors from opening the stream.
+- `recv()` returns a [`StreamError`] if the stream fails later.
+- `rx.status()` gives the final status.
 
 ## Serving gRPC
 
-A gRPC server has three layers:
+On the server side, your main job is to implement one async method per
+`rpc`. The `#[server]` attribute turns your type into an ntex service, so
+you do not have to decode packets or dispatch method names yourself.
 
-- **your type**, with one async method per `rpc`, turned into an ntex
-  service by `#[server]`;
-- **[`GrpcServer`]**, which speaks the gRPC protocol and routes each call to
-  a service by its service name;
-- **an ntex [`Server`](5-server.md)**, which accepts connections, optionally
-  runs TLS, and hands each connection to `GrpcServer`.
+Two layers sit in front of it. [`GrpcServer`] speaks the gRPC protocol and
+routes calls by service name. The ntex [`Server`](5-server.md) accepts
+connections, optionally runs TLS, and hands each connection to
+`GrpcServer`.
 
 ### Implementing a service
 
-Here is the complete helloworld server:
+Implement a service with async methods, then register it with the server.
+This is the complete helloworld server:
 
 ```rust,no_run
 use std::convert::Infallible;
@@ -1031,17 +1033,14 @@ async fn main() -> std::io::Result<()> {
 }
 ```
 
-`#[server(path)]` takes the generated service definition. Each
-`#[method(Name)]` uses the method name from the `.proto` file, and the
-attribute checks the argument and return types against the generated
-`MethodDef` at compile time. A typo in a method name or a wrong message type
-is a compile error. The attribute implements `Service<(), ServerRequest>`
-and `NamedService` for your type; everything else is ordinary Rust.
+Pass the generated service definition to `#[server(path)]`. Mark each
+method with `#[method(Name)]`, using the name from the `.proto` file. The
+attribute checks argument and return types against the generated
+`MethodDef` at compile time. A misspelled method name or wrong message type
+fails to compile.
 
-Import the attribute with `use ntex_grpc::server;`. That brings in both the
-`server` module and the `server` attribute. `use ntex_grpc::server::{self,
-..}` imports only the module, and the confusing error you get is that
-`NamedService` is not implemented.
+The attribute implements `Service<(), ServerRequest>` for your type. It
+also implements `NamedService`. The rest is ordinary Rust.
 
 The signature of a method depends on its kind:
 
@@ -1052,8 +1051,8 @@ The signature of a method depends on its kind:
 | client streaming | `rx: RecvStream<Input>` | as unary |
 | bidirectional | `rx: RecvStream<Input>`, `tx: SendStream<Output>` | as server streaming |
 
-Take `Request<Input>` when you need the request headers. It derefs to the
-message, so the fields are still at hand:
+Use `Request<Input>` when you need request headers. It derefs to the
+message, so you can still access the fields:
 
 ```rust,no_run
 #[method(UnaryEcho)]
@@ -1069,21 +1068,27 @@ async fn unary_echo(&self, req: Request<EchoRequest>) -> EchoReply {
 }
 ```
 
-`GrpcServer` creates a service instance for every connection by calling
-`create()`. Where state lives depends on who should see it:
+`GrpcServer` calls `create()` for each connection to make a service
+instance. State stored in that returned service belongs to the connection.
+If you need to share it more widely, create it outside `create()` and
+clone a handle into each instance.
 
-- State for one connection goes into the service that `create()` returns.
-- State for one worker can be created in the closure passed to `bind()`,
-  which is called for every worker; an `Rc` is enough there. The closure may
-  run again when a worker restarts, so keep that setup safe to repeat.
-- State for the whole server, such as a counter or a store, goes into an
-  `Arc` that all clones share, because workers run on different threads.
+For state shared by one worker, use the closure passed to `bind()`. It runs
+for each worker, so an `Rc` is enough. The closure may run again after a
+worker restarts; keep the setup safe to repeat. For a counter or data store
+shared by the whole server, use an `Arc` shared by all clones, because
+workers run on different threads.
+
+Import the attribute with `use ntex_grpc::server;`. This imports both the
+`server` module and the attribute. An import such as
+`use ntex_grpc::server::{self, ..}` brings in only the module. If you use
+that form, the error says that `NamedService` is not implemented.
 
 ### Streaming methods
 
-Streaming methods receive their messages from a `RecvStream` and send them
-through a `SendStream`. A server-streaming method gets the request and a
-sender:
+Streaming methods let you send or receive messages throughout a call. Use
+`RecvStream` to receive messages and `SendStream` to send them. A
+server-streaming method receives one request and a sender:
 
 ```rust,no_run
 #[method(ServerStreamingEcho)]
@@ -1107,8 +1112,8 @@ async fn server_streaming_echo(
 }
 ```
 
-A client-streaming method reads until the client closes its side, then
-answers once:
+A client-streaming method reads messages until the client closes its side.
+It then returns one reply:
 
 ```rust,no_run
 #[method(ClientStreamingEcho)]
@@ -1123,7 +1128,8 @@ async fn client_streaming_echo(&self, mut rx: RecvStream<EchoRequest>) -> EchoRe
 }
 ```
 
-A bidirectional method gets both and can answer each message as it arrives:
+A bidirectional method gets both streams. It can reply to each message as
+it arrives:
 
 ```rust,no_run
 #[method(BidiStreamingEcho)]
@@ -1140,34 +1146,27 @@ async fn bidi_streaming_echo(
 }
 ```
 
-`?` works on failed sends and receives. If the client goes away, the next
-`send()` fails and the method returns early. When the method returns, the
-call ends and its result becomes the `grpc-status` of the call.
+Use `?` to return early after a failed send or receive. If the client goes
+away, the next `send()` fails. When the method returns, the call ends. Its
+result becomes the call's `grpc-status`.
 
 ### Reporting errors to clients
 
-Some errors are handled for you, before your method runs:
+Use your method's return value to report errors to clients. A
+`ServerError` sets the call's `grpc-status` and `grpc-message`. Its optional
+`HeaderMap` adds trailers. Build the error with `ServerError::new()`.
 
-| Situation | Status |
-| --- | --- |
-| unknown service or method | `UNIMPLEMENTED` |
-| request message that cannot be decoded, including a custom field type that rejects its value | `INVALID_ARGUMENT` |
-| request message larger than `max_message_size` | `RESOURCE_EXHAUSTED` |
-| compressed request in an encoding the server does not support | `UNIMPLEMENTED` |
-| deadline from `grpc-timeout` runs out | `DEADLINE_EXCEEDED` |
+Pass error text through [`encode_grpc_message()`]. gRPC requires
+`grpc-message` to be percent-encoded.
 
-Your methods report their own errors through their return value. A
-`ServerError` becomes the `grpc-status` and `grpc-message` of the call, and
-its optional `HeaderMap` adds more trailers. Build it with
-`ServerError::new()`, and pass the text through [`encode_grpc_message()`],
-because gRPC expects `grpc-message` to be percent-encoded.
+Streaming methods can return `Result<(), ServerError>`, as shown above.
+For unary and client-streaming methods, return
+`Result<Response<Output>, ServerError>` to fail the call with a status.
+Those methods return a reply, so the return type must distinguish an error
+status from an error encoded in the reply.
 
-Streaming methods return `Result<(), ServerError>`, as shown above. Unary
-and client-streaming methods return a reply, so they need a way to say
-whether the `Err` side is a failure. Return `Result<Response<Output>,
-ServerError>` to fail the call with a status. `Response` also carries
-extra trailers for a successful reply, and a plain message turns into one
-with `.into()`:
+A successful `Response` can carry extra trailers. You can turn a plain
+message into a `Response` with `.into()`:
 
 ```rust,no_run
 use ntex::http::header::HeaderValue;
@@ -1193,16 +1192,17 @@ async fn reserve(
 }
 ```
 
-The trailers in `Response::headers` follow `grpc-status: 0`. A
-`grpc-status` or `grpc-message` among them is ignored, so a `Response` is
-always a successful call. The client reads them from `trailers()` on its
-response.
+The trailers in `Response::headers` follow `grpc-status: 0`. The server
+ignores any `grpc-status` or `grpc-message` among them. A `Response`
+therefore always represents a successful call. The client reads these
+trailers with `trailers()` on its response.
 
-A method that returns `Result<Output, E>` works differently: it **always
-ends with `OK`**. Its error type is converted into a reply message
-(`E: Into<Output>`), so the error has to be part of the reply. That suits
-APIs that model errors in the protocol anyway, where a `oneof` gives the
-reply an explicit success or failure:
+A method returning `Result<Output, E>` **always ends with `OK`**. Its error
+type converts into a reply message through `E: Into<Output>`. The error
+must therefore be part of the reply.
+
+Use this form when your protocol models errors as reply data. For example,
+a `oneof` can represent success or failure:
 
 ```protobuf
 message ReserveReply {
@@ -1231,15 +1231,25 @@ async fn reserve(&self, req: ReserveRequest) -> Result<ReserveReply, Problem> {
 }
 ```
 
-Errors in the reply are part of your API: clients get a typed `Problem`
-instead of a status code and a string. Pick a gRPC status when the failure
-is generic, such as a missing resource or a denied permission, and a
-`oneof` when clients need to act on the details.
+An error in the reply gives clients a typed `Problem` rather than a status
+code and string. Use a gRPC status for generic failures, such as a missing
+resource or denied permission. Use a `oneof` when clients need to act on
+the details.
+
+The server handles these errors before your method runs:
+
+| Situation | Status |
+| --- | --- |
+| unknown service or method | `UNIMPLEMENTED` |
+| request message that cannot be decoded, including a custom field type that rejects its value | `INVALID_ARGUMENT` |
+| request message larger than `max_message_size` | `RESOURCE_EXHAUSTED` |
+| compressed request in an encoding the server does not support | `UNIMPLEMENTED` |
+| deadline from `grpc-timeout` runs out | `DEADLINE_EXCEEDED` |
 
 ### Hosting several services
 
-One `GrpcServer` can serve several services, and it routes calls by the
-service name in the request path:
+Register several services on one `GrpcServer` to share a listener. It
+routes calls by the service name in the request path:
 
 ```rust,no_run
 pub fn grpc_server(calls: Arc<AtomicU64>) -> GrpcServer {
@@ -1258,15 +1268,16 @@ pub fn grpc_server(calls: Arc<AtomicU64>) -> GrpcServer {
 | `service_named(name, service)` | add a service under another name, e.g. a hand-written one |
 | `default_service(service)` | take the calls for every service that is not added |
 
-Without a default service, a call to an unknown service fails with
-`UNIMPLEMENTED`. Adding the same name twice panics, so the mistake shows up
-when the server starts, not when the first call arrives.
+Without a default service, calls to an unknown service fail with
+`UNIMPLEMENTED`. Registering the same name twice panics at server startup,
+before any calls arrive.
 
-The default service and `service_named` services are plain ntex services of
-`ServerRequest`, written by hand. They see the call before anything is
-decoded: the service and method names, the request headers and the encoded
-payload. They answer with a `ServerResponse` holding the encoded reply, or
-with a `ServerError` holding any status. They handle only unary calls.
+Write the default service and `service_named` services as plain ntex
+services of `ServerRequest`. They receive the call before decoding, with
+its service and method names, request headers and encoded payload.
+
+Return a `ServerResponse` with an encoded reply, or a `ServerError` with
+any status. These hand-written services handle only unary calls.
 
 ```rust,no_run
 #[derive(Clone, Copy, Debug, Default)]
@@ -1294,22 +1305,20 @@ impl Service<(), server::ServerRequest> for Fallback {
 }
 ```
 
-`Fallback` also needs a `ServiceFactory` implementation, just like the
-`#[server]` types.
+Implement `ServiceFactory` for `Fallback` too, as you would for a
+`#[server]` type.
 
 ### Tuning the server
 
-`GrpcServer` has two gRPC limits:
+Start with message limits when you need to bound the requests your service
+accepts. `GrpcServer::max_message_size(size)` defaults to 4 MiB and checks
+the size again after decompression. A larger request fails the call with
+`RESOURCE_EXHAUSTED`. To limit replies as well, set
+`max_send_message_size(size)`.
 
-- `max_message_size(size)` is the largest request message the server
-  accepts, checked again after decompression. A larger one fails the call
-  with `RESOURCE_EXHAUSTED`. The default is 4 MiB.
-- `max_send_message_size(size)` is the largest reply message the server
-  sends.
-
-Everything below gRPC is HTTP/2. `GrpcServer` reads its HTTP/2 settings
-from the configuration of the listener it is bound to, so add an
-`ntex_h2::ServiceConfig` to the `SharedCfg` passed to `bind()`:
+For connection settings below gRPC, configure HTTP/2. `GrpcServer` reads
+these settings from its listener's configuration. Add an
+`ntex_h2::ServiceConfig` to the `SharedCfg` you pass to `bind()`:
 
 ```rust,no_run
 use ntex::{SharedCfg, time::Seconds};
@@ -1337,7 +1346,7 @@ Server::builder()
     .await
 ```
 
-The defaults suit most services. Change them when your traffic is unusual:
+Start with the defaults and adjust them for your traffic:
 
 | Setting | Default | Why change it |
 | --- | --- | --- |
@@ -1347,15 +1356,15 @@ The defaults suit most services. Change them when your traffic is unusual:
 | `set_ping_timeout` | 10 seconds | detect dead connections; zero disables pings |
 | `set_handshake_timeout` | 5 seconds | how long a new connection has to complete the HTTP/2 handshake |
 
-With the `compression` feature, the server also accepts gzip and zstd
-requests and compresses each reply like its request, unless the client's
+With the `compression` feature, the server accepts gzip and zstd requests.
+It uses the request's encoding to compress the reply, unless the client's
 `grpc-accept-encoding` header rules that out.
 
 ### Running over TLS
 
-gRPC needs HTTP/2, and `GrpcServer` speaks only HTTP/2. It serves any
-[`Io`](7-io.md), so TLS is simply one more service in front of it. On the
-server, the TLS acceptor runs first and passes the decrypted stream on:
+Put a TLS service in front of `GrpcServer` to serve gRPC over TLS. The
+server accepts any [`Io`](7-io.md), but speaks only HTTP/2, as gRPC requires.
+The TLS acceptor runs first and passes the decrypted stream to it:
 
 ```rust,no_run
 use ntex::io::Io;
@@ -1371,7 +1380,7 @@ pub fn grpc_tls_service(
 }
 ```
 
-On the client, give the pool a TLS connector and turn on `secure(true)`, so
+On the client, give the pool a TLS connector. Set `secure(true)` so
 requests carry the `https` scheme:
 
 ```rust,no_run
@@ -1386,31 +1395,28 @@ pub fn connect(addr: impl Into<String>, config: ClientConfig) -> GreeterClient<C
 }
 ```
 
-Both sides must offer `h2` in ALPN (`config.alpn_protocols =
-vec![b"h2".to_vec()]`); many gRPC clients refuse a server that does not
-select it. The client must connect to a host name that matches the server
-certificate, such as `localhost:50056`. Certificates, trust roots and the
-other TLS backends are covered in the [TLS chapter](10-tls.md).
+Both sides must offer `h2` in ALPN. Set
+`config.alpn_protocols = vec![b"h2".to_vec()]`. Many gRPC clients refuse a
+server that does not select it.
 
-Without TLS, ntex-grpc uses HTTP/2 with *prior knowledge*: the client
-starts with the HTTP/2 preface right away, with no HTTP/1.1 upgrade. That is
-what gRPC clients expect for plaintext connections. Tools such as `grpcurl`
-need the `-plaintext` flag to talk to such a server.
+Connect to a host name that matches the server certificate, such as
+`localhost:50056`. See the [TLS chapter](10-tls.md) for certificates, trust
+roots and other TLS backends.
+
+Without TLS, ntex-grpc uses HTTP/2 with *prior knowledge*. The client sends
+the HTTP/2 preface immediately, without an HTTP/1.1 upgrade. gRPC clients
+expect this for plaintext connections. Use `-plaintext` with tools such as
+`grpcurl` to call a server without TLS.
 
 ## Testing your services
 
-Clients and servers are ordinary ntex services, so tests use the ntex test
-server. Start the gRPC server on a random port, connect a generated client
-to it, and make real calls:
+Use the ntex test server to test your service with real gRPC calls. Clients
+and servers are ordinary ntex services. Start the gRPC server on a random
+port, then connect a generated client:
 
 ```rust,no_run
 use ntex::server::TestServerBuilder;
 
-/// STATEMENT: A unary handler that takes `Request<_>` reads the request headers.
-///
-/// HOW:
-/// - Call `UnaryEcho` with the `x-echo-prefix` header set to `> `.
-/// - Check the reply is the message with the prefix in front.
 #[ntex::test]
 async fn unary_echo_reads_request_headers() {
     let calls = Arc::new(AtomicU64::new(0));
@@ -1426,23 +1432,26 @@ async fn unary_echo_reads_request_headers() {
 }
 ```
 
-`TestServerBuilder::config()` takes the same `SharedCfg` as the binary, so
-tests run with the production HTTP/2 settings. A few more patterns from the
-examples:
+Pass the binary's `SharedCfg` to `TestServerBuilder::config()` to test with
+the production HTTP/2 settings. Keep the timeout on every test call: a
+broken server should fail the test rather than hang it.
 
-- **Test unknown methods.** Implement `MethodDef` by hand with a `PATH` the
-  server does not have, send it with `ntex_grpc::client::Request::new`, and
-  check the `UNIMPLEMENTED` or fallback answer.
-- **Test wire compatibility.** Generate the same `.proto` twice, once with
-  `--map` and once without, and call the server that uses custom types with
-  the plain client. That is exactly what other implementations see.
-- **Unit-test custom field types.** Encode a message with
-  `Message::write`, decode it with `Message::read`, compare the two, and
-  check that `merge` rejects invalid input with an error.
-- **Set a timeout on every call in tests**, so a broken server fails the
-  test instead of hanging it.
+Once the successful call works, exercise the routing failures too.
+Implement `MethodDef` by hand with a `PATH` that the server does not have,
+then send it with `ntex_grpc::client::Request::new`. Check for `UNIMPLEMENTED`
+or your fallback's answer.
+
+Custom field types need both local and wire-compatibility tests. For a
+local round trip, encode with `Message::write`, decode with `Message::read`,
+and compare the messages. Also check that `merge` returns an error for
+invalid input. To test compatibility, generate the same `.proto` with and
+without `--map`, then use the plain client to call the custom-types server.
+That exercises the wire format other implementations see.
 
 ## Troubleshooting
+
+Match the symptom to a likely cause before changing your client or server
+configuration.
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
@@ -1458,32 +1467,6 @@ examples:
 | `grpcurl` cannot list services | the server does not offer reflection | pass the `.proto` file with `-proto` |
 | A TLS client refuses to talk to the server | ALPN does not select `h2` | add `h2` to `alpn_protocols` on both sides |
 | A call hangs forever | no timeout and a stalled server | set `timeout()` on every call |
-
-## Production checklist
-
-- **The generated code is up to date.** `generate.sh` lives next to the
-  `.proto` files and its output is committed, so reviews show protocol
-  changes.
-- **Custom field types match the wire.** `value_len` is exact, `is_default`
-  matches the protobuf default, `merge` returns errors instead of panicking,
-  and varint types override `encoded_len`.
-- **Every call has a deadline.** Clients set `timeout()`, so a stalled
-  server cannot hold a call forever.
-- **Retries look at the error.** Only `NotProcessed`, `Connection` with
-  `request_sent == false`, or failures of idempotent methods are retried.
-- **Clients share pools.** There is one `Client` per backend, cloned into
-  the typed clients and transports that use it.
-- **Shared state is in an `Arc`.** Services are created per connection, on
-  several worker threads.
-- **Errors reach clients with the right status.** Methods return
-  `ServerError`s for failed calls, or model errors in the reply with a
-  `oneof`.
-- **Limits are set.** `max_message_size` fits the largest expected message
-  on both sides, and the HTTP/2 stream and window settings fit the load.
-- **Compression is a deliberate choice.** If clients compress, the server
-  is built with the `compression` feature.
-- **TLS offers `h2`.** Both sides use ALPN `h2`, and clients use
-  `secure(true)` and a host name from the certificate.
 
 [gRPC]: https://grpc.io
 [grpcurl]: https://github.com/fullstorydev/grpcurl
