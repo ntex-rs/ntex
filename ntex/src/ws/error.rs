@@ -97,6 +97,10 @@ pub enum WsConfigError {
     /// The URI does not contain a host.
     #[error("Missing host name")]
     MissingHost,
+    /// The URI uses `wss` or `https`, but the client uses the default plain
+    /// connector.
+    #[error("Secure url scheme requires a TLS connector")]
+    TlsRequired,
     /// The URI could not be parsed.
     #[error("Url parse error: {0}")]
     Parse(
