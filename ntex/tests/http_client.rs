@@ -1321,3 +1321,47 @@ async fn client_bodiless_response_ignores_content_length_limit() {
         assert_eq!(response.body().await.unwrap(), Bytes::new());
     }
 }
+
+/// STATEMENT: Pooled connections are keyed by the `address()` override, so a
+/// request for the same authority with another address reaches that server.
+///
+/// HOW:
+/// - Start two keep-alive servers that answer `a` and `b`.
+/// - Send requests for one URL authority to `a`, then `b`, then `a` again with
+///   `address()`, reading each body so the connection returns to the pool.
+/// - Assert each body names the addressed server and server `a` accepted only
+///   one connection, so its pooled connection was reused.
+#[ntex::test]
+async fn client_pool_respects_address_override() {
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let accepted2 = accepted.clone();
+    let srv_a = test_server(async move |_| {
+        let accepted = accepted2.clone();
+        service(async move |io| {
+            accepted.fetch_add(1, Ordering::Relaxed);
+            Ok(io)
+        })
+        .and_then(HttpService::new(
+            App::new().service(web::resource("/").route(web::to(async || "a"))),
+        ))
+    });
+    let srv_b = test_server(async |_| {
+        HttpService::new(App::new().service(web::resource("/").route(web::to(async || "b"))))
+    });
+
+    let client = Client::new();
+    for (addr, expected) in [
+        (srv_a.addr(), "a"),
+        (srv_b.addr(), "b"),
+        (srv_a.addr(), "a"),
+    ] {
+        let response = client
+            .get("http://pool.example:80/")
+            .address(addr)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.body().await.unwrap(), Bytes::from(expected));
+    }
+    assert_eq!(accepted.load(Ordering::Relaxed), 1);
+}

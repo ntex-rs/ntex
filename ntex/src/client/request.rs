@@ -95,7 +95,10 @@ impl ClientRequest {
     #[must_use]
     /// Sets the server socket address.
     ///
-    /// This address is used instead of resolving the URI host name.
+    /// This address is used instead of resolving the URI host name. Pooled
+    /// connections are reused only by requests with the same URI authority
+    /// and the same address, so requests to one host with different
+    /// addresses, or without one, never share a connection.
     pub fn address(mut self, addr: net::SocketAddr) -> Self {
         self.request.addr = Some(addr);
         self

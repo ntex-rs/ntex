@@ -7,6 +7,11 @@
   previously it accepted any certificate. To trust a private root or a self-signed test
   certificate, pass your own `SslConnector` to `ClientBuilder::openssl()`
 
+* Fix client connection pool ignoring `ClientRequest::address()`: pooled
+  connections are now keyed by authority and address override, so a request
+  with another address (or none) no longer reuses a connection to a
+  different server
+
 * Client `body()` and `json()` no longer check `Content-Length` for bodiless
   responses (`HEAD` requests, `204`, `304`). They now return an empty body
   instead of failing with `Overflow` or `UnknownLength`. With response
