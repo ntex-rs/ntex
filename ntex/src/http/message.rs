@@ -129,6 +129,7 @@ impl Head for RequestHead {
         self.headers.clear();
         self.headers_vec.clear();
         self.extensions.get_mut().clear();
+        self.stream = None;
     }
 
     fn with_pool<F, R>(f: F) -> Option<R>
@@ -438,7 +439,6 @@ impl Head for ResponseHead {
         self.io = CurrentIo::None;
         self.flags = Flags::empty();
         self.extensions.get_mut().clear();
-        self.stream = None;
     }
 
     fn with_pool<F, R>(f: F) -> Option<R>
