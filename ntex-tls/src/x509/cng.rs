@@ -20,20 +20,14 @@ use std::{fmt, mem, ptr, sync::Arc};
 use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_PKCS1_PADDING_INFO, BCRYPT_PSS_PADDING_INFO, BCRYPT_SHA256_ALGORITHM,
     BCRYPT_SHA384_ALGORITHM, BCRYPT_SHA512_ALGORITHM, CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL,
-    CERT_CHAIN_CONTEXT, CERT_CHAIN_DISABLE_AIA, CERT_CHAIN_PARA, CERT_CONTEXT, CERT_FIND_SHA1_HASH,
-    CERT_FIND_SUBJECT_STR_W, CERT_KEY_SPEC, CERT_NCRYPT_KEY_SPEC, CERT_STORE_OPEN_EXISTING_FLAG,
-    CERT_STORE_PROV_SYSTEM_W, CERT_STORE_READONLY_FLAG, CERT_SYSTEM_STORE_CURRENT_USER,
-    CERT_SYSTEM_STORE_LOCAL_MACHINE, CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG, CRYPT_ACQUIRE_SILENT_FLAG,
-    CRYPT_INTEGER_BLOB, CRYPT_VERIFY_CERT_SIGN_ISSUER_CERT, CRYPT_VERIFY_CERT_SIGN_SUBJECT_CERT,
-    CertCloseStore, CertDuplicateCertificateContext, CertEnumCertificatesInStore,
-    CertFindCertificateInStore, CertFreeCertificateChain, CertFreeCertificateContext,
-    CertGetCertificateChain, CertOpenStore, CertVerifyTimeValidity,
-    CryptVerifyCertificateSignatureEx, HCERTCHAINENGINE, HCERTSTORE, NCRYPT_KEY_HANDLE,
-    NCRYPT_PAD_PKCS1_FLAG, NCRYPT_PAD_PSS_FLAG, NCRYPT_SILENT_FLAG, NCryptFreeObject,
-    NCryptSignHash, PFXImportCertStore, PFXIsPFXBlob, PKCS_7_ASN_ENCODING, PKCS12_ALWAYS_CNG_KSP,
-    PKCS12_NO_PERSIST_KEY, X509_ASN_ENCODING,
+    CERT_CHAIN_DISABLE_AIA, CERT_CHAIN_PARA, CERT_KEY_SPEC, CERT_NCRYPT_KEY_SPEC,
+    CERT_SYSTEM_STORE_CURRENT_USER, CERT_SYSTEM_STORE_LOCAL_MACHINE,
+    CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG, CRYPT_ACQUIRE_SILENT_FLAG, HCERTCHAINENGINE,
+    NCRYPT_KEY_HANDLE, NCRYPT_PAD_PKCS1_FLAG, NCRYPT_PAD_PSS_FLAG, NCRYPT_SILENT_FLAG,
+    NCryptSignHash, PKCS12_ALWAYS_CNG_KSP, PKCS12_NO_PERSIST_KEY, X509_ASN_ENCODING,
 };
 
+use crate::win::{Cert, CertContext, CertStore, ChainContext, NcryptHandle};
 use crate::x509::digest::cng as digest;
 use crate::x509::identity::{StoreLocation, StoreSelector};
 use crate::x509::key::{HashAlg, SignScheme};
@@ -49,13 +43,14 @@ const HCCE_LOCAL_MACHINE: HCERTCHAINENGINE = 1 as HCERTCHAINENGINE;
 #[derive(Clone)]
 pub struct CngKey(Arc<KeyInner>);
 
+// Fields drop in order: the key before the context or provider it may belong to.
 struct KeyInner {
     key: KeyHandle,
     key_type: KeyType,
     // keeps the key (PKCS#12 keys are bound to the context) and its store alive
-    _ctx: CertCtx,
+    _ctx: CertContext,
     // Imported keys retain their provider; Schannel keys retain their deletion owner.
-    _provider: Option<KeyHandle>,
+    _provider: Option<NcryptHandle>,
     _owner: Option<crate::schannel::Certificate>,
 }
 
@@ -116,7 +111,7 @@ impl CngKey {
             // valid for the call, `digest` is valid for its length and `out` for `cap` bytes.
             let hr = unsafe {
                 NCryptSignHash(
-                    self.0.key.0,
+                    self.0.key.raw(),
                     padding,
                     digest.as_ptr(),
                     digest_len,
@@ -154,57 +149,39 @@ impl fmt::Debug for CngKey {
     }
 }
 
-/// Wraps `der` for `PFXImportCertStore`.
+/// Checks that `der` is a PKCS#12 archive `PFXImportCertStore` accepts.
 ///
 /// # Errors
 /// [`Error::InvalidDer`] if `der` is not a PKCS#12 archive (same as the Unix decoder).
-pub(crate) fn pfx_blob(der: &[u8]) -> Result<CRYPT_INTEGER_BLOB, Error> {
-    let blob = CRYPT_INTEGER_BLOB {
-        cbData: u32::try_from(der.len())
-            .map_err(|_| Error::InvalidIdentity("PKCS#12 archive is too large".into()))?,
-        pbData: der.as_ptr().cast_mut(),
-    };
-    // SAFETY: `blob` points to `der`, which outlives the call.
-    if unsafe { PFXIsPFXBlob(&raw const blob) } == 0 {
+pub(crate) fn check_pfx(der: &[u8]) -> Result<(), Error> {
+    if u32::try_from(der.len()).is_err() {
+        return Err(Error::InvalidIdentity(
+            "PKCS#12 archive is too large".into(),
+        ));
+    }
+    if !crate::win::is_pfx(der) {
         return Err(Error::InvalidDer("not a PKCS#12 archive".into()));
     }
-    Ok(blob)
+    Ok(())
 }
 
 /// Loads the identity from a DER PKCS#12 archive: leaf-first chain without root, and its key.
 pub(crate) fn from_pkcs12(der: &[u8], password: &str) -> Result<(Vec<Certificate>, CngKey), Error> {
-    let blob = pfx_blob(der)?;
+    check_pfx(der)?;
     let flags = PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP;
-    let wide_pw = wide(password);
-    // SAFETY: `blob` points to `der`, the password is NUL terminated.
-    let mut store = unsafe { PFXImportCertStore(&raw const blob, wide_pw.as_ptr(), flags) };
-    if store.is_null() && password.is_empty() {
+    let mut store = CertStore::from_pfx(der, Some(password), flags);
+    if store.is_err() && password.is_empty() {
         // archives exported without a password may be encrypted with a NULL password
-        // SAFETY: as above, a NULL password is allowed.
-        store = unsafe { PFXImportCertStore(&raw const blob, ptr::null(), flags) };
+        store = CertStore::from_pfx(der, None, flags);
     }
-    if store.is_null() {
-        return Err(Error::InvalidIdentity(format!(
-            "PFXImportCertStore failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    let store = Store(store);
-
-    let mut cert: *mut CERT_CONTEXT = ptr::null_mut();
-    loop {
-        // SAFETY: `store` is open; the previous context is freed by the call.
-        cert = unsafe { CertEnumCertificatesInStore(store.0, cert) };
-        if cert.is_null() {
-            return Err(Error::InvalidIdentity(
-                "PKCS#12 archive has no certificate with a usable private key".into(),
-            ));
-        }
-        if let Some(key) = acquire_key(cert) {
-            // enumeration stops here, the context is owned by the caller
-            return identity(CertCtx(cert), key, ptr::null_mut(), store.0, false, None);
-        }
-    }
+    let store =
+        store.map_err(|e| Error::InvalidIdentity(format!("PFXImportCertStore failed: {e}")))?;
+    let (ctx, key) = store.find_map(acquire_key).ok_or_else(|| {
+        Error::InvalidIdentity(
+            "PKCS#12 archive has no certificate with a usable private key".into(),
+        )
+    })?;
+    identity(ctx, key, ptr::null_mut(), Some(&store), false, None)
 }
 
 /// Loads the identity from a Windows system certificate store, see [`crate::x509::identity`].
@@ -217,51 +194,18 @@ pub(crate) fn from_store(
         StoreLocation::CurrentUser => (CERT_SYSTEM_STORE_CURRENT_USER, ptr::null_mut()),
         StoreLocation::LocalMachine => (CERT_SYSTEM_STORE_LOCAL_MACHINE, HCCE_LOCAL_MACHINE),
     };
-    let wide_name = wide(name);
-    // SAFETY: the system provider takes a NUL terminated wide store name.
-    let store = unsafe {
-        CertOpenStore(
-            CERT_STORE_PROV_SYSTEM_W,
-            0,
-            0,
-            flags | CERT_STORE_READONLY_FLAG | CERT_STORE_OPEN_EXISTING_FLAG,
-            wide_name.as_ptr().cast(),
-        )
-    };
-    if store.is_null() {
-        return Err(Error::NotFound(format!(
-            "certificate store {name}: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    let store = Store(store);
-    let encoding = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+    let store = CertStore::open_system(flags, name)
+        .map_err(|e| Error::NotFound(format!("certificate store {name}: {e}")))?;
 
     let (ctx, key) = match select {
         StoreSelector::Thumbprint(tp) => {
-            let hash = CRYPT_INTEGER_BLOB {
-                cbData: 20,
-                pbData: tp.as_ptr().cast_mut(),
-            };
-            // SAFETY: `hash` points to the 20-byte thumbprint for the call.
-            let cert = unsafe {
-                CertFindCertificateInStore(
-                    store.0,
-                    encoding,
-                    0,
-                    CERT_FIND_SHA1_HASH,
-                    (&raw const hash).cast(),
-                    ptr::null(),
-                )
-            };
-            if cert.is_null() {
-                return Err(Error::NotFound(format!(
+            let ctx = store.find_sha1(tp).ok_or_else(|| {
+                Error::NotFound(format!(
                     "certificate {} is not found in {name}",
                     hex::encode(tp)
-                )));
-            }
-            let ctx = CertCtx(cert);
-            let key = acquire_key(ctx.0).ok_or_else(|| {
+                ))
+            })?;
+            let key = acquire_key(&ctx).ok_or_else(|| {
                 Error::InvalidIdentity(format!(
                     "certificate {} has no accessible private key",
                     hex::encode(tp)
@@ -270,47 +214,19 @@ pub(crate) fn from_store(
             (ctx, key)
         }
         StoreSelector::Subject(subject) => {
-            let wide_subject = wide(subject);
-            let mut found: Option<(u64, CertCtx, KeyHandle)> = None;
-            let mut cert: *mut CERT_CONTEXT = ptr::null_mut();
-            loop {
-                // SAFETY: `store` is open, the subject is NUL terminated; the previous context is
-                // freed by the call.
-                cert = unsafe {
-                    CertFindCertificateInStore(
-                        store.0,
-                        encoding,
-                        0,
-                        CERT_FIND_SUBJECT_STR_W,
-                        wide_subject.as_ptr().cast(),
-                        cert,
-                    )
-                };
-                if cert.is_null() {
-                    break;
+            let mut found: Option<(u64, CertContext, KeyHandle)> = None;
+            store.for_each_subject(subject, |cert| {
+                if !cert.is_time_valid() {
+                    return;
                 }
-                // SAFETY: `cert` is a live context with a valid `pCertInfo`.
-                let info = unsafe { (*cert).pCertInfo };
-                // SAFETY: null time means the current time, `info` is valid.
-                if unsafe { CertVerifyTimeValidity(ptr::null(), info) } != 0 {
-                    continue;
-                }
-                // SAFETY: as above.
-                let not_after = unsafe { (*info).NotAfter };
-                let not_after = (u64::from(not_after.dwHighDateTime) << 32)
-                    | u64::from(not_after.dwLowDateTime);
+                let not_after = cert.not_after();
                 if found.as_ref().is_some_and(|(last, ..)| not_after <= *last) {
-                    continue;
+                    return;
                 }
                 if let Some(key) = acquire_key(cert) {
-                    // SAFETY: `cert` is live; the duplicate is owned, the find context is not.
-                    found = Some((
-                        not_after,
-                        CertCtx(unsafe { CertDuplicateCertificateContext(cert) }),
-                        key,
-                    ));
+                    found = Some((not_after, cert.duplicate(), key));
                 }
-            }
+            });
             let (_, ctx, key) = found.ok_or_else(|| {
                 Error::NotFound(format!(
                     "no valid certificate with an accessible private key matches subject {subject:?} in {name}"
@@ -319,34 +235,29 @@ pub(crate) fn from_store(
             (ctx, key)
         }
     };
-    identity(ctx, key, engine, ptr::null_mut(), false, None)
+    identity(ctx, key, engine, None, false, None)
 }
 
 /// Acquires a native key while retaining the Schannel owner of any temporary persisted key.
 pub(crate) fn from_schannel(
     cert: crate::schannel::Certificate,
 ) -> Result<(Vec<Certificate>, CngKey), Error> {
-    let key = acquire_key(cert.as_ptr())
+    let key = acquire_key(cert.context())
         .ok_or_else(|| Error::InvalidIdentity("certificate has no accessible CNG key".into()))?;
-    // SAFETY: the Schannel owner keeps the context alive; the duplicate is separately owned.
-    let ctx = CertCtx(unsafe { CertDuplicateCertificateContext(cert.as_ptr()) });
-    identity(ctx, key, ptr::null_mut(), ptr::null_mut(), true, Some(cert))
+    let ctx = cert.context().duplicate();
+    identity(ctx, key, ptr::null_mut(), None, true, Some(cert))
 }
 
 /// Imports a PKCS#8 key into an ephemeral CNG handle and checks its public key.
 pub(crate) fn from_pkcs8(cert: &Certificate, der: &[u8]) -> Result<CngKey, Error> {
     use windows_sys::Win32::Security::Cryptography::{
-        MS_KEY_STORAGE_PROVIDER, NCRYPT_PKCS8_PRIVATE_KEY_BLOB, NCryptImportKey,
-        NCryptOpenStorageProvider,
+        NCRYPT_PKCS8_PRIVATE_KEY_BLOB, NCryptImportKey,
     };
 
     let key_type = cert
         .key_type()
         .ok_or_else(|| Error::Unsupported("native key algorithm".into()))?;
-    let mut provider = 0;
-    // SAFETY: the provider name and output pointer are valid.
-    status(unsafe { NCryptOpenStorageProvider(&raw mut provider, MS_KEY_STORAGE_PROVIDER, 0) })?;
-    let provider = KeyHandle(provider, true);
+    let provider = NcryptHandle::software_provider().map_err(cng_error)?;
     let mut key = 0;
     let len = u32::try_from(der.len())
         .map_err(|_| Error::InvalidIdentity("private key is too large".into()))?;
@@ -354,7 +265,7 @@ pub(crate) fn from_pkcs8(cert: &Certificate, der: &[u8]) -> Result<CngKey, Error
     // and its private material is not exportable.
     status(unsafe {
         NCryptImportKey(
-            provider.0,
+            provider.as_raw(),
             0,
             NCRYPT_PKCS8_PRIVATE_KEY_BLOB,
             ptr::null(),
@@ -364,8 +275,9 @@ pub(crate) fn from_pkcs8(cert: &Certificate, der: &[u8]) -> Result<CngKey, Error
             NCRYPT_SILENT_FLAG,
         )
     })?;
-    let key = KeyHandle(key, true);
-    if public_key_der(key.0)? != cert.public_key_der() {
+    // SAFETY: a successful import returns a handle owned by the caller.
+    let key = KeyHandle::Owned(unsafe { NcryptHandle::from_raw(key) });
+    if public_key_der(key.raw())? != cert.public_key_der() {
         return Err(Error::InvalidIdentity(
             "certificate/private key mismatch".into(),
         ));
@@ -373,7 +285,7 @@ pub(crate) fn from_pkcs8(cert: &Certificate, der: &[u8]) -> Result<CngKey, Error
     Ok(CngKey(Arc::new(KeyInner {
         key,
         key_type,
-        _ctx: CertCtx::from_der(cert.der())?,
+        _ctx: cert_context(cert)?,
         _provider: Some(provider),
         _owner: None,
     })))
@@ -436,11 +348,11 @@ fn public_key_der(key: NCRYPT_KEY_HANDLE) -> Result<Vec<u8>, Error> {
 }
 
 pub(crate) fn status(code: i32) -> Result<(), Error> {
-    if code == 0 {
-        Ok(())
-    } else {
-        Err(Error::Backend(format!("CNG failed: 0x{code:08x}")))
-    }
+    if code == 0 { Ok(()) } else { Err(cng_error(code)) }
+}
+
+fn cng_error(code: i32) -> Error {
+    Error::Backend(format!("CNG failed: 0x{code:08x}"))
 }
 
 pub(crate) fn win32(ok: i32) -> Result<(), Error> {
@@ -453,33 +365,24 @@ pub(crate) fn win32(ok: i32) -> Result<(), Error> {
 
 /// Verifies a certificate signature with the supplied issuer, without trust evaluation.
 pub(crate) fn verify_signature(cert: &Certificate, issuer: &Certificate) -> Result<bool, Error> {
-    let cert = CertCtx::from_der(cert.der())?;
-    let issuer = CertCtx::from_der(issuer.der())?;
-    // SAFETY: both owned contexts outlive the call and match the specified subject types.
-    Ok(unsafe {
-        CryptVerifyCertificateSignatureEx(
-            0,
-            X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-            CRYPT_VERIFY_CERT_SIGN_SUBJECT_CERT,
-            cert.0.cast(),
-            CRYPT_VERIFY_CERT_SIGN_ISSUER_CERT,
-            issuer.0.cast(),
-            0,
-            ptr::null_mut(),
-        )
-    } != 0)
+    let issuer = cert_context(issuer)?;
+    Ok(cert_context(cert)?.is_signed_by(&issuer))
+}
+
+fn cert_context(cert: &Certificate) -> Result<CertContext, Error> {
+    CertContext::from_der(cert.der()).map_err(|e| Error::InvalidDer(e.to_string()))
 }
 
 fn identity(
-    ctx: CertCtx,
+    ctx: CertContext,
     key: KeyHandle,
     engine: HCERTCHAINENGINE,
-    extra: HCERTSTORE,
+    extra: Option<&CertStore>,
     include_root: bool,
     owner: Option<crate::schannel::Certificate>,
 ) -> Result<(Vec<Certificate>, CngKey), Error> {
     let chain = build_chain(&ctx, engine, extra, include_root)?;
-    if public_key_der(key.0)? != chain[0].public_key_der() {
+    if public_key_der(key.raw())? != chain[0].public_key_der() {
         return Err(Error::InvalidIdentity(
             "certificate/private key mismatch".into(),
         ));
@@ -504,75 +407,41 @@ fn identity(
 
 /// Builds the presented chain, leaf first, without a self-signed root.
 fn build_chain(
-    leaf: &CertCtx,
+    leaf: &Cert,
     engine: HCERTCHAINENGINE,
-    extra: HCERTSTORE,
+    extra: Option<&CertStore>,
     include_root: bool,
 ) -> Result<Vec<Certificate>, Error> {
     // SAFETY: all-zero is a valid `CERT_CHAIN_PARA` (no usage requested).
     let mut para: CERT_CHAIN_PARA = unsafe { mem::zeroed() };
     para.cbSize = u32::try_from(mem::size_of::<CERT_CHAIN_PARA>()).expect("fits u32");
-    let mut chain: *mut CERT_CHAIN_CONTEXT = ptr::null_mut();
-    // SAFETY: all pointers are valid for the call; `chain` receives an owned context.
-    let ok = unsafe {
-        CertGetCertificateChain(
+    // SAFETY: `engine` is the default (null) or the predefined local machine engine, `para`
+    // holds no pointers.
+    let chain = unsafe {
+        ChainContext::build(
             engine,
-            leaf.0,
-            ptr::null(),
+            leaf,
+            None,
             extra,
-            &raw const para,
+            &para,
             CERT_CHAIN_DISABLE_AIA | CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL,
-            ptr::null(),
-            &raw mut chain,
         )
-    };
-    if ok == 0 {
-        return Err(Error::Backend(format!(
-            "CertGetCertificateChain failed: {}",
-            std::io::Error::last_os_error()
-        )));
     }
-    let chain = ChainCtx(chain);
+    .map_err(|e| Error::Backend(format!("CertGetCertificateChain failed: {e}")))?;
 
-    // SAFETY: a successful call returns a valid chain context.
-    let ctx = unsafe { &*chain.0 };
-    let mut certs = Vec::new();
-    if ctx.cChain > 0 {
-        // SAFETY: `rgpChain` has `cChain` (>= 1) valid entries, each with `cElement` elements.
-        let simple = unsafe { &**ctx.rgpChain };
-        let elements =
-            unsafe { std::slice::from_raw_parts(simple.rgpElement, simple.cElement as usize) };
-        for &el in elements {
-            // SAFETY: elements and their certificate contexts are valid while `chain` lives.
-            certs.push(Certificate::from_der(ntex_bytes::Bytes::copy_from_slice(
-                unsafe { ctx_der((*el).pCertContext) },
-            ))?);
-        }
-        if !include_root && certs.len() > 1 && certs.last().is_some_and(Certificate::is_self_issued)
-        {
-            // SAFETY: the last certificate context is live while `chain` is owned here.
-            let root = unsafe { (**elements.last().unwrap()).pCertContext };
-            // SAFETY: both pointers are live certificate contexts of the indicated types.
-            let self_signed = unsafe {
-                CryptVerifyCertificateSignatureEx(
-                    0,
-                    X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-                    CRYPT_VERIFY_CERT_SIGN_SUBJECT_CERT,
-                    root.cast(),
-                    CRYPT_VERIFY_CERT_SIGN_ISSUER_CERT,
-                    root.cast(),
-                    0,
-                    ptr::null_mut(),
-                )
-            };
-            if self_signed != 0 {
-                certs.pop();
-            }
-        }
+    let elements = chain.certificates();
+    let mut certs = elements
+        .iter()
+        .map(|cert| Certificate::from_der(ntex_bytes::Bytes::copy_from_slice(cert.der())))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !include_root
+        && certs.len() > 1
+        && certs.last().is_some_and(Certificate::is_self_issued)
+        && elements.last().is_some_and(|root| root.is_signed_by(root))
+    {
+        certs.pop();
     }
-    // SAFETY: `leaf` is a live context.
-    let leaf_der = unsafe { ctx_der(leaf.0) };
-    if certs.first().is_none_or(|c| c.der().as_ref() != leaf_der) {
+    if certs.first().is_none_or(|c| c.der().as_ref() != leaf.der()) {
         return Err(Error::Backend(
             "certificate chain does not start with the leaf".into(),
         ));
@@ -580,24 +449,15 @@ fn build_chain(
     Ok(certs)
 }
 
-/// DER encoding of a live certificate context.
-///
-/// # Safety
-/// `ctx` must be a valid context that outlives the returned slice.
-unsafe fn ctx_der<'a>(ctx: *const CERT_CONTEXT) -> &'a [u8] {
-    // SAFETY: guaranteed by the caller.
-    unsafe { std::slice::from_raw_parts((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize) }
-}
-
-/// Acquires the CNG private key of a live certificate context without UI.
-fn acquire_key(cert: *const CERT_CONTEXT) -> Option<KeyHandle> {
+/// Acquires the CNG private key of a certificate context without UI.
+fn acquire_key(cert: &Cert) -> Option<KeyHandle> {
     let mut handle = 0;
     let mut spec: CERT_KEY_SPEC = 0;
     let mut free = 0;
     // SAFETY: `cert` is live, the out pointers are valid.
     let ok = unsafe {
         windows_sys::Win32::Security::Cryptography::CryptAcquireCertificatePrivateKey(
-            cert,
+            cert.as_ptr(),
             CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG | CRYPT_ACQUIRE_SILENT_FLAG,
             ptr::null(),
             &raw mut handle,
@@ -608,80 +468,26 @@ fn acquire_key(cert: *const CERT_CONTEXT) -> Option<KeyHandle> {
     if ok == 0 {
         return None;
     }
-    let key = KeyHandle(handle as NCRYPT_KEY_HANDLE, free != 0);
+    let key = if free == 0 {
+        KeyHandle::Borrowed(handle)
+    } else {
+        // SAFETY: `pfCallerFreeProvOrNCryptKey` set, the caller owns the handle.
+        KeyHandle::Owned(unsafe { NcryptHandle::from_raw(handle) })
+    };
     (spec == CERT_NCRYPT_KEY_SPEC).then_some(key)
 }
 
-pub(crate) fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
+/// CNG key handle, owned or cached by its certificate context (`pfCallerFreeProvOrNCryptKey`).
+enum KeyHandle {
+    Owned(NcryptHandle),
+    Borrowed(NCRYPT_KEY_HANDLE),
 }
 
-/// CNG key handle, freed on drop if the caller owns it (`pfCallerFreeProvOrNCryptKey`).
-struct KeyHandle(NCRYPT_KEY_HANDLE, bool);
-
-impl Drop for KeyHandle {
-    fn drop(&mut self) {
-        if self.1 {
-            // SAFETY: the handle is owned.
-            unsafe { NCryptFreeObject(self.0) };
+impl KeyHandle {
+    fn raw(&self) -> NCRYPT_KEY_HANDLE {
+        match self {
+            Self::Owned(handle) => handle.as_raw(),
+            Self::Borrowed(handle) => *handle,
         }
     }
 }
-
-/// Owned certificate store handle; open certificate contexts keep the store alive.
-pub(crate) struct Store(pub(crate) HCERTSTORE);
-
-impl Drop for Store {
-    fn drop(&mut self) {
-        // SAFETY: handle is owned and open.
-        unsafe { CertCloseStore(self.0, 0) };
-    }
-}
-
-/// Owned certificate context.
-pub(crate) struct CertCtx(pub(crate) *mut CERT_CONTEXT);
-
-impl CertCtx {
-    pub(crate) fn from_der(der: &[u8]) -> Result<Self, Error> {
-        let len = u32::try_from(der.len())
-            .map_err(|_| Error::InvalidDer("certificate is too large".into()))?;
-        // SAFETY: DER is readable for len bytes; the API copies it into an owned context.
-        let ctx = unsafe {
-            windows_sys::Win32::Security::Cryptography::CertCreateCertificateContext(
-                X509_ASN_ENCODING,
-                der.as_ptr(),
-                len,
-            )
-        };
-        if ctx.is_null() {
-            Err(Error::InvalidDer(
-                std::io::Error::last_os_error().to_string(),
-            ))
-        } else {
-            Ok(Self(ctx))
-        }
-    }
-}
-
-impl Drop for CertCtx {
-    fn drop(&mut self) {
-        // SAFETY: context is owned and non-null.
-        unsafe { CertFreeCertificateContext(self.0) };
-    }
-}
-
-/// Owned chain context.
-struct ChainCtx(*mut CERT_CHAIN_CONTEXT);
-
-impl Drop for ChainCtx {
-    fn drop(&mut self) {
-        // SAFETY: context is owned and non-null.
-        unsafe { CertFreeCertificateChain(self.0) };
-    }
-}
-
-// SAFETY: CNG key handles and certificate contexts are thread safe (CNG/Crypt32 synchronize
-// internally); the key is only used through `NCryptSignHash` and both are released on drop.
-unsafe impl Send for KeyInner {}
-// SAFETY: see `Send`.
-unsafe impl Sync for KeyInner {}

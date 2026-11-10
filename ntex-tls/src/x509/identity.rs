@@ -282,7 +282,7 @@ impl Identity {
         }
         #[cfg(windows)]
         {
-            crate::x509::cng::pfx_blob(der)?;
+            crate::x509::cng::check_pfx(der)?;
             let schannel = crate::schannel::Certificate::from_pkcs12(der, password)
                 .map_err(|e| Error::InvalidIdentity(e.to_string()))?;
             Self::from_schannel(schannel)

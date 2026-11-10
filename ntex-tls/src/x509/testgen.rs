@@ -354,28 +354,27 @@ mod imp {
         CERT_ALT_NAME_ENTRY, CERT_ALT_NAME_ENTRY_0, CERT_ALT_NAME_INFO,
         CERT_BASIC_CONSTRAINTS2_INFO, CERT_EXTENSION, CERT_INFO, CERT_KEY_CONTEXT,
         CERT_KEY_CONTEXT_0, CERT_KEY_CONTEXT_PROP_ID, CERT_NAME_STR_FORCE_UTF8_DIR_STR_FLAG,
-        CERT_NCRYPT_KEY_SPEC, CERT_PUBLIC_KEY_INFO, CERT_STORE_ADD_ALWAYS,
-        CERT_STORE_NO_CRYPT_RELEASE_FLAG, CERT_STORE_PROV_MEMORY, CERT_V3, CERT_X500_NAME_STR,
-        CRYPT_ALGORITHM_IDENTIFIER, CRYPT_INTEGER_BLOB, CTL_USAGE,
-        CertAddEncodedCertificateToStore, CertOpenStore, CertSetCertificateContextProperty,
-        CertStrToNameW, CryptEncodeObjectEx, CryptExportPublicKeyInfo,
-        CryptSignAndEncodeCertificate, EXPORT_PRIVATE_KEYS, MS_KEY_STORAGE_PROVIDER,
-        NCRYPT_ALLOW_EXPORT_FLAG, NCRYPT_ALLOW_PLAINTEXT_EXPORT_FLAG, NCRYPT_ECDSA_P256_ALGORITHM,
-        NCRYPT_EXPORT_POLICY_PROPERTY, NCRYPT_KEY_HANDLE, NCRYPT_LENGTH_PROPERTY,
-        NCRYPT_PKCS8_PRIVATE_KEY_BLOB, NCRYPT_PROV_HANDLE, NCRYPT_RSA_ALGORITHM,
-        NCryptCreatePersistedKey, NCryptExportKey, NCryptFinalizeKey, NCryptFreeObject,
-        NCryptOpenStorageProvider, NCryptSetProperty, PFXExportCertStoreEx, REPORT_NO_PRIVATE_KEY,
-        REPORT_NOT_ABLE_TO_EXPORT_PRIVATE_KEY, X509_ALTERNATE_NAME, X509_ASN_ENCODING,
-        X509_BASIC_CONSTRAINTS2, X509_CERT_TO_BE_SIGNED, X509_ENHANCED_KEY_USAGE,
-        szOID_BASIC_CONSTRAINTS2, szOID_ECDSA_SHA256, szOID_ENHANCED_KEY_USAGE,
-        szOID_PKIX_KP_CLIENT_AUTH, szOID_PKIX_KP_SERVER_AUTH, szOID_RSA_SHA256RSA,
-        szOID_SUBJECT_ALT_NAME2,
+        CERT_NCRYPT_KEY_SPEC, CERT_PUBLIC_KEY_INFO, CERT_STORE_NO_CRYPT_RELEASE_FLAG, CERT_V3,
+        CERT_X500_NAME_STR, CRYPT_ALGORITHM_IDENTIFIER, CRYPT_INTEGER_BLOB, CTL_USAGE,
+        CertSetCertificateContextProperty, CertStrToNameW, CryptEncodeObjectEx,
+        CryptExportPublicKeyInfo, CryptSignAndEncodeCertificate, EXPORT_PRIVATE_KEYS,
+        MS_KEY_STORAGE_PROVIDER, NCRYPT_ALLOW_EXPORT_FLAG, NCRYPT_ALLOW_PLAINTEXT_EXPORT_FLAG,
+        NCRYPT_ECDSA_P256_ALGORITHM, NCRYPT_EXPORT_POLICY_PROPERTY, NCRYPT_KEY_HANDLE,
+        NCRYPT_LENGTH_PROPERTY, NCRYPT_PKCS8_PRIVATE_KEY_BLOB, NCRYPT_PROV_HANDLE,
+        NCRYPT_RSA_ALGORITHM, NCryptCreatePersistedKey, NCryptExportKey, NCryptFinalizeKey,
+        NCryptFreeObject, NCryptOpenStorageProvider, NCryptSetProperty, PFXExportCertStoreEx,
+        REPORT_NO_PRIVATE_KEY, REPORT_NOT_ABLE_TO_EXPORT_PRIVATE_KEY, X509_ALTERNATE_NAME,
+        X509_ASN_ENCODING, X509_BASIC_CONSTRAINTS2, X509_CERT_TO_BE_SIGNED,
+        X509_ENHANCED_KEY_USAGE, szOID_BASIC_CONSTRAINTS2, szOID_ECDSA_SHA256,
+        szOID_ENHANCED_KEY_USAGE, szOID_PKIX_KP_CLIENT_AUTH, szOID_PKIX_KP_SERVER_AUTH,
+        szOID_RSA_SHA256RSA, szOID_SUBJECT_ALT_NAME2,
     };
     use windows_sys::core::PCSTR;
 
     use super::{ExtKeyUsage, San};
+    use crate::win::{CertContext, CertStore, wide};
     use crate::x509::Certificate;
-    use crate::x509::cng::{CertCtx, Store, status, wide, win32};
+    use crate::x509::cng::{status, win32};
 
     // `CERT_ALT_NAME_*` choices, not exported by windows-sys
     const ALT_RFC822: u32 = 2;
@@ -551,10 +550,9 @@ mod imp {
         eku: &[ExtKeyUsage],
     ) -> Vec<u8> {
         let subject = name(cn);
-        let issuer_ctx = issuer.map(|(c, _)| CertCtx::from_der(c.der()).unwrap());
+        let issuer_ctx = issuer.map(|(c, _)| CertContext::from_der(c.der()).unwrap());
         let issuer_name = match &issuer_ctx {
-            // SAFETY: the context is live, its subject is copied as raw bytes.
-            Some(ctx) => unsafe { (*(*ctx.0).pCertInfo).Subject },
+            Some(ctx) => ctx.info().Subject,
             None => blob(&subject),
         };
 
@@ -713,29 +711,10 @@ mod imp {
         extras: &[&Certificate],
         pw: &str,
     ) -> Vec<u8> {
-        // SAFETY: a memory store takes no parameters.
-        let store = unsafe { CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, 0, ptr::null()) };
-        assert!(!store.is_null(), "{}", std::io::Error::last_os_error());
-        let store = Store(store);
-        let add = |cert: &Certificate, out: *mut *mut _| {
-            // SAFETY: the DER is readable; the store copies it.
-            win32(unsafe {
-                CertAddEncodedCertificateToStore(
-                    store.0,
-                    X509_ASN_ENCODING,
-                    cert.der().as_ptr(),
-                    len32(cert.der()),
-                    CERT_STORE_ADD_ALWAYS,
-                    out,
-                )
-            })
-            .unwrap();
-        };
-        let mut ctx = ptr::null_mut();
-        add(leaf, &raw mut ctx);
-        let ctx = CertCtx(ctx);
+        let store = CertStore::memory().unwrap();
+        let ctx = store.add_encoded(leaf.der()).unwrap();
         for cert in extras {
-            add(cert, ptr::null_mut());
+            store.add_encoded_only(cert.der()).unwrap();
         }
         let key_ctx = CERT_KEY_CONTEXT {
             cbSize: u32::try_from(mem::size_of::<CERT_KEY_CONTEXT>()).unwrap(),
@@ -747,7 +726,7 @@ mod imp {
         // SAFETY: the context is live; the key outlives the export and is not released by it.
         win32(unsafe {
             CertSetCertificateContextProperty(
-                ctx.0,
+                ctx.as_ptr(),
                 CERT_KEY_CONTEXT_PROP_ID,
                 CERT_STORE_NO_CRYPT_RELEASE_FLAG,
                 (&raw const key_ctx).cast(),
@@ -764,7 +743,13 @@ mod imp {
                 cbData: *len,
                 pbData: buf,
             };
-            let ok = PFXExportCertStoreEx(store.0, &raw mut out, pw.as_ptr(), ptr::null(), flags);
+            let ok = PFXExportCertStoreEx(
+                store.as_raw(),
+                &raw mut out,
+                pw.as_ptr(),
+                ptr::null(),
+                flags,
+            );
             *len = out.cbData;
             ok
         });
