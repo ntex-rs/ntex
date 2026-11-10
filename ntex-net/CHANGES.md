@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* tokio: Read through tokio's `try_read_buf` instead of exposing the read
+  buffer's uninitialized spare capacity as `&mut [u8]`
+
 ## [4.9.0] - 2026-11-09
 
 * compio: The read task no longer submits a read while reads are paused, for
