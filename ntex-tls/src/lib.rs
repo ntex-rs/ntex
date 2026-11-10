@@ -68,6 +68,9 @@ pub mod rustls;
 #[cfg(windows)]
 pub mod schannel;
 
+#[cfg(windows)]
+mod win;
+
 #[cfg(all(
     feature = "x509",
     not(any(windows, feature = "openssl", feature = "rustls"))

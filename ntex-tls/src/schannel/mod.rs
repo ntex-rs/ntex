@@ -737,7 +737,6 @@ mod tests {
         use tls_openssl::{asn1::Asn1Time, hash::MessageDigest, pkcs12::Pkcs12, pkey::PKey};
         use tls_openssl::{rsa::Rsa, x509::X509Builder, x509::X509NameBuilder};
         use windows_sys::Win32::Security::Cryptography::{
-            CRYPT_INTEGER_BLOB, CertCloseStore, CertEnumCertificatesInStore, PFXImportCertStore,
             PKCS12_ALWAYS_CNG_KSP, PKCS12_NO_PERSIST_KEY,
         };
 
@@ -768,25 +767,15 @@ mod tests {
             .to_der()
             .unwrap();
 
-        let blob = CRYPT_INTEGER_BLOB {
-            cbData: u32::try_from(pfx.len()).unwrap(),
-            pbData: pfx.as_ptr().cast_mut(),
-        };
-        let password = [0u16];
-        let cert = unsafe {
-            let store = PFXImportCertStore(
-                &raw const blob,
-                password.as_ptr(),
-                PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP,
-            );
-            assert!(!store.is_null());
-            // the enumerated context holds its own reference, which is
-            // handed over to `Certificate` and released on drop
-            let cert = CertEnumCertificatesInStore(store, ptr::null());
-            assert!(!cert.is_null());
-            CertCloseStore(store, 0);
-            Certificate::from_context(cert)
-        };
+        let store = crate::win::CertStore::from_pfx(
+            &pfx,
+            Some(""),
+            PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP,
+        )
+        .unwrap();
+        let (cert, ()) = store.find_map(|_| Some(())).unwrap();
+        drop(store);
+        let cert = Certificate::from_context(cert);
 
         let err = Credentials::outbound(false, Some(cert)).unwrap_err();
         let err = err.get_ref().unwrap().downcast_ref::<SspiError>().unwrap();

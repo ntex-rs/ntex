@@ -21,20 +21,18 @@ use std::{mem, ptr, time::Duration, time::SystemTime, time::UNIX_EPOCH};
 
 use windows_sys::Win32::Foundation::FILETIME;
 use windows_sys::Win32::Security::Cryptography::{
-    CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL, CERT_CHAIN_CONTEXT, CERT_CHAIN_DISABLE_AIA,
-    CERT_CHAIN_ENGINE_CONFIG, CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG, CERT_CHAIN_PARA, CERT_CONTEXT,
-    CERT_STORE_ADD_ALWAYS, CERT_STORE_CREATE_NEW_FLAG, CERT_STORE_PROV_MEMORY,
+    CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL, CERT_CHAIN_DISABLE_AIA, CERT_CHAIN_ENGINE_CONFIG,
+    CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG, CERT_CHAIN_PARA,
     CERT_TRUST_HAS_NOT_SUPPORTED_CRITICAL_EXT, CERT_TRUST_HAS_WEAK_SIGNATURE,
     CERT_TRUST_INVALID_BASIC_CONSTRAINTS, CERT_TRUST_IS_CYCLIC, CERT_TRUST_IS_NOT_SIGNATURE_VALID,
     CERT_TRUST_IS_NOT_TIME_VALID, CERT_TRUST_IS_NOT_VALID_FOR_USAGE, CERT_TRUST_IS_PARTIAL_CHAIN,
     CERT_TRUST_IS_UNTRUSTED_ROOT, CERT_TRUST_NO_ERROR, CERT_USAGE_MATCH, CTL_USAGE,
-    CertAddEncodedCertificateToStore, CertCloseStore, CertCreateCertificateChainEngine,
-    CertFreeCertificateChain, CertFreeCertificateChainEngine, CertFreeCertificateContext,
-    CertGetCertificateChain, CertOpenStore, HCERTCHAINENGINE, HCERTSTORE, USAGE_MATCH_TYPE_AND,
-    X509_ASN_ENCODING, szOID_PKIX_KP_CLIENT_AUTH,
+    CertCreateCertificateChainEngine, CertFreeCertificateChainEngine, HCERTCHAINENGINE,
+    USAGE_MATCH_TYPE_AND, szOID_PKIX_KP_CLIENT_AUTH,
 };
 
 use super::TrustError;
+use crate::win::{CertStore, ChainContext};
 use crate::x509::{Certificate, PeerCerts};
 
 /// Seconds between 1601-01-01 (`FILETIME` epoch) and 1970-01-01.
@@ -59,104 +57,28 @@ const ERRORS: &[(u32, &str)] = &[
     ),
 ];
 
-/// Owned in-memory certificate store.
-struct MemStore(HCERTSTORE);
-
-// SAFETY: certificate stores are internally synchronized, the handle is only closed on drop.
-unsafe impl Send for MemStore {}
-// SAFETY: see `Send`.
-unsafe impl Sync for MemStore {}
-
-impl MemStore {
-    fn new() -> Result<Self, String> {
-        // SAFETY: memory provider takes no parameters.
-        let h = unsafe {
-            CertOpenStore(
-                CERT_STORE_PROV_MEMORY,
-                0,
-                0,
-                CERT_STORE_CREATE_NEW_FLAG,
-                ptr::null(),
-            )
-        };
-        if h.is_null() {
-            Err(format!(
-                "CertOpenStore failed: {}",
-                std::io::Error::last_os_error()
-            ))
-        } else {
-            Ok(MemStore(h))
-        }
-    }
-
-    /// Adds a DER certificate; returns the store's context if `ctx` is set.
-    fn add(&self, der: &[u8], ctx: bool) -> Result<CertCtx, String> {
-        let len = u32::try_from(der.len()).map_err(|_| "certificate is too large".to_string())?;
-        let mut out: *mut CERT_CONTEXT = ptr::null_mut();
-        // SAFETY: `der` is valid for `len` bytes, `out` is a valid out pointer or null.
-        let ok = unsafe {
-            CertAddEncodedCertificateToStore(
-                self.0,
-                X509_ASN_ENCODING,
-                der.as_ptr(),
-                len,
-                CERT_STORE_ADD_ALWAYS,
-                if ctx { &raw mut out } else { ptr::null_mut() },
-            )
-        };
-        if ok == 0 {
-            Err(std::io::Error::last_os_error().to_string())
-        } else {
-            Ok(CertCtx(out))
-        }
-    }
-}
-
-impl Drop for MemStore {
-    fn drop(&mut self) {
-        // SAFETY: handle is owned and open; contexts keep their store alive (no force flag).
-        unsafe { CertCloseStore(self.0, 0) };
-    }
-}
-
-/// Owned certificate context (may be null).
-struct CertCtx(*mut CERT_CONTEXT);
-
-impl Drop for CertCtx {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: context is owned.
-            unsafe { CertFreeCertificateContext(self.0) };
-        }
-    }
-}
-
-/// Owned chain context.
-struct ChainCtx(*mut CERT_CHAIN_CONTEXT);
-
-impl Drop for ChainCtx {
-    fn drop(&mut self) {
-        // SAFETY: context is owned and non-null.
-        unsafe { CertFreeCertificateChain(self.0) };
-    }
+fn memory_store() -> Result<CertStore, String> {
+    CertStore::memory().map_err(|e| format!("CertOpenStore failed: {e}"))
 }
 
 pub(super) struct Builder {
-    roots: Result<MemStore, String>,
+    roots: Result<CertStore, String>,
     anchors: Vec<Certificate>,
 }
 
 impl Builder {
     pub(super) fn new() -> Self {
         Builder {
-            roots: MemStore::new(),
+            roots: memory_store(),
             anchors: Vec::new(),
         }
     }
 
     pub(super) fn add(&mut self, cert: &Certificate) -> Result<(), String> {
         let roots = self.roots.as_ref().map_err(Clone::clone)?;
-        roots.add(cert.der(), false)?;
+        roots
+            .add_encoded_only(cert.der())
+            .map_err(|e| e.to_string())?;
         self.anchors.push(cert.clone());
         Ok(())
     }
@@ -178,7 +100,7 @@ impl Builder {
 /// Owns the root store it was configured with; the handle is freed before the store closes.
 struct Engine {
     handle: HCERTCHAINENGINE,
-    _roots: MemStore,
+    _roots: CertStore,
 }
 
 // SAFETY: chain engines are thread safe, the handle is only freed on drop.
@@ -187,7 +109,7 @@ unsafe impl Send for Engine {}
 unsafe impl Sync for Engine {}
 
 impl Engine {
-    fn new(roots: MemStore) -> Result<Self, String> {
+    fn new(roots: CertStore) -> Result<Self, String> {
         let config = CERT_CHAIN_ENGINE_CONFIG {
             cbSize: u32::try_from(mem::size_of::<CERT_CHAIN_ENGINE_CONFIG>()).expect("fits u32"),
             hRestrictedRoot: ptr::null_mut(),
@@ -200,7 +122,7 @@ impl Engine {
             dwUrlRetrievalTimeout: 0,
             MaximumCachedCertificates: 0,
             CycleDetectionModulus: 0,
-            hExclusiveRoot: roots.0,
+            hExclusiveRoot: roots.as_raw(),
             hExclusiveTrustedPeople: ptr::null_mut(),
             dwExclusiveFlags: CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG,
         };
@@ -282,10 +204,10 @@ impl Store {
         }
 
         let engine = self.engine.as_ref().map_err(internal)?;
-        let extra = MemStore::new().map_err(internal)?;
-        let leaf_ctx = extra.add(leaf.der(), true).map_err(rejected)?;
+        let extra = memory_store().map_err(internal)?;
+        let leaf_ctx = extra.add_encoded(leaf.der()).map_err(rejected)?;
         for c in peer.chain() {
-            extra.add(c.der(), false).map_err(rejected)?;
+            extra.add_encoded_only(c.der()).map_err(rejected)?;
         }
 
         let mut usage = [szOID_PKIX_KP_CLIENT_AUTH.cast_mut()];
@@ -300,46 +222,27 @@ impl Store {
             },
         };
         let time = filetime(now);
-        let mut chain: *mut CERT_CHAIN_CONTEXT = ptr::null_mut();
-        // SAFETY: all pointers are valid for the call; `chain` receives an owned context.
-        let ok = unsafe {
-            CertGetCertificateChain(
+        // SAFETY: the engine is owned by `self`, `usage` outlives the call.
+        let chain = unsafe {
+            ChainContext::build(
                 engine.handle,
-                leaf_ctx.0,
-                &raw const time,
-                extra.0,
-                &raw const para,
+                &leaf_ctx,
+                Some(&time),
+                Some(&extra),
+                &para,
                 CERT_CHAIN_DISABLE_AIA,
-                ptr::null(),
-                &raw mut chain,
             )
-        };
-        if ok == 0 {
-            return Err(internal(std::io::Error::last_os_error()));
         }
-        let chain = ChainCtx(chain);
+        .map_err(internal)?;
 
-        // SAFETY: a successful call returns a valid chain context.
-        let ctx = unsafe { &*chain.0 };
-        let status = ctx.TrustStatus.dwErrorStatus;
+        let status = chain.error_status();
         if status != CERT_TRUST_NO_ERROR {
             return Err(rejected(error_names(status)));
         }
-        if ctx.cChain == 0 {
-            return Err(internal("empty chain"));
-        }
 
-        // SAFETY: `rgpChain` has `cChain` (>= 1) valid entries, each with `cElement` elements.
-        let simple = unsafe { &**ctx.rgpChain };
-        let elements =
-            unsafe { std::slice::from_raw_parts(simple.rgpElement, simple.cElement as usize) };
         let mut expiry: Option<SystemTime> = None;
-        for &el in elements {
-            // SAFETY: elements and their certificate contexts are valid while `chain` lives.
-            let cert = unsafe { &*(*el).pCertContext };
-            let der = unsafe {
-                std::slice::from_raw_parts(cert.pbCertEncoded, cert.cbCertEncoded as usize)
-            };
+        for cert in chain.certificates() {
+            let der = cert.der();
             let cert = std::iter::once(leaf)
                 .chain(peer.chain())
                 .chain(&self.anchors)

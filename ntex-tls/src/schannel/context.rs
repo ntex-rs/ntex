@@ -32,12 +32,10 @@ use windows_sys::Win32::Security::Authentication::Identity::{
     TLS1_ALERT_FATAL, TLS1_ALERT_HANDSHAKE_FAILURE, TLS1_ALERT_UNKNOWN_CA,
 };
 use windows_sys::Win32::Security::Credentials::SecHandle;
-use windows_sys::Win32::Security::Cryptography::{
-    CERT_CONTEXT, CertEnumCertificatesInStore, CertFreeCertificateContext,
-};
+use windows_sys::Win32::Security::Cryptography::CERT_CONTEXT;
 
 use super::{ClientConfig, Credentials, ServerConfig, sspi_error};
-use crate::{TlsCipher, TlsVersion};
+use crate::{TlsCipher, TlsVersion, win::CertContext};
 
 /// Outcome of decrypting a record, including transitions requiring handshake processing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -586,8 +584,9 @@ impl Context {
     }
 
     /// Acquires an owned peer certificate context, or returns none if unavailable.
-    fn remote_cert(&self) -> Option<RemoteCert> {
+    fn remote_cert(&self) -> Option<CertContext> {
         let mut cert: *mut CERT_CONTEXT = ptr::null_mut();
+        // SAFETY: the context handle is live, `cert` receives an owned context reference.
         let status = unsafe {
             QueryContextAttributesW(
                 &raw const self.ctxt,
@@ -595,17 +594,17 @@ impl Context {
                 (&raw mut cert).cast(),
             )
         };
-        if status != SEC_E_OK || cert.is_null() {
-            None
+        if status == SEC_E_OK {
+            // SAFETY: on success the caller owns the returned reference.
+            unsafe { CertContext::from_raw(cert) }
         } else {
-            Some(RemoteCert(cert))
+            None
         }
     }
 
     /// The peer's end-entity certificate in DER encoding.
     pub(super) fn peer_cert(&self) -> Option<Vec<u8>> {
-        self.remote_cert()
-            .map(|cert| unsafe { cert_der(cert.0) }.to_vec())
+        self.remote_cert().map(|cert| cert.der().to_vec())
     }
 
     /// Copies the peer leaf and certificates from its associated store into DER.
@@ -623,35 +622,23 @@ impl Context {
             /// Encoded issuer name used to find the next certificate.
             issuer: Vec<u8>,
         }
-        let entry = |cert: *const CERT_CONTEXT| unsafe {
-            let info = &*(*cert).pCertInfo;
-            Entry {
-                der: cert_der(cert).to_vec(),
-                subject: blob(info.Subject.pbData, info.Subject.cbData).to_vec(),
-                issuer: blob(info.Issuer.pbData, info.Issuer.cbData).to_vec(),
-            }
+        let entry = |cert: &crate::win::Cert| Entry {
+            der: cert.der().to_vec(),
+            subject: cert.subject_name().to_vec(),
+            issuer: cert.issuer_name().to_vec(),
         };
 
         let leaf = self.remote_cert()?;
-        let mut chain = vec![entry(leaf.0)];
+        let mut chain = vec![entry(&leaf)];
 
         // the store of the remote certificate holds the certificates sent by the peer
         let mut certs = Vec::new();
-        let store = unsafe { (*leaf.0).hCertStore };
-        if !store.is_null() {
-            let mut cert = ptr::null();
-            loop {
-                // frees the previous context
-                cert = unsafe { CertEnumCertificatesInStore(store, cert) };
-                if cert.is_null() {
-                    break;
-                }
-                let cert = entry(cert);
-                if cert.der != chain[0].der {
-                    certs.push(cert);
-                }
+        leaf.for_each_in_store(|cert| {
+            let cert = entry(cert);
+            if cert.der != chain[0].der {
+                certs.push(cert);
             }
-        }
+        });
 
         // order by issuer, unrelated certificates go last
         while let Some(idx) = certs
@@ -742,39 +729,6 @@ impl Drop for Context {
                 DeleteSecurityContext(&raw const self.ctxt);
             }
         }
-    }
-}
-
-/// Owned peer certificate reference released with `CertFreeCertificateContext`.
-struct RemoteCert(*const CERT_CONTEXT);
-
-impl Drop for RemoteCert {
-    fn drop(&mut self) {
-        unsafe { CertFreeCertificateContext(self.0) };
-    }
-}
-
-/// Encoded certificate of a valid certificate context.
-///
-/// # Safety
-///
-/// `cert` must point to a valid certificate context whose encoded storage remains
-/// live and immutable for the returned lifetime.
-unsafe fn cert_der<'a>(cert: *const CERT_CONTEXT) -> &'a [u8] {
-    unsafe { blob((*cert).pbCertEncoded, (*cert).cbCertEncoded) }
-}
-
-/// Borrows a Windows byte blob, treating a null pointer or zero length as empty.
-///
-/// # Safety
-///
-/// Non-null, nonempty storage must be readable for `len` bytes and remain live
-/// and immutable for the returned lifetime.
-unsafe fn blob<'a>(data: *const u8, len: u32) -> &'a [u8] {
-    if data.is_null() || len == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(data, len as usize) }
     }
 }
 

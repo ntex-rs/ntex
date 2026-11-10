@@ -6,21 +6,18 @@ use std::{fmt, fmt::Write, io, ptr, sync::Arc};
 
 use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptBuffer, BCryptBufferDesc, BCryptGenRandom, CERT_CONTEXT,
-    CERT_FIND_SHA1_HASH, CERT_FIND_SUBJECT_STR_W, CERT_KEY_CONTEXT_PROP_ID,
-    CERT_KEY_PROV_INFO_PROP_ID, CERT_NCRYPT_KEY_HANDLE_PROP_ID, CERT_STORE_OPEN_EXISTING_FLAG,
-    CERT_STORE_PROV_SYSTEM_W, CERT_STORE_READONLY_FLAG, CERT_SYSTEM_STORE_CURRENT_USER,
-    CERT_SYSTEM_STORE_LOCAL_MACHINE, CRYPT_EXPORTABLE, CRYPT_INTEGER_BLOB, CRYPT_KEY_PROV_INFO,
-    CertCloseStore, CertDuplicateCertificateContext, CertEnumCertificatesInStore,
-    CertFindCertificateInStore, CertFreeCertificateContext, CertGetCertificateContextProperty,
-    CertOpenStore, CertSetCertificateContextProperty, CertVerifyTimeValidity, HCERTSTORE,
+    CERT_KEY_CONTEXT_PROP_ID, CERT_KEY_PROV_INFO_PROP_ID, CERT_NCRYPT_KEY_HANDLE_PROP_ID,
+    CERT_SYSTEM_STORE_CURRENT_USER, CERT_SYSTEM_STORE_LOCAL_MACHINE, CRYPT_EXPORTABLE,
+    CRYPT_KEY_PROV_INFO, CertGetCertificateContextProperty, CertSetCertificateContextProperty,
     MS_KEY_STORAGE_PROVIDER, NCRYPT_ALLOW_EXPORT_FLAG, NCRYPT_ALLOW_PLAINTEXT_EXPORT_FLAG,
     NCRYPT_EXPORT_POLICY_PROPERTY, NCRYPT_KEY_HANDLE, NCRYPT_MACHINE_KEY_FLAG,
-    NCRYPT_PKCS8_PRIVATE_KEY_BLOB, NCRYPT_PROV_HANDLE, NCRYPT_SILENT_FLAG,
-    NCRYPTBUFFER_PKCS_KEY_NAME, NCRYPTBUFFER_VERSION, NCryptDeleteKey, NCryptExportKey,
-    NCryptFreeObject, NCryptImportKey, NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty,
-    PFXImportCertStore, PKCS_7_ASN_ENCODING, PKCS12_ALWAYS_CNG_KSP, PKCS12_NO_PERSIST_KEY,
-    X509_ASN_ENCODING,
+    NCRYPT_PKCS8_PRIVATE_KEY_BLOB, NCRYPT_SILENT_FLAG, NCRYPTBUFFER_PKCS_KEY_NAME,
+    NCRYPTBUFFER_VERSION, NCryptDeleteKey, NCryptExportKey, NCryptFreeObject, NCryptImportKey,
+    NCryptOpenKey, NCryptSetProperty, PKCS12_ALWAYS_CNG_KSP, PKCS12_NO_PERSIST_KEY,
 };
+use zeroize::Zeroizing;
+
+use crate::win::{self, Cert, CertStore, NcryptHandle, wide};
 
 /// Certificate with its private key.
 ///
@@ -63,39 +60,21 @@ impl Certificate {
     /// Fails if the archive cannot be decoded with `password`, has no
     /// certificate with a private key, or the key cannot be stored.
     pub fn from_pkcs12(der: &[u8], password: &str) -> io::Result<Self> {
-        let blob = CRYPT_INTEGER_BLOB {
-            cbData: u32::try_from(der.len()).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "PKCS #12 archive is too large")
-            })?,
-            pbData: der.as_ptr().cast_mut(),
-        };
-        let password = wide(password);
         // a key persisted by the import is named after the archive's friendly
         // name, imports of the same archive would share and delete it; the key
         // is imported to memory and persisted under a unique name instead
         let flags = PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP | CRYPT_EXPORTABLE;
-        let store = unsafe { PFXImportCertStore(&raw const blob, password.as_ptr(), flags) };
-        if store.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let store = Store(store);
-
-        let mut cert = ptr::null();
-        loop {
-            // frees the previous context
-            cert = unsafe { CertEnumCertificatesInStore(store.0, cert) };
-            if cert.is_null() {
-                return Err(io::Error::new(
+        let store = CertStore::from_pfx(der, Some(password), flags)?;
+        let (cert, ()) = store
+            .find_map(|cert| has_private_key(cert).then_some(()))
+            .ok_or_else(|| {
+                io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "PKCS #12 archive has no certificate with a private key",
-                ));
-            }
-            if has_private_key(cert) {
-                break;
-            }
-        }
+                )
+            })?;
         let mut cert = CertContext::new(cert);
-        persist_key(cert.cert)?;
+        persist_key(&cert.cert)?;
         cert.temp_key = true;
         Ok(Self(Arc::new(cert)))
     }
@@ -117,31 +96,12 @@ impl Certificate {
         store: &str,
         thumbprint: &[u8; 20],
     ) -> io::Result<Self> {
-        let store = Store::open(location, store)?;
-
-        let hash = CRYPT_INTEGER_BLOB {
-            cbData: 20,
-            pbData: thumbprint.as_ptr().cast_mut(),
-        };
-        let cert = unsafe {
-            CertFindCertificateInStore(
-                store.0,
-                X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-                0,
-                CERT_FIND_SHA1_HASH,
-                (&raw const hash).cast(),
-                ptr::null(),
-            )
-        };
-        if cert.is_null() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "certificate is not found",
-            ));
-        }
-        let cert = Self(Arc::new(CertContext::new(cert)));
-        if has_private_key(cert.as_ptr()) {
-            Ok(cert)
+        let store = open_store(location, store)?;
+        let cert = store
+            .find_sha1(thumbprint)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "certificate is not found"))?;
+        if has_private_key(&cert) {
+            Ok(Self(Arc::new(CertContext::new(cert))))
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -177,44 +137,26 @@ impl Certificate {
                 "certificate subject is empty",
             ));
         }
-        let store = Store::open(location, store)?;
-        let subject = wide(subject);
+        let store = open_store(location, store)?;
 
-        let mut found: Option<(u64, CertContext)> = None;
-        let mut cert = ptr::null();
-        loop {
-            // frees the previous context
-            cert = unsafe {
-                CertFindCertificateInStore(
-                    store.0,
-                    X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-                    0,
-                    CERT_FIND_SUBJECT_STR_W,
-                    subject.as_ptr().cast(),
-                    cert,
-                )
-            };
-            if cert.is_null() {
-                break;
+        let mut found: Option<(u64, win::CertContext)> = None;
+        store.for_each_subject(subject, |cert| {
+            if !cert.is_time_valid() || !has_private_key(cert) {
+                return;
             }
-            let info = unsafe { (*cert).pCertInfo };
-            if unsafe { CertVerifyTimeValidity(ptr::null(), info) } != 0 || !has_private_key(cert) {
-                continue;
-            }
-            let not_after = unsafe { (*info).NotAfter };
-            let not_after =
-                u64::from(not_after.dwHighDateTime) << 32 | u64::from(not_after.dwLowDateTime);
+            let not_after = cert.not_after();
             if found.as_ref().is_none_or(|(last, _)| not_after > *last) {
-                let cert = CertContext::new(unsafe { CertDuplicateCertificateContext(cert) });
-                found = Some((not_after, cert));
+                found = Some((not_after, cert.duplicate()));
             }
-        }
-        found.map(|(_, cert)| Self(Arc::new(cert))).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "no valid certificate with a private key matches the subject",
-            )
-        })
+        });
+        found
+            .map(|(_, cert)| Self(Arc::new(CertContext::new(cert))))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no valid certificate with a private key matches the subject",
+                )
+            })
     }
 
     /// Borrows the certificate's DER encoding without its private key.
@@ -223,20 +165,24 @@ impl Certificate {
     /// valid for the lifetime of the borrow.
     #[must_use]
     pub fn der(&self) -> &[u8] {
-        let cert = unsafe { &*self.as_ptr() };
-        unsafe { std::slice::from_raw_parts(cert.pbCertEncoded, cert.cbCertEncoded as usize) }
+        self.0.cert.der()
     }
 
     /// Borrows the context pointer without transferring a Windows reference.
     ///
     /// Callers must keep an owning certificate alive while using the pointer.
     pub(crate) fn as_ptr(&self) -> *const CERT_CONTEXT {
-        self.0.cert
+        self.0.cert.as_ptr()
+    }
+
+    /// Borrows the certificate context.
+    pub(crate) fn context(&self) -> &Cert {
+        &self.0.cert
     }
 
     /// Takes ownership of a certificate context.
     #[cfg(all(test, feature = "openssl"))]
-    pub(super) fn from_context(cert: *const CERT_CONTEXT) -> Self {
+    pub(super) fn from_context(cert: win::CertContext) -> Self {
         Self(Arc::new(CertContext::new(cert)))
     }
 
@@ -247,50 +193,15 @@ impl Certificate {
         certificates: &[crate::x509::Certificate],
         key: &[u8],
     ) -> io::Result<Self> {
-        use windows_sys::Win32::Security::Cryptography::{
-            CERT_STORE_ADD_ALWAYS, CERT_STORE_CREATE_NEW_FLAG, CERT_STORE_PROV_MEMORY,
-            CertAddEncodedCertificateToStore,
-        };
-        // SAFETY: the memory-store provider takes no additional parameters.
-        let store = unsafe {
-            CertOpenStore(
-                CERT_STORE_PROV_MEMORY,
-                0,
-                0,
-                CERT_STORE_CREATE_NEW_FLAG,
-                ptr::null(),
-            )
-        };
-        if store.is_null() {
-            return Err(io::Error::last_os_error());
+        let (leaf, chain) = certificates
+            .split_first()
+            .ok_or_else(|| io::Error::other("certificate is missing"))?;
+        let store = CertStore::memory()?;
+        let mut cert = CertContext::new(store.add_encoded(leaf.der())?);
+        for extra in chain {
+            store.add_encoded_only(extra.der())?;
         }
-        let store = Store(store);
-        let mut leaf = None;
-        for cert in certificates {
-            let mut context = ptr::null_mut();
-            let len = u32::try_from(cert.der().len())
-                .map_err(|_| io::Error::other("certificate is too large"))?;
-            // SAFETY: the input is readable; the returned context owns a store reference.
-            if unsafe {
-                CertAddEncodedCertificateToStore(
-                    store.0,
-                    X509_ASN_ENCODING,
-                    cert.der().as_ptr(),
-                    len,
-                    CERT_STORE_ADD_ALWAYS,
-                    &raw mut context,
-                )
-            } == 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            let context = CertContext::new(context);
-            if leaf.is_none() {
-                leaf = Some(context);
-            }
-        }
-        let mut cert = leaf.ok_or_else(|| io::Error::other("certificate is missing"))?;
-        persist_pkcs8(cert.cert, key)?;
+        persist_pkcs8(&cert.cert, key)?;
         cert.temp_key = true;
         Ok(Self(Arc::new(cert)))
     }
@@ -304,18 +215,15 @@ impl fmt::Debug for Certificate {
 
 /// Owned certificate context, the context keeps its store alive.
 struct CertContext {
-    /// Non-null owned certificate reference, released on drop.
-    cert: *const CERT_CONTEXT,
+    cert: win::CertContext,
     /// The private key was imported for this context and is deleted with it
     temp_key: bool,
 }
 
 impl CertContext {
-    /// Takes ownership of a valid, non-null Windows certificate reference.
-    ///
-    /// The caller must not free that reference afterward. Existing private keys
-    /// are preserved unless the importer explicitly marks this as a temporary key.
-    fn new(cert: *const CERT_CONTEXT) -> Self {
+    /// Existing private keys are preserved unless the importer explicitly marks this as a
+    /// temporary key.
+    fn new(cert: win::CertContext) -> Self {
         Self {
             cert,
             temp_key: false,
@@ -323,17 +231,11 @@ impl CertContext {
     }
 }
 
-// Certificate contexts are reference counted and immutable here.
-unsafe impl Send for CertContext {}
-unsafe impl Sync for CertContext {}
-
 impl Drop for CertContext {
     fn drop(&mut self) {
+        // the context reference is released after the key is deleted
         if self.temp_key {
-            delete_key(self.cert);
-        }
-        unsafe {
-            CertFreeCertificateContext(self.cert);
+            delete_key(&self.cert);
         }
     }
 }
@@ -341,17 +243,18 @@ impl Drop for CertContext {
 /// Persists the in-memory private key of a certificate under a unique name,
 /// the certificate refers to the persisted key afterwards.
 ///
-/// `cert` must be a live context with an exportable in-memory CNG key. The
-/// temporary export is zeroed on drop; if attaching the persisted key fails,
-/// deletion of the new key is attempted before returning the original error.
-fn persist_key(cert: *const CERT_CONTEXT) -> io::Result<()> {
+/// `cert` must have an exportable in-memory CNG key. The temporary export is
+/// zeroed on drop; if attaching the persisted key fails, deletion of the new key
+/// is attempted before returning the original error.
+fn persist_key(cert: &Cert) -> io::Result<()> {
     let pkcs8 = export_key(cert)?;
-    persist_pkcs8(cert, &pkcs8.0)
+    persist_pkcs8(cert, &pkcs8)
 }
 
 /// Persists supplied PKCS#8 bytes under an isolated name and attaches the key to `cert`.
-fn persist_pkcs8(cert: *const CERT_CONTEXT, pkcs8: &[u8]) -> io::Result<()> {
+fn persist_pkcs8(cert: &Cert, pkcs8: &[u8]) -> io::Result<()> {
     let mut id = [0u8; 16];
+    // SAFETY: `id` is writable for 16 bytes; no algorithm handle with the system RNG flag.
     let status =
         unsafe { BCryptGenRandom(0 as _, id.as_mut_ptr(), 16, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
     if status != 0 {
@@ -363,7 +266,7 @@ fn persist_pkcs8(cert: *const CERT_CONTEXT, pkcs8: &[u8]) -> io::Result<()> {
     });
     let name = wide(&name);
 
-    let prov = Provider::open(MS_KEY_STORAGE_PROVIDER)?;
+    let prov = NcryptHandle::software_provider().map_err(io::Error::from_raw_os_error)?;
     let mut name_buf = BCryptBuffer {
         cbBuffer: u32::try_from(name.len() * 2).expect("key name fits u32"),
         BufferType: NCRYPTBUFFER_PKCS_KEY_NAME,
@@ -376,9 +279,11 @@ fn persist_pkcs8(cert: *const CERT_CONTEXT, pkcs8: &[u8]) -> io::Result<()> {
     };
     let mut key: NCRYPT_KEY_HANDLE = 0;
     // a named PKCS #8 import persists the key, it is not exportable
+    // SAFETY: the provider is open, `params` and its name buffer outlive the call, `pkcs8`
+    // is readable for its length.
     hresult(unsafe {
         NCryptImportKey(
-            prov.0,
+            prov.as_raw(),
             0,
             NCRYPT_PKCS8_PRIVATE_KEY_BLOB,
             &raw const params,
@@ -388,7 +293,8 @@ fn persist_pkcs8(cert: *const CERT_CONTEXT, pkcs8: &[u8]) -> io::Result<()> {
             NCRYPT_SILENT_FLAG,
         )
     })?;
-    unsafe { NCryptFreeObject(key) };
+    // SAFETY: a successful import returns an owned handle; the key stays persisted.
+    drop(unsafe { NcryptHandle::from_raw(key) });
 
     let info = CRYPT_KEY_PROV_INFO {
         pwszContainerName: name.as_ptr().cast_mut(),
@@ -399,6 +305,9 @@ fn persist_pkcs8(cert: *const CERT_CONTEXT, pkcs8: &[u8]) -> io::Result<()> {
         rgProvParam: ptr::null_mut(),
         dwKeySpec: 0,
     };
+    let cert = cert.as_ptr();
+    // SAFETY: the context is live; null data removes a property, `info` and the strings it
+    // points to outlive the call (the property is copied).
     let ok = unsafe {
         // Schannel would use the in-memory key, drop it
         CertSetCertificateContextProperty(cert, CERT_NCRYPT_KEY_HANDLE_PROP_ID, 0, ptr::null());
@@ -412,10 +321,18 @@ fn persist_pkcs8(cert: *const CERT_CONTEXT, pkcs8: &[u8]) -> io::Result<()> {
     };
     if ok == 0 {
         let err = io::Error::last_os_error();
-        unsafe {
-            if NCryptOpenKey(prov.0, &raw mut key, name.as_ptr(), 0, NCRYPT_SILENT_FLAG) == 0 {
-                delete_owned_key(key);
-            }
+        // SAFETY: the provider is open and the name is NUL terminated; an opened key is owned.
+        if unsafe {
+            NCryptOpenKey(
+                prov.as_raw(),
+                &raw mut key,
+                name.as_ptr(),
+                0,
+                NCRYPT_SILENT_FLAG,
+            )
+        } == 0
+        {
+            delete_owned_key(key);
         }
         return Err(err);
     }
@@ -424,15 +341,16 @@ fn persist_pkcs8(cert: *const CERT_CONTEXT, pkcs8: &[u8]) -> io::Result<()> {
 
 /// Exports the in-memory private key of a certificate as PKCS #8.
 ///
-/// `cert` must remain live throughout the call. Its CNG handle is borrowed, not
-/// released, and the exported plaintext bytes are owned by a zero-on-drop buffer.
-fn export_key(cert: *const CERT_CONTEXT) -> io::Result<SecretBuf> {
+/// The CNG handle is borrowed from `cert`, not released, and the exported
+/// plaintext bytes are owned by a zero-on-drop buffer.
+fn export_key(cert: &Cert) -> io::Result<Zeroizing<Vec<u8>>> {
     // the handle is owned by the certificate
     let mut key: NCRYPT_KEY_HANDLE = 0;
     let mut len = u32::try_from(std::mem::size_of::<NCRYPT_KEY_HANDLE>()).expect("fits u32");
+    // SAFETY: the context is live, `key` is writable for `len` bytes.
     if unsafe {
         CertGetCertificateContextProperty(
-            cert,
+            cert.as_ptr(),
             CERT_NCRYPT_KEY_HANDLE_PROP_ID,
             (&raw mut key).cast(),
             &raw mut len,
@@ -443,6 +361,7 @@ fn export_key(cert: *const CERT_CONTEXT) -> io::Result<SecretBuf> {
     }
     // the key is exportable, allow a plain PKCS #8 export of this in-memory copy
     let policy = NCRYPT_ALLOW_EXPORT_FLAG | NCRYPT_ALLOW_PLAINTEXT_EXPORT_FLAG;
+    // SAFETY: the key is kept alive by `cert`, the policy is a readable `u32`.
     hresult(unsafe {
         NCryptSetProperty(
             key,
@@ -453,6 +372,7 @@ fn export_key(cert: *const CERT_CONTEXT) -> io::Result<SecretBuf> {
         )
     })?;
 
+    // SAFETY: the key is live; null output queries the size.
     hresult(unsafe {
         NCryptExportKey(
             key,
@@ -465,20 +385,21 @@ fn export_key(cert: *const CERT_CONTEXT) -> io::Result<SecretBuf> {
             NCRYPT_SILENT_FLAG,
         )
     })?;
-    let mut buf = SecretBuf(vec![0; len as usize]);
+    let mut buf = Zeroizing::new(vec![0; len as usize]);
+    // SAFETY: the key is live, `buf` is writable for `len` bytes.
     hresult(unsafe {
         NCryptExportKey(
             key,
             0,
             NCRYPT_PKCS8_PRIVATE_KEY_BLOB,
             ptr::null(),
-            buf.0.as_mut_ptr(),
+            buf.as_mut_ptr(),
             len,
             &raw mut len,
             NCRYPT_SILENT_FLAG,
         )
     })?;
-    buf.0.truncate(len as usize);
+    buf.truncate(len as usize);
     Ok(buf)
 }
 
@@ -491,58 +412,39 @@ fn hresult(status: windows_sys::core::HRESULT) -> io::Result<()> {
     }
 }
 
-/// Key material, zeroed on drop.
-struct SecretBuf(Vec<u8>);
-
-impl Drop for SecretBuf {
-    fn drop(&mut self) {
-        for b in &mut self.0 {
-            unsafe { ptr::write_volatile(b, 0) };
-        }
-    }
-}
-
-/// Owned CNG storage-provider handle released with `NCryptFreeObject`.
-struct Provider(NCRYPT_PROV_HANDLE);
-
-impl Provider {
-    /// Opens a provider identified by a live, NUL-terminated UTF-16 name.
-    fn open(name: windows_sys::core::PCWSTR) -> io::Result<Self> {
-        let mut prov: NCRYPT_PROV_HANDLE = 0;
-        hresult(unsafe { NCryptOpenStorageProvider(&raw mut prov, name, 0) })?;
-        Ok(Self(prov))
-    }
-}
-
-impl Drop for Provider {
-    fn drop(&mut self) {
-        unsafe { NCryptFreeObject(self.0) };
-    }
-}
-
 /// Deletes the persisted CNG private key of a certificate, best effort.
 ///
-/// `cert` must be live and refer to an importer-owned temporary key. Legacy
-/// providers and missing key metadata are ignored; system-store keys must not
-/// be passed here.
-fn delete_key(cert: *const CERT_CONTEXT) {
+/// `cert` must refer to an importer-owned temporary key. Legacy providers and
+/// missing key metadata are ignored; system-store keys must not be passed here.
+fn delete_key(cert: &Cert) {
     let Some(info) = key_prov_info(cert) else {
         return;
     };
+    // SAFETY: `key_prov_info` returns an aligned buffer holding a `CRYPT_KEY_PROV_INFO`.
     let info = unsafe { &*info.as_ptr().cast::<CRYPT_KEY_PROV_INFO>() };
     // keys imported with PKCS12_ALWAYS_CNG_KSP have no legacy provider type
     if info.dwProvType != 0 || info.pwszContainerName.is_null() {
         return;
     }
-    let Ok(prov) = Provider::open(info.pwszProvName) else {
+    // SAFETY: the provider name points into `info`, which is live.
+    let Ok(prov) = (unsafe { NcryptHandle::open_provider(info.pwszProvName) }) else {
         return;
     };
     let mut key: NCRYPT_KEY_HANDLE = 0;
     let flags = info.dwFlags & NCRYPT_MACHINE_KEY_FLAG | NCRYPT_SILENT_FLAG;
-    unsafe {
-        if NCryptOpenKey(prov.0, &raw mut key, info.pwszContainerName, 0, flags) == 0 {
-            delete_owned_key(key);
-        }
+    // SAFETY: the provider is open, the container name points into `info`; an opened key is
+    // owned.
+    if unsafe {
+        NCryptOpenKey(
+            prov.as_raw(),
+            &raw mut key,
+            info.pwszContainerName,
+            0,
+            flags,
+        )
+    } == 0
+    {
+        delete_owned_key(key);
     }
 }
 
@@ -550,7 +452,9 @@ fn delete_key(cert: *const CERT_CONTEXT) {
 fn delete_owned_key(key: NCRYPT_KEY_HANDLE) {
     delete_owned_key_with(
         key,
+        // SAFETY: the handle is owned, deletion frees it on success.
         |key| unsafe { NCryptDeleteKey(key, 0) },
+        // SAFETY: called only if deletion failed, the handle is still owned.
         |key| unsafe { NCryptFreeObject(key) },
     );
 }
@@ -577,10 +481,12 @@ fn delete_owned_key_with(
 
 /// `CRYPT_KEY_PROV_INFO` of a certificate, in an aligned buffer.
 ///
-/// `cert` must be live. Embedded string pointers refer into the returned buffer
-/// and must not outlive or be used after moving its contents to another allocation.
-fn key_prov_info(cert: *const CERT_CONTEXT) -> Option<Vec<u64>> {
+/// Embedded string pointers refer into the returned buffer and must not outlive
+/// or be used after moving its contents to another allocation.
+fn key_prov_info(cert: &Cert) -> Option<Vec<u64>> {
+    let cert = cert.as_ptr();
     let mut len = 0u32;
+    // SAFETY: the context is live; null output queries the size.
     if unsafe {
         CertGetCertificateContextProperty(
             cert,
@@ -593,6 +499,7 @@ fn key_prov_info(cert: *const CERT_CONTEXT) -> Option<Vec<u64>> {
         return None;
     }
     let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+    // SAFETY: `buf` is writable for at least `len` bytes and 8-byte aligned.
     let ok = unsafe {
         CertGetCertificateContextProperty(
             cert,
@@ -604,48 +511,20 @@ fn key_prov_info(cert: *const CERT_CONTEXT) -> Option<Vec<u64>> {
     (ok && len as usize >= std::mem::size_of::<CRYPT_KEY_PROV_INFO>()).then_some(buf)
 }
 
-/// Owned certificate-store handle; open certificate contexts can outlive it.
-struct Store(HCERTSTORE);
-
-impl Store {
-    /// Opens an existing system store read-only, never creating a missing store.
-    fn open(location: CertStoreLocation, name: &str) -> io::Result<Self> {
-        let location = match location {
-            CertStoreLocation::CurrentUser => CERT_SYSTEM_STORE_CURRENT_USER,
-            CertStoreLocation::LocalMachine => CERT_SYSTEM_STORE_LOCAL_MACHINE,
-        };
-        let name = wide(name);
-        let store = unsafe {
-            CertOpenStore(
-                CERT_STORE_PROV_SYSTEM_W,
-                0,
-                0,
-                location | CERT_STORE_READONLY_FLAG | CERT_STORE_OPEN_EXISTING_FLAG,
-                name.as_ptr().cast(),
-            )
-        };
-        if store.is_null() {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(Self(store))
-        }
-    }
+/// Opens an existing system store read-only, never creating a missing store.
+fn open_store(location: CertStoreLocation, name: &str) -> io::Result<CertStore> {
+    let location = match location {
+        CertStoreLocation::CurrentUser => CERT_SYSTEM_STORE_CURRENT_USER,
+        CertStoreLocation::LocalMachine => CERT_SYSTEM_STORE_LOCAL_MACHINE,
+    };
+    CertStore::open_system(location, name)
 }
 
-impl Drop for Store {
-    fn drop(&mut self) {
-        // open certificate contexts keep the store alive
-        unsafe {
-            CertCloseStore(self.0, 0);
-        }
-    }
-}
-
-/// Checks a live certificate context for a key handle or provider association.
+/// Checks a certificate context for a key handle or provider association.
 ///
 /// This examines properties only; it does not open the key or prove that the
 /// current process has permission to use it.
-fn has_private_key(cert: *const CERT_CONTEXT) -> bool {
+fn has_private_key(cert: &Cert) -> bool {
     [
         CERT_KEY_PROV_INFO_PROP_ID,
         CERT_KEY_CONTEXT_PROP_ID,
@@ -654,13 +533,12 @@ fn has_private_key(cert: *const CERT_CONTEXT) -> bool {
     .into_iter()
     .any(|prop| {
         let mut len = 0u32;
-        unsafe { CertGetCertificateContextProperty(cert, prop, ptr::null_mut(), &raw mut len) != 0 }
+        // SAFETY: the context is live; null output queries the size.
+        unsafe {
+            CertGetCertificateContextProperty(cert.as_ptr(), prop, ptr::null_mut(), &raw mut len)
+                != 0
+        }
     })
-}
-
-/// Encodes a Windows string and appends its terminating UTF-16 NUL.
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(Some(0)).collect()
 }
 
 #[cfg(test)]
@@ -703,7 +581,7 @@ mod tests {
     }
 
     fn key_name(cert: &Certificate) -> Vec<u16> {
-        let buf = key_prov_info(cert.as_ptr()).unwrap();
+        let buf = key_prov_info(cert.context()).unwrap();
         let info = unsafe { &*buf.as_ptr().cast::<CRYPT_KEY_PROV_INFO>() };
         let name = info.pwszContainerName;
         let mut len = 0;
@@ -714,12 +592,19 @@ mod tests {
     }
 
     fn key_exists(name: &[u16]) -> bool {
-        let prov = Provider::open(MS_KEY_STORAGE_PROVIDER).unwrap();
+        let prov = NcryptHandle::software_provider().unwrap();
         let mut key: NCRYPT_KEY_HANDLE = 0;
-        let status =
-            unsafe { NCryptOpenKey(prov.0, &raw mut key, name.as_ptr(), 0, NCRYPT_SILENT_FLAG) };
+        let status = unsafe {
+            NCryptOpenKey(
+                prov.as_raw(),
+                &raw mut key,
+                name.as_ptr(),
+                0,
+                NCRYPT_SILENT_FLAG,
+            )
+        };
         if status == 0 {
-            unsafe { NCryptFreeObject(key) };
+            drop(unsafe { NcryptHandle::from_raw(key) });
         }
         status == 0
     }
@@ -736,7 +621,7 @@ mod tests {
         let other = Certificate::from_pkcs12(PFX, "ntex").unwrap();
         assert!(format!("{cert:?}").contains("Certificate"));
         assert_eq!(cert.der(), other.der());
-        assert!(has_private_key(cert.as_ptr()));
+        assert!(has_private_key(cert.context()));
 
         let name = key_name(&cert);
         let other_name = key_name(&other);
@@ -800,7 +685,7 @@ mod tests {
                 .is_err()
         );
         // the store is not created
-        assert!(Store::open(CertStoreLocation::CurrentUser, name).is_err());
+        assert!(open_store(CertStoreLocation::CurrentUser, name).is_err());
     }
 
     /// STATEMENT: Store lookup rejects a certificate without a private key.
@@ -813,27 +698,26 @@ mod tests {
         use windows_sys::Win32::Security::Cryptography::CERT_SHA1_HASH_PROP_ID;
 
         // trusted root certificates have no private keys, usually
-        let store = Store::open(CertStoreLocation::CurrentUser, "Root").unwrap();
-        let mut cert = ptr::null();
-        loop {
-            cert = unsafe { CertEnumCertificatesInStore(store.0, cert) };
-            assert!(!cert.is_null(), "no root certificate without a private key");
-            if !has_private_key(cert) {
-                break;
-            }
-        }
-        let mut thumbprint = [0u8; 20];
-        let mut len = 20u32;
-        let ok = unsafe {
-            CertGetCertificateContextProperty(
-                cert,
-                CERT_SHA1_HASH_PROP_ID,
-                thumbprint.as_mut_ptr().cast(),
-                &raw mut len,
-            )
-        };
-        unsafe { CertFreeCertificateContext(cert) };
-        assert!(ok != 0 && len == 20);
+        let store = open_store(CertStoreLocation::CurrentUser, "Root").unwrap();
+        let (_, thumbprint) = store
+            .find_map(|cert| {
+                if has_private_key(cert) {
+                    return None;
+                }
+                let mut thumbprint = [0u8; 20];
+                let mut len = 20u32;
+                let ok = unsafe {
+                    CertGetCertificateContextProperty(
+                        cert.as_ptr(),
+                        CERT_SHA1_HASH_PROP_ID,
+                        thumbprint.as_mut_ptr().cast(),
+                        &raw mut len,
+                    )
+                };
+                assert!(ok != 0 && len == 20);
+                Some(thumbprint)
+            })
+            .expect("no root certificate without a private key");
 
         let err = Certificate::from_store(CertStoreLocation::CurrentUser, "Root", &thumbprint)
             .unwrap_err();
