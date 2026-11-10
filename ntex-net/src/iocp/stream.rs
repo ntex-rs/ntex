@@ -1,4 +1,4 @@
-use std::os::windows::io::{AsRawSocket, BorrowedSocket};
+use std::os::windows::io::AsRawSocket;
 use std::{cell::Cell, io, mem, net, pin::pin, rc::Rc};
 
 use ntex_io::IoContext;
@@ -34,10 +34,12 @@ use crate::helpers::Queue;
 /// [`Close::Blocking`].
 fn close_socket(io: WinSock::SOCKET, terminate: bool, nonblocking: bool) -> Close {
     let shutdown = if terminate {
-        crate::helpers::abort_raw_socket(io as _);
+        // SAFETY: the socket is closed below, after the borrow ends
+        unsafe { crate::helpers::with_sock_ref(io as _, crate::helpers::abort_socket) };
         Ok(())
     } else {
-        crate::helpers::drain_raw_socket(io as _);
+        // SAFETY: the socket is closed below, after the borrow ends
+        unsafe { crate::helpers::with_sock_ref(io as _, crate::helpers::drain_socket) };
         syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())
     };
     if nonblocking {
@@ -125,8 +127,10 @@ impl BlockingClose {
     /// Closes the socket in blocking mode, waiting for the linger timeout.
     fn run(self) -> io::Result<()> {
         // a non-blocking socket would fail the close with `WSAEWOULDBLOCK` again
-        let sock = unsafe { BorrowedSocket::borrow_raw(self.io as _) };
-        let _ = socket2::SockRef::from(&sock).set_nonblocking(false);
+        // SAFETY: the socket is owned by this job and closed below, after the borrow ends
+        let _ = unsafe {
+            crate::helpers::with_sock_ref(self.io as _, |sock| sock.set_nonblocking(false))
+        };
         let close = syscall!(SOCKET, WinSock::closesocket(self.io)).map(|_| ());
         self.shutdown.and(close)
     }
@@ -776,7 +780,7 @@ impl Drop for WeakStreamCtl {
 
 #[cfg(test)]
 mod tests {
-    use std::os::windows::io::{AsRawHandle, FromRawSocket, IntoRawSocket};
+    use std::os::windows::io::{AsRawHandle, IntoRawSocket};
     use std::time::{Duration, Instant};
 
     use ntex_bytes::BytesMut;
@@ -804,8 +808,10 @@ mod tests {
     /// parallel, a closed handle value may already belong to another test.
     fn is_ours(io: WinSock::SOCKET, addr: &socket2::SockAddr) -> bool {
         is_open(io) && {
-            let s = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(io as _) });
-            s.local_addr().is_ok_and(|a| a == *addr)
+            // SAFETY: the handle is checked to be open, it is not closed while borrowed
+            unsafe {
+                crate::helpers::with_sock_ref(io as _, |s| s.local_addr().is_ok_and(|a| a == *addr))
+            }
         }
     }
 
@@ -1661,12 +1667,14 @@ mod tests {
         let id = ctl.id;
         ops.0
             .with(|st| st.streams[id].ops.read_mut().fake_blocking());
-        {
-            let s = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(raw as _) });
-            s.set_nonblocking(false).unwrap();
-            // a recv issued without input fails after this instead of hanging
-            s.set_read_timeout(Some(std::time::Duration::from_secs(2)))
-                .unwrap();
+        // SAFETY: the registered stream keeps the socket open
+        unsafe {
+            crate::helpers::with_sock_ref(raw as _, |s| {
+                s.set_nonblocking(false).unwrap();
+                // a recv issued without input fails after this instead of hanging
+                s.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .unwrap();
+            });
         }
 
         let start = std::time::Instant::now();

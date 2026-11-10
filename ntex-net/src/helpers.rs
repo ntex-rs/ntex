@@ -71,26 +71,6 @@ pub(crate) fn abort_socket(sock: &socket2::SockRef<'_>) {
     let _ = sock.set_linger(Some(std::time::Duration::ZERO));
 }
 
-/// Arranges for a socket referenced by its raw handle to be aborted.
-///
-/// See [`abort_socket()`].
-#[cfg(unix)]
-pub(crate) fn abort_raw_socket(fd: std::os::fd::RawFd) {
-    // SAFETY: the fd is owned by the caller and outlives the borrow
-    let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-    abort_socket(&socket2::SockRef::from(&fd));
-}
-
-/// Arranges for a socket referenced by its raw handle to be aborted.
-///
-/// See [`abort_socket()`].
-#[cfg(windows)]
-pub(crate) fn abort_raw_socket(socket: std::os::windows::io::RawSocket) {
-    // SAFETY: the socket is owned by the caller and outlives the borrow
-    let socket = unsafe { std::os::windows::io::BorrowedSocket::borrow_raw(socket) };
-    abort_socket(&socket2::SockRef::from(&socket));
-}
-
 /// Maximum amount of input discarded by [`drain_socket()`], in 4kB chunks.
 const MAX_DRAIN_CHUNKS: usize = 16;
 
@@ -132,20 +112,31 @@ pub(crate) fn drain_socket(sock: &socket2::SockRef<'_>) {
     }
 }
 
-/// Drains the receive queue of a socket referenced by its raw handle.
+/// Raw socket handle of the platform.
 #[cfg(unix)]
-pub(crate) fn drain_raw_socket(fd: std::os::fd::RawFd) {
-    // SAFETY: the fd is owned by the caller and outlives the borrow
-    let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-    drain_socket(&socket2::SockRef::from(&fd));
-}
-
-/// Drains the receive queue of a socket referenced by its raw handle.
+pub(crate) type RawSock = std::os::fd::RawFd;
+/// Raw socket handle of the platform.
 #[cfg(windows)]
-pub(crate) fn drain_raw_socket(socket: std::os::windows::io::RawSocket) {
-    // SAFETY: the socket is owned by the caller and outlives the borrow
-    let socket = unsafe { std::os::windows::io::BorrowedSocket::borrow_raw(socket) };
-    drain_socket(&socket2::SockRef::from(&socket));
+pub(crate) type RawSock = std::os::windows::io::RawSocket;
+
+/// Runs `f` with a socket borrowed from its raw handle.
+///
+/// The socket is not closed when `f` returns.
+///
+/// # Safety
+///
+/// `raw` must be an open socket that is not closed while `f` runs.
+pub(crate) unsafe fn with_sock_ref<R>(
+    raw: RawSock,
+    f: impl FnOnce(&socket2::SockRef<'_>) -> R,
+) -> R {
+    // SAFETY: the caller keeps the handle open for the borrow
+    #[cfg(unix)]
+    let sock = unsafe { std::os::fd::BorrowedFd::borrow_raw(raw) };
+    // SAFETY: the caller keeps the handle open for the borrow
+    #[cfg(windows)]
+    let sock = unsafe { std::os::windows::io::BorrowedSocket::borrow_raw(raw) };
+    f(&socket2::SockRef::from(&sock))
 }
 
 #[derive(Default)]

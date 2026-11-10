@@ -437,7 +437,8 @@ impl StreamCtl {
     pub(crate) fn shutdown(self) -> io::Result<()> {
         self.inner.with(|streams| {
             let fd = streams[self.id as usize].fd();
-            crate::helpers::drain_raw_socket(fd);
+            // SAFETY: the stream entry owns the fd until this handle is dropped
+            unsafe { crate::helpers::with_sock_ref(fd, crate::helpers::drain_socket) };
             crate::helpers::shutdown_result(
                 syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ()),
             )
@@ -449,7 +450,9 @@ impl StreamCtl {
     /// The descriptor itself is released when this handle is dropped.
     pub(crate) fn abort(&self) {
         self.inner.with(|streams| {
-            crate::helpers::abort_raw_socket(streams[self.id as usize].fd());
+            let fd = streams[self.id as usize].fd();
+            // SAFETY: the stream entry owns the fd until this handle is dropped
+            unsafe { crate::helpers::with_sock_ref(fd, crate::helpers::abort_socket) };
         });
     }
 
@@ -599,8 +602,12 @@ fn close_fd(fd: os::fd::RawFd) {
 )))]
 fn lingers(fd: os::fd::RawFd) -> bool {
     // SAFETY: the fd is owned by the dropped stream and is not closed yet
-    let fd = unsafe { os::fd::BorrowedFd::borrow_raw(fd) };
-    matches!(socket2::SockRef::from(&fd).linger(), Ok(Some(t)) if !t.is_zero())
+    unsafe {
+        crate::helpers::with_sock_ref(
+            fd,
+            |sock| matches!(sock.linger(), Ok(Some(t)) if !t.is_zero()),
+        )
+    }
 }
 
 #[cfg(any(
@@ -772,7 +779,7 @@ mod tests {
         let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let sock = std::net::TcpStream::connect(lst.local_addr().unwrap()).unwrap();
         assert!(!lingers(sock.as_raw_fd()));
-        crate::helpers::abort_raw_socket(sock.as_raw_fd());
+        crate::helpers::abort_socket(&socket2::SockRef::from(&sock));
         assert!(!lingers(sock.as_raw_fd()));
     }
 

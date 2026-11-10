@@ -908,8 +908,6 @@ mod tests {
     /// Accepted streams disable Nagle, as on the other backends.
     #[ntex::test]
     async fn from_tcp_stream_sets_nodelay() {
-        use std::os::windows::io::FromRawSocket;
-
         let reactor = Reactor::new().unwrap();
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let _client = net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -918,8 +916,8 @@ mod tests {
 
         let raw = stream.as_raw_socket();
         let io = crate::Reactor::from_tcp_stream(&reactor, stream, SharedCfg::default()).unwrap();
-        let sock = mem::ManuallyDrop::new(unsafe { net::TcpStream::from_raw_socket(raw) });
-        assert!(sock.nodelay().unwrap());
+        // SAFETY: `io` keeps the socket open
+        assert!(unsafe { crate::helpers::with_sock_ref(raw, |s| s.tcp_nodelay()) }.unwrap());
         drop(io);
     }
 

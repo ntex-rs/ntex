@@ -294,7 +294,6 @@ fn get_wsa_fn<F>(sock: RawSocket, fguid: GUID) -> io::Result<Option<F>> {
 #[cfg(test)]
 mod tests {
     use std::os::windows::io::AsRawHandle;
-    use std::os::windows::io::FromRawSocket;
     use std::time::{Duration, Instant};
     use windows_sys::Win32::System::IO::GetQueuedCompletionStatus;
 
@@ -303,8 +302,9 @@ mod tests {
     /// Whether `io` is still an open socket bound to `addr`. Tests run in
     /// parallel, a closed handle value may already belong to another test.
     fn is_ours(io: RawSocket, addr: &SockAddr) -> bool {
-        let s = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(io) });
-        s.local_addr().is_ok_and(|a| a == *addr)
+        // SAFETY: test-only probe, a closed handle fails the lookup and the borrow never
+        // closes it
+        unsafe { crate::helpers::with_sock_ref(io, |s| s.local_addr().is_ok_and(|a| a == *addr)) }
     }
 
     fn pending_connect(
@@ -315,9 +315,8 @@ mod tests {
         let raw = sock.as_raw_socket();
         let rx = ops.connect(sock, addr.into(), SharedCfg::default());
         assert_eq!(ops.0.ops.borrow().len(), 1, "connect did not stay pending");
-        let local = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(raw) })
-            .local_addr()
-            .unwrap();
+        // SAFETY: the pending connect keeps the socket open
+        let local = unsafe { crate::helpers::with_sock_ref(raw, |s| s.local_addr()) }.unwrap();
         (rx, raw, local)
     }
 
@@ -436,9 +435,8 @@ mod tests {
         let raw = sock.as_raw_socket();
         let rx = ops.connect(sock, addr.into(), SharedCfg::default());
         assert_eq!(ops.0.ops.borrow().len(), 1, "connect did not stay pending");
-        let local = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(raw) })
-            .local_addr()
-            .unwrap();
+        // SAFETY: the pending connect keeps the socket open
+        let local = unsafe { crate::helpers::with_sock_ref(raw, |s| s.local_addr()) }.unwrap();
 
         ConnectOpsHandler {
             inner: ops.0.clone(),
