@@ -46,6 +46,7 @@ impl BufRing {
         debug_assert!(entries.is_power_of_two());
 
         // the ring must be page aligned
+        // SAFETY: This supported `sysconf` query takes no pointers and accesses no caller memory.
         let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) })
             .ok()
             .filter(|p| p.is_power_of_two())

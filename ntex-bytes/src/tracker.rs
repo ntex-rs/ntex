@@ -190,17 +190,24 @@ mod tests {
         let inner = tracker.as_inner();
         // SAFETY: the tracker is alive
         unsafe { (*inner).charge(100) };
+        // SAFETY: The tracker handle keeps `inner` alive while this additional allocation is
+        // charged.
         unsafe { (*inner).charge(50) };
         assert_eq!(tracker.snapshot(), snap(150, 2));
 
+        // SAFETY: The tracker handle keeps `inner` alive while its existing charge is resized.
         unsafe { (*inner).resize(100, 300) };
         assert_eq!(tracker.snapshot(), snap(350, 2));
+        // SAFETY: The tracker handle keeps `inner` alive while its existing charge is resized.
         unsafe { (*inner).resize(300, 200) };
+        // SAFETY: The tracker handle keeps `inner` alive while its existing charge is resized.
         unsafe { (*inner).resize(200, 200) };
         assert_eq!(tracker.snapshot(), snap(250, 2));
 
+        // SAFETY: The first charge retains a reference and now accounts for 200 bytes.
         unsafe { TrackerInner::uncharge(inner, 200) };
         assert_eq!(tracker.snapshot(), snap(50, 1));
+        // SAFETY: The second charge retains a reference and accounts for 50 bytes.
         unsafe { TrackerInner::uncharge(inner, 50) };
         assert_eq!(tracker.snapshot(), snap(0, 0));
         assert_eq!(
@@ -223,10 +230,12 @@ mod tests {
 
         // handles are not allocations
         assert_eq!(tracker.snapshot(), snap(0, 0));
+        // SAFETY: The tracker handle keeps its state alive while the allocation is charged.
         unsafe { (*tracker.as_inner()).charge(10) };
         assert_eq!(tracker2.snapshot(), snap(10, 1));
         drop(tracker2);
         assert_eq!(tracker.snapshot(), snap(10, 1));
+        // SAFETY: The ten-byte charge retains the reference consumed by this uncharge.
         unsafe { TrackerInner::uncharge(tracker.as_inner(), 10) };
         assert_eq!(tracker.snapshot(), snap(0, 0));
     }
@@ -239,11 +248,18 @@ mod tests {
     fn allocation_outlives_handles() {
         let tracker = BytesTracker::new();
         let inner = tracker.as_inner();
+        // SAFETY: The tracker handle keeps `inner` alive while the allocation is charged.
         unsafe { (*inner).charge(10) };
+        // SAFETY: The tracker handle keeps `inner` alive while the additional allocation is
+        // charged.
         unsafe { (*inner).charge(20) };
         drop(tracker);
         // the allocations keep the state alive, the last one frees it
+        // SAFETY: The ten-byte charge keeps `inner` alive and supplies the reference being
+        // released.
         unsafe { TrackerInner::uncharge(inner, 10) };
+        // SAFETY: The twenty-byte charge keeps `inner` alive and supplies the final reference being
+        // released.
         unsafe { TrackerInner::uncharge(inner, 20) };
     }
 
@@ -265,12 +281,20 @@ mod tests {
                     let inner = tracker.as_inner();
                     for i in 0..ITERS {
                         let handle = tracker.clone();
+                        // SAFETY: The thread owns a tracker handle that keeps `inner` alive while
+                        // charging.
                         unsafe { (*inner).charge(i) };
+                        // SAFETY: The thread owns a tracker handle and resizes its own existing
+                        // charge.
                         unsafe { (*inner).resize(i, i + 1) };
                         drop(handle);
+                        // SAFETY: The loop iteration owns the charge and its reference, resized
+                        // above to `i + 1` bytes.
                         unsafe { TrackerInner::uncharge(inner, i + 1) };
                     }
                     // left for the main thread to release
+                    // SAFETY: The thread still owns a tracker handle; the new charge retains a
+                    // reference for the main thread.
                     unsafe { (*inner).charge(1) };
                 })
             })
@@ -283,6 +307,8 @@ mod tests {
         let inner = tracker.as_inner();
         drop(tracker);
         for _ in 0..THREADS {
+            // SAFETY: Each joined thread left one one-byte charge and a reference, consumed once
+            // per iteration.
             unsafe { TrackerInner::uncharge(inner, 1) };
         }
     }

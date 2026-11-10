@@ -561,6 +561,8 @@ fn with_item_value_outlives_replacement() {
         let len = with_item::<Item, _, _>(|item| {
             // replaces and frees the stored value while `f` holds its clone
             set_item(Item::default());
+            // SAFETY: `with_item` retains its own `Rc`, keeping `item` alive after storage is
+            // cleared.
             unsafe { remove_all_items() };
             item.0.len()
         });
@@ -591,6 +593,7 @@ fn remove_all_items_drops_outside_borrow() {
     thread::spawn(|| {
         set_item(Item);
         set_item(1u32);
+        // SAFETY: No `with_item` calls or borrowed storage values are outstanding on this thread.
         unsafe { remove_all_items() };
         assert!(get_item::<u32>().is_none());
         assert!(get_item::<u64>().is_none(), "item inserted by a destructor");

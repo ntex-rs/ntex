@@ -216,6 +216,7 @@ impl Arbiter {
                     sys2.unregister_arbiter(Id(id));
                     // skipped by `block_on` if the event loop panicked
                     run_shutdown_callbacks();
+                    // SAFETY: The event loop and shutdown callbacks have ended, so storage borrows are released.
                     unsafe {
                         remove_all_items();
                     }
@@ -267,6 +268,7 @@ impl Arbiter {
             latency: Arc::default(),
             #[cfg(target_os = "linux")]
             #[allow(clippy::cast_possible_truncation)]
+            // SAFETY: `SYS_gettid` takes no pointer arguments and returns this thread's ID.
             tid: unsafe { libc::syscall(libc::SYS_gettid) } as i32,
             #[cfg(windows)]
             thread: crate::watchdog::ThreadHandle::current(),

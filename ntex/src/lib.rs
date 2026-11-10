@@ -176,6 +176,7 @@ pub mod util {
         #[cfg(not(feature = "no-test-logging"))]
         if std::env::var("NTEX_NO_TEST_LOG").is_err() {
             if std::env::var("RUST_LOG").is_err() {
+                // SAFETY: This requires initialization before other threads access the environment.
                 unsafe {
                     std::env::set_var("RUST_LOG", "trace");
                 }

@@ -50,7 +50,7 @@ pub(crate) fn apply_mask(buf: &mut [u8], mask_u32: u32) {
 // a `ShortSlice` must be smaller than a u64.
 #[allow(clippy::needless_pass_by_value)]
 fn xor_short(buf: ShortSlice<'_>, mask: u64) {
-    // Unsafe: we know that a `ShortSlice` fits in a u64
+    // SAFETY: `ShortSlice` has fewer than eight bytes; both copies stay in bounds and use disjoint storage.
     unsafe {
         let (ptr, len) = (buf.0.as_mut_ptr(), buf.0.len());
         let mut b: u64 = 0;
@@ -66,6 +66,7 @@ fn xor_short(buf: ShortSlice<'_>, mask: u64) {
 // Unsafe: caller must ensure the buffer has the correct size and alignment
 unsafe fn cast_slice(buf: &mut [u8]) -> &mut [u64] {
     #[allow(clippy::cast_ptr_alignment)]
+    // SAFETY: The caller provides an eight-byte-aligned buffer whose length is a multiple of eight.
     unsafe {
         // Assert correct size and alignment in debug builds
         debug_assert!(buf.len().trailing_zeros() >= 3);
@@ -92,13 +93,13 @@ fn align_buf(buf: &mut [u8]) -> (ShortSlice<'_>, &mut [u64], ShortSlice<'_>) {
         let (tmp, tail) = buf.split_at_mut(end_aligned - start_ptr);
         let (head, mid) = tmp.split_at_mut(start_aligned - start_ptr);
 
-        // Unsafe: we know the middle section is correctly aligned, and the outer
-        // sections are smaller than 8 bytes
+        // SAFETY: Rounding to eight-byte boundaries aligns `mid` and makes its length a multiple
+        // of eight; the disjoint head and tail each have fewer than eight bytes.
         unsafe { (ShortSlice::new(head), cast_slice(mid), ShortSlice(tail)) }
     } else {
         // We didn't cross even one aligned boundary!
 
-        // Unsafe: The outer sections are smaller than 8 bytes
+        // SAFETY: Without a complete aligned interval, `buf` has fewer than eight bytes; the tail is empty.
         unsafe { (ShortSlice::new(buf), &mut [], ShortSlice::new(&mut [])) }
     }
 }

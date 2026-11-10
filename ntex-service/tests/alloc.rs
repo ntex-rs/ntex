@@ -47,14 +47,17 @@ fn record_alloc(bytes: usize) {
     });
 }
 
+// SAFETY: Allocation and deallocation delegate unchanged to `System`; counters are thread-local.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record_alloc(layout.size());
+        // SAFETY: Delegates to `System` with the caller's layout, as required by `GlobalAlloc`.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         record_alloc(layout.size());
+        // SAFETY: Delegates to `System` with the caller's layout, preserving zero-initialization.
         unsafe { System.alloc_zeroed(layout) }
     }
 
@@ -64,11 +67,13 @@ unsafe impl GlobalAlloc for Counting {
             value.deallocs += 1;
             counts.set(value);
         });
+        // SAFETY: Delegates to `System` with the caller's live pointer and matching layout.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         record_alloc(size);
+        // SAFETY: Delegates to `System` with the caller's live pointer, layout, and valid new size.
         unsafe { System.realloc(ptr, layout, size) }
     }
 }

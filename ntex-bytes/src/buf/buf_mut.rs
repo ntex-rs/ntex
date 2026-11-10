@@ -246,6 +246,7 @@ pub trait BufMut {
             dst[..cnt].copy_from_slice(&src[off..off + cnt]);
             off += cnt;
 
+            // SAFETY: The `cnt` bytes in the writable chunk were initialized by the copy above.
             unsafe {
                 self.advance_mut(cnt);
             }
@@ -571,6 +572,8 @@ impl BufMut for Vec<u8> {
         let len = self.len();
 
         let ptr = self.as_mut_ptr();
+        // SAFETY: The vector owns its allocation exclusively, and `len..cap` is its writable spare
+        // capacity.
         unsafe { &mut UninitSlice::from_raw_parts_mut(ptr, cap)[len..] }
     }
 }
@@ -583,7 +586,8 @@ impl BufMut for &mut [u8] {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
-        // the bytes are initialized, `UninitSlice` never reads or de-initializes them
+        // SAFETY: The exclusive slice covers these bytes; `UninitSlice` cannot read or
+        // de-initialize them.
         unsafe { UninitSlice::from_raw_parts_mut(self.as_mut_ptr(), self.len()) }
     }
 
@@ -597,6 +601,8 @@ impl BufMut for &mut [u8] {
     #[inline]
     fn put_slice(&mut self, src: &[u8]) {
         self[..src.len()].copy_from_slice(src);
+        // SAFETY: The copied prefix is initialized and `src.len()` fits the destination checked by
+        // slicing above.
         unsafe {
             self.advance_mut(src.len());
         }
@@ -651,6 +657,7 @@ mod tests {
 
         let b = buf.as_mut();
         let mut bb = Box::new(b);
+        // SAFETY: The boxed slice has ten initialized bytes, so advancing by one stays within bounds.
         unsafe { bb.advance_mut(1) };
         let chunk = bb.chunk_mut();
         chunk.copy_from_slice(b"111111111");
@@ -678,6 +685,7 @@ mod tests {
         assert_eq!((&mut buf).remaining_mut(), crate::storage::MIN_CAPACITY - 1);
         let chunk = (&mut buf).chunk_mut();
         chunk.write_byte(0, b'9');
+        // SAFETY: The first spare byte was initialized by `write_byte` immediately above.
         unsafe { (&mut buf).advance_mut(1) };
         assert_eq!((&mut buf).remaining_mut(), crate::storage::MIN_CAPACITY - 2);
 

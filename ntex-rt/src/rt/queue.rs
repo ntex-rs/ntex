@@ -89,7 +89,9 @@ pub(crate) struct RunnableQueue {
 #[repr(align(128))]
 struct CacheLine;
 
+// SAFETY: Non-owner threads use only immutable or synchronized fields; the owner drains all local state.
 unsafe impl Send for RunnableQueue {}
+// SAFETY: Local queues and cells are accessed only by the owner; cross-thread operations use synchronization.
 unsafe impl Sync for RunnableQueue {}
 
 impl RunnableQueue {
@@ -136,6 +138,7 @@ impl RunnableQueue {
         future: F,
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
+        // SAFETY: The caller guarantees owner-thread access and the captured data's required lifetime.
         JoinHandle::new(unsafe { task::spawn(future, self, location) })
     }
 
@@ -151,6 +154,7 @@ impl RunnableQueue {
         future: F,
         location: SpawnLocation,
     ) {
+        // SAFETY: The caller guarantees the captured lifetime and owner locality or a `Send` submission.
         unsafe { task::spawn_detached::<_, LOCAL>(future, self, location) }
     }
 

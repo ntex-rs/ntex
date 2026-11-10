@@ -418,6 +418,7 @@ impl SystemRunner {
             .await;
 
         crate::arbiter::run_shutdown_callbacks();
+        // SAFETY: The local task set and shutdown callbacks have ended, releasing storage borrows.
         unsafe {
             crate::remove_all_items();
         }

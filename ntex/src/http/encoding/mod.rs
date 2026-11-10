@@ -85,6 +85,7 @@ unsafe impl WriteBuf for Spare<'_> {
     }
 
     unsafe fn filled_until(&mut self, n: usize) {
+        // SAFETY: The caller guarantees `n` bytes of the exposed spare capacity have been initialized.
         unsafe { self.buf.set_len(self.start + n) }
     }
 }

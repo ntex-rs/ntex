@@ -179,6 +179,7 @@ pub(crate) fn start(sys: &System) -> bool {
                 ss_flags: 0,
                 ss_size: 0,
             };
+            // SAFETY: The aligned alternate stack is leaked, and both stack descriptors are valid for this call.
             let result = unsafe { libc::sigaltstack(&raw const stack, &raw mut old) };
             if result != 0 {
                 log::error!("Cannot set signal stack");
@@ -189,6 +190,7 @@ pub(crate) fn start(sys: &System) -> bool {
                 signal::SaFlags::SA_ONSTACK,
                 signal::SigSet::empty(),
             );
+            // SAFETY: `sig_segv` has the signal-handler ABI and only uses signal-safe operations.
             unsafe {
                 match signal::sigaction(signal::SIGSEGV, &sig_action) {
                     Ok(prev) => _ = PREV_SIGSEGV.set(prev),
@@ -233,6 +235,7 @@ pub(crate) fn start(sys: &System) -> bool {
             }
         };
 
+        // SAFETY: The callback only reads atomics and captures frames into the preallocated signal slot.
         let usr2 = unsafe { register(SIGUSR2, || crate::watchdog::sig_usr2()) };
         if usr2.is_err() {
             log::error!("Cannot install signal handler for SIGUSR2");
@@ -345,6 +348,7 @@ fn start_fatal_signal_thread() -> std::io::Result<()> {
 
     let (read, write) = UnixStream::pair()?;
     write.set_nonblocking(true)?;
+    // SAFETY: `getpid` takes no arguments and accesses no caller-provided memory.
     let (_, read, _) = FATAL_PIPE.get_or_init(|| (unsafe { libc::getpid() }, read, write));
     std::thread::Builder::new()
         .name("ntex-rt:crashes".to_string())
@@ -379,6 +383,7 @@ extern "C" fn sig_segv(v: i32) {
         (signal::SIGSEGV, &PREV_SIGSEGV, b"S")
     };
     if let Some((pid, _, write)) = FATAL_PIPE.get() {
+        // SAFETY: The process-lifetime descriptor and one-byte buffer remain valid; both calls are signal-safe.
         unsafe {
             // A forked child must not shut down its parent's server.
             if libc::getpid() == *pid {
@@ -393,6 +398,7 @@ extern "C" fn sig_segv(v: i32) {
         .get()
         .copied()
         .unwrap_or_else(|| SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty()));
+    // SAFETY: `prev` is a saved valid action or the default action; restoring it is signal-safe.
     unsafe {
         let _ = signal::sigaction(sig, &prev);
     }

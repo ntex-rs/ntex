@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::must_use_candidate,

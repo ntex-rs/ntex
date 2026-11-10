@@ -413,6 +413,7 @@ fn runtime_spawn_skips_owner_lookup() {
     // All Runtime entrypoints already know the owner, even with a cold TLS cache.
     let id = THREAD_ID.with(Cell::take);
     let task = rt.spawn(async move { output });
+    // SAFETY: `borrowed` outlives `rt`, which completes or destroys this future even on unwind.
     let unchecked = unsafe { rt.spawn_unchecked(async { borrowed.set(true) }) };
     rt.spawn_detached(async move { done.set(true) });
     assert!(THREAD_ID.with(Cell::get).is_none());
@@ -2144,12 +2145,17 @@ impl Hook {
             on_clone: Cell::new(on_clone),
             on_release: Cell::new(on_release),
         }));
+        // SAFETY: The boxed hook and its manual counts stay on this test thread until final
+        // release.
         unsafe { Waker::from_raw(RawWaker::new(hook.cast(), &Self::VTABLE)) }
     }
 
     unsafe fn clone(p: *const ()) -> RawWaker {
+        // SAFETY: `p` points to a live boxed hook retained by the waker being cloned.
         let hook = unsafe { &*p.cast::<Hook>() };
         hook.refs.set(hook.refs.get() + 1);
+        // SAFETY: The count was incremented for this temporary waker, which guards against callback
+        // unwind.
         let cloned = unsafe { Waker::from_raw(RawWaker::new(p, &Self::VTABLE)) };
         if let Some(f) = hook.on_clone.take() {
             f();
@@ -2159,12 +2165,15 @@ impl Hook {
     }
 
     unsafe fn release(p: *const ()) {
+        // SAFETY: The releasing waker still owns a count keeping the boxed hook alive.
         let hook = unsafe { &*p.cast::<Hook>() };
         hook.refs.set(hook.refs.get() - 1);
         if hook.refs.get() == 0 {
             if let Some(f) = hook.on_release.take() {
                 f();
             }
+            // SAFETY: The final count was released and the callback returned; reclaim this box
+            // exactly once.
             drop(unsafe { Box::from_raw(p.cast_mut().cast::<Hook>()) });
         }
     }

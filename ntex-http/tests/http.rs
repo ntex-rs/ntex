@@ -301,6 +301,7 @@ fn header_map_value() {
 #[test]
 #[allow(clippy::op_ref, clippy::cmp_owned)]
 fn header_value() {
+    // SAFETY: `raw` contains only visible ASCII bytes permitted in a header value.
     let v = unsafe { HeaderValue::from_shared_unchecked(Bytes::from_static(b"raw")) };
     assert_eq!(v, "raw");
 
@@ -315,6 +316,7 @@ fn header_value() {
     let v = HeaderValue::from_bytes(b"caf\xe9").unwrap();
     let err: ToStrError = v.to_str().unwrap_err();
     assert!(!err.to_string().is_empty());
+    // SAFETY: The bytes are valid UTF-8, but NUL and DEL violate the documented header-byte contract.
     let v = unsafe { HeaderValue::from_shared_unchecked(Bytes::from_static(b"a\x00\x7fb")) };
     assert_eq!(v.to_str().unwrap(), "a\x00\x7fb");
 

@@ -144,6 +144,7 @@ fn capture_backtrace(arb: &Arbiter) -> Option<ntex_error::BacktraceRaw> {
     if !CAPTURE.arm(tid) {
         return None;
     }
+    // SAFETY: `tgkill` takes scalar IDs and a signal number, targeting an arbiter in this process.
     let result = unsafe { libc::syscall(libc::SYS_tgkill, libc::getpid(), tid, libc::SIGUSR2) };
 
     let mut bt = None;
@@ -173,6 +174,7 @@ pub(crate) fn sig_usr2() {
     #[cfg(target_os = "linux")]
     #[allow(clippy::cast_possible_truncation)]
     {
+        // SAFETY: `SYS_gettid` takes no pointer arguments and is safe to invoke from a signal handler.
         let tid = unsafe { libc::syscall(libc::SYS_gettid) } as i32;
         CAPTURE.capture(tid, Location::caller().file());
     }
@@ -224,12 +226,14 @@ mod windows {
         stack: (usize, usize),
     }
 
-    // The handle is a process-wide kernel object reference.
+    // SAFETY: The duplicated handle is a process-wide kernel reference with no thread-local ownership.
     unsafe impl Send for ThreadHandle {}
+    // SAFETY: Shared access only uses kernel thread APIs and immutable stack bounds; closing requires ownership.
     unsafe impl Sync for ThreadHandle {}
 
     impl Drop for ThreadHandle {
         fn drop(&mut self) {
+            // SAFETY: `current` obtains one owned duplicated handle, closed only by this destructor.
             unsafe { CloseHandle(self.handle) };
         }
     }
@@ -242,6 +246,7 @@ mod windows {
         pub(crate) fn current() -> Option<Self> {
             let mut handle = std::ptr::null_mut();
             let mut stack = (0, 0);
+            // SAFETY: Current-process/thread pseudo-handles are valid, and all output pointers are writable locals.
             unsafe {
                 let process = GetCurrentProcess();
                 if DuplicateHandle(
@@ -270,6 +275,7 @@ mod windows {
             if !cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
                 return Ok(0);
             }
+            // SAFETY: The owned handle is valid; `get_context` observes suspension before walking the stack.
             unsafe {
                 if SuspendThread(self.handle) == u32::MAX {
                     return Err(io::Error::last_os_error());
@@ -296,7 +302,7 @@ mod windows {
         };
 
         ctx.ContextFlags = CONTROL | INTEGER;
-        // also waits until the thread is actually suspended
+        // SAFETY: The caller suspended this valid thread handle; `ctx` is writable and suitably aligned.
         if unsafe { GetThreadContext(handle, ctx) } == 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -327,14 +333,17 @@ mod windows {
             }
             let mut base = 0;
             let entry =
+                // SAFETY: The suspended thread supplies the instruction address, and `base` is a writable local.
                 unsafe { RtlLookupFunctionEntry(ctx.Rip, &raw mut base, std::ptr::null_mut()) };
             if entry.is_null() {
                 // leaf function, the return address is on top of the stack
+                // SAFETY: The suspended stack pointer is in bounds and ABI-aligned for its return address.
                 ctx.Rip = unsafe { *(sp as *const u64) };
                 ctx.Rsp += 8;
             } else {
                 let mut data = std::ptr::null_mut();
                 let mut frame = 0;
+                // SAFETY: The lookup supplied matching unwind metadata for this suspended, writable context.
                 unsafe {
                     RtlVirtualUnwind(
                         UNW_FLAG_NHANDLER,
@@ -373,13 +382,16 @@ mod windows {
             }
             let mut base = 0;
             let entry =
+                // SAFETY: The suspended thread supplies the instruction address, and `base` is a writable local.
                 unsafe { RtlLookupFunctionEntry(pc as usize, &raw mut base, std::ptr::null_mut()) };
             if entry.is_null() {
                 // leaf function, the return address is in the link register
+                // SAFETY: `GetThreadContext` initialized the ARM64 integer-register union, including `X[30]`.
                 ctx.Pc = unsafe { ctx.Anonymous.X[30] };
             } else {
                 let mut data = std::ptr::null_mut();
                 let mut frame = 0;
+                // SAFETY: The lookup supplied matching unwind metadata for this suspended, writable context.
                 unsafe {
                     RtlVirtualUnwind(
                         UNW_FLAG_NHANDLER,

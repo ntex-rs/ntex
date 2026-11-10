@@ -11,18 +11,22 @@ thread_local! {
     static ALLOCS: Cell<usize> = const { Cell::new(0) };
 }
 
+// SAFETY: Allocation and deallocation delegate unchanged to `System`; counters are thread-local.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCS.with(|c| c.set(c.get() + 1));
+        // SAFETY: Delegates to `System` with the caller's layout, as required by `GlobalAlloc`.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: Delegates to `System` with the caller's live pointer and matching layout.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         ALLOCS.with(|c| c.set(c.get() + 1));
+        // SAFETY: Delegates to `System` with the caller's live pointer, layout, and valid new size.
         unsafe { System.realloc(ptr, layout, size) }
     }
 }

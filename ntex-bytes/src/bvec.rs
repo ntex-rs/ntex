@@ -450,6 +450,8 @@ impl BytesMut {
     /// Panics if `cnt > len`.
     #[inline]
     pub fn advance_to(&mut self, cnt: usize) {
+        // SAFETY: `set_start` checks `cnt <= len` before advancing within this live, exclusively
+        // owned view.
         unsafe {
             self.storage.set_start(cnt);
         }
@@ -850,6 +852,8 @@ impl BufMut for BytesMut {
 /// Interop with the `bytes` crate: like `bytes::BytesMut`, the buffer grows on
 /// demand, so `remaining_mut()` reports `usize::MAX - len` and `chunk_mut()`
 /// is never empty. The native [`BufMut`] impl reports spare capacity instead.
+// SAFETY: Chunks expose only allocated spare bytes, and advancement checks capacity before exposing
+// caller-initialized data.
 unsafe impl bytes::buf::BufMut for BytesMut {
     #[inline]
     fn remaining_mut(&self) -> usize {
@@ -871,6 +875,8 @@ unsafe impl bytes::buf::BufMut for BytesMut {
         if BufMut::remaining_mut(self) == 0 {
             self.reserve(64);
         }
+        // SAFETY: The live buffer exclusively owns its spare capacity, which is exactly the
+        // returned range.
         unsafe {
             let ptr = self.storage.as_ptr();
             bytes::buf::UninitSlice::from_raw_parts_mut(
@@ -902,6 +908,8 @@ unsafe impl bytes::buf::BufMut for BytesMut {
     #[inline]
     fn put_bytes(&mut self, val: u8, cnt: usize) {
         self.reserve(cnt);
+        // SAFETY: `reserve(cnt)` provides writable space, and all `cnt` bytes are initialized
+        // before advancing.
         unsafe {
             ptr::write_bytes(self.storage.as_ptr().add(self.len()), val, cnt);
             BufMut::advance_mut(self, cnt);

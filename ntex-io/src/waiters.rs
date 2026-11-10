@@ -523,6 +523,7 @@ mod tests {
         // Generic waker clones need not retain the original vtable address.
         static VTABLE: RawWakerVTable =
             RawWakerVTable::new(|data| RawWaker::new(data, &VTABLE), |_| {}, |_| {}, |_| {});
+        // SAFETY: The static vtable never dereferences its data and all callbacks are thread-safe.
         let noop = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
         let mut wakers = Waiters::new();
         let first = wakers.register(7, &noop);

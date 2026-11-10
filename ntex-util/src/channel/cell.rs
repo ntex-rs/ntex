@@ -36,11 +36,13 @@ impl<T> Cell<T> {
     }
 
     pub(super) fn get_ref(&self) -> &T {
+        // SAFETY: This `Rc` state is thread-local; callers end borrows before mutation or user callbacks.
         unsafe { &*self.inner.as_ref().get() }
     }
 
     #[allow(clippy::mut_from_ref)]
     pub(super) fn get_mut(&self) -> &mut T {
+        // SAFETY: Callers exclude overlapping borrows and reentrant user code on this thread-local state.
         unsafe { &mut *self.inner.as_ref().get() }
     }
 }

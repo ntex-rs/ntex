@@ -62,6 +62,8 @@ fn test_put_u16() {
 #[test]
 fn test_vec_advance_mut() {
     let mut buf = Vec::with_capacity(8);
+    // SAFETY: The first eight bytes of the writable chunk are initialized by the copy before
+    // advancing.
     unsafe {
         buf.chunk_mut()[0..8].copy_from_slice(b"12345678");
         buf.advance_mut(8);
@@ -78,6 +80,8 @@ fn test_vec_advance_mut() {
 fn test_vec_advance_mut_past_capacity() {
     let mut buf = Vec::<u8>::with_capacity(8);
     // the bytes past the capacity cannot have been initialized
+    // SAFETY: The implementation checks allocated capacity and panics before exposing any
+    // uninitialized bytes.
     unsafe { buf.advance_mut(buf.capacity() + 1) };
 }
 

@@ -260,6 +260,7 @@ pub(crate) mod hooks {
             |_| run_hook(&ON_WAKE),
             |_| run_hook(&ON_DROP),
         );
+        // SAFETY: Callbacks ignore the null data pointer and access only their calling thread's TLS.
         unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &HOOK_VTABLE)) }
     }
 
@@ -333,7 +334,9 @@ mod tests {
     fn test_register_same_waker() {
         static A: u8 = 0;
         static B: u8 = 0;
+        // SAFETY: The static vtable never dereferences the static data and uses only atomic shared state.
         let a = unsafe { Waker::from_raw(RawWaker::new((&raw const A).cast(), &VTABLE)) };
+        // SAFETY: The same thread-safe vtable ignores this distinct static data pointer.
         let b = unsafe { Waker::from_raw(RawWaker::new((&raw const B).cast(), &VTABLE)) };
 
         let w = LocalWaker::new();

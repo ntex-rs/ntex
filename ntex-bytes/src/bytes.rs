@@ -432,6 +432,7 @@ impl Bytes {
     /// Panics if `cnt > len`.
     #[inline]
     pub fn advance_to(&mut self, cnt: usize) {
+        // SAFETY: `set_start` checks `cnt <= len` before advancing within this live view.
         unsafe {
             self.storage.set_start(cnt);
         }
@@ -785,6 +786,7 @@ mod tests {
         <BytesMut as BufMut>::put_slice(&mut b, b"12345");
         assert_eq!(b, b"\x01\x0212345".as_ref());
         <BytesMut as BufMut>::chunk_mut(&mut b).write_byte(0, b'1');
+        // SAFETY: The first spare byte was initialized by `write_byte` immediately above.
         unsafe { <BytesMut as BufMut>::advance_mut(&mut b, 1) };
         assert_eq!(b, b"\x01\x02123451".as_ref());
 

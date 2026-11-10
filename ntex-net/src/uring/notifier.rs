@@ -45,6 +45,8 @@ impl NotifierRead {
         if self.is_queued() {
             // Do not put notifier reads in the overflow queue. Until
             // this succeeds, teardown can discard the arming request.
+            // SAFETY: The boxed buffer stays live until cancellation or is leaked on teardown;
+            // only one read is armed, and its descriptor is owned by the reactor.
             let _ = unsafe {
                 sq.push(|en| {
                     self.state.set(NotifierState::Active);
@@ -151,6 +153,7 @@ impl Notifier {
         // io-uring fails reads of non-blocking files with EAGAIN instead of
         // waiting for data, a write blocks only on the counter overflow
         let fd = syscall!(libc::eventfd(0, libc::EFD_CLOEXEC))?;
+        // SAFETY: `eventfd` returned a new descriptor, transferred to this sole owner.
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
         Ok(Self { fd: Arc::new(fd) })
     }

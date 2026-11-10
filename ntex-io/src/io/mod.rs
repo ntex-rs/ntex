@@ -238,6 +238,7 @@ impl<F> Io<F> {
     }
 
     fn take_io_ref(&self) -> IoRef {
+        // SAFETY: Callers exclude borrows of this slot; transferred state is retained or leaked.
         unsafe { mem::replace(&mut *self.0.get(), IoRef::create_empty()) }
     }
 
@@ -262,10 +263,12 @@ impl<F> Io<F> {
     }
 
     fn st(&self) -> &IoState {
+        // SAFETY: The slot owns this live state; replacing it requires excluding outstanding borrows.
         unsafe { &(*self.0.get()).0 }
     }
 
     fn io_ref(&self) -> &IoRef {
+        // SAFETY: The slot stays initialized and is not replaced while its `IoRef` is borrowed.
         unsafe { &*self.0.get() }
     }
 
@@ -316,6 +319,7 @@ impl<F> Io<F> {
         }
         #[cfg(feature = "tracker")]
         st.update_buf_tracker(&cfg);
+        // SAFETY: The caller guarantees no references into the previous configuration remain live.
         unsafe {
             st.cfg.replace(cfg);
         }

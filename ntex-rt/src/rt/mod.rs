@@ -85,6 +85,7 @@ where
 {
     let location = Location::caller();
     let fut = crate::task::wrap(fut);
+    // SAFETY: The current runtime is owner-local, and the wrapped future is `'static`.
     Runtime::with_current(|rt| unsafe { rt.spawn_at(fut, location) })
 }
 
@@ -104,6 +105,7 @@ where
 {
     let location = Location::caller();
     let fut = crate::task::wrap(fut);
+    // SAFETY: The current runtime is owner-local, and the wrapped future is `'static`.
     Runtime::with_current(|rt| unsafe { rt.spawn_detached_at(fut, location) });
 }
 
@@ -289,6 +291,7 @@ impl Runtime {
     /// this low-level method does not apply registered task callbacks.
     #[track_caller]
     pub fn spawn<F: Future + 'static>(&self, future: F) -> JoinHandle<F::Output> {
+        // SAFETY: `Runtime` is thread-confined, and the future owns all captured data.
         unsafe { self.spawn_at(future, Location::caller()) }
     }
 
@@ -308,6 +311,7 @@ impl Runtime {
     /// request cancellation.
     #[track_caller]
     pub unsafe fn spawn_unchecked<F: Future>(&self, future: F) -> JoinHandle<F::Output> {
+        // SAFETY: The caller guarantees that borrowed future and output data outlive their use.
         unsafe { self.spawn_at(future, Location::caller()) }
     }
 
@@ -321,6 +325,7 @@ impl Runtime {
         future: F,
         location: SpawnLocation,
     ) -> JoinHandle<F::Output> {
+        // SAFETY: `Runtime` is thread-confined, and the caller guarantees the captured lifetime.
         unsafe { self.queue.spawn(future, location) }
     }
 
@@ -331,6 +336,7 @@ impl Runtime {
     /// apply registered task callbacks.
     #[track_caller]
     pub fn spawn_detached<F: Future + 'static>(&self, future: F) {
+        // SAFETY: `Runtime` is thread-confined, and the future owns all captured data.
         unsafe { self.spawn_detached_at(future, Location::caller()) }
     }
 
@@ -341,6 +347,7 @@ impl Runtime {
     ///
     /// The caller should ensure the captured lifetime is long enough.
     pub(crate) unsafe fn spawn_detached_at<F: Future>(&self, future: F, location: SpawnLocation) {
+        // SAFETY: `Runtime` is thread-confined, and the caller guarantees the captured lifetime.
         unsafe { self.queue.spawn_detached::<_, true>(future, location) }
     }
 
@@ -521,6 +528,7 @@ impl Runtime {
                 self.queue.notify();
             })))));
             let task = slot.0.clone();
+            // SAFETY: `slot` removes the borrowing future before this scope ends, including on unwind.
             unsafe {
                 self.spawn_detached_at(
                     poll_fn(move |cx| {
@@ -634,7 +642,7 @@ impl Handle {
     /// task that blocks a stalled runtime.
     pub fn current_task(&self) -> Option<&'static Location<'static>> {
         let task = self.queue.current.load(Ordering::Relaxed);
-        // only null or a `&'static Location` is stored
+        // SAFETY: The owner only stores null or a pointer to a `&'static Location`.
         unsafe { task.as_ref() }
     }
 
@@ -674,11 +682,13 @@ impl Handle {
     {
         let location = Location::caller();
         if Some(self.queue.id) == try_current_thread_id() {
+            // SAFETY: The identity check establishes owner locality, and the future is `'static`.
             RemoteJoinHandle::local(unsafe { self.queue.spawn(future, location) })
         } else {
             let job = Job::new(future, true);
             let join = RemoteJoin::new(job.clone());
             // a rejected submission closes the job on this thread
+            // SAFETY: `Runner` contains a `Send`, `'static` future and output, permitting remote submission.
             unsafe {
                 self.queue.spawn_detached::<_, false>(Runner(job), location);
             }
@@ -698,6 +708,7 @@ impl Handle {
     where
         F: Future + Send + 'static,
     {
+        // SAFETY: The future is `Send` and `'static`, permitting either local or remote submission.
         unsafe {
             self.queue
                 .spawn_detached::<_, false>(future, Location::caller());

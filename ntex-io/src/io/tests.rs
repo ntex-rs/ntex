@@ -166,6 +166,7 @@ async fn read_size_reset_by_set_config() {
     io.st().track_read(60_000, false);
     assert_eq!(io.st().read_size(), BytePageSize::Size64);
 
+    // SAFETY: No configuration or tracker references are retained across this replacement.
     unsafe {
         io.set_config(
             SharedCfg::new("SRV2")
@@ -1289,6 +1290,7 @@ async fn close_reason_metrics() {
     io.set_close_reason(CloseReason::Decoder);
     assert_eq!(io.close_reason(), Some(CloseReason::KeepAlive));
     // a taken io leaves a placeholder that is not counted
+    // SAFETY: No references into `io` survive the preceding assertions or this transfer.
     let io2 = unsafe { io.take() };
     drop(io);
     drop(io2);
@@ -5294,6 +5296,8 @@ mod buf_tracker {
     async fn set_config_keeps_per_connection() {
         let (_client, io) = io_with(BufTracker::PerConnection);
         let t = io.buf_tracker().cloned().unwrap();
+        // SAFETY: The tracker was cloned; no configuration or tracker borrows survive this
+        // replacement.
         unsafe {
             io.set_config(cfg_with(BufTracker::PerConnection));
         }
@@ -5314,6 +5318,7 @@ mod buf_tracker {
         assert_eq!(old.snapshot().live_allocations, 1);
 
         let t = BytesTracker::new();
+        // SAFETY: The old tracker is an owned clone; no configuration or tracker borrows remain.
         unsafe {
             io.set_config(cfg_with(BufTracker::Shared(t.clone())));
         }
@@ -5322,6 +5327,8 @@ mod buf_tracker {
         assert_eq!(t.snapshot().live_allocations, 1);
 
         // switching back creates a new per-connection tracker
+        // SAFETY: The preceding tracker borrow ended with its assertion; no configuration borrows
+        // remain.
         unsafe {
             io.set_config(cfg_with(BufTracker::PerConnection));
         }
@@ -5346,6 +5353,7 @@ mod buf_tracker {
         client.write(TEXT);
         io.read_more().await.unwrap();
 
+        // SAFETY: No configuration or tracker references are retained across this replacement.
         unsafe {
             io.set_config(cfg_with(BufTracker::Disabled));
         }

@@ -206,6 +206,7 @@ impl ReadOperation {
                 let st = self.ctx.with_read_buf(|buf| {
                     let chunk = buf.chunk_mut();
                     let len = i32::try_from(chunk.len()).unwrap_or(i32::MAX);
+                    // SAFETY: The live socket writes at most `len` bytes into this borrowed spare chunk.
                     let res = unsafe { recv(self.io as _, chunk.as_mut_ptr(), len, 0) };
                     if res == SOCKET_ERROR {
                         let err = io::Error::last_os_error();
@@ -250,6 +251,8 @@ impl ReadOperation {
             }];
             let mut size = 0;
             let mut flags = 0;
+            // SAFETY: Winsock copies the zero-length descriptor; the driver retains the header
+            // until completion, and the stack outputs are used only during this call.
             let result = unsafe {
                 WSARecv(
                     self.io as _,
@@ -527,6 +530,7 @@ fn sent(pages: &mut BytePages, res: io::Result<usize>) -> io::Result<usize> {
 }
 
 pub(crate) fn winapi_result() -> Poll<io::Result<()>> {
+    // SAFETY: `GetLastError` reads only the calling thread's error state.
     let error = unsafe { GetLastError() };
     match error {
         ERROR_IO_PENDING => Poll::Pending,

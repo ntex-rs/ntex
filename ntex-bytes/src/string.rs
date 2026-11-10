@@ -429,6 +429,7 @@ mod test {
         let b = s.into_bytes();
         assert_eq!(b, Bytes::copy_from_slice(b"test"));
 
+        // SAFETY: The buffer contains the valid UTF-8 literal `test`.
         let s = unsafe { ByteString::from_bytes_unchecked(b) };
         assert_eq!(s, "test");
         assert_eq!(s.slice(0..2), "te");

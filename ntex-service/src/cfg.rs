@@ -127,7 +127,9 @@ impl Storage {
 /// Metadata and lookup access for a shared configuration.
 pub struct CfgContext(*const Storage);
 
+// SAFETY: The pointer targets an `Arc<Storage>`, and `Storage` is `Send + Sync`.
 unsafe impl Send for CfgContext {}
+// SAFETY: Only shared access to `Storage` is exposed, and `Storage` is `Sync`.
 unsafe impl Sync for CfgContext {}
 
 impl CfgContext {
@@ -159,6 +161,8 @@ impl CfgContext {
     where
         T: Configuration,
     {
+        // SAFETY: `self.0` comes from `Arc::as_ptr` of a live `Arc<Storage>`;
+        // `mem::forget` below keeps the strong count unchanged.
         let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
         let cfg = get(&inner);
         mem::forget(inner);
@@ -167,6 +171,8 @@ impl CfgContext {
 
     /// Returns a handle to the complete shared configuration.
     pub fn shared(&self) -> SharedCfg {
+        // SAFETY: `self.0` comes from `Arc::as_ptr` of a live `Arc<Storage>`;
+        // `mem::forget` below keeps the strong count unchanged.
         let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
         let shared = SharedCfg(inner.clone());
         mem::forget(inner);
@@ -174,6 +180,8 @@ impl CfgContext {
     }
 
     fn get_ref(&self) -> &Storage {
+        // SAFETY: `self.0` points to the `Storage` kept alive by the `Cfg` or
+        // thread-local default that owns this context.
         unsafe { self.0.as_ref().unwrap() }
     }
 }
@@ -228,6 +236,8 @@ impl<T: Configuration> Cfg<T> {
     }
 
     fn get_ref(&self) -> &T {
+        // SAFETY: The untagged pointer refers to a `T` owned by the storage or by
+        // an `Arc<T>`, both kept alive by the strong counts this `Cfg` holds.
         unsafe {
             (*self.0.get())
                 .map_addr(|addr| addr & KIND_UNMASK)
@@ -244,6 +254,7 @@ impl<T: Configuration> Cfg<T> {
     /// The caller must guarantee that no references to the inner `T` value
     /// exist at the time this function is called.
     pub unsafe fn replace(&self, cfg: Cfg<T>) {
+        // SAFETY: The caller guarantees no references to the inner value exist.
         unsafe {
             ptr::swap(self.0.get(), cfg.0.get());
         }
@@ -252,6 +263,8 @@ impl<T: Configuration> Cfg<T> {
 
 impl<T: Configuration> Drop for Cfg<T> {
     fn drop(&mut self) {
+        // SAFETY: `get` took one storage strong count for this `Cfg`, plus one
+        // `Arc<T>` count when tagged `KIND_ARC`; both are released exactly once.
         unsafe {
             let addr = (*self.0.get()).map_addr(|addr| addr & KIND_UNMASK);
             Arc::decrement_strong_count(addr.as_ref().unwrap().ctx().0);

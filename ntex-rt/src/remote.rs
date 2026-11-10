@@ -33,10 +33,9 @@ pub(crate) struct Job<F: Future> {
     stage: UnsafeCell<Stage<F>>,
 }
 
-// The owner accesses `stage` until it publishes `DONE`, the joiner only after
-// observing it. The future is polled and dropped on the owner thread, unless
-// the submission is rejected before it is published.
+// SAFETY: The future and output are `Send`; the owner transfers stage access to the unique joiner via `DONE`.
 unsafe impl<F: Future + Send> Send for Job<F> where F::Output: Send {}
+// SAFETY: Only the owner accesses the stage before publishing `DONE`, and only the unique joiner afterward.
 unsafe impl<F: Future + Send> Sync for Job<F> where F::Output: Send {}
 
 impl<F: Future> Job<F> {

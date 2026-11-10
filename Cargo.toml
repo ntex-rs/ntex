@@ -29,6 +29,11 @@ missing_debug_implementations = "deny"
 
 unexpected_cfgs = { level = "warn", priority = -2, check-cfg = ['cfg(docsrs)', 'cfg(docsrs_dep)'] }
 
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+
 [patch.crates-io]
 ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }

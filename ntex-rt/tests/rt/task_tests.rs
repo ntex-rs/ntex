@@ -162,6 +162,7 @@ fn new_rt() -> Runtime {
 }
 
 fn spawn<F: Future + 'static>(rt: &Runtime, f: F) -> Task<F::Output> {
+    // SAFETY: Tests call on the runtime owner thread and the future is bounded by `'static`.
     unsafe { task::spawn(f, &rt.queue, Location::caller()) }
 }
 
@@ -416,8 +417,11 @@ fn spawn_detached() {
         let p = Probe::default();
         let fut = p.future(Res::Ready);
         let q = rt.queue.clone();
-        let spawn =
-            move || unsafe { task::spawn_detached::<_, false>(fut, &q, Location::caller()) };
+        let spawn = move || {
+            // SAFETY: The probe future is `Send` and owns its data for either local or remote
+            // submission.
+            unsafe { task::spawn_detached::<_, false>(fut, &q, Location::caller()) }
+        };
         let r = if remote {
             on_thread(spawn);
             one_remote(&rt).unwrap()
@@ -434,6 +438,7 @@ fn spawn_detached() {
     // dropped without a run
     let rt = new_rt();
     let p = Probe::default();
+    // SAFETY: This is the runtime owner thread and the probe future owns its captured data.
     unsafe { task::spawn_detached::<_, true>(p.future(Res::Ready), &rt.queue, Location::caller()) };
     drop(one_local(&rt));
     p.check(0, 1, 0);
@@ -513,6 +518,7 @@ fn finish_unshared() {
     let tok = out.token();
     let mut tok = Some(tok);
     let fut = poll_fn(move |_| Poll::Ready(tok.take().unwrap()));
+    // SAFETY: This is the runtime owner thread and the future owns its captured output token.
     unsafe { task::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
     assert!(!one_local(&rt).run());
     assert_eq!(out.get(), 1);
@@ -565,6 +571,7 @@ fn finish_unshared() {
     // the task is freed if the output drop panics
     let rt = new_rt();
     let fut = poll_fn(|_| Poll::Ready(PanicOnDrop));
+    // SAFETY: This is the runtime owner thread and the future captures no borrowed data.
     unsafe { task::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
     let r = one_local(&rt);
     assert!(catch_unwind(AssertUnwindSafe(|| r.run())).is_err());
@@ -582,6 +589,7 @@ fn untouched_completion_reclaims_without_fifo_service() {
     let rt = new_rt();
 
     // no join handle and no waker
+    // SAFETY: This is the runtime owner thread and the future captures no borrowed data.
     unsafe { task::spawn_detached::<_, true>(async {}, &rt.queue, Location::caller()) };
     one_local(&rt).run();
     assert_eq!(rt.queue.task_count(), 0);
@@ -600,6 +608,7 @@ fn untouched_completion_reclaims_without_fifo_service() {
         *slot2.lock().unwrap() = Some(cx.waker().clone());
         Poll::Ready(())
     });
+    // SAFETY: This is the runtime owner thread and the future owns its captured waker slot.
     unsafe { task::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
     one_local(&rt).run();
     drop(slot.lock().unwrap().take());
@@ -615,6 +624,7 @@ fn untouched_completion_reclaims_without_fifo_service() {
         *slot2.lock().unwrap() = Some(cx.waker().clone());
         Poll::Pending
     });
+    // SAFETY: This is the runtime owner thread and the future owns its captured waker slot.
     unsafe { task::spawn_detached::<_, true>(fut, &rt.queue, Location::caller()) };
     one_local(&rt).run();
     let w = slot.lock().unwrap().take().unwrap();
@@ -1136,6 +1146,8 @@ fn shutdown_drop_wakes_and_spawns() {
             &rt,
             pending_with_drop(move || {
                 w1.wake();
+                // SAFETY: The detached future is `Send` and owns its data, including during
+                // shutdown.
                 unsafe { task::spawn_detached::<_, false>(fut2, &q, Location::caller()) };
                 if panics {
                     // Exercise unwind cleanup without invoking panic hooks or backtraces.
@@ -1419,12 +1431,15 @@ fn shutdown_panic_waits_for_admitted_publication() {
         }),
     );
     let (q, d) = (rt.queue.clone(), drops.clone());
-    on_thread(move || unsafe {
-        task::spawn_detached::<_, false>(
-            pending_with_drop(move || d.inc()),
-            &q,
-            Location::caller(),
-        );
+    on_thread(move || {
+        // SAFETY: The future owns its thread-safe counter and is `Send` and `'static`.
+        unsafe {
+            task::spawn_detached::<_, false>(
+                pending_with_drop(move || d.inc()),
+                &q,
+                Location::caller(),
+            );
+        }
     });
     // Hold an admitted entry outside the MPSC queue until admission closes.
     let entry = rt.queue.wake_queue.pop().unwrap().into_remote();
@@ -1565,15 +1580,22 @@ fn spawn_after_shutdown() {
             let p = Probe::default();
             let fut = p.future(Res::Ready);
             let task = if remote {
-                on_thread(move || unsafe {
-                    task::spawn_detached::<_, false>(fut, &q, Location::caller());
+                on_thread(move || {
+                    // SAFETY: The probe future is `Send` and owns its data despite queue shutdown.
+                    unsafe {
+                        task::spawn_detached::<_, false>(fut, &q, Location::caller());
+                    }
                 });
                 None
             } else if detached {
+                // SAFETY: This is the original queue owner thread and the probe future owns its
+                // data.
                 unsafe { task::spawn_detached::<_, true>(fut, &q, Location::caller()) };
                 drop(q);
                 None
             } else {
+                // SAFETY: This is the original queue owner thread and the probe future owns its
+                // data.
                 let task = unsafe { task::spawn(fut, &q, Location::caller()) };
                 drop(q);
                 Some(task)
@@ -2090,6 +2112,7 @@ fn panic_clone_waker() -> Waker {
         |_| (),
         |_| (),
     );
+    // SAFETY: The clone callback only panics; the other callbacks ignore the null data pointer.
     unsafe { Waker::from_raw(std::task::RawWaker::new(std::ptr::null(), &PANIC)) }
 }
 
@@ -2200,6 +2223,8 @@ fn stress_worker(mut rng: u64, slots: &[Slot], queue: &Arc<RunnableQueue>, futs:
     let mut indices = Vec::new();
     for f in futs {
         indices.push(f.idx);
+        // SAFETY: Each stress future is `Send` and owns its data, so remote submission can outlive
+        // this call.
         unsafe {
             task::spawn_detached::<_, false>(f, queue, Location::caller());
         }

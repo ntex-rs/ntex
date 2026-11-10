@@ -183,12 +183,14 @@ pub(super) struct Routing {
 ///
 /// `data` must point to a native task allocation that remains valid for `'a`.
 unsafe fn routing<'a>(data: *const ()) -> &'a Routing {
+    // SAFETY: The caller guarantees a live task allocation; routing is an immutable `Core` field.
     unsafe { &(*data.cast::<Core>()).routing }
 }
 
 /// Checks whether this task still has a live endpoint on the current thread.
 #[inline]
 pub(super) unsafe fn active_owner(data: *const ()) -> bool {
+    // SAFETY: The caller retains a native task reference while its routing is inspected.
     matches!(unsafe { owner(data) }, Owner::Active)
 }
 
@@ -197,6 +199,7 @@ pub(super) unsafe fn active_owner(data: *const ()) -> bool {
 /// The caller must hold a native task reference and be on its owner thread.
 #[inline]
 pub(crate) unsafe fn clone_local_waker(ptr: *const ()) {
+    // SAFETY: The caller holds a native task reference on its owner thread.
     task::inc_local(unsafe { task::task_ptr(ptr) });
 }
 
@@ -205,6 +208,7 @@ pub(crate) unsafe fn clone_local_waker(ptr: *const ()) {
 /// The caller must hold a native task reference and be on its owner thread.
 #[inline]
 pub(crate) unsafe fn wake_local_waker(ptr: *const (), owned: bool) {
+    // SAFETY: The caller holds a native owner-thread reference and transfers it when `owned`.
     task::wake_local::<true>(unsafe { task::task_ptr(ptr) }, owned);
 }
 
@@ -213,6 +217,7 @@ pub(crate) unsafe fn wake_local_waker(ptr: *const (), owned: bool) {
 /// The caller must own a native task reference and be on its owner thread.
 #[inline]
 pub(crate) unsafe fn drop_local_waker(ptr: *const ()) {
+    // SAFETY: The caller transfers an owned native reference on its owner thread.
     task::release_unshared(unsafe { task::task_ptr(ptr) });
 }
 
@@ -224,8 +229,10 @@ pub(crate) fn raw_waker(ptr: *const ()) -> RawWaker {
 
 /// Acquire thread-safe ownership before releasing the local reference.
 pub(crate) unsafe fn into_waker(ptr: *const ()) -> Waker {
+    // SAFETY: The local reference backs this borrowed native waker; `ManuallyDrop` prevents its release.
     let raw = ManuallyDrop::new(unsafe { Waker::from_raw(raw_waker(ptr)) });
     let waker = (*raw).clone();
+    // SAFETY: The caller transfers its owner-local reference after the standard clone acquired ownership.
     unsafe { drop_local_waker(ptr) };
     waker
 }
@@ -233,6 +240,7 @@ pub(crate) unsafe fn into_waker(ptr: *const ()) -> Waker {
 /// Resolves owner-local liveness, caching closure before shutdown runs callbacks.
 #[inline]
 unsafe fn owner(data: *const ()) -> Owner {
+    // SAFETY: The caller retains a native task reference while its immutable routing is borrowed.
     let route = unsafe { routing(data) };
     match OWNER_ENDPOINT.with(Cell::get) {
         OwnerEndpoint::Active(id) if id == route.runtime => Owner::Active,
@@ -368,7 +376,7 @@ fn publish_admitted(
 ) -> Result<Option<Arc<RunnableQueue>>, ()> {
     let permit = queue.admit(false).ok_or(())?;
     // Project only the shared atomic, without borrowing the owner-only core.
-    // The source reference protects this store and the following publication.
+    // SAFETY: The source reference protects this coallocated atomic through the following publication.
     let touched = unsafe { &(*entry.header().cast::<Core>().as_ptr()).remote_touched };
     // Acquiring an existing mark carries it through a returned remote clone.
     if !touched.load(Ordering::Acquire) {
@@ -408,6 +416,7 @@ pub(super) enum Operation {
     WakeAndRelease = 4,
 }
 
+// SAFETY: Entries transfer or borrow a protected task reference; only the owner accesses task state.
 unsafe impl Send for WakeEntry {}
 
 impl WakeEntry {
@@ -429,7 +438,7 @@ impl WakeEntry {
     fn header(&self) -> NonNull<Header> {
         #[cfg(target_pointer_width = "64")]
         return self.data.map_addr(|addr| {
-            // Clearing only the tag restores the original aligned, non-null pointer.
+            // SAFETY: Clearing only the tag restores the original aligned, non-null allocation address.
             unsafe { std::num::NonZeroUsize::new_unchecked(addr.get() & !OP_MASK) }
         });
         #[cfg(not(target_pointer_width = "64"))]
@@ -495,6 +504,7 @@ impl WakeEntry {
 /// Checks routing once, for a direct owner-local handle.
 #[inline]
 pub(crate) fn local_waker_ptr(waker: &Waker) -> Option<*const ()> {
+    // SAFETY: A matching native vtable proves the borrowed waker retains a native task allocation.
     if ptr::eq(waker.vtable(), &raw const WAKER_VTABLE) && unsafe { active_owner(waker.data()) } {
         Some(waker.data())
     } else {
@@ -509,7 +519,9 @@ pub(crate) fn local_waker_ptr(waker: &Waker) -> Option<*const ()> {
 ///
 /// `data` must belong to a live native standard waker or a protected borrowed poll waker.
 unsafe fn clone_waker(data: *const ()) -> RawWaker {
+    // SAFETY: The caller supplies native waker data backed by an owned or protected borrowed reference.
     let h = unsafe { task::task_ptr(data) };
+    // SAFETY: The caller's reference keeps immutable routing alive during owner resolution.
     let acquired = match unsafe { owner(data) } {
         Owner::Active => {
             task::inc_local(h);
@@ -517,6 +529,7 @@ unsafe fn clone_waker(data: *const ()) -> RawWaker {
         }
         Owner::Closed => false,
         Owner::Remote => publish(
+            // SAFETY: The caller's source reference remains alive until this operation is published.
             unsafe { routing(data) }.runtime,
             WakeEntry::new(h, Operation::AddRef),
         ),
@@ -536,7 +549,9 @@ unsafe fn clone_waker(data: *const ()) -> RawWaker {
 /// `data` must belong to a live native standard waker, owned if `OWNED`.
 /// A borrowed poll waker is also valid when `OWNED` is false.
 unsafe fn wake<const OWNED: bool>(data: *const ()) {
+    // SAFETY: The caller supplies native waker data backed by an owned or protected borrowed reference.
     let h = unsafe { task::task_ptr(data) };
+    // SAFETY: The caller's reference keeps immutable routing alive during owner resolution.
     match unsafe { owner(data) } {
         // Scheduling may notify a driver that reenters shutdown.
         // Nothing may touch the task afterward.
@@ -544,6 +559,7 @@ unsafe fn wake<const OWNED: bool>(data: *const ()) {
         Owner::Closed => {}
         Owner::Remote => {
             publish(
+                // SAFETY: The caller's source reference remains alive until this operation is published.
                 unsafe { routing(data) }.runtime,
                 WakeEntry::new(
                     h,
@@ -564,12 +580,15 @@ unsafe fn wake<const OWNED: bool>(data: *const ()) {
 ///
 /// `data` must belong to an owned native standard waker whose reference is consumed.
 unsafe fn drop_waker(data: *const ()) {
+    // SAFETY: The caller supplies native waker data backed by an owned or protected borrowed reference.
     let h = unsafe { task::task_ptr(data) };
+    // SAFETY: The caller's reference keeps immutable routing alive during owner resolution.
     match unsafe { owner(data) } {
         Owner::Active => task::release_local(h),
         Owner::Closed => {}
         Owner::Remote => {
             publish(
+                // SAFETY: The caller's source reference remains alive until this operation is published.
                 unsafe { routing(data) }.runtime,
                 WakeEntry::new(h, Operation::Release),
             );

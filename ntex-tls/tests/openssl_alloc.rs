@@ -24,13 +24,16 @@ thread_local! {
 /// Records the size of the last allocation on the current thread
 struct Recording;
 
+// SAFETY: Allocation and deallocation delegate unchanged to `System`; recording is thread-local.
 unsafe impl GlobalAlloc for Recording {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let _ = LAST.try_with(|last| last.set(layout.size()));
+        // SAFETY: Delegates to `System` with the caller's layout, as required by `GlobalAlloc`.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: Delegates to `System` with the caller's live pointer and matching layout.
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -47,16 +50,18 @@ static GLOBAL: Recording = Recording;
 /// - Complete a handshake, transfer 256 KiB in each direction, and check orderly shutdown.
 #[ntex::test]
 async fn openssl_uses_global_allocator() {
-    // SAFETY: no other thread uses OpenSSL yet
+    // SAFETY: This sole test installs hooks before any OpenSSL allocations or concurrent use.
     assert!(unsafe { use_global_allocator() });
 
     // the block carries a 16 byte header
     LAST.set(0);
+    // SAFETY: The allocation size is positive and the filename is a static NUL-terminated C string.
     let p = unsafe { openssl_sys::CRYPTO_malloc(1000, c"test".as_ptr(), 0) };
     assert!(!p.is_null());
     assert_eq!(LAST.get(), 1016);
+    // SAFETY: `p` is a live allocation from `CRYPTO_malloc` and is freed exactly once.
     unsafe { openssl_sys::CRYPTO_free(p, c"test".as_ptr(), 0) };
-    // SAFETY: as above
+    // SAFETY: The same hooks remain installed and no other thread uses OpenSSL.
     assert!(unsafe { use_global_allocator() });
 
     let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(ssl::SslMethod::tls()).unwrap();

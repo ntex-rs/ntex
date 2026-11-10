@@ -186,6 +186,7 @@ impl Storage {
         Storage {
             len,
             ptr: addr.cast_mut(),
+            // SAFETY: All callers supply a non-null static `StorageVTable` reference.
             offset: unsafe { NonZeroUsize::new_unchecked(vtable.expose_provenance()) },
         }
     }
@@ -193,6 +194,8 @@ impl Storage {
     #[inline]
     pub(crate) fn from_slice(src: &[u8]) -> Storage {
         if src.len() <= INLINE_CAP {
+            // SAFETY: The source is readable for `src.len()` bytes, which fits the inline capacity
+            // checked above.
             unsafe { Storage::from_ptr_inline(src.as_ptr(), src.len()) }
         } else {
             Storage::from_slice_with_capacity(src.len(), src)
@@ -269,6 +272,8 @@ impl Storage {
     #[inline]
     pub(crate) fn len(&self) -> usize {
         match self.kind() {
+            // SAFETY: External storage retains the live vtable and handle pair provided by
+            // `StorageExt::create`.
             KIND_STEXT => unsafe { ((*self.st_vtable()).len)(self.st_addr(), self.st_len()) },
             KIND_INLINE => self.inline_len(),
             _ => self.len,
@@ -313,10 +318,14 @@ impl Storage {
         let kind = self.kind();
         match kind {
             // capacity from the start of this view to the end of the allocation
+            // SAFETY: The vec kind owns a reference to the header; capacity is immutable while
+            // shared.
             KIND_VEC => unsafe {
                 stvec::Header::capacity(self.shared_vec()) + stvec::METADATA_SIZE
                     - self.vec_offset()
             },
+            // SAFETY: External storage retains the live vtable and handle pair provided by
+            // `StorageExt::create`.
             KIND_STEXT => unsafe { ((*self.st_vtable()).len)(self.st_addr(), self.st_len()) },
             KIND_INLINE => INLINE_CAP,
             _ => self.len,
@@ -325,6 +334,8 @@ impl Storage {
 
     #[inline]
     pub(crate) fn split_off(&mut self, at: usize, create_inline: bool) -> Storage {
+        // SAFETY: Callers ensure `at <= len`; copied tails fit inline and shared tails retain a
+        // reference.
         let other = unsafe {
             if create_inline && self.len() - at <= INLINE_CAP {
                 Storage::from_ptr_inline(self.as_ptr().add(at), self.len() - at)
@@ -334,6 +345,8 @@ impl Storage {
                 other
             }
         };
+        // SAFETY: The prefix ends at the caller-checked `at`; an inline copy is made only when it
+        // fits.
         unsafe {
             if create_inline && at <= INLINE_CAP {
                 *self = Storage::from_ptr_inline(self.as_ptr(), at);
@@ -354,6 +367,8 @@ impl Storage {
             // external storage cannot share a range, only the range is copied
             Storage::from_slice(&self.as_ref()[begin..end])
         } else {
+            // SAFETY: The checked range lies within initialized data and the cloned view retains
+            // its allocation reference.
             unsafe {
                 let mut other = self.shallow_clone();
                 other.set_end(end);
@@ -365,6 +380,8 @@ impl Storage {
 
     #[inline]
     pub(crate) fn split_to(&mut self, at: usize) -> Storage {
+        // SAFETY: Callers ensure `at <= len`; the initialized prefix is copied inline or retains a
+        // shared reference.
         let other = unsafe {
             if at <= INLINE_CAP {
                 Storage::from_ptr_inline(self.as_ptr(), at)
@@ -374,6 +391,8 @@ impl Storage {
                 other
             }
         };
+        // SAFETY: The caller-checked `at` lies within the view, and the returned prefix is no
+        // longer mutable here.
         unsafe {
             self.set_start(at);
         }
@@ -382,6 +401,8 @@ impl Storage {
     }
 
     pub(crate) fn truncate(&mut self, len: usize) {
+        // SAFETY: Only a prefix of initialized bytes is retained, and inline copies are bounded by
+        // `INLINE_CAP`.
         unsafe {
             if len <= self.len() {
                 if len < INLINE_CAP {
@@ -403,12 +424,16 @@ impl Storage {
             // a shared view retains the whole allocation, including
             // the space before the start of the view
             let capacity = if kind == KIND_VEC {
+                // SAFETY: The vec kind owns a reference to the live header; capacity is immutable
+                // while shared.
                 unsafe { stvec::Header::capacity(self.shared_vec()) }
             } else {
                 self.capacity()
             };
 
             if self.len() <= INLINE_CAP {
+                // SAFETY: The initialized view fits inline, and the old storage stays alive until
+                // the copy completes.
                 *self = unsafe { Storage::from_ptr_inline(self.as_ptr(), self.len()) };
             } else if capacity - self.len() >= 64 {
                 // the copy is not attributed to a tracker
@@ -445,6 +470,8 @@ impl Storage {
     #[inline]
     fn set_inline_len(&mut self, len: usize) {
         debug_assert!(len <= INLINE_CAP);
+        // SAFETY: Inline kind bits remain set, so replacing only the length bits cannot produce
+        // zero.
         self.offset = unsafe {
             NonZeroUsize::new_unchecked(
                 self.offset.get() & !INLINE_LEN_MASK | (len << KIND_OFFSET_BITS),
@@ -580,6 +607,8 @@ impl Storage {
         if self.kind() == KIND_VEC {
             let offset = self.vec_offset();
             let st =
+                // SAFETY: This vec view owns a reference and its bounds are initialized; success
+                // transfers that reference.
                 unsafe { stvec::StorageVec::from_unique_view(self.shared_vec(), offset, self.len) };
             if let Some(st) = st {
                 mem::forget(self);
@@ -630,6 +659,8 @@ impl Storage {
     pub(crate) fn info(&self) -> Info {
         let kind = self.kind();
 
+        // SAFETY: The vec-kind check guards header access; the handle keeps it alive and only
+        // shared-safe fields are read.
         let (id, refs, capacity) = unsafe {
             if kind == KIND_VEC {
                 // the other header fields belong to the `BytesMut` handle
@@ -654,12 +685,18 @@ impl Storage {
     }
 }
 
+// SAFETY: Views are immutable, shared vec ownership uses atomics, and external storage requires
+// `Send + Sync`.
 unsafe impl Send for Storage {}
+// SAFETY: Shared views only expose immutable bytes; vec refcounts are atomic and external storage
+// requires `Sync`.
 unsafe impl Sync for Storage {}
 
 impl Clone for Storage {
     #[inline]
     fn clone(&self) -> Storage {
+        // SAFETY: Cloning preserves immutable views and retains their backing storage through its
+        // reference-count or vtable.
         unsafe { self.shallow_clone() }
     }
 }
@@ -671,6 +708,8 @@ impl Drop for Storage {
             KIND_VEC => {
                 stvec::release_shared_vec(self.shared_vec());
             }
+            // SAFETY: This handle owns the external pair, which its live vtable releases exactly
+            // once.
             KIND_STEXT => unsafe {
                 ((*self.st_vtable()).drop)(self.st_addr(), self.st_len());
             },
@@ -734,6 +773,7 @@ mod tests {
     fn trimdown() {
         let mut b = Bytes::from(LONG.to_vec());
         assert_eq!(b.storage.capacity(), 263);
+        // SAFETY: The initialized `LONG` view contains the 68-byte prefix being retained.
         unsafe { b.storage.set_len(68) };
         assert_eq!(b.len(), 68);
         assert_eq!(&b[..], &LONG[..68]);
@@ -742,6 +782,8 @@ mod tests {
         assert_eq!(&b[..], &LONG[..68]);
         assert_eq!(b.storage.capacity(), 68);
 
+        // SAFETY: The initialized 68-byte view contains the `INLINE_CAP`-byte prefix being
+        // retained.
         unsafe { b.storage.set_len(super::INLINE_CAP) };
         assert_eq!(&b[..], &LONG[..super::INLINE_CAP]);
         b.trimdown();
@@ -819,6 +861,8 @@ mod tests {
         bv.extend_from_slice(b"hello world.");
         bv.extend_from_slice(b"hello world.");
         bv.extend_from_slice(b"hello world.");
+        // SAFETY: The live buffer owns the allocation; its pointer is only recorded, not
+        // dereferenced.
         let p1 = unsafe { bv.storage.as_ptr() as usize };
 
         bv.advance(48);
@@ -827,6 +871,8 @@ mod tests {
         bv.reserve(48);
         assert!(bv.is_empty());
         assert_eq!(bv.capacity(), 48);
+        // SAFETY: The live buffer owns the allocation; its pointer is only recorded, not
+        // dereferenced.
         let p2 = unsafe { bv.storage.as_ptr() as usize };
         assert_eq!(p1, p2);
     }
@@ -901,8 +947,11 @@ mod tests {
         b.truncate(cap);
         assert_eq!(&b[..], &LONG[..cap]);
 
+        // SAFETY: The inline view contains at least five initialized bytes.
         unsafe { b.storage.set_end(5) };
         assert_eq!(&b[..], &LONG[..5]);
+        // SAFETY: `cap` is the inline capacity and `set_end` clamps the result to the current
+        // initialized length.
         unsafe { b.storage.set_end(cap) };
         assert_eq!(&b[..], &LONG[..5]);
     }

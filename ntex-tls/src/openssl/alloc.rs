@@ -132,8 +132,8 @@ mod shim {
         if unsafe { GetModuleHandleExW(flags, malloc as *const u16, &raw mut module) } == 0 {
             return None;
         }
-        // SAFETY: the module stays loaded, it provides the installed hooks.
         let export = |name: &std::ffi::CStr| {
+            // SAFETY: the module stays loaded, it provides the installed hooks.
             unsafe { GetProcAddress(module, name.as_ptr().cast()) }.map(|f| f as usize)
         };
         Some((

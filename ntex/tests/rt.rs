@@ -314,7 +314,7 @@ async fn system_storage() {
 #[cfg(all(target_os = "linux", feature = "neon-uring"))]
 #[ntex::test]
 async fn idle_disconnect_uring() {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use ntex::io::{Io, IoConfig};
     use ntex::util::{BytePageSize, Bytes};
@@ -395,7 +395,7 @@ async fn idle_disconnect_uring() {
 #[cfg(any(target_os = "linux", windows))]
 #[test]
 fn test_log_backtrace() {
-    use std::{sync::atomic::AtomicBool, time::Duration};
+    use std::{sync::Arc, sync::atomic::AtomicBool, time::Duration};
 
     fn run(tx: oneshot::Sender<()>) {
         thread::spawn(move || {
