@@ -321,6 +321,7 @@ impl FilterLayer for SslFilter {
                     // SAFETY: `ssl_read_uninit` only writes decrypted, initialized bytes.
                     let chunk = unsafe { dst.chunk_mut().as_uninit_slice_mut() };
                     match stream.ssl_read_uninit(chunk) {
+                        // SAFETY: `ssl_read_uninit` initialized the first `v` bytes of `chunk`.
                         Ok(v) => unsafe { dst.advance_mut(v) },
                         Err(e) => {
                             return match e.code() {
@@ -447,6 +448,7 @@ impl Drop for Staging {
 fn new_stream<F>(io: &Io<F>, ssl: ssl::Ssl) -> io::Result<SslStream<IoInner>> {
     // Let OpenSSL pull all buffered ciphertext in one BIO read, instead of
     // reading every record header and body separately.
+    // SAFETY: `ssl` owns a live `SSL`, this control takes no pointer argument.
     unsafe {
         ffi::SSL_ctrl(
             ssl.as_ptr(),

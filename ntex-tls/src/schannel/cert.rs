@@ -582,18 +582,22 @@ mod tests {
 
     fn key_name(cert: &Certificate) -> Vec<u16> {
         let buf = key_prov_info(cert.context()).unwrap();
+        // SAFETY: `key_prov_info` returns an aligned `CRYPT_KEY_PROV_INFO` buffer.
         let info = unsafe { &*buf.as_ptr().cast::<CRYPT_KEY_PROV_INFO>() };
         let name = info.pwszContainerName;
         let mut len = 0;
+        // SAFETY: the container name is a NUL-terminated string within `buf`.
         while unsafe { *name.add(len) } != 0 {
             len += 1;
         }
+        // SAFETY: `len + 1` units including the terminator were read above.
         unsafe { std::slice::from_raw_parts(name, len + 1) }.to_vec()
     }
 
     fn key_exists(name: &[u16]) -> bool {
         let prov = NcryptHandle::software_provider().unwrap();
         let mut key: NCRYPT_KEY_HANDLE = 0;
+        // SAFETY: the provider is live, `name` is NUL-terminated, `key` is a local.
         let status = unsafe {
             NCryptOpenKey(
                 prov.as_raw(),
@@ -604,6 +608,7 @@ mod tests {
             )
         };
         if status == 0 {
+            // SAFETY: on success the caller owns the opened key handle.
             drop(unsafe { NcryptHandle::from_raw(key) });
         }
         status == 0
@@ -706,6 +711,7 @@ mod tests {
                 }
                 let mut thumbprint = [0u8; 20];
                 let mut len = 20u32;
+                // SAFETY: `cert` is a live context and `thumbprint` holds `len` bytes.
                 let ok = unsafe {
                     CertGetCertificateContextProperty(
                         cert.as_ptr(),

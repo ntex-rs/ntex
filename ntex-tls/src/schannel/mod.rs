@@ -217,8 +217,10 @@ struct Credentials {
     _cert: Option<Certificate>,
 }
 
-// Schannel credentials handles can be used from multiple threads.
+// SAFETY: Schannel credentials handles can be used from multiple threads,
+// and `Certificate` only holds a reference-counted certificate context.
 unsafe impl Send for Credentials {}
+// SAFETY: see `Send`, the handle is only read after acquisition.
 unsafe impl Sync for Credentials {}
 
 impl Credentials {
@@ -262,7 +264,7 @@ impl Credentials {
                 dwFlags: flags,
                 cCreds: num_certs,
                 paCred: certs_ptr,
-                ..unsafe { mem::zeroed() }
+                ..Default::default()
             };
             (&raw mut sch_cred).cast()
         } else {
@@ -271,13 +273,15 @@ impl Credentials {
                 dwFlags: flags,
                 cCreds: num_certs,
                 paCred: certs_ptr,
-                ..unsafe { mem::zeroed() }
+                ..Default::default()
             };
             (&raw mut schannel_cred).cast()
         };
 
-        let mut handle = unsafe { mem::zeroed::<SecHandle>() };
+        let mut handle = SecHandle::default();
         let mut expiry = 0i64;
+        // SAFETY: `auth_data` points to an initialized credentials structure whose
+        // certificate array outlives the call, the out pointers are locals.
         let status = unsafe {
             AcquireCredentialsHandleW(
                 ptr::null(),
@@ -307,12 +311,13 @@ impl Credentials {
 /// Errors of `SCH_CREDENTIALS` are reported as is, a fallback to
 /// `SCHANNEL_CRED` would hide them and offer older protocols only.
 fn supports_sch_credentials() -> bool {
-    let mut info = unsafe { mem::zeroed::<OSVERSIONINFOW>() };
+    let mut info = OSVERSIONINFOW::default();
     #[allow(clippy::cast_possible_truncation)]
     {
         info.dwOSVersionInfoSize = u32::try_from(mem::size_of::<OSVERSIONINFOW>()).unwrap_or(0);
     }
     // unlike GetVersionExW, not affected by the application manifest
+    // SAFETY: `info` is an `OSVERSIONINFOW` with its size field set.
     unsafe { RtlGetVersion(&raw mut info) };
     (info.dwMajorVersion, info.dwBuildNumber) >= (10, 17763)
 }
@@ -325,6 +330,7 @@ impl std::fmt::Debug for Credentials {
 
 impl Drop for Credentials {
     fn drop(&mut self) {
+        // SAFETY: the handle was acquired by `acquire` and is freed once.
         unsafe {
             FreeCredentialsHandle(&raw const self.handle);
         }
