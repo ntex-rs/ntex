@@ -1,5 +1,9 @@
 # Changes
 
+## [4.7.1] - 2026-11-10
+
+* Add `RequestHead::stream` to enable stream view in http services 
+
 ## [4.7.0] - 2026-11-09
 
 * Security: the default OpenSSL HTTP client (`Client::new()`, `ClientBuilder::new()`) now
