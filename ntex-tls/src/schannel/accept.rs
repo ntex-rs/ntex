@@ -1582,6 +1582,7 @@ mod tests {
             unsafe extern "C" {
                 fn SSL_renegotiate(ssl: *mut openssl_sys::SSL) -> std::ffi::c_int;
             }
+            // SAFETY: `self.ssl` owns a live `SSL`.
             assert_eq!(unsafe { SSL_renegotiate(self.ssl.ssl().as_ptr()) }, 1);
             if let Err(err) = self.ssl.do_handshake() {
                 assert!(Self::want_read(&err), "{err}");
@@ -1595,6 +1596,7 @@ mod tests {
             unsafe extern "C" {
                 fn SSL_renegotiate_pending(ssl: *const openssl_sys::SSL) -> std::ffi::c_int;
             }
+            // SAFETY: `self.ssl` owns a live `SSL`.
             unsafe { SSL_renegotiate_pending(self.ssl.ssl().as_ptr()) != 0 }
         }
 

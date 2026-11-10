@@ -142,7 +142,7 @@ impl Context {
     fn new(cred: Arc<Credentials>, role: Role, alpn: Option<Arc<[u8]>>) -> Self {
         Self {
             cred,
-            ctxt: unsafe { mem::zeroed::<SecHandle>() },
+            ctxt: SecHandle::default(),
             have_ctxt: false,
             coalesce: matches!(role, Role::Server(_)),
             role,
@@ -290,6 +290,9 @@ impl Context {
         } else {
             ptr::null()
         };
+        // SAFETY: the credentials handle is kept alive by `cred`, `ctxt` is null
+        // or a live context, `input` is null or valid per this method's contract,
+        // and the output pointers are locals that outlive the call.
         let status = unsafe {
             match &self.role {
                 Role::Client(target) => InitializeSecurityContextW(
@@ -371,6 +374,8 @@ impl Context {
             ptr::from_mut(token).cast(),
         );
         let in_desc = buffer_desc(slice::from_mut(&mut in_buf));
+        // SAFETY: the caller guarantees a live context and a `T` matching the
+        // token layout, `in_buf` borrows `token` for the duration of the call.
         let status = unsafe { ApplyControlToken(&raw const self.ctxt, &raw const in_desc) };
         if status != SEC_E_OK {
             return Err(sspi_error(name, status));
@@ -390,7 +395,9 @@ impl Context {
             return Ok(sizes);
         }
 
-        let mut sizes = unsafe { mem::zeroed::<SecPkgContext_StreamSizes>() };
+        let mut sizes = SecPkgContext_StreamSizes::default();
+        // SAFETY: `sizes` is the structure documented for `SECPKG_ATTR_STREAM_SIZES`,
+        // an invalid handle is reported as an error status.
         let status = unsafe {
             QueryContextAttributesW(
                 &raw const self.ctxt,
@@ -446,6 +453,7 @@ impl Context {
         if avail >= overhead + cmp::min(len, MIN_RECORD) {
             let len = cmp::min(len, avail - overhead);
             let tls_len = self.encrypt_into(src, len, chunk.as_mut_ptr(), sizes)?;
+            // SAFETY: `encrypt_into` initialized `tls_len` bytes, at most `avail`.
             unsafe { dst.advance_mut(tls_len) };
             return Ok(true);
         }
@@ -456,6 +464,7 @@ impl Context {
         );
         let mut frame = BytesMut::with_capacity(overhead + len);
         let tls_len = self.encrypt_into(src, len, frame.chunk_mut().as_mut_ptr(), sizes)?;
+        // SAFETY: `encrypt_into` initialized `tls_len` bytes, at most the capacity.
         unsafe { frame.advance_mut(tls_len) };
         dst.append(frame);
         Ok(true)
@@ -482,6 +491,8 @@ impl Context {
         while copied < len {
             let mut page = src.take().expect("src holds len bytes");
             let n = cmp::min(page.len(), len - copied);
+            // SAFETY: `header_len + copied + n` is within the frame, which the
+            // caller guarantees does not overlap the source pages.
             unsafe {
                 ptr::copy_nonoverlapping(page.as_ptr(), frame.add(header_len + copied), n);
             }
@@ -490,19 +501,20 @@ impl Context {
             src.prepend(page);
         }
 
+        // SAFETY: both offsets are within the frame, see the method contract.
+        let (data, trailer) = unsafe { (frame.add(header_len), frame.add(header_len + len)) };
         let mut bufs = [
             sec_buffer(SECBUFFER_STREAM_HEADER, sizes.cbHeader, frame.cast()),
             sec_buffer(
                 SECBUFFER_DATA,
                 u32::try_from(len).expect("TLS message length fits u32"),
-                unsafe { frame.add(header_len).cast() },
+                data.cast(),
             ),
-            sec_buffer(SECBUFFER_STREAM_TRAILER, sizes.cbTrailer, unsafe {
-                frame.add(header_len + len).cast()
-            }),
+            sec_buffer(SECBUFFER_STREAM_TRAILER, sizes.cbTrailer, trailer.cast()),
             EMPTY_BUFFER,
         ];
         let desc = buffer_desc(&mut bufs);
+        // SAFETY: the buffers describe the frame, valid for header, data and trailer.
         let status = unsafe { EncryptMessage(&raw const self.ctxt, 0, &raw const desc, 0) };
         if status != SEC_E_OK {
             return Err(sspi_error("EncryptMessage", status));
@@ -548,6 +560,8 @@ impl Context {
         ];
         let desc = buffer_desc(&mut bufs);
         let mut qop = 0u32;
+        // SAFETY: the data buffer covers the first `record_len <= src.len()` bytes
+        // of `src`, which SSPI decrypts in place.
         let status =
             unsafe { DecryptMessage(&raw const self.ctxt, &raw const desc, 0, &raw mut qop) };
 
@@ -659,6 +673,8 @@ impl Context {
     /// The negotiated protocol version.
     pub(super) fn protocol_version(&self) -> Option<TlsVersion> {
         let mut info = SecPkgContext_ConnectionInfo::default();
+        // SAFETY: `info` is the structure documented for `SECPKG_ATTR_CONNECTION_INFO`,
+        // an invalid handle is reported as an error status.
         let status = unsafe {
             QueryContextAttributesW(
                 &raw const self.ctxt,
@@ -679,6 +695,8 @@ impl Context {
             dwVersion: SECPKGCONTEXT_CIPHERINFO_V1,
             ..Default::default()
         };
+        // SAFETY: `info` is the structure documented for `SECPKG_ATTR_CIPHER_INFO`,
+        // an invalid handle is reported as an error status.
         let status = unsafe {
             QueryContextAttributesW(
                 &raw const self.ctxt,
@@ -703,7 +721,9 @@ impl Context {
 
     /// Copies a successfully negotiated ALPN identifier from the current SSPI context.
     fn query_alpn_protocol(&self) -> Option<Vec<u8>> {
-        let mut proto = unsafe { mem::zeroed::<SecPkgContext_ApplicationProtocol>() };
+        let mut proto = SecPkgContext_ApplicationProtocol::default();
+        // SAFETY: `proto` is the structure documented for
+        // `SECPKG_ATTR_APPLICATION_PROTOCOL`, an invalid handle is reported as an error status.
         let status = unsafe {
             QueryContextAttributesW(
                 &raw const self.ctxt,
@@ -724,8 +744,9 @@ impl Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
-        unsafe {
-            if self.have_ctxt {
+        if self.have_ctxt {
+            // SAFETY: the context is owned and deleted once, before `cred` drops.
+            unsafe {
                 DeleteSecurityContext(&raw const self.ctxt);
             }
         }
@@ -852,6 +873,7 @@ fn client_hello_servername(src: &[u8]) -> Option<String> {
 
     let mut name = ptr::null_mut();
     let mut len = 0u32;
+    // SAFETY: `record` is valid for its length, the out pointers are locals.
     let status = unsafe {
         SslGetServerIdentity(
             record.as_ptr(),
@@ -864,7 +886,7 @@ fn client_hello_servername(src: &[u8]) -> Option<String> {
     if status != SEC_E_OK || name.is_null() || len == 0 {
         return None;
     }
-    // points into `record`
+    // SAFETY: on success `name` points to `len` bytes within `record`, which is still alive.
     let name = unsafe { slice::from_raw_parts(name, len as usize) };
     std::str::from_utf8(name).ok().map(str::to_owned)
 }
@@ -1050,10 +1072,12 @@ fn message_size([_, a, b, c]: [u8; 4]) -> usize {
 fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
     if !buf.pvBuffer.is_null() {
         if buf.cbBuffer != 0 {
+            // SAFETY: SSPI allocated `cbBuffer` initialized bytes at `pvBuffer`.
             let token =
                 unsafe { slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize) };
             output.put_slice(token);
         }
+        // SAFETY: `buf` owns the SSPI allocation, per this function's contract.
         unsafe {
             FreeContextBuffer(buf.pvBuffer);
         }
@@ -1071,8 +1095,9 @@ fn decrypted_parts(bufs: &[SecBuffer]) -> (Option<&[u8]>, usize) {
         .find(|buf| {
             buf.BufferType == SECBUFFER_DATA && buf.cbBuffer != 0 && !buf.pvBuffer.is_null()
         })
-        .map(|buf| unsafe {
-            slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize)
+        .map(|buf| {
+            // SAFETY: the caller guarantees data pointers reference the live input allocation.
+            unsafe { slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize) }
         });
     (data, extra_len(bufs))
 }
@@ -1123,18 +1148,22 @@ mod tests {
         static ALLOCS: Cell<usize> = const { Cell::new(0) };
     }
 
+    // SAFETY: every method forwards to `System` with the caller's arguments.
     unsafe impl GlobalAlloc for Counting {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            // SAFETY: forwarded from the caller.
             unsafe { System.alloc(layout) }
         }
 
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: forwarded from the caller.
             unsafe { System.dealloc(ptr, layout) }
         }
 
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
             let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            // SAFETY: forwarded from the caller.
             unsafe { System.realloc(ptr, layout, size) }
         }
     }

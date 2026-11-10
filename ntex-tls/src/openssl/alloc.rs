@@ -27,6 +27,7 @@
 pub unsafe fn use_global_allocator() -> bool {
     #[cfg(ntex_openssl_mem)]
     {
+        // SAFETY: the caller upholds the same contract.
         unsafe { shim::install() }
     }
     #[cfg(not(ntex_openssl_mem))]
@@ -91,6 +92,7 @@ mod shim {
     /// See [`super::use_global_allocator`].
     pub(super) unsafe fn install() -> bool {
         let (mut m, mut r, mut f) = (None, None, None);
+        // SAFETY: the out pointers are locals, the caller excludes concurrent changes.
         unsafe { CRYPTO_get_mem_functions(&raw mut m, &raw mut r, &raw mut f) };
         let current = (
             m.map(|m| m as usize),
@@ -105,6 +107,8 @@ mod shim {
         } else if current == hooks(CRYPTO_malloc, CRYPTO_realloc, CRYPTO_free)
             || current.0.and_then(dll_defaults) == Some(current)
         {
+            // SAFETY: OpenSSL's default hooks are installed, so no live block was
+            // allocated by a foreign allocator that these hooks would free.
             unsafe { CRYPTO_set_mem_functions(malloc, realloc, free) == 1 }
         } else {
             false
@@ -159,6 +163,8 @@ mod shim {
     /// `realloc`. Its preceding size header must remain intact.
     #[allow(clippy::cast_ptr_alignment)] // blocks are ALIGN aligned
     unsafe fn block(p: *mut c_void) -> (*mut u8, Layout) {
+        // SAFETY: `p` follows an aligned header written by `finish`, and
+        // `size + HEADER` was a valid layout when the block was allocated.
         unsafe {
             let base = p.cast::<u8>().sub(HEADER);
             let size = base.cast::<usize>().read();
@@ -180,6 +186,7 @@ mod shim {
         if base.is_null() {
             return ptr::null_mut();
         }
+        // SAFETY: the allocation is `ALIGN` aligned and at least `HEADER` bytes long.
         unsafe {
             base.cast::<usize>().write(size);
             base.add(HEADER).cast()
@@ -198,6 +205,7 @@ mod shim {
             return ptr::null_mut();
         }
         match layout(size) {
+            // SAFETY: `layout` has a non-zero size, `finish` gets the block it describes.
             Some(layout) => unsafe { finish(alloc::alloc(layout), size) },
             None => ptr::null_mut(),
         }
@@ -219,15 +227,19 @@ mod shim {
     ) -> *mut c_void {
         // OpenSSL forwards these cases to a custom realloc unchanged
         if p.is_null() {
+            // SAFETY: forwarded from the caller.
             return unsafe { malloc(size, file, line) };
         }
         if size == 0 {
+            // SAFETY: the caller passes an owned block from this shim.
             unsafe { free(p, file, line) };
             return ptr::null_mut();
         }
         let Some(new) = layout(size) else {
             return ptr::null_mut();
         };
+        // SAFETY: the caller passes an owned block from this shim, `new.size()` is
+        // non-zero and valid for `ALIGN`.
         unsafe {
             let (base, old) = block(p);
             // on failure the original block stays valid, as with C realloc
@@ -243,6 +255,7 @@ mod shim {
     /// with an intact header, and must not be used after this call.
     pub(super) unsafe extern "C" fn free(p: *mut c_void, _: *const c_char, _: c_int) {
         if !p.is_null() {
+            // SAFETY: the caller passes an owned block from this shim.
             unsafe {
                 let (base, layout) = block(p);
                 alloc::dealloc(base, layout);
@@ -263,6 +276,7 @@ mod shim {
         #[test]
         fn malloc_realloc_free() {
             let (file, line) = (ptr::null(), 0);
+            // SAFETY: each pointer comes from the shim and is used within its size.
             unsafe {
                 assert!(malloc(0, file, line).is_null());
                 assert!(malloc(usize::MAX - 8, file, line).is_null());
@@ -311,6 +325,7 @@ mod tests {
     #[test]
     fn rejected_after_openssl_allocated() {
         drop(SslConnector::builder(SslMethod::tls()).unwrap());
+        // SAFETY: no other thread replaces the OpenSSL hooks during the test.
         assert!(!unsafe { super::use_global_allocator() });
     }
 }
