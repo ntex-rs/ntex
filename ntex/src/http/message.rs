@@ -438,6 +438,7 @@ impl Head for ResponseHead {
         self.io = CurrentIo::None;
         self.flags = Flags::empty();
         self.extensions.get_mut().clear();
+        self.stream = None;
     }
 
     fn with_pool<F, R>(f: F) -> Option<R>
