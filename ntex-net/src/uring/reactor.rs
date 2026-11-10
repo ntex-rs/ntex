@@ -139,6 +139,7 @@ impl ReactorApi {
         entries: u16,
         bgid: u16,
     ) -> io::Result<()> {
+        // SAFETY: The caller guarantees the ring remains valid until it is unregistered.
         unsafe {
             self.inner
                 .ring
@@ -219,6 +220,8 @@ impl ReactorInner {
             PushGuard(&self.pushing)
         };
 
+        // SAFETY: Submission is thread-local and non-reentrant; zeroing initializes every SQE field
+        // before `f` uses it, and only the run loop publishes the queue tail.
         unsafe {
             let changes = &mut *self.changes.get();
             // the queue tail is published by the run loop submit
@@ -344,6 +347,8 @@ impl Reactor {
     }
 
     fn apply_changes(&self, sq: SubmissionQueue<'_, SEntry>) -> bool {
+        // SAFETY: The thread-local overflow entries are initialized and disjoint from the SQ;
+        // no submission callback runs while they are copied.
         unsafe {
             let changes = &mut *self.inner.changes.get();
             // safety: "changes" contains only initialized entries
@@ -594,6 +599,7 @@ impl ntex_rt::Driver for Reactor {
         let _notifier = self.inner.notify_read.guard(&self.inner.ring);
         let ring = &self.inner.ring;
         let sq = ring.submission();
+        // SAFETY: This run loop is the sole completion consumer; callbacks never borrow the CQ.
         let mut cq = unsafe { ring.completion_shared() };
         let submitter = ring.submitter();
         let result = loop {
@@ -689,6 +695,7 @@ mod tests {
         // queued entries wrap around the end of the deque storage; the borrow
         // ends before `apply_changes()` takes its own
         {
+            // SAFETY: The test has the only access to the queue; the borrow ends before `apply_changes()`.
             let changes = unsafe { &mut *reactor.inner.changes.get() };
             let cap = changes.capacity();
             let nop = |user_data| {
@@ -710,10 +717,12 @@ mod tests {
 
         assert!(!reactor.apply_changes(sq));
         sq.sync();
+        // SAFETY: No other borrow of the change queue is live.
         assert!(unsafe { &*reactor.inner.changes.get() }.is_empty());
         assert_eq!(sq.len(), 4);
 
         ring.submitter().submit_and_wait(4).unwrap();
+        // SAFETY: The test is the only consumer of the completion queue.
         let mut cq = unsafe { ring.completion_shared() };
         cq.sync();
         let ids: Vec<_> = cq.map(|e| e.user_data()).collect();
@@ -752,16 +761,22 @@ mod tests {
         let message = |err: Box<dyn std::any::Any + Send>| {
             err.downcast_ref::<&str>().copied().unwrap_or_default()
         };
-        let changes = || unsafe { &*reactor.inner.changes.get() }.len();
+        let changes = || {
+            // SAFETY: Called between submissions, when no other borrow of the queue is live.
+            unsafe { &*reactor.inner.changes.get() }.len()
+        };
         let ring = &reactor.inner.ring;
 
-        let err = catch_unwind(AssertUnwindSafe(|| unsafe {
-            api.submit(1, |en| {
-                Nop::new(en);
-                api.submit(2, |en| {
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: `Nop` entries reference no memory; the nested call panics before submitting.
+            unsafe {
+                api.submit(1, |en| {
                     Nop::new(en);
+                    api.submit(2, |en| {
+                        Nop::new(en);
+                    });
                 });
-            });
+            }
         }))
         .unwrap_err();
         assert_eq!(
@@ -777,11 +792,14 @@ mod tests {
             });
         }
         assert!(ring.submission().is_full());
-        let err = catch_unwind(AssertUnwindSafe(|| unsafe {
-            api.submit(1, |en| {
-                Nop::new(en);
-                api.cancel(2);
-            });
+        let err = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: `Nop` entries reference no memory; the nested cancel panics.
+            unsafe {
+                api.submit(1, |en| {
+                    Nop::new(en);
+                    api.cancel(2);
+                });
+            }
         }))
         .unwrap_err();
         assert_eq!(
@@ -790,6 +808,7 @@ mod tests {
         );
         assert_eq!(changes(), 1);
 
+        // SAFETY: `Nop` entries reference no memory or descriptors.
         unsafe {
             api.submit(3, |en| {
                 Nop::new(en);
@@ -839,6 +858,7 @@ mod tests {
         };
         let mut fds = [0; 2];
         syscall!(libc::pipe(fds.as_mut_ptr())).unwrap();
+        // SAFETY: `pipe` returned two fresh descriptors that nothing else owns.
         let (rd, wr) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
 
         let events = Rc::new(Events::default());
@@ -846,6 +866,7 @@ mod tests {
         let buf_ptr = buf.as_mut_ptr();
         let fd = rd.as_raw_fd();
         reactor.register(|api| {
+            // SAFETY: `buf` and `rd` outlive the reactor run, which waits until the read is canceled.
             unsafe {
                 api.submit(1, |en| {
                     Read::new(en, Fd(fd), buf_ptr, 8);
@@ -947,12 +968,15 @@ mod tests {
 
         notify.notify().unwrap();
         ring.submitter().submit_and_wait(1).unwrap();
+        // SAFETY: The test is the only consumer of the completion queue.
         let mut cq = unsafe { ring.completion_shared() };
         cq.sync();
         let entry = cq.next().unwrap();
         assert_eq!(entry.user_data(), Reactor::NOTIFY);
         assert_eq!(entry.result(), 8);
+        // SAFETY: `buf` is the allocation the reactor retained; its read completed with the CQE above.
         let buf = unsafe { Box::from_raw(buf) };
+        // SAFETY: The read completed, so the kernel no longer writes to the cell.
         assert_eq!(unsafe { *buf.get() }, 1);
     }
 
@@ -990,11 +1014,13 @@ mod tests {
             NotifierState::Stopped
         );
         assert_eq!(sq.len(), 4);
+        // SAFETY: No other borrow of the change queue is live.
         assert_eq!(unsafe { &*reactor.inner.changes.get() }.len(), 4);
 
         let submitter = reactor.inner.ring.submitter();
         reactor.flush(sq, &submitter);
         submitter.submit_and_wait(8).unwrap();
+        // SAFETY: The test is the only consumer of the completion queue.
         let mut cq = unsafe { reactor.inner.ring.completion_shared() };
         cq.sync();
         assert_eq!(cq.len(), 8);
@@ -1016,6 +1042,7 @@ mod tests {
         );
         assert_notifier_canceled(&reactor);
 
+        // SAFETY: The test is the only consumer of the completion queue.
         let mut cq = unsafe { reactor.inner.ring.completion_shared() };
         reactor.poll_completions(&mut cq);
         reactor
@@ -1135,6 +1162,7 @@ mod tests {
             fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {
                 assert!(!self.seen, "unwind with the rearmed notifier in flight");
                 self.seen = true;
+                // SAFETY: `Nop` entries reference no memory or descriptors.
                 unsafe {
                     self.api.submit(0, |en| {
                         Nop::new(en);
@@ -1150,9 +1178,11 @@ mod tests {
             return;
         };
         let duplicate =
+            // SAFETY: `dup` returned a fresh descriptor that nothing else owns.
             unsafe { OwnedFd::from_raw_fd(syscall!(libc::dup(reactor.as_raw_fd())).unwrap()) };
         let notify = reactor.notifier.handle();
         reactor.register(|api| {
+            // SAFETY: `Nop` entries reference no memory or descriptors.
             unsafe {
                 api.submit(0, |en| {
                     Nop::new(en);
@@ -1173,6 +1203,7 @@ mod tests {
         );
         assert_notifier_canceled(&reactor);
         drop(rt);
+        // SAFETY: The test is the only consumer of the completion queue.
         let mut cq = unsafe { reactor.inner.ring.completion_shared() };
         cq.sync();
         let entry = cq.next().unwrap();

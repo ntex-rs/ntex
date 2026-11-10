@@ -64,6 +64,7 @@ impl ReactorApi {
     /// methods.
     pub fn attach_with_mode(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
         event.key = (u64::from(id) | self.batch) as usize;
+        // SAFETY: Internal stream callers keep `fd` open and detach it before closing it.
         if let Err(err) = unsafe { self.poll.add_with_mode(fd, event, mode) } {
             self.change(Change::Error {
                 batch: self.id,
@@ -75,6 +76,7 @@ impl ReactorApi {
 
     /// Detach an fd from the driver.
     pub fn detach(&self, fd: RawFd, id: u32) {
+        // SAFETY: Internal stream callers keep `fd` open until detachment returns.
         if let Err(err) = self.poll.delete(unsafe { BorrowedFd::borrow_raw(fd) }) {
             self.change(Change::Error {
                 batch: self.id,
@@ -95,6 +97,7 @@ impl ReactorApi {
 
         let result = self
             .poll
+            // SAFETY: Internal stream callers keep `fd` open during registration.
             .modify_with_mode(unsafe { BorrowedFd::borrow_raw(fd) }, event, mode);
         self.check(id, result);
     }
@@ -108,9 +111,10 @@ impl ReactorApi {
     pub fn modify_with_mode_deferred(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
         event.key = (u64::from(id) | self.batch) as usize;
 
-        let result =
-            self.poll
-                .modify_with_mode_deferred(unsafe { BorrowedFd::borrow_raw(fd) }, event, mode);
+        let result = self
+            .poll
+            // SAFETY: Internal stream callers keep `fd` open until detachment.
+            .modify_with_mode_deferred(unsafe { BorrowedFd::borrow_raw(fd) }, event, mode);
         self.check(id, result);
     }
 
@@ -130,6 +134,7 @@ impl ReactorApi {
     }
 
     fn change(&self, ev: Change) {
+        // SAFETY: This thread-local queue is borrowed only for this non-reentrant push.
         unsafe { (*self.changes.get()).push_back(ev) };
     }
 }
@@ -195,6 +200,7 @@ impl Reactor {
     }
 
     fn apply_changes(&self, handlers: &mut [HandlerItem]) {
+        // SAFETY: Queue access is thread-local and the borrow ends before handler callbacks.
         while let Some(op) = unsafe { (*self.changes.get()).pop_front() } {
             match op {
                 Change::Error {
@@ -214,6 +220,7 @@ impl Reactor {
             }
             // Ticks can fail poller operations, and handling those errors can
             // enqueue more deferred work. Finish both before waiting.
+            // SAFETY: No queue mutation or handler callback overlaps this thread-local read.
             if unsafe { (*self.changes.get()).is_empty() } {
                 break;
             }
@@ -465,6 +472,7 @@ mod tests {
         reactor.handlers.set(Some(handlers));
 
         assert_eq!(*errors.borrow(), vec![1, 2]);
+        // SAFETY: Dispatch has finished and no callback can mutate the thread-local queue.
         assert!(unsafe { (*reactor.changes.get()).is_empty() });
     }
 }

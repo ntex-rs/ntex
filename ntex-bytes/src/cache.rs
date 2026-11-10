@@ -130,6 +130,8 @@ pub(crate) unsafe fn put_page(ptr: *mut Header, size: BytePageSize) -> bool {
     let class = size as usize;
     with_cache(|cst| {
         if cst.pages[class].len() < cst.limits[class] {
+            // SAFETY: The caller transfers a live page with no references; the cache takes
+            // exclusive ownership.
             cst.pages[class].push(unsafe { StorageVec::recycle(ptr) });
             cst.metrics.cached(class);
             true

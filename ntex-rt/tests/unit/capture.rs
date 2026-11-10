@@ -4,6 +4,7 @@ static CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[allow(clippy::cast_possible_truncation)]
 fn gettid() -> i32 {
+    // SAFETY: `SYS_gettid` takes no arguments and cannot fail.
     unsafe { libc::syscall(libc::SYS_gettid) as i32 }
 }
 
@@ -57,6 +58,7 @@ fn capture_from_signal_handler() {
     let _guard = CAPTURE_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // SAFETY: `sig_usr2` is the watchdog's production handler, which only touches the armed capture slot.
     let id = unsafe {
         signal_hook::low_level::register(signal_hook::consts::SIGUSR2, crate::watchdog::sig_usr2)
             .unwrap()
@@ -64,6 +66,7 @@ fn capture_from_signal_handler() {
     let tid = gettid();
 
     assert!(CAPTURE.arm(tid));
+    // SAFETY: `tgkill` takes plain integers and targets this thread, which handles `SIGUSR2`.
     let res = unsafe { libc::syscall(libc::SYS_tgkill, libc::getpid(), tid, libc::SIGUSR2) };
     assert_eq!(res, 0);
     let bt = CAPTURE

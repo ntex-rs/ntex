@@ -332,6 +332,7 @@ impl fmt::Debug for HeaderValue {
             for (i, &b) in bytes.iter().enumerate() {
                 if !is_visible_ascii(b) || b == b'"' {
                     if from != i {
+                        // SAFETY: `bytes[from..i]` contains only visible ASCII.
                         f.write_str(unsafe { str::from_utf8_unchecked(&bytes[from..i]) })?;
                     }
                     if b == b'"' {
@@ -343,6 +344,8 @@ impl fmt::Debug for HeaderValue {
                 }
             }
 
+            // SAFETY: `bytes[from..]` contains only visible ASCII; other bytes
+            // were escaped and skipped in the loop above.
             f.write_str(unsafe { str::from_utf8_unchecked(&bytes[from..]) })?;
             f.write_str("\"")
         }

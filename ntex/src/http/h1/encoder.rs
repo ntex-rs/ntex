@@ -564,6 +564,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytePages) {
     } else if n < 100 {
         let mut buf: [u8; 22] = *b"\r\ncontent-length: 00\r\n";
         let d1 = n << 1;
+        // SAFETY: `n < 100` selects a complete LUT pair, copied into two bytes of the separate local buffer.
         unsafe {
             ptr::copy_nonoverlapping(
                 DEC_DIGITS_LUT.as_ptr().add(d1 as usize),
@@ -577,6 +578,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytePages) {
         // decode 2 more chars, if > 2 chars
         let d1 = (n % 100) << 1;
         n /= 100;
+        // SAFETY: `n % 100` selects a complete LUT pair; positions 19 and 20 are within the local buffer.
         unsafe {
             ptr::copy_nonoverlapping(
                 DEC_DIGITS_LUT.as_ptr().add(d1 as usize),
@@ -596,6 +598,8 @@ fn write_content_length(mut n: u64, bytes: &mut BytePages) {
 }
 
 pub(crate) fn convert_usize<B: BufMut>(mut n: u64, bytes: &mut B, eol: bool) {
+    // SAFETY: A `u64` needs at most 20 digits, within this 41-byte buffer; every LUT pair index
+    // is below 100, copies use disjoint storage, and the final slice covers initialized bytes.
     unsafe {
         let mut curr: isize = 39;
         let mut buf = [0u8; 41];

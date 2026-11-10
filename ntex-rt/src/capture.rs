@@ -14,6 +14,7 @@ pub(crate) struct Capture {
     slot: UnsafeCell<MaybeUninit<ntex_error::BacktraceRaw>>,
 }
 
+// SAFETY: Atomic states grant the handler exclusive writes and publish them to the single arming watchdog.
 unsafe impl Sync for Capture {}
 
 impl Capture {
@@ -62,8 +63,9 @@ impl Capture {
             return;
         }
 
-        // Frame walking only, symbol resolution happens on the system thread.
+        // SAFETY: `WRITING` serializes handler captures; the platform unwinder is assumed signal-safe.
         let bt = unsafe { ntex_error::BacktraceRaw::with_filename_unsynchronized(location) };
+        // SAFETY: Winning `ARMED` to `WRITING` grants this handler exclusive access to the slot.
         unsafe { (*self.slot.get()).write(bt) };
 
         if self
@@ -77,6 +79,7 @@ impl Capture {
             .is_err()
         {
             // abandoned by the ping loop
+            // SAFETY: This handler initialized the slot; abandonment leaves cleanup exclusively to it.
             unsafe { (*self.slot.get()).assume_init_drop() };
             self.state.store(Self::IDLE, Ordering::Release);
         }
@@ -84,6 +87,7 @@ impl Capture {
 
     pub(crate) fn take(&self, tid: i32) -> Option<ntex_error::BacktraceRaw> {
         if self.state.load(Ordering::Acquire) == Self::state(tid, Self::READY) {
+            // SAFETY: The arming watchdog alone consumes `READY`; acquire observes the handler's initialized slot.
             let bt = unsafe { (*self.slot.get()).assume_init_read() };
             self.state.store(Self::IDLE, Ordering::Release);
             Some(bt)

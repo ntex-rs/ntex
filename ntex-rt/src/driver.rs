@@ -196,6 +196,7 @@ where
     }
 
     crate::arbiter::run_shutdown_callbacks();
+    // SAFETY: The event loop and shutdown callbacks have ended, so storage borrows are released.
     unsafe {
         crate::remove_all_items();
     }

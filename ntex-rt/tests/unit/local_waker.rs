@@ -13,22 +13,31 @@ impl Counter {
     // A fixed vtable makes identity assertions independent of codegen deduplication.
     fn waker(counter: Arc<Self>) -> Waker {
         unsafe fn clone(data: *const ()) -> RawWaker {
+            // SAFETY: `data` comes from `Arc::into_raw` and the source waker keeps a strong count
+            // alive.
             unsafe { Arc::increment_strong_count(data.cast::<Counter>()) };
             RawWaker::new(data, &VTABLE)
         }
         unsafe fn wake(data: *const ()) {
+            // SAFETY: This consuming wake takes ownership of exactly one raw `Arc` strong count.
             let counter = unsafe { Arc::from_raw(data.cast::<Counter>()) };
             counter.0.fetch_add(1, Ordering::Relaxed);
         }
         unsafe fn wake_by_ref(data: *const ()) {
+            // SAFETY: The borrowed waker keeps the `Counter` allocation alive; its counter is
+            // atomic.
             unsafe { &*data.cast::<Counter>() }
                 .0
                 .fetch_add(1, Ordering::Relaxed);
         }
         unsafe fn drop(data: *const ()) {
+            // SAFETY: Dropping the waker consumes exactly one strong count created by
+            // `Arc::into_raw` or clone.
             std::mem::drop(unsafe { Arc::from_raw(data.cast::<Counter>()) });
         }
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+        // SAFETY: The data owns an `Arc<Counter>` count and the vtable balances counts with atomic
+        // operations.
         unsafe { Waker::from_raw(RawWaker::new(Arc::into_raw(counter).cast(), &VTABLE)) }
     }
 }
@@ -36,19 +45,25 @@ impl Counter {
 // Cloning changes both raw parts to those of the inner waker.
 fn changing_waker(waker: Waker) -> Waker {
     unsafe fn clone(data: *const ()) -> RawWaker {
+        // SAFETY: `data` points to the boxed `Waker` kept alive by the source waker during cloning.
         let waker = ManuallyDrop::new(unsafe { &*data.cast::<Waker>() }.clone());
         RawWaker::new(waker.data(), waker.vtable())
     }
     unsafe fn wake(data: *const ()) {
+        // SAFETY: Consuming wake owns the box created for this waker and reclaims it exactly once.
         unsafe { Box::from_raw(data.cast_mut().cast::<Waker>()) }.wake();
     }
     unsafe fn wake_by_ref(data: *const ()) {
+        // SAFETY: The borrowed wrapper waker keeps its boxed inner `Waker` alive during this call.
         unsafe { &*data.cast::<Waker>() }.wake_by_ref();
     }
     unsafe fn drop(data: *const ()) {
+        // SAFETY: Dropping the wrapper reclaims its uniquely owned box exactly once.
         std::mem::drop(unsafe { Box::from_raw(data.cast_mut().cast::<Waker>()) });
     }
     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    // SAFETY: The data owns a boxed `Waker`; the vtable clones or consumes it without
+    // unsynchronized mutation.
     unsafe {
         Waker::from_raw(RawWaker::new(
             Box::into_raw(Box::new(waker)).cast(),
@@ -109,7 +124,10 @@ fn fallback_null_data_and_clone_unwind() {
         |data| assert!(data.is_null()),
         |data| assert!(data.is_null()),
     );
-    let waker = || unsafe { Waker::from_raw(RawWaker::new(ptr::null(), &PANIC)) };
+    let waker = || {
+        // SAFETY: The callbacks accept null data, never dereference it, and clone only panics.
+        unsafe { Waker::from_raw(RawWaker::new(ptr::null(), &PANIC)) }
+    };
     let source = LocalWaker::from(waker());
     let mut same = LocalWaker::from(waker());
     same.clone_from(&source); // Same identity must not call the panicking clone.
@@ -136,27 +154,35 @@ fn fallback_null_data_and_clone_unwind() {
 fn fallback_wake_and_drop_unwind() {
     static VTABLE: RawWakerVTable = RawWakerVTable::new(
         |data| {
+            // SAFETY: `data` comes from `Arc::into_raw` and the source waker keeps a strong count
+            // alive.
             unsafe { Arc::increment_strong_count(data.cast::<Counter>()) };
             RawWaker::new(data, &VTABLE)
         },
         |data| {
+            // SAFETY: Consuming wake takes one raw strong count, which is dropped while unwinding.
             let counter = unsafe { Arc::from_raw(data.cast::<Counter>()) };
             counter.0.fetch_add(1, Ordering::Relaxed);
             resume_unwind(Box::new("wake"));
         },
         |data| {
+            // SAFETY: The borrowed waker keeps `Counter` alive and its counter uses atomic
+            // operations.
             unsafe { &*data.cast::<Counter>() }
                 .0
                 .fetch_add(1, Ordering::Relaxed);
             resume_unwind(Box::new("wake_by_ref"));
         },
         |data| {
+            // SAFETY: The drop callback takes one raw strong count, which is dropped while
+            // unwinding.
             let counter = unsafe { Arc::from_raw(data.cast::<Counter>()) };
             counter.0.fetch_add(1, Ordering::Relaxed);
             resume_unwind(Box::new("drop"));
         },
     );
     let counter = Arc::new(Counter::default());
+    // SAFETY: The data owns an `Arc<Counter>` count; callbacks balance counts even when unwinding.
     let local = LocalWaker::from(unsafe {
         Waker::from_raw(RawWaker::new(
             Arc::into_raw(counter.clone()).cast(),

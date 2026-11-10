@@ -467,6 +467,7 @@ impl Accept {
             let result = if info.registered.get() {
                 self.poller.modify(&info.sock, Event::readable(idx))
             } else {
+                // SAFETY: The listener stays in `self.sockets` and is deleted from the poller before drop.
                 unsafe { self.poller.add(&info.sock, Event::readable(idx)) }
             };
             if let Err(err) = result {

@@ -166,6 +166,7 @@ impl<F: Future> Fns<F> {
     /// Gives `f` the stage, `h` must be a task of the future type `F`.
     #[inline]
     unsafe fn with_stage<R>(h: NonNull<Header>, f: impl FnOnce(*mut Stage<F>) -> R) -> R {
+        // SAFETY: The caller supplies a live task of type `F`; its `repr(C)` prefixes start at zero.
         unsafe { (*h.cast::<TaskCore<F>>().as_ptr()).stage.with_mut(f) }
     }
 
@@ -176,6 +177,7 @@ impl<F: Future> Fns<F> {
     /// `h` must identify a live task of type `F` on its owner thread, with its
     /// stage in `Running` and no overlapping access to the future.
     unsafe fn poll(h: NonNull<Header>, cx: &mut Context<'_>) -> bool {
+        // SAFETY: The caller guarantees exclusive owner access to the pinned, running future.
         unsafe {
             let polled = Self::with_stage(h, |stage| {
                 let Stage::Running(fut) = &mut *stage else {
@@ -207,10 +209,12 @@ impl<F: Future> Fns<F> {
         impl<F: Future> Drop for Guard<F> {
             /// Leaves no initialized stage behind after its destructor runs or panics.
             fn drop(&mut self) {
+                // SAFETY: The stage remains allocated and exclusively borrowed until this guard drops.
                 unsafe { ptr::write(self.0, Stage::Consumed) };
             }
         }
 
+        // SAFETY: The caller guarantees exclusive owner access; the pinned future is dropped in place.
         unsafe {
             Self::with_stage(h, |stage| {
                 let guard = Guard(stage);
@@ -226,7 +230,9 @@ impl<F: Future> Fns<F> {
     /// `h` must identify a live task of type `F` on its owner thread.
     /// `out` must exclusively point to an initialized `Option<F::Output>`.
     unsafe fn take_output(h: NonNull<Header>, out: *mut ()) {
+        // SAFETY: The caller guarantees a live, owner-local task with no overlapping stage access.
         if let Some(v) = unsafe { Self::take_output_value(h) } {
+            // SAFETY: The caller supplies an exclusive, initialized `Option<F::Output>` slot.
             unsafe { *out.cast::<Option<F::Output>>() = Some(v) };
         }
     }
@@ -238,11 +244,13 @@ impl<F: Future> Fns<F> {
     /// `h` must identify a live task of type `F` on its owner thread, with no
     /// overlapping access to its stage.
     unsafe fn drop_output(h: NonNull<Header>) {
+        // SAFETY: The caller guarantees exclusive owner access to this live task's stage.
         drop(unsafe { Self::take_output_value(h) });
     }
 
     /// Takes the output if there is one, the stage becomes `Consumed`.
     unsafe fn take_output_value(h: NonNull<Header>) -> Option<F::Output> {
+        // SAFETY: The caller guarantees exclusive owner access; only an unpinned output is moved.
         unsafe {
             Self::with_stage(h, |stage| {
                 if matches!(*stage, Stage::Finished(_))
@@ -258,6 +266,7 @@ impl<F: Future> Fns<F> {
 
     /// Frees the task, drops a left future, output and awaiter.
     unsafe fn dealloc(h: NonNull<Header>) {
+        // SAFETY: The vtable matches the leaked `Box<TaskCore<F>>`, and the final reference is gone.
         drop(unsafe { Box::from_raw(h.cast::<TaskCore<F>>().as_ptr()) });
     }
 }
@@ -277,6 +286,7 @@ impl Awaiter {
     ///
     /// The caller should have exclusive access to the awaiter.
     unsafe fn take(&self) -> Option<crate::LocalWaker> {
+        // SAFETY: The caller guarantees exclusive access to the awaiter during this closure.
         self.0.with_mut(|p| unsafe { (*p).take() })
     }
 
@@ -290,6 +300,7 @@ impl Awaiter {
     ///
     /// The caller should have exclusive access to the awaiter.
     unsafe fn register(&self, waker: &Waker) -> Option<crate::LocalWaker> {
+        // SAFETY: The caller guarantees exclusive access; `will_wake` does not invoke waker callbacks.
         if self.0.with_mut(|p| unsafe {
             (*p).as_ref()
                 .is_some_and(|current| current.will_wake(waker))
@@ -298,6 +309,7 @@ impl Awaiter {
         }
         // Clone outside the cell access: a custom callback can complete the task.
         let new = crate::LocalWaker::from_waker(waker);
+        // SAFETY: The caller guarantees exclusive access, reacquired after the cloning callback.
         self.0.with_mut(|p| unsafe { (*p).replace(new) })
     }
 }
@@ -305,6 +317,7 @@ impl Awaiter {
 impl Drop for Awaiter {
     /// Releases a stored join waker after removing it from the slot.
     fn drop(&mut self) {
+        // SAFETY: `&mut self` guarantees exclusive access to the awaiter.
         drop(unsafe { self.take() });
     }
 }
@@ -312,18 +325,21 @@ impl Drop for Awaiter {
 /// Header of a task, the caller holds a reference for the lifetime.
 #[inline]
 fn header<'a>(h: NonNull<Header>) -> &'a Header {
+    // SAFETY: Callers retain a task reference for the returned borrow's lifetime.
     unsafe { h.as_ref() }
 }
 
 /// The caller is on the owner thread and holds a task reference for the lifetime.
 #[inline]
 pub(super) fn core<'a>(h: NonNull<Header>) -> &'a Core {
+    // SAFETY: Callers hold an owner-thread task reference; `Core` is its `repr(C)` prefix.
     unsafe { h.cast::<Core>().as_ref() }
 }
 
 /// Returns `true` on the owner thread of the task.
 #[inline]
 fn is_owner(h: NonNull<Header>) -> bool {
+    // SAFETY: The caller holds a task reference; only coallocated immutable routing is read.
     Some(unsafe { (*h.cast::<Core>().as_ptr()).routing.owner }) == try_current_thread_id()
 }
 
@@ -332,11 +348,13 @@ fn is_owner(h: NonNull<Header>) -> bool {
 /// The caller must establish liveness independently of the pointer. Completed-task
 /// callers check registration and use the borrow only for callback-free operations.
 fn owner_queue<'a>(h: NonNull<Header>) -> &'a RunnableQueue {
+    // SAFETY: Callers establish endpoint liveness on the owner and do not outlive that endpoint.
     unsafe { header(h).queue.as_ref() }
 }
 
 /// Borrows a live owner endpoint for callback-free inspection or publication.
 fn live_owner_queue<'a>(h: NonNull<Header>) -> Option<&'a RunnableQueue> {
+    // SAFETY: The caller retains a live task reference while checking its immutable routing.
     if core(h).state.get() & FINISHED == 0 || unsafe { wake::active_owner(h.as_ptr().cast()) } {
         Some(owner_queue(h))
     } else {
@@ -347,6 +365,7 @@ fn live_owner_queue<'a>(h: NonNull<Header>) -> Option<&'a RunnableQueue> {
 /// Task of a waker data pointer.
 #[inline]
 pub(super) unsafe fn task_ptr(ptr: *const ()) -> NonNull<Header> {
+    // SAFETY: Callers supply a native waker data pointer originating from a non-null task allocation.
     unsafe { NonNull::new_unchecked(ptr.cast_mut().cast::<Header>()) }
 }
 
@@ -472,6 +491,7 @@ fn last_ref(h: NonNull<Header>) {
     let local = core(h);
     let state = local.state.get();
     if state & FINISHED != 0 {
+        // SAFETY: The matching vtable owns this allocation; completion and zero references permit freeing it.
         unsafe { (header(h).vtable.dealloc)(h) };
         return;
     }
@@ -502,6 +522,7 @@ fn close(h: NonNull<Header>) {
     let local = core(h);
     local.state.set(local.state.get() | RUNNING);
     let finish = Finish(h);
+    // SAFETY: The close reference keeps the matching task alive, and `RUNNING` prevents reentrant polling.
     unsafe { (header(finish.0).vtable.drop_future)(finish.0) };
 }
 
@@ -541,6 +562,7 @@ fn complete(h: NonNull<Header>) -> Completed {
     }
     Completed {
         detached: state & DETACHED != 0,
+        // SAFETY: Completion runs on the owner and no awaiter access spans callbacks.
         awaiter: unsafe { header(h).awaiter.take() },
     }
 }
@@ -560,6 +582,7 @@ impl Drop for Release {
 /// reference of the caller.
 fn drop_output(h: NonNull<Header>) {
     let release = Release(h);
+    // SAFETY: The release guard retains the completed task while its matching vtable consumes the output.
     unsafe { (header(release.0).vtable.drop_output)(release.0) };
 }
 
@@ -577,6 +600,7 @@ pub(crate) unsafe fn spawn<F: Future>(
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) -> Task<F::Output> {
+    // SAFETY: The caller guarantees the owner thread and the captured data's required lifetime.
     match unsafe { create::<_, true>(future, queue, location, false) } {
         Ok(h) => Task { h, _t: PhantomData },
         Err(future) => {
@@ -599,6 +623,7 @@ pub(crate) unsafe fn spawn_detached<F: Future, const LOCAL: bool>(
     queue: &Arc<RunnableQueue>,
     location: SpawnLocation,
 ) {
+    // SAFETY: The caller guarantees the captured lifetime and owner locality or a `Send` submission.
     if let Err(future) = unsafe { create::<_, LOCAL>(future, queue, location, true) } {
         cancel_closed(future, location);
     }
@@ -736,11 +761,13 @@ impl Runnable {
         // The run reference protects the borrowed poll waker. Its final release
         // waits behind any acquisitions published by another thread.
         let waker =
+            // SAFETY: The run reference backs this borrowed native waker, which `ManuallyDrop` never releases.
             ManuallyDrop::new(unsafe { Waker::from_raw(wake::raw_waker(h.as_ptr().cast())) });
         let mut cx = Context::from_waker(&waker);
 
         // a panic of the poll drops the future and completes the task
         let guard = Guard(h);
+        // SAFETY: The run reference protects this owner-local task; `RUNNING` excludes reentrant polling.
         let ready = unsafe { (hdr.vtable.poll)(h, &mut cx) };
         mem::forget(guard);
 
@@ -823,6 +850,7 @@ impl fmt::Debug for Runnable {
 /// An unpolled, detached `Send` future submitted to its owner, owns a reference.
 pub(crate) struct Remote(pub(super) NonNull<Header>);
 
+// SAFETY: Only unpolled, detached `Send` futures are submitted; task state is accessed only by the owner.
 unsafe impl Send for Remote {}
 
 impl Remote {
@@ -1056,13 +1084,16 @@ impl<T> Task<T> {
         let local = core(self.h);
         if local.state.get() & FINISHED == 0 {
             // The waker callbacks may poll the runtime and complete the task.
+            // SAFETY: The join is owner-local, and awaiter cell access ends before any waker callback.
             drop(unsafe { hdr.awaiter.register(cx.waker()) });
             if local.state.get() & FINISHED == 0 {
                 return Poll::Pending;
             }
+            // SAFETY: Registration has returned, leaving exclusive owner access to the awaiter.
             drop(unsafe { hdr.awaiter.take() });
         }
         let mut out = None;
+        // SAFETY: This join retains the completed task of output type `T`; `out` is its exclusive typed slot.
         unsafe { (header(self.h).vtable.take_output)(self.h, (&raw mut out).cast()) };
         Poll::Ready(out)
     }
@@ -1082,6 +1113,7 @@ impl<T> Drop for Task<T> {
         let cancel = state & CANCEL_ON_DROP != 0;
         // nothing waits for the output, the waker is dropped once the task is
         // consistent, its drop may run user code
+        // SAFETY: This owner-local join has exclusive awaiter access, with no callbacks inside `take`.
         let awaiter = unsafe { hdr.awaiter.take() };
         // the runner of a cancelled task drops the future, a running task may
         // still complete

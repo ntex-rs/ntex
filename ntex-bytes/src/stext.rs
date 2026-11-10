@@ -92,6 +92,7 @@ impl ByteString {
     pub fn from_ext<T: StorageExtStr>(val: T) -> ByteString {
         let (addr, len, vtable) = StorageExtStr::create(val);
 
+        // SAFETY: `StorageExtStr` guarantees that the externally owned data is valid UTF-8.
         unsafe {
             ByteString::from_bytes_unchecked(Bytes {
                 storage: Storage::from_stext(addr, len, vtable),
@@ -119,6 +120,8 @@ mod tests {
 
     fn drop(addr: *const u8, len: usize) {
         let ptr = std::ptr::slice_from_raw_parts_mut(addr.cast_mut(), len);
+        // SAFETY: This pair comes from `Box::into_raw` in `Boxed::create` and is released exactly
+        // once.
         std::mem::drop(unsafe { Box::from_raw(ptr) });
     }
 

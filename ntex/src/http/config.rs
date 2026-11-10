@@ -710,6 +710,7 @@ impl DateService {
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
         DATE.with(|date| {
+            // SAFETY: The TLS date array stays live and cannot be updated during this non-reentrant copy.
             dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
         });
     }
@@ -718,6 +719,7 @@ impl DateService {
     pub fn set_date_header2(&self, dst: &mut BytePages) {
         DateService::check_date();
         DATE.with(|date| {
+            // SAFETY: The TLS date array stays live and cannot be updated during this non-reentrant copy.
             dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
         });
     }
@@ -726,6 +728,7 @@ impl DateService {
     pub fn bset_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
         DATE.with(|date| {
+            // SAFETY: The TLS date array stays live and cannot be updated during this non-reentrant copy.
             dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
         });
     }

@@ -559,6 +559,7 @@ impl StreamItem {
                 {
                     full = n == chunk_len;
                     total += n;
+                    // SAFETY: `read` initialized exactly `n` bytes within the spare chunk.
                     unsafe { buf.advance_mut(n) };
                 }
                 result
@@ -1015,6 +1016,7 @@ mod tests {
 
             // a separate poller observes the kernel event for the socket
             let poller = Poller::new().unwrap();
+            // SAFETY: The poller is dropped before `socket` is closed.
             unsafe {
                 poller
                     .add_with_mode(&socket, Event::none(0), PollMode::Oneshot)
@@ -1051,6 +1053,7 @@ mod tests {
                 .unwrap();
             let ev = events.iter().next().expect("no event for the reset");
             assert_eq!(ev.is_err(), Some(true));
+            drop(poller);
 
             handler.event(ctl.id as usize, ev);
 

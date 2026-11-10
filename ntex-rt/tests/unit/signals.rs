@@ -389,8 +389,12 @@ fn os_signal_delivered() {
         assert!(sys.signals());
 
         deliver(
-            || unsafe {
-                libc::kill(libc::getpid(), libc::SIGHUP);
+            || {
+                // SAFETY: The current process has installed its SIGHUP handler before this
+                // delivery.
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGHUP);
+                }
             },
             |sig| matches!(sig, Signal::Hup),
         )
@@ -430,6 +434,7 @@ fn signal_child_mode() -> Option<String> {
             rlim_cur: limit,
             rlim_max: limit,
         };
+        // SAFETY: `resource` is a valid limit selector and `limits` points to an initialized value.
         assert_eq!(unsafe { libc::setrlimit(resource, &raw const limits) }, 0);
     }
     Some(mode)
@@ -479,6 +484,8 @@ fn fatal_signals_terminate_process() {
                 if mode.ends_with("abort") {
                     std::process::abort();
                 }
+                // SAFETY: The mapping is checked for success; the protected write deliberately
+                // faults in this isolated child, violating `write_volatile`'s no-trap contract.
                 unsafe {
                     let page = libc::mmap(
                         std::ptr::null_mut(),
@@ -531,6 +538,7 @@ async fn wait_for_signal_handler() {
 fn raise_fatal_signal(sig: i32) {
     std::thread::spawn(move || {
         nix::errno::Errno::EBUSY.set();
+        // SAFETY: Callers pass SIGABRT or SIGSEGV after installing the test signal handlers.
         assert_eq!(unsafe { libc::raise(sig) }, 0);
         assert_eq!(nix::errno::Errno::last(), nix::errno::Errno::EBUSY);
     })
@@ -557,8 +565,11 @@ fn fatal_signal_notifications() {
                 let _sigs = SIGS.lock();
                 let (_, _, write) = FATAL_PIPE.get().unwrap();
                 let fd = write.as_raw_fd();
+                // SAFETY: The live pipe owns `fd` and the static buffer contains the one byte being
+                // written.
                 assert_eq!(unsafe { libc::write(fd, b"A".as_ptr().cast(), 1) }, 1);
                 let bytes = [0u8; 1];
+                // SAFETY: The live pipe owns `fd` and `bytes` remains readable for its full length.
                 while unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) } >= 0 {}
                 assert_eq!(nix::errno::Errno::last(), nix::errno::Errno::EAGAIN);
                 raise_fatal_signal(libc::SIGABRT);
@@ -568,9 +579,12 @@ fn fatal_signal_notifications() {
             if mode == "fork" {
                 let rx = signal();
                 wait_for_signal_handler().await;
+                // SAFETY: The child only calls async-signal-safe libc functions before `_exit`.
                 let pid = unsafe { libc::fork() };
                 assert!(pid >= 0);
                 if pid == 0 {
+                    // SAFETY: These libc calls are async-signal-safe and the child exits without
+                    // running Rust destructors.
                     unsafe {
                         libc::alarm(2);
                         libc::raise(libc::SIGABRT);
@@ -578,6 +592,8 @@ fn fatal_signal_notifications() {
                     }
                 }
                 let mut status = 0;
+                // SAFETY: `pid` is the child just forked and `status` points to a writable
+                // initialized integer.
                 assert_eq!(unsafe { libc::waitpid(pid, &raw mut status, 0) }, pid);
                 assert_eq!(status, 0);
                 raise_fatal_signal(libc::SIGSEGV);

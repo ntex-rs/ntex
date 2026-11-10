@@ -44,14 +44,17 @@ impl UninitSlice {
         UninitSlice::from_uninit_mut(core::slice::from_raw_parts_mut(ptr.cast(), len))
     }
 
-    // SAFETY for both: `UninitSlice` is a `repr(transparent)` wrapper of `[MaybeUninit<u8>]`
     #[inline]
     fn from_uninit(slice: &[MaybeUninit<u8>]) -> &UninitSlice {
+        // SAFETY: `UninitSlice` is a transparent wrapper of `[MaybeUninit<u8>]`, with the same
+        // lifetime.
         unsafe { &*(ptr::from_ref(slice) as *const UninitSlice) }
     }
 
     #[inline]
     fn from_uninit_mut(slice: &mut [MaybeUninit<u8>]) -> &mut UninitSlice {
+        // SAFETY: `UninitSlice` is a transparent wrapper of `[MaybeUninit<u8>]`, preserving
+        // exclusive access.
         unsafe { &mut *(ptr::from_mut(slice) as *mut UninitSlice) }
     }
 
@@ -77,6 +80,7 @@ impl UninitSlice {
     pub fn write_byte(&mut self, index: usize, byte: u8) {
         assert!(index < self.len());
 
+        // SAFETY: `index < len` was checked above, so the pointer addresses a writable byte.
         unsafe { self[index..].as_mut_ptr().write(byte) }
     }
 
@@ -106,6 +110,7 @@ impl UninitSlice {
 
         assert_eq!(self.len(), src.len());
 
+        // SAFETY: The lengths match, and the exclusive destination slice cannot overlap `src`.
         unsafe {
             ptr::copy_nonoverlapping(src.as_ptr(), self.as_mut_ptr(), self.len());
         }
@@ -113,7 +118,7 @@ impl UninitSlice {
 
     /// Return a raw pointer to the slice's buffer.
     ///
-    /// # Safety
+    /// # Pointer usage
     ///
     /// The caller **must not** read from the referenced memory and **must not**
     /// write **uninitialized** bytes to the slice either.
@@ -227,6 +232,8 @@ mod tests {
     #[test]
     fn index_and_uninit_access() {
         let mut data = [0u8; 8];
+        // SAFETY: The pointer and length cover the live array, exclusively borrowed until the last
+        // slice use.
         let slice = unsafe { UninitSlice::from_raw_parts_mut(data.as_mut_ptr(), data.len()) };
 
         assert_eq!(slice[..].len(), 8);
@@ -236,6 +243,8 @@ mod tests {
         assert_eq!(slice[1..3].len(), 2);
         assert_eq!(slice[1..=3].len(), 3);
 
+        // SAFETY: Only initialized bytes are written, preserving initialization of the underlying
+        // array.
         unsafe {
             slice.as_uninit_slice_mut()[0].write(b'a');
             slice.as_uninit_slice_mut()[1].write(b'b');

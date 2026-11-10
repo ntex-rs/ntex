@@ -792,6 +792,7 @@ mod tests {
     fn is_open(io: WinSock::SOCKET) -> bool {
         let mut val = 0i32;
         let mut len = i32::try_from(mem::size_of::<i32>()).unwrap();
+        // SAFETY: `val` and `len` outlive the call and match the option size.
         let res = unsafe {
             WinSock::getsockopt(
                 io,
@@ -848,6 +849,7 @@ mod tests {
         };
         let open = is_ours(io, &addr);
         if open {
+            // SAFETY: the test owns `io`, and nothing else closes it.
             unsafe { WinSock::closesocket(io) };
         }
 
@@ -1031,6 +1033,7 @@ mod tests {
     fn assert_closed(io: WinSock::SOCKET, peer: &mut std::net::TcpStream) {
         let open = is_ours(io, &peer.peer_addr().unwrap().into());
         if open {
+            // SAFETY: the test owns `io`, and nothing else closes it.
             unsafe { WinSock::closesocket(io) };
         }
         assert!(!open, "cleanup leaked the socket");
@@ -1143,6 +1146,7 @@ mod tests {
         let result = close_socket(raw, false, false).wait().await;
         let open = is_ours(raw, &addr);
         if open {
+            // SAFETY: the test owns `raw`, and nothing else closes it.
             unsafe { WinSock::closesocket(raw) };
         }
         assert!(!open, "blocking close leaked the socket");
@@ -1377,6 +1381,7 @@ mod tests {
 
         let open = is_ours(raw, &peer.peer_addr().unwrap().into());
         if open {
+            // SAFETY: the test owns `raw`, and nothing else closes it.
             unsafe { WinSock::closesocket(raw) };
         }
         assert!(!open, "socket not closed");
@@ -1548,6 +1553,7 @@ mod tests {
     fn dequeue(reactor: &Reactor, timeout: u32) -> Option<*mut Overlapped> {
         let mut entry = OVERLAPPED_ENTRY::default();
         let mut count = 0;
+        // SAFETY: `entry` and `count` outlive the call, and the port handle is valid.
         let res = unsafe {
             GetQueuedCompletionStatusEx(
                 reactor.as_raw_handle().cast(),
@@ -1722,6 +1728,7 @@ mod tests {
     fn deliver_notification(reactor: &Reactor, ops: &StreamOps, timeout: u32) -> bool {
         let mut entry = OVERLAPPED_ENTRY::default();
         let mut count = 0;
+        // SAFETY: `entry` and `count` outlive the call, and the port handle is valid.
         let res = unsafe {
             GetQueuedCompletionStatusEx(
                 reactor.as_raw_handle().cast(),

@@ -91,6 +91,7 @@ fn shared_cfg() {
     let t2 = cfg2.get::<TestCfg>();
     assert_eq!(t2.tag(), "TEST2");
     assert_eq!(t2.id(), cfg2.id());
+    // SAFETY: No references to the inner `TestCfg` survive the preceding assertions.
     unsafe { t2.replace(SharedCfg::from(SharedCfg::new("TEST3")).get::<TestCfg>()) };
 
     let cfg2 = t2.shared();

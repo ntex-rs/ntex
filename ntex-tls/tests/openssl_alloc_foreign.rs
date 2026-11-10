@@ -24,6 +24,7 @@ static FREES: AtomicUsize = AtomicUsize::new(0);
 
 /// Foreign allocation hook backed by the C allocator.
 unsafe extern "C" fn foreign_malloc(size: usize, _: *const c_char, _: c_int) -> *mut c_void {
+    // SAFETY: `malloc` accepts the requested size without additional pointer preconditions.
     unsafe { libc::malloc(size) }
 }
 
@@ -34,12 +35,15 @@ unsafe extern "C" fn foreign_realloc(
     _: *const c_char,
     _: c_int,
 ) -> *mut c_void {
+    // SAFETY: OpenSSL passes a null pointer or a live block from these C-allocator hooks.
     unsafe { libc::realloc(p, size) }
 }
 
 /// Foreign deallocation hook backed by the C allocator, counting calls.
 unsafe extern "C" fn foreign_free(p: *mut c_void, _: *const c_char, _: c_int) {
     FREES.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: OpenSSL passes a null pointer or a live block from these C-allocator hooks, freed
+    // once.
     unsafe { libc::free(p) }
 }
 
@@ -54,6 +58,9 @@ unsafe extern "C" fn foreign_free(p: *mut c_void, _: *const c_char, _: c_int) {
 ///   and freeing the earlier block goes through the foreign hook.
 #[test]
 fn foreign_hooks_are_not_replaced() {
+    // SAFETY: This sole test installs hooks before OpenSSL use; hook queries use valid output
+    // slots.
+    // The allocated block is freed once through the same unchanged C-allocator hooks.
     unsafe {
         assert_eq!(
             CRYPTO_set_mem_functions(foreign_malloc, foreign_realloc, foreign_free),
@@ -66,7 +73,7 @@ fn foreign_hooks_are_not_replaced() {
             1
         );
 
-        // SAFETY: no other thread uses OpenSSL
+        // No other thread uses OpenSSL.
         assert!(!use_global_allocator());
 
         let (mut m, mut r, mut f) = (None, None, None);

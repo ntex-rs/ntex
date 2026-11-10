@@ -119,6 +119,8 @@ impl ConnectOps {
                 },
             );
             let mut sent = 0;
+            // SAFETY: The stored op keeps the socket, address and header live until completion;
+            // `ConnectEx` receives no data buffer and writes `sent` only during this call.
             let res = unsafe {
                 self.0.connect.as_ref().unwrap()(
                     op.sock.as_ref().unwrap().as_raw_socket() as _,

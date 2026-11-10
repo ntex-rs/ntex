@@ -97,6 +97,8 @@ fn test_bytes_mut_buf() {
     bytes::buf::BufMut::put_slice(&mut buf, b"12");
     bytes::buf::BufMut::put_u8(&mut buf, b'3');
     bytes::buf::BufMut::put_i8(&mut buf, b'4' as i8);
+    // SAFETY: The nonempty writable chunk receives one initialized byte before it is read and
+    // advanced.
     unsafe {
         let c = bytes::buf::BufMut::chunk_mut(&mut buf);
         *c.as_mut_ptr() = b'5';
@@ -154,6 +156,8 @@ fn test_bytes_vec_buf() {
     bytes::buf::BufMut::put_slice(&mut buf, b"12");
     bytes::buf::BufMut::put_u8(&mut buf, b'3');
     bytes::buf::BufMut::put_i8(&mut buf, b'4' as i8);
+    // SAFETY: The nonempty writable chunk receives one initialized byte before it is read and
+    // advanced.
     unsafe {
         let c = bytes::buf::BufMut::chunk_mut(&mut buf);
         *c.as_mut_ptr() = b'5';
@@ -209,6 +213,8 @@ fn test_bytes_mut_buf_grows() {
 fn test_bytes_mut_buf_advance_past_capacity() {
     let mut buf = BytesMut::with_capacity(8);
     let cap = buf.capacity();
+    // SAFETY: The implementation checks allocated capacity and panics before exposing any
+    // uninitialized bytes.
     unsafe { bytes::buf::BufMut::advance_mut(&mut buf, cap + 1) };
 }
 

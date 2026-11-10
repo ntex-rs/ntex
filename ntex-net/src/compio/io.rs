@@ -72,6 +72,7 @@ impl IoBufMut for CompioBuf {
 
 impl SetLen for CompioBuf {
     unsafe fn set_len(&mut self, len: usize) {
+        // SAFETY: `SetLen` requires the caller to have initialized `len` bytes of the exposed spare slice.
         unsafe {
             self.0.advance_mut(len);
         }
@@ -344,6 +345,7 @@ mod tests {
         for (d, s) in dst.iter_mut().zip(data) {
             d.write(*s);
         }
+        // SAFETY: The test inputs fit the spare slice, and the loop initializes all `data.len()` bytes.
         unsafe { buf.advance_to(data.len()) };
     }
 

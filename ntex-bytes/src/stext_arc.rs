@@ -15,6 +15,8 @@ fn len(_: *const u8, len: usize) -> usize {
 fn clone_str(addr: *const u8, len: usize) -> Option<(*const u8, usize)> {
     let slice_ptr: *const [u8] = ptr::slice_from_raw_parts(addr, len);
     let str_ptr = slice_ptr as *const str;
+    // SAFETY: The pair owns a raw `Arc` reference; forgetting the reconstructed handle and its
+    // clone retains both.
     let arc = unsafe { Arc::from_raw(str_ptr) };
     let arc2 = arc.clone();
     mem::forget(arc);
@@ -26,6 +28,8 @@ fn clone_str(addr: *const u8, len: usize) -> Option<(*const u8, usize)> {
 fn drop_str(addr: *const u8, len: usize) {
     let slice_ptr: *const [u8] = ptr::slice_from_raw_parts(addr, len);
     let str_ptr = slice_ptr as *const str;
+    // SAFETY: The vtable pair comes from `Arc::into_raw` and owns the strong reference released
+    // here.
     let arc = unsafe { Arc::from_raw(str_ptr) };
     drop(arc);
 }
@@ -98,11 +102,13 @@ mod tests {
         assert_eq!(Arc::strong_count(&test), 1);
 
         let mut b = Bytes::from_ext(test.clone());
+        // SAFETY: The initialized four-byte view contains the two bytes being consumed.
         unsafe { b.storage.set_start(2) };
         assert_eq!(&b, b"st");
         assert_eq!(Arc::strong_count(&test), 1);
 
         let mut b = Bytes::from_ext(test.clone());
+        // SAFETY: The initialized four-byte view contains the two-byte prefix being retained.
         unsafe { b.storage.set_end(2) };
         assert_eq!(&b, b"te");
         assert_eq!(Arc::strong_count(&test), 1);

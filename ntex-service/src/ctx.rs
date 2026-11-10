@@ -68,16 +68,22 @@ impl WaitersRef {
 
     #[allow(clippy::mut_from_ref)]
     pub(crate) fn get(&self) -> &mut slab::Slab<Option<Waker>> {
+        // SAFETY: `WaitersRef` is `!Sync`, and callers do not hold the returned
+        // reference across calls that access `indexes` again.
         unsafe { &mut *self.indexes.get() }
     }
 
     #[allow(clippy::mut_from_ref)]
     fn get_calls(&self) -> &mut slab::Slab<Option<Waker>> {
+        // SAFETY: `WaitersRef` is `!Sync`, and callers do not hold the returned
+        // reference across calls that access `calls` again.
         unsafe { &mut *self.calls.get() }
     }
 
     #[allow(clippy::mut_from_ref)]
     pub(crate) fn get_wakers(&self) -> &mut Vec<u32> {
+        // SAFETY: `WaitersRef` is `!Sync`, and callers do not hold the returned
+        // reference across calls that access `wakers` again.
         unsafe { &mut *self.wakers.get() }
     }
 

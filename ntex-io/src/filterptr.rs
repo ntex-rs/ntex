@@ -37,7 +37,10 @@ impl FilterPtr {
 
     pub(crate) fn get(&self) -> &dyn Filter {
         match self.as_ref() {
-            Repr::Filter(_, filter) => unsafe { filter.as_ref().unwrap() },
+            Repr::Filter(_, filter) => {
+                // SAFETY: The pointer targets the owned typed filter or the static `NullFilter`.
+                unsafe { filter.as_ref().unwrap() }
+            }
             Repr::Sealed(b) => b.as_ref(),
         }
     }
@@ -50,6 +53,7 @@ impl FilterPtr {
     pub(crate) fn filter<F: Filter>(&self) -> &F {
         if let Repr::Filter(ptr, _) = self.as_ref() {
             assert!(!ptr.is_null(), "Filter is not set");
+            // SAFETY: The owning `Io<F>` supplies the stored concrete type and keeps it live.
             unsafe { (*ptr).cast::<F>().as_ref().unwrap() }
         } else {
             panic!("Filter is sealed")
@@ -58,10 +62,12 @@ impl FilterPtr {
 
     #[allow(clippy::mut_from_ref)]
     fn as_mut(&self) -> &mut Repr {
+        // SAFETY: Access is thread-local; callers exclude overlapping representation borrows.
         unsafe { &mut *self.0.get() }
     }
 
     fn as_ref(&self) -> &Repr {
+        // SAFETY: Access is thread-local and the representation is not mutated while borrowed.
         unsafe { &*self.0.get() }
     }
 
@@ -70,6 +76,7 @@ impl FilterPtr {
     pub(crate) fn take_filter<F>(&self) -> Box<F> {
         if let Repr::Filter(ptr, _) = mem::take(self.as_mut()) {
             assert!(!ptr.is_null(), "Filter is not set");
+            // SAFETY: `Io<F>` supplies the allocation's type; replacing the representation transfers sole ownership.
             unsafe { Box::from_raw(ptr as *mut F) }
         } else {
             panic!("Filter is sealed")
@@ -238,6 +245,7 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
+        // SAFETY: No references into `io` survive the move; the stopped placeholder is only dropped.
         let io2 = unsafe { io.take() };
         let mut io3: crate::IoBoxed = io2.into();
         let io4 = io3.take();

@@ -1066,25 +1066,28 @@ impl StreamOpsStorage {
                 ))) as u32;
                 item.wr_op = NonZeroU32::new(op_id);
 
-                // SAFETY: pointers are derived from the stored operation, so
-                // moving the box into the slab cannot invalidate them. A single
-                // page is heap backed, gathered pages are stored in the boxed
-                // `SendBuf`, the data does not move until the operation completes
+                // Pointers are derived from the stored operation: the heap-backed
+                // pages and boxed `SendBuf` stay in place until completion.
                 let (ptr, msg) = match &mut self.ops[op_id as usize] {
                     Some(Operation::SendOne { page, .. }) => {
+                        // SAFETY: This page is heap-backed; its storage is retained and unchanged through the final completion.
                         (unsafe { page.as_ptr() }, ptr::null())
                     }
                     Some(Operation::Send { buf, .. }) if num == 1 => {
                         let ptr = buf
                             .pages()
                             .next()
-                            .map(|page| unsafe { page.as_ptr() })
+                            .map(|page| {
+                                // SAFETY: The boxed send buffer keeps this page in place and unchanged through the final completion.
+                                unsafe { page.as_ptr() }
+                            })
                             .unwrap_or_default();
                         (ptr, ptr::null())
                     }
                     Some(Operation::Send { buf, .. }) => {
                         let SendBuf { pages, iov, msg } = &mut **buf;
                         for (iov, page) in iov.iter_mut().zip(pages.iter().flatten()) {
+                            // SAFETY: The boxed send buffer keeps each page in place and unchanged through the final completion.
                             iov.iov_base = unsafe { page.as_ptr() }.cast_mut().cast();
                             iov.iov_len = page.len();
                         }
@@ -1447,6 +1450,7 @@ mod tests {
         handler.tick();
         assert!(ops.0.with(|st| st.streams.get(old).is_none()));
         // `Close` was never submitted, the kernel did not close the descriptor
+        // SAFETY: `Close` was never submitted, so `fd` is still open and nothing else owns it.
         unsafe { libc::close(fd) };
 
         let (io, ctl, _peer) = register(&ops);

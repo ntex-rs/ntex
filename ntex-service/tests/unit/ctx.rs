@@ -87,11 +87,13 @@ fn counting_waker() -> (&'static WakeCounter, Waker) {
     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake, drop);
 
     unsafe fn clone(data: *const ()) -> RawWaker {
+        // SAFETY: `data` points to the leaked `WakeCounter`, accessed only on this test thread.
         let cnt = unsafe { &*data.cast::<WakeCounter>() };
         cnt.clones.set(cnt.clones.get() + 1);
         RawWaker::new(data, &VTABLE)
     }
     unsafe fn wake(data: *const ()) {
+        // SAFETY: `data` points to the leaked `WakeCounter`, accessed only on this test thread.
         let cnt = unsafe { &*data.cast::<WakeCounter>() };
         cnt.wakes.set(cnt.wakes.get() + 1);
     }
@@ -102,6 +104,7 @@ fn counting_waker() -> (&'static WakeCounter, Waker) {
         wakes: Cell::new(0),
     }));
     let raw = RawWaker::new(std::ptr::from_ref(cnt).cast(), &VTABLE);
+    // SAFETY: The leaked counter outlives all wakers, whose callbacks run only on this test thread.
     (cnt, unsafe { Waker::from_raw(raw) })
 }
 

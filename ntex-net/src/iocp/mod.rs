@@ -35,6 +35,7 @@ impl Overlapped {
         Self {
             hnd,
             udata,
+            // SAFETY: An unused `OVERLAPPED` is initialized with zero integers and null pointers.
             base: unsafe { std::mem::zeroed() },
         }
     }
@@ -65,6 +66,7 @@ impl<T> Op<T> {
     /// separately allocated or part of an `OpPairBox`.
     /// Access through the result must not alias other references to the state.
     pub(crate) unsafe fn data_from_overlapped(optr: *mut Overlapped) -> *mut T {
+        // SAFETY: The caller supplies a live `Op<T>`; its `repr(C)` header is the first field.
         unsafe { &raw mut (*optr.cast::<Self>()).state }
     }
 }
@@ -299,6 +301,7 @@ mod tests {
     // protected, including a payload access after the kernel write.
     #[inline(never)]
     fn issue(op: &mut TestOp, optr: *mut OVERLAPPED) {
+        // SAFETY: `optr` points to the live header of the test's boxed operation.
         unsafe { (*optr).Internal = 7 };
         op.value += 1;
     }
@@ -311,6 +314,7 @@ mod tests {
         assert_eq!(op.value, 1);
 
         // Completion recovers only the payload and can immediately resubmit.
+        // SAFETY: `optr` is the header of a live `OpBox<TestOp>`, and no other borrow of its payload is active.
         unsafe {
             let done = &mut *Op::<TestOp>::data_from_overlapped(optr.cast());
             issue(done, optr);
@@ -324,6 +328,7 @@ mod tests {
         #[inline(never)]
         fn inspect(op: &TestOp, optr: *mut OVERLAPPED) {
             assert_eq!(op.value, 1);
+            // SAFETY: `optr` points to the live header of the test's boxed operation.
             unsafe { (*optr).Internal = 7 };
             assert_eq!(format!("{op:?}"), "TestOp { value: 1 }");
         }
@@ -337,6 +342,7 @@ mod tests {
         inspect(op, optr);
         issue(op, optr);
 
+        // SAFETY: `optr` is the header of a live `OpBox<TestOp>`, and no other borrow of its payload is active.
         unsafe {
             let done = &mut *Op::<TestOp>::data_from_overlapped(optr.cast());
             done.value += 1;
@@ -354,6 +360,7 @@ mod tests {
         let optr = op.as_overlapped();
         let raw = op.into_raw();
         // Cleanup can move out the payload, leaving a live header for the kernel.
+        // SAFETY: `raw` is the live allocation of `op`, its payload is moved out and restored before the box is freed.
         unsafe {
             let state = ptr::read(&raw const (*raw).state);
             (*optr).Internal = 1;
@@ -392,11 +399,13 @@ mod tests {
         let write_header = pair.write_overlapped();
         let read = pair.read_ptr();
         let mut owners = vec![pair];
+        // SAFETY: `read` points to the boxed payload, which moving `owners` does not move.
         unsafe { read_and_write(&mut *read, read_header, &mut owners) };
         assert_eq!(owners[0].read().value, 2);
         assert_eq!(owners[0].write().value, 11);
 
         // Completing one direction must not borrow the other one's live header.
+        // SAFETY: both headers belong to the live pair in `owners`; each payload is borrowed only once.
         unsafe {
             let read = &mut *Op::<TestOp>::data_from_overlapped(read_header.cast());
             issue(read, read_header);
@@ -452,11 +461,13 @@ mod tests {
         let write_header = pair.write_overlapped();
         let read = pair.read_ptr();
         let mut owners = vec![pair];
+        // SAFETY: `read` points to the boxed payload, which moving `owners` does not move.
         unsafe { read_and_write(&mut *read, &mut owners) };
         assert_eq!(owners[0].read().1, 2);
         assert_eq!(owners[0].write().value, 11);
 
         // The write completion recovers its payload from the untagged header.
+        // SAFETY: `write_header` belongs to the live pair in `owners`, and its payload is not otherwise borrowed.
         unsafe {
             let write = &mut *Op::<TestOp>::data_from_overlapped(write_header.cast());
             issue(write, write_header);
@@ -489,6 +500,7 @@ mod tests {
         );
         let read_header = pair.read_overlapped();
         // The read header is inside, not at the start of, the allocation.
+        // SAFETY: `read_header` belongs to `pair`, which is still alive.
         unsafe { (*read_header).Internal = 1 };
         drop(pair);
         assert_eq!(read.get(), 1);

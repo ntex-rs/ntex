@@ -643,6 +643,7 @@ fn fns_defined_for_bytes_vec() {
     assert_eq!(bytes, b"2111111111"[..]);
 
     let mut bytes = BytesMut::copy_from_slice(b"hello world");
+    // SAFETY: The initialized buffer contains the one-byte prefix being retained.
     unsafe { bytes.set_len(1) };
     assert_eq!(bytes, "h");
 }
@@ -1119,6 +1120,7 @@ fn reserve_more_unset() {
 #[should_panic]
 fn set_len_over_u32() {
     let mut buf = BytesMut::with_capacity(64);
+    // SAFETY: The implementation checks capacity and panics before exposing the oversized length.
     unsafe { buf.set_len((1 << 32) + 5) };
 }
 
@@ -1223,6 +1225,7 @@ fn bytes_handle_concurrent_with_bytes_mut() {
     buf.advance_to(8);
     let _ = buf.split_to(32);
     buf.reserve(64);
+    // SAFETY: The buffer is nonempty and shortening it retains only initialized bytes.
     unsafe { buf.set_len(buf.len() - 1) };
 
     let (info, b) = t.join().unwrap();

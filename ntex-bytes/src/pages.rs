@@ -657,6 +657,8 @@ impl BytePage {
     /// inline page stores its data inside the `BytePage` itself, so moving the
     /// page invalidates the pointer, see [`is_inline`](Self::is_inline).
     pub unsafe fn as_ptr(&self) -> *const u8 {
+        // SAFETY: Each variant keeps its backing storage alive; the caller must preserve the page
+        // while using the pointer.
         unsafe {
             match &self.inner {
                 StorageType::Bytes(b) => b.storage.as_ptr(),
@@ -743,6 +745,8 @@ impl BytePage {
     pub fn advance_to(&mut self, cnt: usize) {
         match &mut self.inner {
             StorageType::Bytes(b) => b.advance_to(cnt),
+            // SAFETY: `set_start` checks `cnt <= len` before advancing within the live, exclusively
+            // owned view.
             StorageType::Storage(b) => unsafe { b.set_start(cnt) },
             StorageType::Vec(b) => {
                 assert!(
@@ -770,7 +774,7 @@ impl BytePage {
 
     fn into_storage(self) -> Result<StorageVec, Self> {
         if let StorageType::Storage(st) = self.inner {
-            // SAFETY: Converting back to `StorageVec` requires uniqueness.
+            // Converting back to `StorageVec` requires uniqueness.
             if !st.is_full() && st.is_unique() {
                 Ok(st)
             } else {
@@ -1069,6 +1073,8 @@ mod tests {
     #[test]
     fn pages() {
         let cap = BytePageSize::Size8.capacity();
+        // SAFETY: Each `as_ptr` result is compared immediately while its page remains live,
+        // unmoved, and unchanged.
         unsafe {
             // pages
             let mut pages = BytePages::new(BytePageSize::Size8);
@@ -1280,16 +1286,21 @@ mod tests {
     fn pages_copy_to_shares_current() {
         let mut pages = BytePages::new(BytePageSize::Size8);
         pages.put_slice(&[1; 64]);
+        // SAFETY: The current page owns a live allocation; the pointer is only recorded for
+        // comparison.
         let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
 
         let mut copy = BytePages::new(BytePageSize::Size8);
         pages.copy_to(&mut copy);
         let page = copy.take().unwrap();
+        // SAFETY: The page is live and unmoved during this pointer comparison.
         assert_eq!(unsafe { page.as_ptr() }, ptr.cast_const());
         assert_eq!(page.as_ref(), &[1; 64][..]);
 
         // the source keeps writing to the page it shares with the copy
         pages.put_slice(&[2; 64]);
+        // SAFETY: The current page owns a live allocation; the pointer is only compared, not
+        // dereferenced.
         assert_eq!(unsafe { pages.current.as_ref().unwrap().as_ptr() }, ptr);
         assert_eq!(page.as_ref(), &[1; 64][..]);
         assert_eq!(pages.len(), 128);
@@ -1307,6 +1318,8 @@ mod tests {
     fn pages_split_keeps_current_writable() {
         let mut pages = BytePages::new(BytePageSize::Size8);
         pages.put_slice(&[1; 64]);
+        // SAFETY: The current page owns a live allocation; the pointer is only recorded for
+        // comparison.
         let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
         let remaining = pages.spare();
 
@@ -1320,6 +1333,8 @@ mod tests {
         pages.put_slice(&[2; 16]);
         assert_eq!(pages.num_pages(), 1);
         assert_eq!(
+            // SAFETY: The current page owns a live allocation; the pointer is only compared, not
+            // dereferenced.
             unsafe { pages.current.as_ref().unwrap().as_ptr() },
             ptr.wrapping_add(40)
         );
@@ -1340,11 +1355,15 @@ mod tests {
         // the whole current page moves with its spare capacity
         let mut pages = BytePages::new(BytePageSize::Size8);
         pages.put_slice(&[1; 64]);
+        // SAFETY: The current page owns a live allocation; the pointer is only recorded for
+        // comparison.
         let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
         let to = pages.split_to(64);
         assert!(pages.is_empty());
         assert_eq!(pages.num_pages(), 0);
         assert_eq!(to.spare(), remaining);
+        // SAFETY: The destination owns the moved allocation; its pointer is only compared, not
+        // dereferenced.
         assert_eq!(unsafe { to.current.as_ref().unwrap().as_ptr() }, ptr);
 
         // an empty current page stays in place
@@ -1365,10 +1384,13 @@ mod tests {
         let mut pages = BytePages::new(BytePageSize::Size8);
         assert!(pages.has_remaining_mut());
         assert_eq!(pages.remaining_mut(), usize::MAX);
+        // SAFETY: Advancing by zero exposes no uninitialized bytes.
         unsafe { pages.advance_mut(0) };
 
         // filling the current page through `chunk_mut` starts a new one
         let n = pages.chunk_mut().len();
+        // SAFETY: The writable chunk has `n` bytes, all initialized by `write_bytes` before
+        // advancing.
         unsafe {
             std::ptr::write_bytes(pages.chunk_mut().as_mut_ptr(), 1, n);
             pages.advance_mut(n);
@@ -1376,6 +1398,8 @@ mod tests {
         assert!(pages.chunk_mut().len() > 0);
         // the new current page holds no data yet
         assert_eq!(pages.num_pages(), 1);
+        // SAFETY: The nonempty writable chunk receives one initialized byte before advancing by
+        // one.
         unsafe {
             *pages.chunk_mut().as_mut_ptr() = 2;
             pages.advance_mut(1);
@@ -1404,6 +1428,8 @@ mod tests {
         // `advance_mut` leaves a full current page
         let mut pages = BytePages::new(BytePageSize::Size8);
         let n = pages.chunk_mut().len();
+        // SAFETY: The writable chunk has `n` bytes, all initialized by `write_bytes` before
+        // advancing.
         unsafe {
             std::ptr::write_bytes(pages.chunk_mut().as_mut_ptr(), 1, n);
             pages.advance_mut(n);
@@ -1419,6 +1445,8 @@ mod tests {
         // splitting off a full current page leaves an empty page without capacity
         let mut pages = BytePages::new(BytePageSize::Size8);
         let n = pages.chunk_mut().len();
+        // SAFETY: The writable chunk has `n` bytes, all initialized by `write_bytes` before
+        // advancing.
         unsafe {
             std::ptr::write_bytes(pages.chunk_mut().as_mut_ptr(), 1, n);
             pages.advance_mut(n);
@@ -1441,6 +1469,8 @@ mod tests {
     fn pages_advance_past_current_page() {
         let mut pages = BytePages::new(BytePageSize::Size8);
         let n = pages.chunk_mut().len();
+        // SAFETY: The implementation checks the chunk bound and panics before exposing any
+        // uninitialized bytes.
         unsafe { pages.advance_mut(n + 1) };
     }
 
@@ -1496,6 +1526,8 @@ mod tests {
         // the current page
         let mut pages = BytePages::new(BytePageSize::Size8);
         pages.put_slice(&[1; 64]);
+        // SAFETY: The current page owns a live allocation; the pointer is only recorded for
+        // comparison.
         let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
         let mut buf = BytesMut::from(pages);
         assert_eq!(buf.as_ptr(), ptr.cast_const());
@@ -1507,6 +1539,8 @@ mod tests {
 
         let mut pages = BytePages::new(BytePageSize::Size8);
         pages.put_slice(&[1; 64]);
+        // SAFETY: The current page owns a live allocation; the pointer is only recorded for
+        // comparison.
         let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
         let b = Bytes::from(pages);
         assert_eq!(b.as_ptr(), ptr.cast_const());

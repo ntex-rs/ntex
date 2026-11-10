@@ -120,6 +120,8 @@
 //! Keep-alive, frame-read, and write timeouts are disabled by default.
 //! [`Dispatcher::max_inflight`] separately limits normal frame admission;
 //! it does not limit buffer sizes.
+
+#![forbid(unsafe_code)]
 #![deny(clippy::pedantic)]
 #![allow(clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, ready};

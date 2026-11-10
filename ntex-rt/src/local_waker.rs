@@ -64,6 +64,7 @@ impl LocalWaker {
     #[inline]
     pub fn from_waker(waker: &Waker) -> Self {
         if let Some(ptr) = wake::local_waker_ptr(waker) {
+            // SAFETY: `local_waker_ptr` verified a native waker on its registered owner thread.
             unsafe { wake::clone_local_waker(ptr) };
             Self::native(ptr)
         } else {
@@ -76,6 +77,7 @@ impl LocalWaker {
     pub fn wake(self) {
         if self.is_native() {
             let this = ManuallyDrop::new(self);
+            // SAFETY: This thread-confined native handle transfers its owned reference without running `Drop`.
             unsafe { wake::wake_local_waker(this.data, true) };
         } else {
             self.into_waker().wake();
@@ -86,6 +88,7 @@ impl LocalWaker {
     #[inline]
     pub fn wake_by_ref(&self) {
         if self.is_native() {
+            // SAFETY: This native handle retains a task reference and cannot leave its owner thread.
             unsafe { wake::wake_local_waker(self.data, false) };
         } else {
             self.borrowed_waker().wake_by_ref();
@@ -108,8 +111,10 @@ impl LocalWaker {
     pub fn into_waker(self) -> Waker {
         let this = ManuallyDrop::new(self);
         if this.is_native() {
+            // SAFETY: This native handle transfers its owner-thread reference, suppressing its own `Drop`.
             unsafe { wake::into_waker(this.data) }
         } else {
+            // SAFETY: The saved data and vtable retain the original standard waker's owned reference.
             unsafe { Waker::from_raw(this.raw_waker()) }
         }
     }
@@ -139,7 +144,7 @@ impl LocalWaker {
         if self.is_native() {
             wake::raw_waker(self.data)
         } else {
-            // Fallback metadata came from Waker::vtable(), a static reference.
+            // SAFETY: Fallback metadata came from `Waker::vtable()`, a static reference.
             RawWaker::new(self.data, unsafe {
                 self.metadata.cast::<RawWakerVTable>().as_ref()
             })
@@ -147,7 +152,7 @@ impl LocalWaker {
     }
 
     fn borrowed_waker(&self) -> ManuallyDrop<Waker> {
-        // The temporary borrows this handle's reference, it must not release it.
+        // SAFETY: This handle retains the matching data and vtable; `ManuallyDrop` prevents a borrowed release.
         ManuallyDrop::new(unsafe { Waker::from_raw(self.raw_waker()) })
     }
 }
@@ -157,6 +162,7 @@ impl From<Waker> for LocalWaker {
     #[inline]
     fn from(waker: Waker) -> Self {
         if let Some(ptr) = wake::local_waker_ptr(&waker) {
+            // SAFETY: `local_waker_ptr` verified a native waker on its registered owner thread.
             unsafe { wake::clone_local_waker(ptr) };
             drop(waker);
             Self::native(ptr)
@@ -170,6 +176,7 @@ impl Clone for LocalWaker {
     #[inline]
     fn clone(&self) -> Self {
         if self.is_native() {
+            // SAFETY: This native handle retains a task reference and is confined to its owner thread.
             unsafe { wake::clone_local_waker(self.data) };
             Self::native(self.data)
         } else {
@@ -189,8 +196,10 @@ impl Drop for LocalWaker {
     #[inline]
     fn drop(&mut self) {
         if self.is_native() {
+            // SAFETY: This thread-confined native handle owns the reference being released.
             unsafe { wake::drop_local_waker(self.data) };
         } else {
+            // SAFETY: The saved data and vtable reconstruct this handle's owned standard-waker reference.
             drop(unsafe { Waker::from_raw(self.raw_waker()) });
         }
     }

@@ -145,6 +145,8 @@ impl StorageVec {
     ///
     /// `ptr` must point to a live `Header` without references.
     pub(crate) unsafe fn recycle(ptr: *mut Header) -> StorageVec {
+        // SAFETY: The caller provides a live, exclusively owned header with no outstanding
+        // references.
         unsafe {
             (*ptr).len = 0;
             (*ptr).offset = METADATA_SIZE_U32;
@@ -166,11 +168,14 @@ impl StorageVec {
 
     /// Return a slice for the handle's view into the shared buffer
     pub(crate) fn as_ref(&self) -> &[u8] {
+        // SAFETY: The handle keeps the allocation alive and its view contains `len` initialized
+        // bytes.
         unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
     /// Return a mutable slice for the handle's view into the shared buffer
     pub(crate) fn as_mut(&mut self) -> &mut [u8] {
+        // SAFETY: This mutable handle exclusively owns the initialized bytes in its view.
         unsafe { slice::from_raw_parts_mut(self.as_ptr(), self.len()) }
     }
 
@@ -196,6 +201,8 @@ impl StorageVec {
     /// Insert a byte into the next slot and advance the len by 1.
     pub(crate) fn put_u8(&mut self, n: u8) {
         let len = self.len();
+        // SAFETY: Callers reserve at least one spare byte, and this handle exclusively owns that
+        // slot.
         unsafe {
             let inner = self.as_inner();
             (*inner).len += 1;
@@ -215,15 +222,21 @@ impl StorageVec {
     pub(crate) fn put_slice_partial(&mut self, src: &[u8]) -> usize {
         let cnt = cmp::min(src.len(), self.remaining());
         self.spare_mut()[..cnt].copy_from_slice(&src[..cnt]);
+        // SAFETY: The `cnt` appended bytes were initialized by the copy above and fit in spare
+        // capacity.
         unsafe { self.set_len(self.len() + cnt) };
         cnt
     }
 
     pub(crate) fn len(&self) -> usize {
+        // SAFETY: The handle owns a reference to the live header; only this view can change its
+        // length.
         unsafe { (*self.0.as_ptr()).len as usize }
     }
 
     pub(crate) fn capacity(&self) -> usize {
+        // SAFETY: The handle keeps the header alive, and reading its fields cannot overlap mutable
+        // access to this view.
         unsafe {
             let inner = self.0.as_ref();
             (inner.capacity + METADATA_SIZE_U32 - inner.offset) as usize
@@ -232,6 +245,8 @@ impl StorageVec {
 
     #[inline]
     pub(crate) fn remaining(&self) -> usize {
+        // SAFETY: The handle keeps the header alive, and reading its fields cannot overlap mutable
+        // access to this view.
         unsafe {
             let inner = self.0.as_ref();
             (inner.capacity + METADATA_SIZE_U32 - inner.offset - inner.len) as usize
@@ -243,6 +258,7 @@ impl StorageVec {
     }
 
     pub(crate) fn is_unique(&self) -> bool {
+        // SAFETY: The handle owns a reference to the live header whose atomic count is read.
         unsafe { Header::is_unique(self.0.as_ptr()) }
     }
 
@@ -278,6 +294,8 @@ impl StorageVec {
     /// The view shares the allocation, so `self` is no longer unique while
     /// it exists. There is never more than one `StorageVec` per allocation.
     pub(crate) fn shallow_freeze(&self) -> Storage {
+        // SAFETY: The initialized view is copied inline or shared after incrementing the atomic
+        // reference count.
         unsafe {
             if self.len() <= INLINE_CAP {
                 Storage::from_ptr_inline(self.as_ptr(), self.len())
@@ -294,6 +312,8 @@ impl StorageVec {
     }
 
     pub(crate) fn freeze(self) -> Storage {
+        // SAFETY: The initialized view is copied inline or receives this handle's reference via
+        // `mem::forget`.
         unsafe {
             if self.len() <= INLINE_CAP {
                 Storage::from_ptr_inline(self.as_ptr(), self.len())
@@ -307,6 +327,8 @@ impl StorageVec {
     }
 
     pub(crate) fn split_to(&mut self, at: usize) -> Storage {
+        // SAFETY: Callers ensure `at <= len`; the head is copied or retained and removed from the
+        // mutable view.
         unsafe {
             let ptr = self.as_ptr();
 
@@ -328,6 +350,8 @@ impl StorageVec {
     }
 
     pub(crate) fn truncate(&mut self, len: usize) {
+        // SAFETY: The handle keeps the header alive; reclaiming the prefix requires uniqueness and
+        // truncation only shortens data.
         unsafe {
             // try to reclaim the buffer. This is possible if the current
             // handle is the only outstanding handle pointing to the buffer.
@@ -351,6 +375,8 @@ impl StorageVec {
         if new_len > len {
             let additional = new_len - len;
             self.reserve(additional);
+            // SAFETY: The reservation provides `additional` writable bytes, all filled before
+            // increasing the length.
             unsafe {
                 let dst = self.as_raw()[len..].as_mut_ptr();
                 ptr::write_bytes(dst, value, additional);
@@ -392,6 +418,8 @@ impl StorageVec {
         // reclaimed, a shared page moves to a page of the same size
         let len = self.len();
         let half = size.half_capacity();
+        // SAFETY: The handle owns a reference to the live header; `capacity` is unchanged while
+        // shared.
         if len + half <= unsafe { Header::capacity(self.0.as_ptr()) } {
             if self.is_unique() {
                 self.reserve_inner(half, true);
@@ -418,6 +446,8 @@ impl StorageVec {
     fn move_to_page(&mut self, size: BytePageSize) {
         let len = self.len();
         let mut st = StorageVec::sized_exact(size);
+        // SAFETY: Callers select a page that fits `len`; the new allocation is disjoint and
+        // receives initialized bytes.
         unsafe {
             ptr::copy_nonoverlapping(self.as_ptr(), st.as_ptr(), len);
             st.set_len(len);
@@ -427,6 +457,8 @@ impl StorageVec {
     }
 
     fn reserve_inner(&mut self, additional: usize, exact: bool) {
+        // SAFETY: The handle owns a live reference; moving or reallocating its data is guarded by
+        // uniqueness.
         unsafe {
             let inner = self.as_inner();
             let len = (*inner).len as usize;
@@ -498,6 +530,8 @@ impl StorageVec {
     /// It is derived from the allocation size, any allocation of a page
     /// size belongs to the page category.
     pub(crate) fn page_size(&self) -> BytePageSize {
+        // SAFETY: The handle keeps the header alive; only its capacity, immutable while shared, is
+        // read.
         unsafe { BytePageSize::from_alloc_size(Header::capacity(self.0.as_ptr()) + METADATA_SIZE) }
     }
 
@@ -515,6 +549,8 @@ impl StorageVec {
         let old_layout = shared_vec_layout(capacity).unwrap();
         let new_layout = shared_vec_layout(new_cap).unwrap();
 
+        // SAFETY: The caller guarantees unique ownership and the current layout; null reallocation
+        // results are rejected.
         unsafe {
             let ptr = self.0.as_ptr();
 
@@ -588,7 +624,11 @@ impl StorageVec {
     }
 }
 
+// SAFETY: The mutable view is uniquely owned, immutable sibling views are disjoint, and the
+// refcount is atomic.
 unsafe impl Send for StorageVec {}
+// SAFETY: Shared access only reads the view or updates atomics; view mutation requires exclusive
+// access.
 unsafe impl Sync for StorageVec {}
 
 impl Drop for StorageVec {
@@ -607,6 +647,8 @@ impl Header {
         let ptr = Self::alloc_with_capacity(cap, src.len() as u32);
 
         // copy slice
+        // SAFETY: The fresh, non-null allocation is aligned for `Header` and has room for
+        // `src.len()` data bytes.
         unsafe {
             let dst = ptr.add(METADATA_SIZE);
             let sl = slice::from_raw_parts_mut(dst, src.len());
@@ -624,6 +666,8 @@ impl Header {
         let layout = shared_vec_layout(cap).unwrap();
 
         // Alloc memory and store data
+        // SAFETY: The layout fits the header and data; allocation failure is checked before
+        // initializing the aligned header.
         unsafe {
             let ptr = alloc::alloc(layout);
             if ptr.is_null() {
@@ -658,6 +702,8 @@ impl Header {
     /// fields concurrently.
     unsafe fn is_unique(ptr: *const Header) -> bool {
         // Acquire synchronizes with the Release decrement of other handles
+        // SAFETY: The caller holds a reference to the live header; only its atomic refcount is
+        // accessed.
         unsafe { (*ptr).ref_count.load(Acquire) == 1 }
     }
 
@@ -671,6 +717,8 @@ impl Header {
     /// reference, or be the final release.
     #[cfg(feature = "tracker")]
     pub(crate) unsafe fn tracker(ptr: *const Header) -> *const TrackerInner {
+        // SAFETY: The caller keeps the header alive and excludes concurrent writes to its tracker
+        // field.
         unsafe { ptr::addr_of!((*ptr).tracker).read() }
     }
 
@@ -683,6 +731,8 @@ impl Header {
     #[cfg(feature = "tracker")]
     pub(crate) unsafe fn attach(ptr: *mut Header, tracker: *const TrackerInner) {
         if !tracker.is_null() {
+            // SAFETY: The caller provides a unique untracked header and a live tracker, checked
+            // non-null above.
             unsafe {
                 debug_assert!((*ptr).tracker.is_null());
                 (*tracker).charge((*ptr).capacity as usize + METADATA_SIZE);
@@ -704,6 +754,8 @@ impl Header {
 
 pub(crate) fn release_shared_vec(ptr: *mut Header) {
     // follow the drop steps from Arc
+    // SAFETY: Callers transfer one live allocation reference; only the final release recycles or
+    // deallocates it.
     unsafe {
         if (*ptr).ref_count.fetch_sub(1, Release) != 1 {
             return;
@@ -852,6 +904,7 @@ mod tests {
 
         // the view may start past the allocation start
         let mut st = StorageVec::from_slice(100, &data);
+        // SAFETY: The 100-byte initialized view contains the 30 bytes being consumed.
         unsafe { st.set_start(30) };
         st.reserve(1000);
         assert_eq!(st.as_ref(), &data[30..]);
@@ -865,6 +918,8 @@ mod tests {
 
         // nothing left in the view
         let mut st = StorageVec::from_slice(100, &data);
+        // SAFETY: The entire 100-byte view is initialized and advancing to its end stays within
+        // bounds.
         unsafe { st.set_start(100) };
         st.reserve(1000);
         assert!(st.as_ref().is_empty());
@@ -958,6 +1013,8 @@ mod tests {
         let mut st = StorageVec::sized(BytePageSize::Size32);
         let full = pattern(st.capacity());
         assert_eq!(st.put_slice_partial(&full), full.len());
+        // SAFETY: The full initialized view has at least 100 bytes, so this retains its final 100
+        // bytes.
         unsafe { st.set_start(full.len() - 100) };
         let view = st.shallow_freeze();
         assert_eq!(st.remaining(), 0);
@@ -1117,6 +1174,7 @@ mod tests {
         assert_eq!(st.remaining(), cap - 51);
 
         // advancing the start keeps the spare capacity
+        // SAFETY: The view contains 51 initialized bytes, so consuming ten stays within bounds.
         unsafe { st.set_start(10) };
         assert_eq!(st.len(), 41);
         assert_eq!(st.capacity(), cap - 10);
@@ -1251,10 +1309,14 @@ mod tracker_tests {
     }
 
     fn alloc_size(b: &BytesMut) -> usize {
+        // SAFETY: The buffer owns a reference to the live header; only its stable capacity field is
+        // read.
         unsafe { Header::capacity(b.storage.0.as_ptr()) + METADATA_SIZE }
     }
 
     fn is_tracked(b: &BytesMut) -> bool {
+        // SAFETY: The buffer keeps the header alive and its shared borrow excludes tracker-field
+        // mutation.
         unsafe { !Header::tracker(b.storage.0.as_ptr()).is_null() }
     }
 

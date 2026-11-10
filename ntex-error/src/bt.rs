@@ -157,8 +157,9 @@ impl BacktraceRaw {
     ///
     /// Same requirements as [`backtrace::trace_unsynchronized`].
     pub unsafe fn with_filename_unsynchronized(location: &'static str) -> Self {
-        Self::capture(location, |cb| unsafe {
-            backtrace::trace_unsynchronized(cb);
+        Self::capture(location, |cb| {
+            // SAFETY: The caller upholds the `trace_unsynchronized` requirements.
+            unsafe { backtrace::trace_unsynchronized(cb) };
         })
     }
 

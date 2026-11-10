@@ -305,6 +305,7 @@ impl FlateDecoder {
             };
             let read = usize::try_from(self.inner.total_in() - total_in).unwrap();
             let written = usize::try_from(self.inner.total_out() - total_out).unwrap();
+            // SAFETY: The decoder initialized `written` bytes in the spare chunk without reallocating it.
             unsafe { self.buf.advance_mut(written) };
             data.advance_to(read);
 

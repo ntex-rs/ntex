@@ -991,23 +991,35 @@ mod tests {
 
         // Keep clone identity stable without relying on generic vtable deduplication.
         static VTABLE: RawWakerVTable = RawWakerVTable::new(
-            |data| unsafe {
-                let state = &*data.cast::<Registration>();
-                assert!(!state.panic_on_clone.load(Ordering::Relaxed), "clone");
-                state.clones.fetch_add(1, Ordering::Relaxed);
-                Arc::increment_strong_count(data.cast::<Registration>());
-                RawWaker::new(data, &VTABLE)
+            |data| {
+                // SAFETY: Each waker holds a live `Arc<Registration>` count; cloning adds one for the new waker.
+                unsafe {
+                    let state = &*data.cast::<Registration>();
+                    assert!(!state.panic_on_clone.load(Ordering::Relaxed), "clone");
+                    state.clones.fetch_add(1, Ordering::Relaxed);
+                    Arc::increment_strong_count(data.cast::<Registration>());
+                    RawWaker::new(data, &VTABLE)
+                }
             },
-            |data| unsafe {
-                Arc::from_raw(data.cast::<Registration>())
-                    .inner
-                    .wake_by_ref();
+            |data| {
+                // SAFETY: Consuming this waker transfers its one raw `Arc` count into the temporary owner.
+                unsafe {
+                    Arc::from_raw(data.cast::<Registration>())
+                        .inner
+                        .wake_by_ref();
+                }
             },
-            |data| unsafe {
-                (*data.cast::<Registration>()).inner.wake_by_ref();
+            |data| {
+                // SAFETY: The borrowed waker keeps the `Arc<Registration>` allocation live for this call.
+                unsafe {
+                    (*data.cast::<Registration>()).inner.wake_by_ref();
+                }
             },
-            |data| unsafe {
-                drop(Arc::from_raw(data.cast::<Registration>()));
+            |data| {
+                // SAFETY: Dropping this waker releases exactly the raw `Arc` count it owns.
+                unsafe {
+                    drop(Arc::from_raw(data.cast::<Registration>()));
+                }
             },
         );
 
@@ -1017,6 +1029,7 @@ mod tests {
                 clones: AtomicUsize::new(0),
                 panic_on_clone: AtomicBool::new(false),
             });
+            // SAFETY: The vtable manages the transferred `Arc` count and accesses only thread-safe state.
             let waker = unsafe {
                 Waker::from_raw(RawWaker::new(Arc::into_raw(state.clone()).cast(), &VTABLE))
             };

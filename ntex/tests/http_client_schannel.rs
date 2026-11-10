@@ -1177,11 +1177,14 @@ async fn test_tls12_renegotiation() {
 
         // `SslRef` is the `SSL` pointer
         let ssl = std::ptr::from_ref(stream.ssl()).cast_mut().cast();
+        // SAFETY: `ssl` is the live `SSL` of `stream`, used only on this thread.
         assert_eq!(unsafe { SSL_renegotiate(ssl) }, 1);
         // sends HelloRequest, the client's handshake is processed by reads
+        // SAFETY: `ssl` is the live `SSL` of `stream`, used only on this thread.
         assert_eq!(unsafe { SSL_do_handshake(ssl) }, 1);
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut buf = [0u8; 64];
+        // SAFETY: `ssl` is the live `SSL` of `stream`, used only on this thread.
         while unsafe { SSL_renegotiate_pending(ssl) } != 0 {
             assert!(Instant::now() < deadline, "renegotiation is not completed");
             match stream.read(&mut buf) {

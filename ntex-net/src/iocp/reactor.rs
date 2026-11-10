@@ -357,12 +357,14 @@ impl Reactor {
             let overlapped_ptr: *mut Overlapped = entry.lpOverlapped.cast();
             // Copy completion data without borrowing the header: the handler
             // may resubmit the same op and let the kernel write it again.
+            // SAFETY: Non-notification packets reference a retained operation or the live notify header.
             let hnd = unsafe { (*overlapped_ptr).hnd };
             if hnd == 0 {
                 continue;
             }
 
             #[allow(clippy::cast_possible_wrap)]
+            // SAFETY: Completion has returned the retained header to the driver before dispatch.
             let (udata, status, size) = unsafe {
                 (
                     (*overlapped_ptr).udata,
@@ -373,6 +375,7 @@ impl Reactor {
             let result = if status >= 0 {
                 Ok(size)
             } else {
+                // SAFETY: Status translation accepts any `NTSTATUS` and accesses no caller memory.
                 let error = unsafe { RtlNtStatusToDosError(status) };
                 match error {
                     ERROR_IO_INCOMPLETE
@@ -429,6 +432,7 @@ struct ReactorInner {
 
 impl ReactorInner {
     fn new() -> io::Result<Self> {
+        // SAFETY: The sentinel requests a new port; a non-null result is owned and wrapped once.
         let port = unsafe {
             let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1);
             if port.is_null() {
@@ -496,6 +500,7 @@ impl ReactorInner {
                 | WinSock::SOCK_NOTIFY_TRIGGER_EDGE) as u8,
             registrationResult: 0,
         };
+        // SAFETY: The port and socket are live; `reg` is writable and no completion output is requested.
         let res = unsafe {
             psn(
                 self.port.as_raw_handle(),
@@ -562,14 +567,18 @@ type ProcessSocketNotificationsFn = unsafe extern "system" fn(
 /// fail to load on older builds, which wait for input with zero-byte recvs.
 fn process_socket_notifications() -> Option<ProcessSocketNotificationsFn> {
     static PSN: OnceLock<Option<ProcessSocketNotificationsFn>> = OnceLock::new();
-    *PSN.get_or_init(|| unsafe {
-        let module = GetModuleHandleA(c"ws2_32.dll".as_ptr().cast());
-        if module.is_null() {
-            return None;
+    *PSN.get_or_init(|| {
+        // SAFETY: Both names are NUL-terminated; loaded Winsock exports the named function
+        // with this system ABI and remains loaded while the cached pointer is used.
+        unsafe {
+            let module = GetModuleHandleA(c"ws2_32.dll".as_ptr().cast());
+            if module.is_null() {
+                return None;
+            }
+            GetProcAddress(module, c"ProcessSocketNotifications".as_ptr().cast()).map(|f| {
+                mem::transmute::<unsafe extern "system" fn() -> isize, ProcessSocketNotificationsFn>(f)
+            })
         }
-        GetProcAddress(module, c"ProcessSocketNotifications".as_ptr().cast()).map(|f| {
-            mem::transmute::<unsafe extern "system" fn() -> isize, ProcessSocketNotificationsFn>(f)
-        })
     })
 }
 
@@ -593,6 +602,7 @@ fn ifs_flag(domain: Domain) -> u8 {
 /// such operations inline, so the extra packet would complete the slot a
 /// second time, possibly after it was reused by another operation.
 fn check_ifs_socket(h: RawHandle) -> io::Result<()> {
+    // SAFETY: All fields are integers or integer arrays, for which zero is valid.
     let mut info: WinSock::WSAPROTOCOL_INFOW = unsafe { mem::zeroed() };
     let mut len = i32::try_from(mem::size_of_val(&info)).unwrap();
     syscall!(
@@ -621,8 +631,9 @@ pub(crate) struct ReactorHandle {
     inner: Arc<ReactorInner>,
 }
 
-/// SAFETY: `ReactorInner` holds iocp port handle which is thread safe
+// SAFETY: The port is thread-safe, the notify header is immutable, and the cache is atomic.
 unsafe impl Send for ReactorInner {}
+// SAFETY: Concurrent notifications only read the header; the kernel never writes posted headers.
 unsafe impl Sync for ReactorInner {}
 
 impl Notify for ReactorHandle {
@@ -782,6 +793,7 @@ mod tests {
             (f::STATUS_HOST_UNREACHABLE, io::ErrorKind::HostUnreachable),
             (f::STATUS_IO_TIMEOUT, io::ErrorKind::TimedOut),
         ] {
+            // SAFETY: `RtlNtStatusToDosError` takes an integer and has no other preconditions.
             let error = unsafe { RtlNtStatusToDosError(status) };
             let err = io::Error::from_raw_os_error(wsa_error(error));
             assert_eq!(err.kind(), kind, "{status:#x}: {err:?}");

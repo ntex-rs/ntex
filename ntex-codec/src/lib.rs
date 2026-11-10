@@ -68,6 +68,8 @@
 //! assert!(LineCodec.decode_eof(&mut src).unwrap().is_none());
 //! ```
 
+#![forbid(unsafe_code)]
+
 use std::{fmt, io, rc::Rc};
 
 use ntex_bytes::{BytePages, Bytes, BytesMut};

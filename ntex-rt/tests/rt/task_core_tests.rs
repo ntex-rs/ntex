@@ -20,6 +20,8 @@ fn runtime() -> Runtime {
 }
 
 fn spawn<F: Future>(rt: &Runtime, future: F) -> Task<F::Output> {
+    // SAFETY: Tests call on the runtime owner and complete or destroy futures before their borrows
+    // end.
     unsafe { super::spawn(future, &rt.queue, Location::caller()) }
 }
 
@@ -521,18 +523,26 @@ fn owner_endpoint_cache_tracks_multiple_runtimes_and_shutdown() {
     let first_data = first_task.h.as_ptr().cast();
     let second_data = second_task.h.as_ptr().cast();
     for _ in 0..3 {
+        // SAFETY: `first_task` retains the native allocation backing `first_data`.
         assert!(unsafe { wake::active_owner(first_data) });
+        // SAFETY: `first_task` still retains the native allocation backing `first_data`.
         assert!(unsafe { wake::active_owner(first_data) });
+        // SAFETY: `second_task` retains the native allocation backing `second_data`.
         assert!(unsafe { wake::active_owner(second_data) });
     }
     // Unregistering a different runtime must not invalidate the live identity.
     drop(first);
+    // SAFETY: `second_task` retains its native allocation while its runtime is still live.
     assert!(unsafe { wake::active_owner(second_data) });
+    // SAFETY: `first_task` retains the native allocation even though its runtime has shut down.
     assert!(!unsafe { wake::active_owner(first_data) });
     drop(second);
+    // SAFETY: `second_task` retains the native allocation even though its runtime has shut down.
     assert!(!unsafe { wake::active_owner(second_data) });
     let third = runtime();
+    // SAFETY: `first_task` still retains its native allocation after the third runtime is created.
     assert!(!unsafe { wake::active_owner(first_data) });
+    // SAFETY: `second_task` still retains its native allocation after the third runtime is created.
     assert!(!unsafe { wake::active_owner(second_data) });
     drop((first_task, second_task, third));
 }
@@ -551,18 +561,23 @@ fn owner_endpoint_cache_does_not_cache_remote_routes() {
     let Poll::Ready(Some(waker)) = task.poll_join(&Context::from_waker(Waker::noop())) else {
         panic!("missing completed waker");
     };
+    // SAFETY: This native waker retains the task allocation backing its data pointer.
     assert!(unsafe { wake::active_owner(waker.data()) });
     let waker = thread::spawn(move || {
+        // SAFETY: The moved native waker keeps its allocation alive during the remote lookup.
         assert!(!unsafe { wake::active_owner(waker.data()) });
         drop(waker.clone());
         let other = runtime();
         let other_task = spawn(&other, pending::<()>());
         drain(&other);
         let other_data = other_task.h.as_ptr().cast();
+        // SAFETY: `other_task` retains the native allocation backing `other_data`.
         assert!(unsafe { wake::active_owner(other_data) });
         for _ in 0..2 {
+            // SAFETY: The native waker keeps its allocation alive during each remote lookup.
             assert!(!unsafe { wake::active_owner(waker.data()) });
             drop(waker.clone());
+            // SAFETY: `other_task` still retains the allocation backing `other_data`.
             assert!(unsafe { wake::active_owner(other_data) });
         }
         drop(other_task);
@@ -574,6 +589,7 @@ fn owner_endpoint_cache_does_not_cache_remote_routes() {
     .unwrap();
     assert!(!rt.queue.wake_queue.is_empty());
     drain(&rt);
+    // SAFETY: The returned native waker still retains the allocation backing its data pointer.
     assert!(unsafe { wake::active_owner(waker.data()) });
     drop((waker, task));
     drain(&rt);
@@ -802,9 +818,13 @@ fn remote_endpoint_cache_releases_closed_queues_on_rejection() {
         let queue = Arc::downgrade(&cached.queue);
         let allocations = Arc::downgrade(&cached.queue.task_allocations);
         // The join handles protect these borrowed wakers through shutdown.
+        // SAFETY: The join handle retains this native task; `ManuallyDrop` prevents releasing a
+        // borrowed count.
         let waker = ManuallyDrop::new(unsafe {
             Waker::from_raw(wake::raw_waker(cached_task.h.as_ptr().cast()))
         });
+        // SAFETY: The join handle retains this native task; `ManuallyDrop` prevents releasing a
+        // borrowed count.
         let other = ManuallyDrop::new(unsafe {
             Waker::from_raw(wake::raw_waker(missing_task.h.as_ptr().cast()))
         });
@@ -1040,6 +1060,8 @@ fn borrowed_poll_waker_acquisition_precedes_final_owner_release() {
             });
             rt.queue.pop_local().unwrap().run();
             let waker = saved.borrow_mut().take().unwrap();
+            // SAFETY: This native waker retains the task allocation; inspection occurs on its owner
+            // thread.
             assert_eq!(core(unsafe { task_ptr(waker.data()) }).refs.get(), 1);
             assert_eq!(rt.queue.task_count(), 1);
             // Owner release must not overtake the queued acquisition.
@@ -1203,6 +1225,8 @@ fn running_release_does_not_overtake_borrowed_acquisition() {
 #[test]
 fn earlier_fifo_wake_acquires_later_published_writes() {
     struct Published(std::cell::UnsafeCell<usize>);
+    // SAFETY: The sole write precedes wake publication; the owner reads only after acquiring that
+    // wake.
     unsafe impl Sync for Published {}
 
     let rt = runtime();
@@ -1221,6 +1245,8 @@ fn earlier_fifo_wake_acquires_later_published_writes() {
                 *slot.borrow_mut() = Some(cx.waker().clone());
                 Poll::Pending
             } else {
+                // SAFETY: The owner has acquired the producer wake, which publishes the sole
+                // payload write.
                 assert_eq!(unsafe { *data.0.get() }, 42);
                 Poll::Ready(())
             }
@@ -1247,6 +1273,8 @@ fn earlier_fifo_wake_acquires_later_published_writes() {
             .is_none()
     );
     let producer = thread::spawn(move || {
+        // SAFETY: This producer is the sole writer; wake publication synchronizes the later owner
+        // read.
         unsafe { *value.0.get() = 42 };
         waker.wake_by_ref();
         // Only wake publication, not this flag, synchronizes the payload.
@@ -1299,7 +1327,9 @@ fn unregistered_clones_and_native_awaiters_are_inert() {
     assert!(queue.tasks.head.get().is_null());
     assert_eq!(queue.task_count(), 1);
     let awaiter = Awaiter::new();
+    // SAFETY: The awaiter is local to this thread and has no other borrowers.
     assert!(unsafe { awaiter.register(&waker) }.is_none());
+    // SAFETY: Registration has returned and this thread still has exclusive access to the awaiter.
     let cloned = unsafe { awaiter.take() }.unwrap();
     assert!(!cloned.will_wake(&waker));
     cloned.wake();
@@ -1433,6 +1463,8 @@ impl std::task::Wake for CheckCompletion {
         assert!(self.queue.tasks.head.get().is_null());
         self.calls.fetch_add(1, Ordering::Relaxed);
         // Completion callbacks may immediately spawn another task.
+        // SAFETY: The owner-thread assertion above holds, and the detached future captures no
+        // borrowed data.
         unsafe {
             super::spawn_detached::<_, true>(async {}, &self.queue, Location::caller());
         }
@@ -1566,15 +1598,18 @@ fn remote_activation_and_shutdown_before_poll() {
     let queue = rt.queue.clone();
     let polls = Arc::new(AtomicUsize::new(0));
     let p = polls.clone();
-    thread::spawn(move || unsafe {
-        super::spawn_detached::<_, false>(
-            poll_fn(move |_| {
-                p.fetch_add(1, Ordering::Relaxed);
-                Poll::<()>::Pending
-            }),
-            &queue,
-            Location::caller(),
-        );
+    thread::spawn(move || {
+        // SAFETY: The future owns only an atomic counter and is `Send` and `'static`.
+        unsafe {
+            super::spawn_detached::<_, false>(
+                poll_fn(move |_| {
+                    p.fetch_add(1, Ordering::Relaxed);
+                    Poll::<()>::Pending
+                }),
+                &queue,
+                Location::caller(),
+            );
+        }
     })
     .join()
     .unwrap();
@@ -1608,6 +1643,8 @@ fn shutdown_does_not_reactivate_a_running_core() {
             drops: drops.clone(),
             panics: false,
         };
+        // SAFETY: This is the queue owner thread, and the moved future owns all of its captured
+        // data.
         let task = unsafe {
             super::spawn(
                 async move {
