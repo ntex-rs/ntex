@@ -156,8 +156,15 @@ impl Reactor {
     const BATCH_MASK: u64 = 0xFFFF_0000_0000_0000;
     const DATA_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
+    /// Events handled per poll, tasks run between batches.
+    ///
+    /// Small batches let a connection write its response while its socket
+    /// state is still in cache. With 2048, ~1K busy connections per worker ran
+    /// ~20% slower in HTTP/1 benchmarks.
+    const EVENTS_CAPACITY: u32 = 16;
+
     pub fn new() -> io::Result<Self> {
-        Reactor::with_capacity(2048)
+        Reactor::with_capacity(Self::EVENTS_CAPACITY)
     }
 
     pub fn with_capacity(io_queue_capacity: u32) -> io::Result<Self> {

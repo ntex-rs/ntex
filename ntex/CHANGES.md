@@ -1,6 +1,6 @@
 # Changes
 
-## [4.7.1] - Unreleased
+## [4.7.1] - 2026-11-11
 
 * Add `RequestHead::stream` to enable stream view in http services
 
