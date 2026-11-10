@@ -307,3 +307,45 @@ fn miri_drop_with_pending_readiness() {
     assert!(pl.poll_ready(&mut cx, &1).is_pending());
     drop(pl);
 }
+
+struct PendingCall(Vec<usize>);
+
+impl Service<Vec<usize>, ()> for PendingCall {
+    type Res = ();
+    type Error = ();
+
+    async fn call(&self, (): (), ctx: Ctx<'_, Self, Vec<usize>>) -> Result<(), ()> {
+        let _g = scopeguard(&self.0, ctx.st());
+        pending().await
+    }
+}
+
+fn scopeguard<'a>(s: &'a [usize], st: &'a [usize]) -> impl Drop + 'a {
+    struct G<'a>(&'a [usize], &'a [usize]);
+    impl Drop for G<'_> {
+        fn drop(&mut self) {
+            assert_eq!(self.0.iter().sum::<usize>(), 3);
+            assert_eq!(self.1.iter().sum::<usize>(), 7);
+        }
+    }
+    G(s, st)
+}
+
+/// STATEMENT: An owned call on a fixed-state binding keeps the service and its state alive
+/// after the pipeline and binding are dropped.
+///
+/// HOW:
+/// - Start an owned call on a `bind_state` binding, then drop the binding and the pipeline.
+/// - Poll the call into the pending service call and drop it; its guard reads both the
+///   service's and the state's vectors.
+#[test]
+fn miri_drop_pending_state_call_after_pipeline() {
+    let mut cx = Context::from_waker(Waker::noop());
+    let pl = PipelineState::new(PendingCall(vec![1, 2]));
+    let b = pl.bind_state(vec![3, 4]);
+    let mut call = Box::pin(b.call_static(()));
+    drop(b);
+    drop(pl);
+    assert!(call.as_mut().poll(&mut cx).is_pending());
+    drop(call);
+}

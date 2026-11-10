@@ -1,11 +1,11 @@
-use std::{fmt, marker::PhantomPinned, ptr, rc::Rc, task::Context, task::Poll};
+use std::{fmt, marker::PhantomPinned, rc::Rc, task::Context, task::Poll};
 
 use crate::{
     BindCtx, Ctx, IntoService, ReadyCallback, ReadyLink, Service, ctx::WaitersRef, util::BoxFuture,
 };
 
 use crate::pipeline::PipelineBinding;
-use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness};
+use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness, detach};
 use crate::readiness::ReadyScope;
 
 /// Execution container for a service whose state is supplied per operation.
@@ -322,6 +322,10 @@ impl<St, Req, Res, Err> PipelineInternalApi<Req, Res, Err> for PipelineInternal<
         self.api.call(idx, req, &self.st)
     }
 
+    fn call_static(self: Rc<Self>, idx: u32, req: Req) -> BoxFuture<'static, Result<Res, Err>> {
+        self.api.clone().call_static(idx, req, self)
+    }
+
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Err>> {
         unreachable!()
     }
@@ -346,6 +350,19 @@ struct PipelineInner<S, E> {
     _pinned: PhantomPinned,
 }
 
+impl<S, E> PipelineInner<S, E> {
+    async fn call_impl<St, Req>(&self, idx: u32, req: Req, st: &St) -> Result<S::Res, E>
+    where
+        S: Service<St, Req, Error = E>,
+    {
+        let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, st);
+        self.readiness
+            .ready(|| ctx.ready_generation(&self.s))
+            .await?;
+        self.s.call(req, ctx).await
+    }
+}
+
 impl<S, E> Drop for PipelineInner<S, E> {
     fn drop(&mut self) {
         // The readiness future borrows `s` and `waiters`, so it must be dropped
@@ -363,6 +380,14 @@ trait PipelineStateApi<St, Req, Res, Err> {
     fn call<'a>(&'a self, idx: u32, req: Req, st: &'a St) -> BoxFuture<'a, Result<Res, Err>>
     where
         Req: 'a;
+
+    /// Calls with a future that keeps `self` and `owner`, which holds the state, alive.
+    fn call_static(
+        self: Rc<Self>,
+        idx: u32,
+        req: Req,
+        owner: Rc<PipelineInternal<St, Req, Res, Err>>,
+    ) -> BoxFuture<'static, Result<Res, Err>>;
 
     fn ready<'a>(&'a self, idx: u32, st: &'a St) -> BoxFuture<'a, Result<(), Err>>
     where
@@ -425,13 +450,16 @@ where
     where
         Req: 'a,
     {
-        Box::pin(async move {
-            let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, st);
-            self.readiness
-                .ready(|| ctx.ready_generation(&self.s))
-                .await?;
-            self.s.call(req, ctx).await
-        })
+        Box::pin(self.call_impl(idx, req, st))
+    }
+
+    fn call_static(
+        self: Rc<Self>,
+        idx: u32,
+        req: Req,
+        owner: Rc<PipelineInternal<St, Req, S::Res, S::Error>>,
+    ) -> BoxFuture<'static, Result<S::Res, S::Error>> {
+        Box::pin(async move { self.call_impl(idx, req, &owner.st).await })
     }
 
     fn poll_ready(&self, cx: &mut Context<'_>, st: &St) -> Poll<Result<(), S::Error>>
@@ -439,10 +467,8 @@ where
         St: Clone,
     {
         self.readiness.poll_ready(cx, || {
-            // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
-            // `fut` is stored in `self.readiness`, which is reset before other
-            // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
-            let pl = unsafe { &*(ptr::from_ref(self)) };
+            // SAFETY: the future is stored in `self.readiness`
+            let pl = unsafe { detach(self) };
             let st = st.clone();
             Box::pin(async move {
                 let registration = pl.waiters.register();
