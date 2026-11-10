@@ -1035,17 +1035,20 @@ impl Drop for ReadyObserver {
     }
 }
 
-/// Runs a check until it completes without being invalidated.
-///
-/// Hand-written instead of an `async fn` to keep nested service readiness
-/// futures shallow, deep `async` nesting overflows the compiler's query depth.
-pub(crate) struct RunCheck<'a, F, Fut> {
-    scope: &'a ReadyScope,
-    check: F,
-    // Dropped before `observer`.
-    fut: Option<Fut>,
-    observer: Option<ReadyObserver>,
-    generation: Generation,
+pin_project_lite::pin_project! {
+    /// Runs a check until it completes without being invalidated.
+    ///
+    /// Hand-written instead of an `async fn` to keep nested service readiness
+    /// futures shallow, deep `async` nesting overflows the compiler's query depth.
+    pub(crate) struct RunCheck<'a, F, Fut> {
+        scope: &'a ReadyScope,
+        check: F,
+        // Dropped before `observer`.
+        #[pin]
+        fut: Option<Fut>,
+        observer: Option<ReadyObserver>,
+        generation: Generation,
+    }
 }
 
 impl<'a, F, Fut, E> RunCheck<'a, F, Fut>
@@ -1087,29 +1090,26 @@ where
     /// Repeated invalidation yields to the executor instead of spinning.
     /// After completion, the next poll starts a new check.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: `fut` is pinned in place and only dropped in place.
-        let this = unsafe { self.get_unchecked_mut() };
+        let mut this = self.project();
         let mut restarted = false;
         loop {
             // `&Option<Fut>` would retag the whole future and invalidate
             // borrows it holds into itself, `&mut` to a `!Unpin` future is not retagged.
-            if this.fut.as_mut().is_none() {
-                this.generation = this.scope.generation();
-                this.fut = Some((this.check)());
+            if this.fut.as_mut().as_pin_mut().is_none() {
+                *this.generation = this.scope.generation();
+                this.fut.set(Some((this.check)()));
             }
-            if let Some(observer) = &this.observer {
+            if let Some(observer) = this.observer.as_ref() {
                 observer.register(cx.waker());
             }
-            let result = if this.scope.is_directly_invalidated(this.generation) {
+            let result = if this.scope.is_directly_invalidated(*this.generation) {
                 None
             } else {
                 let before_poll = this.scope.generation();
-                // SAFETY: see above.
-                let fut = unsafe { Pin::new_unchecked(this.fut.as_mut().unwrap()) };
-                match fut.poll(cx) {
+                match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
                     Poll::Ready(result) => Some(result),
                     Poll::Pending => {
-                        let scope = this.scope;
+                        let scope = *this.scope;
                         this.observer
                             .get_or_insert_with(|| scope.observer())
                             .register(cx.waker());
@@ -1121,12 +1121,12 @@ where
                     }
                 }
             };
-            this.fut = None;
+            this.fut.set(None);
             if let Some(result) = result {
-                this.observer = None;
+                *this.observer = None;
                 result?;
-                if this.scope.is_current(this.generation) {
-                    return Poll::Ready(Ok(this.generation));
+                if this.scope.is_current(*this.generation) {
+                    return Poll::Ready(Ok(*this.generation));
                 }
             }
             // A check that keeps invalidating its own scope must not starve the executor.

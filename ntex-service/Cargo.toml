@@ -25,6 +25,7 @@ default = []
 [dependencies]
 log = { workspace = true }
 slab = { workspace = true }
+pin-project-lite = { workspace = true }
 foldhash = { workspace = true }
 
 [dev-dependencies]

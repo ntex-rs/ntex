@@ -74,9 +74,6 @@ struct Channel {
     write: IoTestState,
 }
 
-unsafe impl Sync for Channel {}
-unsafe impl Send for Channel {}
-
 impl Channel {
     fn is_closed(&self) -> bool {
         self.flags.contains(IoTestFlags::CLOSED)
