@@ -561,11 +561,15 @@ impl BufMut for BytePages {
         }
     }
 
-    fn put_slice(&mut self, mut src: &[u8]) {
-        while !src.is_empty() {
-            let amount = self.with_current(|st| st.put_slice_partial(src));
-
-            src = &src[amount..];
+    #[inline]
+    fn put_slice(&mut self, src: &[u8]) {
+        // a small write that leaves the current page non-full is copied in place
+        if let Some(st) = self.current.as_mut()
+            && st.remaining() > src.len()
+        {
+            st.put_slice_partial(src);
+        } else {
+            self.put_slice_pages(src);
         }
     }
 
@@ -577,6 +581,16 @@ impl BufMut for BytePages {
     #[inline]
     fn put_i8(&mut self, n: i8) {
         self.put_u8(n as u8);
+    }
+}
+
+impl BytePages {
+    fn put_slice_pages(&mut self, mut src: &[u8]) {
+        while !src.is_empty() {
+            let amount = self.with_current(|st| st.put_slice_partial(src));
+
+            src = &src[amount..];
+        }
     }
 }
 
@@ -1688,6 +1702,45 @@ mod tests {
         assert_eq!(<BytePage as Borrow<[u8]>>::borrow(&page), b"123");
         let b = Bytes::from(page);
         assert_eq!(b, b"123");
+    }
+
+    /// STATEMENT: A slice written into the current page stays there until it fills the page, which then moves to the page list.
+    ///
+    /// HOW:
+    /// - Write slices that leave one spare byte in the first page and check that no page was pushed.
+    /// - Write the last byte and check that the full page is pushed with no current page left.
+    /// - Write a slice larger than the page and check the page count, length, and frozen bytes.
+    #[test]
+    fn put_slice_current_page() {
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        pages.put_slice(b"abc");
+        let spare = pages.spare();
+        assert!(spare > 1);
+        assert_eq!(pages.pages().len(), 0);
+        assert_eq!(pages.num_pages(), 1);
+
+        let fill = vec![b'x'; spare - 1];
+        pages.put_slice(&fill);
+        assert_eq!(pages.spare(), 1);
+        assert_eq!(pages.pages().len(), 0);
+
+        pages.put_slice(b"y");
+        assert_eq!(pages.pages().len(), 1);
+        assert!(pages.current.is_none());
+        assert_eq!(pages.num_pages(), 1);
+        let page_len = pages.len();
+        assert_eq!(page_len, spare + 3);
+
+        let large = vec![b'z'; page_len + 10];
+        pages.put_slice(&large);
+        assert_eq!(pages.len(), page_len * 2 + 10);
+        assert_eq!(pages.num_pages(), 3);
+
+        let mut expected = b"abc".to_vec();
+        expected.extend_from_slice(&fill);
+        expected.push(b'y');
+        expected.extend_from_slice(&large);
+        assert_eq!(pages.freeze(), expected[..]);
     }
 
     /// STATEMENT: Cloned pages preserve contents while short storage is copied inline and longer mutable storage is shared.

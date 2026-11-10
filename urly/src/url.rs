@@ -88,6 +88,27 @@ pub(crate) fn assemble_target(
     assemble_inner(c, orig, true)
 }
 
+/// Builds an origin-form request-target, a path not starting with `//` and an
+/// optional query, without copying `data`.
+///
+/// Produces the same URL as [`assemble_target`] with the split components.
+pub(crate) fn origin_form(data: ByteString) -> Url {
+    debug_assert!(data.starts_with('/') && !data.starts_with("//"));
+    debug_assert!(data.len() <= parse::MAX_LEN);
+    let len = data.len() as u16;
+    let path_end = data.find('?').map_or(len, |i| i as u16);
+    Url {
+        data,
+        scheme_end: 0,
+        auth_start: 0,
+        path_start: 0,
+        path_end,
+        query_end: len,
+        host_start: 0,
+        host_end: 0,
+    }
+}
+
 fn assemble_inner(
     c: &Components<'_>,
     orig: Option<&ByteString>,

@@ -154,6 +154,83 @@ const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
 // the kind bits of vec storage are stored in the low bits of the header address
 const _: () = assert!(mem::align_of::<stvec::Header>() > KIND_MASK);
 
+/// Builds inline storage in registers with fixed-size loads, instead of a
+/// variable-length `memmove` into a stack value that is then read back.
+#[cfg(all(target_endian = "little", target_pointer_width = "64"))]
+mod inline_le64 {
+    use std::{num::NonZeroUsize, ptr};
+
+    use super::{INLINE_CAP, KIND_INLINE, KIND_OFFSET_BITS, Storage};
+
+    const _: () = assert!(INLINE_CAP == 23 && super::INLINE_DATA_OFFSET == 1);
+
+    #[inline]
+    unsafe fn rd64(src: *const u8) -> u64 {
+        src.cast::<u64>().read_unaligned()
+    }
+
+    #[inline]
+    unsafe fn rd32(src: *const u8) -> u64 {
+        u64::from(src.cast::<u32>().read_unaligned())
+    }
+
+    /// Loads `len` bytes as three little-endian words, zero-filled past `len`,
+    /// reading only `src..src + len`.
+    #[inline]
+    pub(super) unsafe fn load_exact(src: *const u8, len: usize) -> [u64; 3] {
+        match len {
+            0 => [0, 0, 0],
+            1..=3 => {
+                let mid = len / 2;
+                let w = u64::from(*src)
+                    | u64::from(*src.add(mid)) << (mid * 8)
+                    | u64::from(*src.add(len - 1)) << ((len - 1) * 8);
+                [w, 0, 0]
+            }
+            // overlapping loads repeat identical bytes, so `|` merges them
+            4..=8 => [rd32(src) | rd32(src.add(len - 4)) << ((len - 4) * 8), 0, 0],
+            9..=16 => [rd64(src), rd64(src.add(len - 8)) >> ((16 - len) * 8), 0],
+            _ => [
+                rd64(src),
+                rd64(src.add(8)),
+                rd64(src.add(len - 8)) >> ((24 - len) * 8),
+            ],
+        }
+    }
+
+    /// Loads `len` bytes as three little-endian words, zero-filled past `len`,
+    /// reading `src..src + INLINE_CAP`.
+    #[inline]
+    pub(super) unsafe fn load_window(src: *const u8, len: usize) -> [u64; 3] {
+        [
+            rd64(src) & mask(len),
+            rd64(src.add(8)) & mask(len.saturating_sub(8)),
+            (rd64(src.add(15)) >> 8) & mask(len.saturating_sub(16)),
+        ]
+    }
+
+    /// Mask of the low `min(n, 8)` bytes.
+    #[inline]
+    fn mask(n: usize) -> u64 {
+        ((1u128 << (n.min(8) * 8)) - 1) as u64
+    }
+
+    /// Packs the kind, the length and 23 data bytes into the `Storage` fields.
+    /// Data starts at byte 1, after the kind and length byte of `offset`.
+    #[inline]
+    pub(super) fn build(d0: u64, d1: u64, d2: u64, len: usize) -> Storage {
+        let w0 = (KIND_INLINE | (len << KIND_OFFSET_BITS)) as u64 | (d0 << 8);
+        let w1 = (d0 >> 56) | (d1 << 8);
+        let w2 = (d1 >> 56) | (d2 << 8);
+        Storage {
+            // SAFETY: the inline kind bits are set
+            offset: unsafe { NonZeroUsize::new_unchecked(w0 as usize) },
+            ptr: ptr::without_provenance_mut(w1 as usize),
+            len: w2 as usize,
+        }
+    }
+}
+
 /*
  *
  * ===== Storage =====
@@ -230,18 +307,56 @@ impl Storage {
         }
     }
 
+    /// Copies `len` bytes at `src` into a new inline storage.
+    ///
+    /// # Safety
+    ///
+    /// `src` must be readable for `len` initialized bytes and `len <= INLINE_CAP`.
     #[inline]
     pub(crate) unsafe fn from_ptr_inline(src: *const u8, len: usize) -> Storage {
-        let mut st = Storage {
-            ptr: ptr::null_mut(),
-            len: 0,
-            offset: PTR_INLINE,
-        };
+        #[cfg(all(target_endian = "little", target_pointer_width = "64"))]
+        {
+            let [d0, d1, d2] = inline_le64::load_exact(src, len);
+            inline_le64::build(d0, d1, d2, len)
+        }
+        #[cfg(not(all(target_endian = "little", target_pointer_width = "64")))]
+        {
+            let mut st = Storage {
+                ptr: ptr::null_mut(),
+                len: 0,
+                offset: PTR_INLINE,
+            };
 
-        let dst = st.inline_ptr();
-        ptr::copy(src, dst, len);
-        st.set_inline_len(len);
-        st
+            let dst = st.inline_ptr();
+            ptr::copy(src, dst, len);
+            st.set_inline_len(len);
+            st
+        }
+    }
+
+    /// Copies the first `len` of `avail` bytes at `src` into a new inline storage.
+    ///
+    /// Reads a whole `INLINE_CAP` window when `avail` allows it, which avoids
+    /// branching on `len`.
+    ///
+    /// # Safety
+    ///
+    /// `src` must be readable for `avail` initialized bytes and
+    /// `len <= min(avail, INLINE_CAP)`.
+    #[inline]
+    pub(crate) unsafe fn from_ptr_inline_prefix(
+        src: *const u8,
+        avail: usize,
+        len: usize,
+    ) -> Storage {
+        debug_assert!(len <= avail && len <= INLINE_CAP);
+        #[cfg(all(target_endian = "little", target_pointer_width = "64"))]
+        if avail >= INLINE_CAP {
+            let [d0, d1, d2] = inline_le64::load_window(src, len);
+            return inline_le64::build(d0, d1, d2, len);
+        }
+        let _ = avail;
+        Storage::from_ptr_inline(src, len)
     }
 
     /// Return a slice for the handle's view into the shared buffer
@@ -349,7 +464,7 @@ impl Storage {
         // fits.
         unsafe {
             if create_inline && at <= INLINE_CAP {
-                *self = Storage::from_ptr_inline(self.as_ptr(), at);
+                *self = Storage::from_ptr_inline_prefix(self.as_ptr(), self.len(), at);
             } else {
                 self.set_end(at);
             }
@@ -384,7 +499,7 @@ impl Storage {
         // shared reference.
         let other = unsafe {
             if at <= INLINE_CAP {
-                Storage::from_ptr_inline(self.as_ptr(), at)
+                Storage::from_ptr_inline_prefix(self.as_ptr(), self.len(), at)
             } else {
                 let mut other = self.shallow_clone();
                 other.set_end(at);
@@ -406,7 +521,7 @@ impl Storage {
         unsafe {
             if len <= self.len() {
                 if len < INLINE_CAP {
-                    *self = Storage::from_ptr_inline(self.as_ptr(), len);
+                    *self = Storage::from_ptr_inline_prefix(self.as_ptr(), self.len(), len);
                 } else {
                     self.set_len(len);
                 }
@@ -732,6 +847,9 @@ impl Kind {
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use std::ptr;
+
+    use super::{KIND_INLINE, Storage};
 
     const LONG: &[u8] =
         b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
@@ -954,5 +1072,50 @@ mod tests {
         // initialized length.
         unsafe { b.storage.set_end(cap) };
         assert_eq!(&b[..], &LONG[..5]);
+    }
+
+    /// STATEMENT: Inline storage built from a pointer matches a byte-by-byte copy for every length, whether the source is exact or a wider window.
+    ///
+    /// HOW:
+    /// - For each length up to `INLINE_CAP` and each source offset in a buffer of distinct bytes, build with `from_ptr_inline` from an exact copy and with `from_ptr_inline_prefix` from both the exact copy and the full buffer.
+    /// - Compare the raw fields with a reference that copies bytes into a zeroed inline storage, and check the visible contents.
+    #[test]
+    fn inline_from_ptr_matches_reference() {
+        fn reference(src: &[u8]) -> Storage {
+            let mut st = Storage::empty();
+            // SAFETY: `src` fits the inline buffer of `st`.
+            unsafe { ptr::copy_nonoverlapping(src.as_ptr(), st.inline_ptr(), src.len()) };
+            st.set_inline_len(src.len());
+            st
+        }
+        fn fields(st: &Storage) -> (usize, usize, usize) {
+            (st.offset.get(), st.ptr.addr(), st.len)
+        }
+
+        let buf: Vec<u8> = (1..=64).collect();
+        for len in 0..=super::INLINE_CAP {
+            for start in 0..=8 {
+                let src = &buf[start..start + len];
+                let exact = src.to_vec();
+                let expected = fields(&reference(src));
+                // SAFETY: each source is readable and initialized for the declared bytes.
+                let built = unsafe {
+                    [
+                        Storage::from_ptr_inline(exact.as_ptr(), len),
+                        Storage::from_ptr_inline_prefix(exact.as_ptr(), len, len),
+                        Storage::from_ptr_inline_prefix(
+                            buf[start..].as_ptr(),
+                            buf.len() - start,
+                            len,
+                        ),
+                    ]
+                };
+                for st in &built {
+                    assert_eq!(st.kind(), KIND_INLINE);
+                    assert_eq!(st.as_ref(), src, "len {len}, start {start}");
+                    assert_eq!(fields(st), expected, "len {len}, start {start}");
+                }
+            }
+        }
     }
 }

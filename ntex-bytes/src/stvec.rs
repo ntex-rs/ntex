@@ -333,7 +333,7 @@ impl StorageVec {
             let ptr = self.as_ptr();
 
             let other = if at <= INLINE_CAP {
-                Storage::from_ptr_inline(ptr, at)
+                Storage::from_ptr_inline_prefix(ptr, self.len(), at)
             } else {
                 let inner = self.as_inner();
                 let ref_cnt = (*inner).ref_count.fetch_add(1, Relaxed);
