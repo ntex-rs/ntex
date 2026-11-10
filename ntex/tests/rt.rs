@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{sync::mpsc, thread};
 
 use ntex::rt::{self, Arbiter, Handle, System};
@@ -186,55 +186,44 @@ fn test_spawn_api() {
     });
 }
 
-/// STATEMENT: Task lifecycle callbacks install once and run for spawned work.
+static CB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn counting_callbacks() -> ntex::rt::TaskCallbacks {
+    ntex::rt::TaskCallbacks {
+        before: || {
+            CB_COUNTER.fetch_add(1, Ordering::Relaxed);
+            Some(CB_COUNTER.as_ptr().cast_const().cast())
+        },
+        enter: |ptr| {
+            CB_COUNTER.fetch_add(1, Ordering::Relaxed);
+            ptr
+        },
+        exit: |_| {
+            CB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        },
+        after: |_| {
+            CB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        },
+    }
+}
+
+/// STATEMENT: Task callbacks set with the `task_callbacks` test argument run for spawned work.
 ///
 /// HOW:
-/// - Install counting callbacks with `task_opt_callbacks` and assert a second installation is rejected.
-/// - Join a sleeping task, assert completion, and verify the callback counter increased.
-#[test]
-fn test_spawn_cb() {
-    let counter = Arc::new(AtomicUsize::new(0));
-    let c = counter.clone();
-    let before = move || {
-        let _ = c.fetch_add(1, Ordering::Relaxed);
-        Some(c.as_ptr() as *const _)
-    };
-    let c = counter.clone();
-    let enter = move |_| {
-        let _ = c.fetch_add(1, Ordering::Relaxed);
-        c.as_ptr() as *const _
-    };
-    let c = counter.clone();
-    let exit = move |_| {
-        let _ = c.fetch_add(1, Ordering::Relaxed);
-    };
-    let c = counter.clone();
-    let after = move |_| {
-        let _ = c.fetch_add(1, Ordering::Relaxed);
-    };
-
-    unsafe {
-        let set = ntex::rt::task_opt_callbacks(
-            before.clone(),
-            enter.clone(),
-            exit.clone(),
-            after.clone(),
-        );
-        assert!(set);
-        let set = ntex::rt::task_opt_callbacks(before, enter, exit, after);
-        assert!(!set);
-    }
-
-    System::new("test", ntex::rt::DefaultRuntime).block_on(async {
-        let mut hnd = ntex::rt::spawn(async {
-            sleep(Millis(25)).await;
-        });
-        let _ = (&mut hnd).await;
-        assert!(hnd.is_finished());
+/// - Run the test system with counting callbacks passed through `#[ntex::test]`.
+/// - Join a sleeping task, assert completion, and verify `before`, `enter`,
+///   `exit`, and `after` increased the counter.
+#[ntex::test(task_callbacks = counting_callbacks)]
+async fn test_spawn_cb() {
+    let start = CB_COUNTER.load(Ordering::Relaxed);
+    let mut hnd = ntex::rt::spawn(async {
+        sleep(Millis(25)).await;
     });
+    let _ = (&mut hnd).await;
+    assert!(hnd.is_finished());
 
-    let val = counter.load(Ordering::Relaxed);
-    assert!(val > 0);
+    // `before` and `after` once, `enter` and `exit` for each of at least two polls
+    assert!(CB_COUNTER.load(Ordering::Relaxed) - start >= 6);
 }
 
 /// STATEMENT: `Arbiter::on_shutdown` callbacks, including nested registrations, run while the arbiter is still running.

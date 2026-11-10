@@ -1,6 +1,6 @@
 use std::{fmt, future::Future, io, marker::PhantomData, panic, rc::Rc, sync::Arc, time};
 
-use crate::{driver::Runner, signals, system::System, system::SystemConfig};
+use crate::{TaskCallbacks, driver::Runner, signals, system::System, system::SystemConfig};
 
 #[derive(Debug, Clone)]
 /// Builder for an ntex runtime system.
@@ -29,6 +29,8 @@ pub struct Builder {
     timer_resolution: u8,
     /// testing flag
     testing: bool,
+    /// Task instrumentation callbacks
+    task_callbacks: Option<fn() -> TaskCallbacks>,
 }
 
 impl Builder {
@@ -45,6 +47,7 @@ impl Builder {
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_mins(1),
             timer_resolution: 16,
+            task_callbacks: None,
         }
     }
 
@@ -184,6 +187,19 @@ impl Builder {
     }
 
     #[must_use]
+    /// Sets a factory of callbacks for instrumenting tasks spawned on the
+    /// system's threads.
+    ///
+    /// The factory is called on the system thread and on each of its arbiter
+    /// threads when the thread joins the system, so it can set up per-thread
+    /// state for its callbacks. See [`TaskCallbacks`] for when they are
+    /// called. By default, no callbacks are set.
+    pub fn task_callbacks(mut self, factory: fn() -> TaskCallbacks) -> Self {
+        self.task_callbacks = Some(factory);
+        self
+    }
+
+    #[must_use]
     /// Configures the system for testing.
     ///
     /// Sets the testing flag and disables signal and panic handling on this
@@ -222,6 +238,7 @@ impl Builder {
             pool_limit: self.pool_limit,
             pool_recv_timeout: self.pool_recv_timeout,
             timer_resolution: self.timer_resolution,
+            task_callbacks: self.task_callbacks,
             runner: Arc::new(runner),
         };
         self.build_with(config)

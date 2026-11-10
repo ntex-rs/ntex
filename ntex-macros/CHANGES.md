@@ -1,5 +1,9 @@
 # Changes
 
+## [4.6.0] - 2026-11-10
+
+* Add `task_callbacks` argument to `main` and `test` macros
+
 ## [4.5.0] - 2026-11-09
 
 * Add `timer_resolution` argument to `test` macro

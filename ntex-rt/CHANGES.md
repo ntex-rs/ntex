@@ -1,5 +1,12 @@
 # Changes
 
+## [4.7.0] - 2026-11-10
+
+* Replace process-wide `task_callbacks()` and `task_opt_callbacks()`
+  with per-system `TaskCallbacks` of plain `fn` pointers. `Builder::task_callbacks()`
+  takes a `fn() -> TaskCallbacks` factory that is called on the system thread
+  and each of its arbiter threads; `SystemConfig::task_callbacks()` returns it
+
 ## [4.6.0] - 2026-11-07
 
 * Add `AbortOnUnwind` guard, it aborts the process if dropped before it is disarmed
