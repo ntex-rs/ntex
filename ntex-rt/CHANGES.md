@@ -1,6 +1,6 @@
 # Changes
 
-## [4.8.0] - Unreleased
+## [4.8.0] - 2026-11-11
 
 * Add `Runtime::run_ready()`, it runs ready tasks within the current turn,
   so drivers can run tasks between chunks of events without ending the turn
