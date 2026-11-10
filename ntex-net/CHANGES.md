@@ -16,6 +16,9 @@
   not block when completions arrived during the turn on kernels without deferred
   task running
 
+* iocp: Run tasks after every 16 completions instead of after the whole batch of up
+  to 512, within one runtime turn
+
 ## [4.9.0] - 2026-11-09
 
 * compio: The read task no longer submits a read while reads are paused, for

@@ -225,7 +225,7 @@ impl ntex_rt::Driver for Reactor {
                         break Err(err);
                     }
                 }
-                Ok(_) => self.poll_completions(&events[..recv_count as usize]),
+                Ok(_) => self.poll_events(&events[..recv_count as usize], || rt.run_ready()),
             }
         };
 
@@ -278,6 +278,23 @@ pub(crate) fn map_socket_error(err: io::Error) -> io::Error {
 impl Reactor {
     /// How long a stopped runtime waits for its cancelled operations.
     const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// Completions handled before ready tasks run, so a task writes to its
+    /// socket while the socket is still hot in the cache.
+    const EVENTS_PER_POLL: usize = 16;
+
+    /// Handles `events` in chunks of `EVENTS_PER_POLL` and calls `run_ready`
+    /// between chunks. All chunks belong to one runtime turn.
+    fn poll_events(&self, events: &[OVERLAPPED_ENTRY], mut run_ready: impl FnMut()) {
+        let mut chunks = events.chunks(Self::EVENTS_PER_POLL);
+        if let Some(chunk) = chunks.next() {
+            self.poll_completions(chunk);
+        }
+        for chunk in chunks {
+            run_ready();
+            self.poll_completions(chunk);
+        }
+    }
 
     /// Cancels the operations in flight and dispatches their completions for
     /// up to `timeout`, then cleans up the handlers.
@@ -879,6 +896,45 @@ mod tests {
         );
         // one tick per batch of completions
         assert_eq!(ticks.get(), 1);
+    }
+
+    /// STATEMENT: `poll_events` handles completions in chunks of `EVENTS_PER_POLL` and
+    /// runs ready tasks only between chunks.
+    ///
+    /// HOW:
+    /// - Dispatch `2 * EVENTS_PER_POLL + 4` completions to a recording handler through
+    ///   `poll_events`, recording the completion count at each `run_ready` call.
+    /// - Check `run_ready` ran twice, after 16 and 32 completions, all completions were
+    ///   handled in order, and the handler ticked once per chunk.
+    #[test]
+    fn poll_events_runs_tasks_between_chunks() {
+        let reactor = Reactor::new().unwrap();
+        let done = Completions::default();
+        let ticks = Rc::new(Cell::new(0));
+        reactor.register(|_| Box::new(Recorder(done.clone(), ticks.clone())));
+
+        let total = Reactor::EVENTS_PER_POLL * 2 + 4;
+        let mut ops: Vec<Box<Overlapped>> = (0..total)
+            .map(|i| Box::new(Overlapped::new(1, u32::try_from(i).unwrap())))
+            .collect();
+        let events: Vec<_> = ops
+            .iter_mut()
+            .map(|ov| OVERLAPPED_ENTRY {
+                lpOverlapped: (&raw mut ov.base),
+                ..OVERLAPPED_ENTRY::default()
+            })
+            .collect();
+
+        let mut runs = Vec::new();
+        reactor.poll_events(&events, || runs.push(done.borrow().len()));
+
+        let chunk = Reactor::EVENTS_PER_POLL;
+        assert_eq!(runs, [chunk, chunk * 2]);
+        let expected: Vec<_> = (0..total)
+            .map(|i| (u32::try_from(i).unwrap(), Ok(0)))
+            .collect();
+        assert_eq!(*done.borrow(), expected);
+        assert_eq!(ticks.get(), 3);
     }
 
     /// Sockets of the base Winsock providers return IFS handles and can be
