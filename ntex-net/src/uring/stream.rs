@@ -1267,7 +1267,9 @@ impl StreamCtl {
             // releases the descriptor.
             self.inner.with(|storage| {
                 storage.pause_read(self.id, &self.inner.api);
-                crate::helpers::abort_raw_socket(storage.streams[self.id].fd().0);
+                let fd = storage.streams[self.id].fd().0;
+                // SAFETY: the stream entry owns the fd until this handle is dropped
+                unsafe { crate::helpers::with_sock_ref(fd, crate::helpers::abort_socket) };
             });
             return Ok(());
         }
@@ -1286,7 +1288,8 @@ impl StreamCtl {
                     // `pause_read()` above only submits a cancel, so a recv can
                     // still be in flight; draining now would race it. Nothing is
                     // lost by skipping, that recv empties the queue itself.
-                    crate::helpers::drain_raw_socket(fd.0);
+                    // SAFETY: the stream entry owns the fd until this handle is dropped
+                    unsafe { crate::helpers::with_sock_ref(fd.0, crate::helpers::drain_socket) };
                 }
                 let (tx, rx) = self.inner.pool.channel();
                 let op_id = storage.add_operation(Operation::shutdown(tx));
