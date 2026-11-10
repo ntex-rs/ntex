@@ -1,4 +1,4 @@
-use std::{any, fmt, hash, io, ptr};
+use std::{any, fmt, hash, io};
 
 use ntex_bytes::{BytePage, BytePages, BytesMut};
 use ntex_codec::{Decoder, Encoder};
@@ -830,8 +830,7 @@ impl IoRef {
                 self.0.buffer.write_buf_size(),
                 self.0.flags
             );
-            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-            hnd.write(ctx);
+            hnd.write(IoContext::from_ref(self));
             self.restore_handle(hnd);
         }
         if self.0.flags.is_write_paused() {

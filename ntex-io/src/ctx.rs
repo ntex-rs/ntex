@@ -44,13 +44,19 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// filter chain goes away with it and that output can never be delivered. Every
 /// other way a connection can end, an expired shutdown timeout included,
 /// reports `Close`.
-// `repr(transparent)` is required: `IoRef::call_write` casts `&IoRef` to `&IoContext`.
+// `repr(transparent)` is required by `IoContext::from_ref`.
 #[repr(transparent)]
 pub struct IoContext(IoRef);
 
 impl IoContext {
     pub(crate) fn new(io: IoRef) -> Self {
         Self(io)
+    }
+
+    /// Views an `IoRef` as an `IoContext` without cloning it.
+    pub(crate) fn from_ref(io: &IoRef) -> &Self {
+        // SAFETY: `IoContext` is `repr(transparent)` over `IoRef`
+        unsafe { &*std::ptr::from_ref(io).cast::<IoContext>() }
     }
 
     fn st(&self) -> &IoState {

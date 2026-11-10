@@ -218,6 +218,19 @@ impl<E> Drop for PipelineCheck<'_, E> {
     }
 }
 
+/// Extends a borrow of a pipeline to an unbounded lifetime, for a future that
+/// is stored inside that pipeline.
+///
+/// # Safety
+///
+/// `pl` must be `Rc`-allocated, so it never moves. The returned reference must
+/// only be used by a future stored in `pl` that its `Drop` impl releases before
+/// any field is dropped, see `Drop for PipelineInner` here and in `pl_state`.
+pub(crate) unsafe fn detach<'a, T>(pl: &T) -> &'a T {
+    // SAFETY: guaranteed by the caller
+    unsafe { &*ptr::from_ref(pl) }
+}
+
 // ======================== PipelineApi ============================
 
 pub(crate) struct PipelineApi<Req, Res, Err>(Rc<dyn PipelineInternalApi<Req, Res, Err>>);
@@ -283,6 +296,11 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         self.0.call(idx, req)
     }
 
+    /// Calls the service with a future that keeps the pipeline alive.
+    pub(crate) fn call_static(&self, idx: u32, req: Req) -> BoxFuture<'static, Result<Res, Err>> {
+        self.0.clone().call_static(idx, req)
+    }
+
     pub(crate) fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>> {
         self.0.poll_ready(cx)
     }
@@ -315,6 +333,16 @@ struct PipelineInner<S: Service<St, Req>, St, Req> {
     _pinned: PhantomPinned,
 }
 
+impl<S: Service<St, Req>, St, Req> PipelineInner<S, St, Req> {
+    async fn call_impl(&self, idx: u32, req: Req) -> Result<S::Res, S::Error> {
+        let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st);
+        self.readiness
+            .ready(|| ctx.ready_generation(&self.s))
+            .await?;
+        self.s.call(req, ctx.into_call()).await
+    }
+}
+
 impl<S: Service<St, Req>, St, Req> Drop for PipelineInner<S, St, Req> {
     fn drop(&mut self) {
         // Readiness and shutdown futures borrow `s`, `st` and `waiters`, so they
@@ -343,6 +371,8 @@ pub(crate) trait PipelineInternalApi<Req, Res, Err> {
     fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>>;
 
     fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<Res, Err>>;
+
+    fn call_static(self: Rc<Self>, idx: u32, req: Req) -> BoxFuture<'static, Result<Res, Err>>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>>;
 
@@ -381,13 +411,15 @@ where
     }
 
     fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<S::Res, S::Error>> {
-        Box::pin(async move {
-            let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st);
-            self.readiness
-                .ready(|| ctx.ready_generation(&self.s))
-                .await?;
-            self.s.call(req, ctx.into_call()).await
-        })
+        Box::pin(self.call_impl(idx, req))
+    }
+
+    fn call_static(
+        self: Rc<Self>,
+        idx: u32,
+        req: Req,
+    ) -> BoxFuture<'static, Result<S::Res, S::Error>> {
+        Box::pin(async move { self.call_impl(idx, req).await })
     }
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
@@ -395,10 +427,8 @@ where
             return Poll::Ready(Ok(()));
         }
         self.readiness.poll_ready(cx, || {
-            // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
-            // `fut` is stored in `self.readiness`, which is reset before other
-            // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
-            let pl = unsafe { &*(ptr::from_ref(self)) };
+            // SAFETY: the future is stored in `self.readiness`
+            let pl = unsafe { detach(self) };
             Box::pin(async move {
                 let registration = pl.waiters.register();
                 Ctx::<'_, S, St>::new(registration.idx, &pl.waiters, &pl.st)
@@ -414,10 +444,8 @@ where
             RuntimeState::New => {
                 self.waiters.shutdown();
                 self.readiness.cancel();
-                // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
-                // `fut` is stored in `self.st_runtime`, which is reset before other
-                // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
-                let pl = unsafe { &*(ptr::from_ref(self)) };
+                // SAFETY: the future is stored in `self.st_runtime`
+                let pl = unsafe { detach(self) };
 
                 Box::pin(async move {
                     let ctx = Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st);
