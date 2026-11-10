@@ -1,8 +1,11 @@
 # Changes
 
-## [4.7.1] - 2026-11-10
+## [4.7.1] - Unreleased
 
-* Add `RequestHead::stream` to enable stream view in http services 
+* Add `RequestHead::stream` to enable stream view in http services
+
+* HTTP/1 server writes a response body of up to 4 KiB together with the
+  response head, for `Bytes` and `Body::Bytes` bodies
 
 ## [4.7.0] - 2026-11-09
 

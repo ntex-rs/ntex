@@ -1,11 +1,13 @@
 //! HTTP/1 protocol dispatcher
-use std::{future, io, mem, pin::Pin, rc::Rc, task::Context, task::Poll, task::ready};
+use std::{any::Any, future, io, mem, pin::Pin, rc::Rc, task::Context, task::Poll, task::ready};
 
+use crate::channel::bstream;
+use crate::codec::Encoder;
 use crate::io::{CloseReason, Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
-use crate::{channel::bstream, util::clone_io_error};
+use crate::util::{Bytes, clone_io_error};
 
-use crate::http::body::{Body, MessageBody, ResponseBody};
+use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::error::{DispatchError, PayloadError, ResponseError};
 use crate::http::message::CurrentIo;
 use crate::http::{
@@ -423,18 +425,40 @@ where
         // but we still want to handle requests with app service
         // so we skip response processing for dropped connection
         if self.io.is_active() {
-            let result = self
-                .io
-                .encode(Message::Item((msg, size)), &self.codec)
-                .inspect_err(|_| {
-                    if let Some(ref mut payload) = self.payload {
-                        payload.1.set_error(PayloadError::Incomplete(None));
-                    }
-                });
+            // a small in-memory body is encoded together with the head
+            let small = if self.payload.is_none() && self.pending_payload_error.is_none() {
+                take_small_body(&mut body, size)
+            } else {
+                None
+            };
+
+            let result = if let Some(chunk) = small {
+                // the next request read flushes the response under write backpressure
+                let codec = &self.codec;
+                self.io
+                    .with_write_src(|buf| {
+                        codec.encode(Message::Item((msg, size)), buf)?;
+                        // no body bytes are sent, for example to a HEAD request
+                        if codec.is_body_complete() {
+                            Ok(())
+                        } else {
+                            codec.encode(Message::Chunk(Some(chunk)), buf)
+                        }
+                    })
+                    .unwrap_or(Ok(()))
+            } else {
+                self.io
+                    .encode(Message::Item((msg, size)), &self.codec)
+                    .inspect_err(|_| {
+                        if let Some(ref mut payload) = self.payload {
+                            payload.1.set_error(PayloadError::Incomplete(None));
+                        }
+                    })
+            };
 
             match result {
-                // a response without body bytes, for example to a HEAD request,
-                // is complete, the body is not polled
+                // a response without remaining body bytes, for example to a HEAD
+                // request or with a small body sent above, is complete
                 Ok(()) if self.codec.is_body_complete() => self.response_done(),
                 Ok(()) => {
                     self.response_started = true;
@@ -1168,6 +1192,31 @@ where
 
 fn write_timeout_error() -> io::Error {
     io::Error::new(io::ErrorKind::TimedOut, "Write backpressure timeout")
+}
+
+/// Bodies up to this size are encoded together with the response head.
+const SMALL_BODY_SIZE: u64 = 4096;
+
+/// Takes the bytes of a small in-memory body, leaving the body empty.
+fn take_small_body<B: MessageBody>(body: &mut ResponseBody<B>, size: BodySize) -> Option<Bytes> {
+    if !matches!(size, BodySize::Sized(len) if len > 0 && len <= SMALL_BODY_SIZE) {
+        return None;
+    }
+    let bytes = match body {
+        ResponseBody::Other(Body::Bytes(b)) => b,
+        ResponseBody::Body(b) => {
+            let b: &mut dyn Any = b;
+            if b.is::<Bytes>() {
+                b.downcast_mut::<Bytes>()?
+            } else if let Some(Body::Bytes(b)) = b.downcast_mut::<Body>() {
+                b
+            } else {
+                return None;
+            }
+        }
+        ResponseBody::Other(_) => return None,
+    };
+    Some(mem::take(bytes))
 }
 
 #[cfg(test)]
@@ -2431,6 +2480,123 @@ mod tests {
 
         client.close().await;
         assert!(client.is_server_dropped());
+    }
+
+    /// STATEMENT: Only nonempty in-memory bodies of at most 4 KiB are taken for encoding with the response head.
+    ///
+    /// HOW:
+    /// - Take bodies stored as `Body::Bytes`, as a concrete `Bytes`, and as a concrete `Body`, and check the bytes and the emptied body.
+    /// - Check that empty, 4,097-byte, and boxed `Body::Message` bodies are left in place.
+    #[test]
+    fn test_take_small_body() {
+        let mut body = ResponseBody::<Body>::Other(Body::from("ok"));
+        let size = body.size();
+        assert_eq!(take_small_body(&mut body, size).unwrap(), "ok");
+        assert_eq!(body.size(), BodySize::Sized(0));
+
+        let mut body = ResponseBody::Body(Bytes::from("x".repeat(4096)));
+        let size = body.size();
+        assert_eq!(take_small_body(&mut body, size).unwrap().len(), 4096);
+        assert_eq!(body.size(), BodySize::Sized(0));
+
+        let mut body = ResponseBody::Body(Body::from("ok"));
+        let size = body.size();
+        assert_eq!(take_small_body(&mut body, size).unwrap(), "ok");
+        assert_eq!(body.size(), BodySize::Sized(0));
+
+        for mut body in [
+            ResponseBody::Body(Body::Empty),
+            ResponseBody::Body(Body::from("x".repeat(4097))),
+            ResponseBody::Body(Body::from_message(Bytes::from("ok"))),
+        ] {
+            let size = body.size();
+            assert!(take_small_body(&mut body, size).is_none());
+            assert_eq!(body.size(), size);
+        }
+    }
+
+    /// STATEMENT: Pipelined responses with small bodies keep their framing, and a HEAD response carries no body bytes.
+    ///
+    /// HOW:
+    /// - Pipeline GET, HEAD, and GET requests to a service that returns the body `ok`.
+    /// - Split the written bytes into responses and check each `content-length: 2` head, the GET bodies, and the empty HEAD body.
+    #[crate::rt_test]
+    async fn test_pipeline_small_body() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        spawn_h1(server, async |_| {
+            Ok::<_, io::Error>(Response::Ok().body("ok"))
+        });
+
+        client.write(
+            "GET /1 HTTP/1.1\r\nhost: localhost\r\n\r\n\
+             HEAD /2 HTTP/1.1\r\nhost: localhost\r\n\r\n\
+             GET /3 HTTP/1.1\r\nhost: localhost\r\n\r\n",
+        );
+        sleep(Millis(50)).await;
+
+        let data = String::from_utf8(client.read_any().to_vec()).unwrap();
+        let parts: Vec<_> = data.split("HTTP/1.1 200 OK\r\n").skip(1).collect();
+        assert_eq!(parts.len(), 3, "{data:?}");
+        for part in &parts {
+            assert!(part.contains("content-length: 2\r\n"), "{part:?}");
+        }
+        assert!(parts[0].ends_with("\r\n\r\nok"), "{:?}", parts[0]);
+        assert!(parts[1].ends_with("\r\n\r\n"), "{:?}", parts[1]);
+        assert!(parts[2].ends_with("\r\n\r\nok"), "{:?}", parts[2]);
+        assert!(!client.is_server_dropped());
+
+        client.close().await;
+        assert!(client.is_server_dropped());
+    }
+
+    /// STATEMENT: Write backpressure stops pipelined dispatch when small bodies are written with their heads.
+    ///
+    /// HOW:
+    /// - Block peer reads and pipeline 64 requests whose service returns a 4 KiB body, counting service calls.
+    /// - Verify write backpressure leaves requests unserved, then unblock the peer and receive all 64 complete responses.
+    #[crate::rt_test]
+    async fn test_pipeline_small_body_backpressure() {
+        const REQUESTS: usize = 64;
+
+        let calls = Rc::new(Cell::new(0));
+        let calls2 = calls.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let mut h1 = h1(server, move |_| {
+            calls2.set(calls2.get() + 1);
+            async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(4096))) }
+        });
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n".repeat(REQUESTS));
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_wr_backpressure());
+        assert!(calls.get() < REQUESTS, "{}", calls.get());
+
+        client.remote_buffer_cap(1024 * 1024);
+        let mut data = BytesMut::new();
+        let res = timeout(Millis(5000), async {
+            loop {
+                let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
+                data.extend_from_slice(&client.read_any());
+                if data.len() >= REQUESTS * 4096 && calls.get() == REQUESTS {
+                    let n = data
+                        .windows(15)
+                        .filter(|w| *w == b"HTTP/1.1 200 OK")
+                        .count();
+                    if n == REQUESTS && data.ends_with(&[b'x'; 4096]) {
+                        break;
+                    }
+                }
+                sleep(Millis(10)).await;
+            }
+        })
+        .await;
+        assert!(res.is_ok(), "calls: {}, bytes: {}", calls.get(), data.len());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
     /// STATEMENT: Requests pipelined after a nonpersistent request are not dispatched.

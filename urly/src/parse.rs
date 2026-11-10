@@ -10,7 +10,7 @@ use crate::error::{ErrorKind, InvalidUrl};
 use crate::host::normalize_host;
 use crate::quoting::{Component, requote};
 use crate::scheme::Scheme;
-use crate::url::{Components, Url, assemble, assemble_target};
+use crate::url::{Components, Url, assemble, assemble_target, origin_form};
 
 /// Maximum URL length in bytes.
 pub(crate) const MAX_LEN: usize = u16::MAX as usize;
@@ -136,6 +136,10 @@ pub(crate) fn parse_target(src: Bytes) -> Result<Url, InvalidUrl> {
     simdutf8::compat::from_utf8(&src).map_err(crate::url::utf8_error)?;
     // SAFETY: UTF-8 is checked above; target syntax is checked separately.
     let src = unsafe { ByteString::from_bytes_unchecked(src) };
+    // the common origin-form needs no reassembly
+    if src.starts_with('/') && !src.starts_with("//") {
+        return Ok(origin_form(src));
+    }
     let c = if src.starts_with('/') || src == "*" {
         let (path, query) = split_at_char(&src, '?');
         Components {
@@ -362,6 +366,58 @@ pub(crate) fn validate(src: &str) -> Result<(), InvalidUrl> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// STATEMENT: `parse_target` builds path targets, including the origin-form fast
+    /// path, the same as general target assembly.
+    ///
+    /// HOW:
+    /// - Parse origin-form targets with empty, repeated, encoded, non-ASCII and
+    ///   fragment-like parts, and queries containing `?`, `/` and `:`, plus `//`
+    ///   paths that must not take the fast path.
+    /// - Assemble the same split components with `assemble_target`.
+    /// - Compare the string and every component accessor of both URLs.
+    #[test]
+    fn origin_form_matches_assembly() {
+        for target in [
+            "/",
+            "/?",
+            "/??",
+            "/a",
+            "/a/",
+            "/a:b/c",
+            "/./a/../b",
+            "/a%2Fb%zz",
+            "/ü b#f",
+            "/a?",
+            "/a?b=1&c",
+            "/a?b?c/d:e",
+            "/a#f?q",
+            "/a?q#f",
+            "//",
+            "//a/b?c",
+        ] {
+            let src = ByteString::from(target);
+            let fast = parse_target(src.clone().into_bytes()).unwrap();
+            let (path, query) = split_at_char(&src, '?');
+            let slow = assemble_target(
+                &Components {
+                    path,
+                    query,
+                    ..Components::default()
+                },
+                Some(&src),
+            )
+            .unwrap();
+            assert_eq!(fast.as_str(), slow.as_str(), "{target}");
+            assert_eq!(fast.scheme_str(), slow.scheme_str(), "{target}");
+            assert_eq!(fast.authority(), slow.authority(), "{target}");
+            assert_eq!(fast.host(), slow.host(), "{target}");
+            assert_eq!(fast.path(), slow.path(), "{target}");
+            assert_eq!(fast.query(), slow.query(), "{target}");
+            assert_eq!(fast.fragment(), slow.fragment(), "{target}");
+            assert_eq!(fast.path_and_query(), slow.path_and_query(), "{target}");
+        }
+    }
 
     #[test]
     fn dot_segments() {

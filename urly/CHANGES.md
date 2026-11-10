@@ -1,5 +1,10 @@
 # Changes
 
+## [1.3.1] - Unreleased
+
+* `Url::parse_target()` builds origin-form targets such as `/a?b` directly
+  instead of reassembling them, about twice as fast
+
 ## [1.3.0] - 2026-11-09
 
 * Requoting decodes only unreserved escapes (`A-Z a-z 0-9 - . _ ~`); escapes of

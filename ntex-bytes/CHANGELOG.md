@@ -1,5 +1,13 @@
 # Changes
 
+## [1.15.1] - Unreleased
+
+* `BytePages` copies a slice that fits into the current page in place
+
+* Inline `Bytes` copies (up to 23 bytes, e.g. from `split_to()`) are built
+  with fixed-size loads instead of a `memmove` call on 64-bit little-endian
+  targets
+
 ## [1.15.0] - 2026-11-09
 
 * `BytesMut::with_page_size()`, `with_page_size_in()` and new `BytePages` pages
