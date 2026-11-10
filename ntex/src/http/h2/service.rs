@@ -469,6 +469,7 @@ where
 
         let is_head_req = method == Method::HEAD;
         let head = req.head_mut();
+        head.set_stream(stream.clone());
         head.uri = uri;
         head.version = Version::HTTP_2;
         head.method = method;

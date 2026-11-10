@@ -1,6 +1,7 @@
 use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 
 use bitflags::bitflags;
+use ntex_h2::StreamRef;
 use urly::Url;
 
 use crate::http::header::HeaderMap;
@@ -94,6 +95,8 @@ pub struct RequestHead {
     pub headers_vec: Vec<HeaderItem>,
     /// Request-local type map.
     pub extensions: RefCell<Extensions>,
+    /// Stream this request is made on (if over http/2).
+    pub(crate) stream: Option<StreamRef>,
     pub(crate) io: CurrentIo,
     pub(crate) flags: Flags,
 }
@@ -102,6 +105,7 @@ impl Default for RequestHead {
     fn default() -> RequestHead {
         RequestHead {
             id: 0,
+            stream: None,
             io: CurrentIo::None,
             uri: Url::new(),
             method: Method::default(),
@@ -125,6 +129,7 @@ impl Head for RequestHead {
         self.headers.clear();
         self.headers_vec.clear();
         self.extensions.get_mut().clear();
+        self.stream = None;
     }
 
     fn with_pool<F, R>(f: F) -> Option<R>
@@ -231,6 +236,14 @@ impl RequestHead {
     #[inline]
     pub(crate) fn set_upgrade(&mut self) {
         self.flags.insert(Flags::UPGRADE);
+    }
+
+    pub(crate) fn set_stream(&mut self, stream: StreamRef) {
+        self.stream = Some(stream);
+    }
+
+    pub fn stream(&self) -> Option<&StreamRef> {
+        self.stream.as_ref()
     }
 
     /// Returns the peer socket address.
