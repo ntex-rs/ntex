@@ -237,7 +237,7 @@ impl RequestHead {
         self.flags.insert(Flags::UPGRADE);
     }
 
-    pub(crate) fn set_stream(&mut self, stream: StreamRef){
+    pub(crate) fn set_stream(&mut self, stream: StreamRef) {
         self.stream = Some(stream);
     }
 
