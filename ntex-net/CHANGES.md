@@ -1,12 +1,20 @@
 # Changes
 
-## [4.9.1] - Unreleased
+## [4.10.0] - 2026-11-11
 
 * tokio: Read through tokio's `try_read_buf` instead of exposing the read
   buffer's uninitialized spare capacity as `&mut [u8]`
 
 * polling: Handle up to 16 events per poll instead of 2048, so tasks write
   while socket state is still cached (~20% faster HTTP/1 under many connections)
+
+* io-uring: Run tasks after every 16 completions instead of after the whole
+  completion queue, submissions still share one `io_uring_enter` (~15% faster
+  HTTP/1 under many connections)
+
+* io-uring: Flush a full submission queue without ending the runtime turn, and do
+  not block when completions arrived during the turn on kernels without deferred
+  task running
 
 ## [4.9.0] - 2026-11-09
 
