@@ -1,6 +1,6 @@
 # Changes
 
-## [1.3.1] - Unreleased
+## [1.3.1] - 2026-11-11
 
 * `Url::parse_target()` builds origin-form targets such as `/a?b` directly
   instead of reassembling them, about twice as fast

@@ -1,6 +1,6 @@
 # Changes
 
-## [1.15.1] - Unreleased
+## [1.15.1] - 2026-11-11
 
 * `BytePages` copies a slice that fits into the current page in place
 
