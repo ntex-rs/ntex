@@ -1,7 +1,7 @@
 use std::task::{Context, Poll, ready};
-use std::{any, cmp, future::poll_fn, io, pin::Pin, ptr, rc::Rc};
+use std::{any, cmp, future::poll_fn, io, pin::Pin, rc::Rc};
 
-use ntex_bytes::{BufMut, BytePages};
+use ntex_bytes::{BytePages, BytesMut};
 use ntex_io::{Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tok_io::net::TcpStream;
@@ -36,7 +36,7 @@ trait Stream: AsyncRead + AsyncWrite + Unpin {
     /// Arranges for the socket to be reset instead of closed gracefully.
     fn abort(&self);
 
-    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
+    fn try_read_buf(&self, buf: &mut BytesMut) -> io::Result<usize>;
 
     fn try_write(&self, buf: &[u8]) -> io::Result<usize>;
 
@@ -62,8 +62,8 @@ impl Stream for TcpStream {
         crate::helpers::abort_socket(&socket2::SockRef::from(self));
     }
 
-    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
-        TcpStream::try_read(self, buf)
+    fn try_read_buf(&self, buf: &mut BytesMut) -> io::Result<usize> {
+        TcpStream::try_read_buf(self, buf)
     }
 
     fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
@@ -95,8 +95,8 @@ impl Stream for tok_io::net::UnixStream {
         crate::helpers::abort_socket(&socket2::SockRef::from(self));
     }
 
-    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
-        tok_io::net::UnixStream::try_read(self, buf)
+    fn try_read_buf(&self, buf: &mut BytesMut) -> io::Result<usize> {
+        tok_io::net::UnixStream::try_read_buf(self, buf)
     }
 
     fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
@@ -382,20 +382,12 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
             "{}: Read attempt, buf len({}) cap({})",
             ctx.tag(),
             buf.len(),
-            buf.remaining_mut()
+            buf.capacity() - buf.len()
         );
 
         // read data from socket
-        let io_res = io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
-
-        match io_res {
-            Ok(0) => Poll::Ready(Ok(0)),
-            Ok(n) => {
-                // Safety: This is guaranteed to be the number of initialized
-                // bytes due to the invariants provided by `try_read()`.
-                unsafe { buf.advance_mut(n) };
-                Poll::Ready(Ok(n))
-            }
+        match io.try_read_buf(buf) {
+            Ok(n) => Poll::Ready(Ok(n)),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 pending = true;
                 Poll::Pending

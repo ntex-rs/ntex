@@ -64,7 +64,7 @@ compio-io = { workspace = true, optional = true }
 compio-net = { workspace = true, optional = true }
 compio-driver = { workspace = true, optional = true }
 compio-runtime = { workspace = true, optional = true }
-tok-io = { workspace = true, features = ["rt", "net"], optional = true }
+tok-io = { workspace = true, features = ["rt", "net", "io-util"], optional = true }
 
 [dev-dependencies]
 ntex = { workspace = true }
