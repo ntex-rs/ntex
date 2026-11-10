@@ -70,8 +70,8 @@ pub fn now() -> Instant {
 
 /// Spawns a future on the current native runtime and returns its join handle.
 ///
-/// The future and its output need not be `Send`. Registered
-/// [`task_callbacks`](crate::task_callbacks) wrap the task. Dropping the handle
+/// The future and its output need not be `Send`. The current system's
+/// [`TaskCallbacks`](crate::TaskCallbacks) wrap the task. Dropping the handle
 /// detaches it unless [`cancel_on_drop`](JoinHandle::cancel_on_drop) is enabled.
 /// Completion is not guaranteed if the runtime shuts down.
 ///

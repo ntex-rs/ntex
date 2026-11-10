@@ -111,7 +111,7 @@ pub use self::local_waker::LocalWaker;
 pub use self::pool::{BlockingError, BlockingResult, ThreadPool, spawn_blocking};
 pub use self::rt::{Runtime, RuntimeBuilder};
 pub use self::system::{Id, System};
-pub use self::task::{SendableJoinHandle, spawn_sendable, task_callbacks, task_opt_callbacks};
+pub use self::task::{SendableJoinHandle, TaskCallbacks, spawn_sendable};
 
 #[cfg(feature = "tokio")]
 pub use self::rt_tokio::*;

@@ -306,6 +306,9 @@ pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   arbiters to spot busy ones. Defaults to 2000, zero turns pings off.
 /// - `timer_resolution = N` - resolution of the timer wheel in milliseconds,
 ///   a power of two between 1 and 16. Defaults to 16.
+/// - `task_callbacks = path` - a `fn() -> ntex::rt::TaskCallbacks` factory for
+///   instrumenting spawned tasks, passed to `Builder::task_callbacks`. It is
+///   called on every thread of the system. None by default.
 /// - `rt = path` - the runtime to run on, a value that implements
 ///   `ntex::rt::Runner`. Defaults to `ntex::rt::DefaultRuntime`, the runtime
 ///   picked by ntex features.
@@ -364,6 +367,8 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// - `timer_resolution = N` - resolution of the timer wheel in milliseconds,
 ///   a power of two between 1 and 16. Defaults to 16.
+/// - `task_callbacks = path` - a `fn() -> ntex::rt::TaskCallbacks` factory, as
+///   for [`rt_main`].
 ///
 /// Other arguments, including the rest of those of [`rt_main`], are a compile
 /// error. Build a `System` manually for any other runtime configuration.

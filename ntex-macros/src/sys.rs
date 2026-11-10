@@ -1,7 +1,7 @@
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::quote;
 
-use crate::parse::{Error, parse_args};
+use crate::parse::{Arg, Error, parse_args};
 
 pub(crate) struct MainArgs {
     name: Option<Literal>,
@@ -9,6 +9,7 @@ pub(crate) struct MainArgs {
     ping_interval: Option<Literal>,
     timer_resolution: Option<Literal>,
     panic_handling: Option<Ident>,
+    task_callbacks: Option<TokenStream>,
     rt: Option<TokenStream>,
 }
 
@@ -39,12 +40,15 @@ impl MainArgs {
             .map(|panics| quote!(.panic_handling(#panics)))
             .unwrap_or_default();
 
+        let sys_task_callbacks = gen_task_callbacks(self.task_callbacks);
+
         quote! {
             #sys_name
             #sys_ping_interval
             #sys_timer_resolution
             #sys_signals
             #sys_panics
+            #sys_task_callbacks
         }
     }
 
@@ -62,6 +66,7 @@ impl MainArgs {
             panic_handling: None,
             ping_interval: None,
             timer_resolution: None,
+            task_callbacks: None,
         };
 
         for param in parse_args(input)? {
@@ -72,11 +77,12 @@ impl MainArgs {
                 "panic_handling" => args.panic_handling.is_some(),
                 "ping_interval" => args.ping_interval.is_some(),
                 "timer_resolution" => args.timer_resolution.is_some(),
+                "task_callbacks" => args.task_callbacks.is_some(),
                 "rt" => args.rt.is_some(),
                 _ => {
                     return Err(Error::new_spanned(
                         &param.name,
-                        "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval`, `timer_resolution` or `rt`",
+                        "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval`, `timer_resolution`, `task_callbacks` or `rt`",
                     ));
                 }
             };
@@ -113,6 +119,9 @@ impl MainArgs {
                         param.value_error("`timer_resolution` value must be an integer literal")
                     })?);
                 }
+                "task_callbacks" => {
+                    args.task_callbacks = Some(parse_task_callbacks(&param)?);
+                }
                 _ => {
                     args.rt = Some(
                         param
@@ -127,39 +136,67 @@ impl MainArgs {
     }
 }
 
+/// Builder call for the `task_callbacks` argument, the path names a factory
+/// function returning `TaskCallbacks`
+fn gen_task_callbacks(path: Option<TokenStream>) -> TokenStream {
+    path.map(|path| quote!(.task_callbacks(#path)))
+        .unwrap_or_default()
+}
+
+fn parse_task_callbacks(param: &Arg) -> Result<TokenStream, Error> {
+    param
+        .path()
+        .ok_or_else(|| param.value_error("`task_callbacks` value must be a path"))
+}
+
 /// Arguments of the `test` macro
 pub(crate) struct TestArgs {
     timer_resolution: Option<Literal>,
+    task_callbacks: Option<TokenStream>,
 }
 
 impl TestArgs {
     pub(crate) fn gen_sys_config(self) -> TokenStream {
-        self.timer_resolution
+        let timer_resolution = self
+            .timer_resolution
             .map(|millis| quote!(.timer_resolution(#millis)))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let task_callbacks = gen_task_callbacks(self.task_callbacks);
+        quote!(#timer_resolution #task_callbacks)
     }
 
     pub(crate) fn parse(input: TokenStream) -> Result<Self, Error> {
         let mut args = TestArgs {
             timer_resolution: None,
+            task_callbacks: None,
         };
 
         for param in parse_args(input)? {
-            if param.name != "timer_resolution" {
+            let name = param.name.to_string();
+            let duplicate = match name.as_str() {
+                "timer_resolution" => args.timer_resolution.is_some(),
+                "task_callbacks" => args.task_callbacks.is_some(),
+                _ => {
+                    return Err(Error::new_spanned(
+                        &param.name,
+                        "unknown argument, expected `timer_resolution` or `task_callbacks`",
+                    ));
+                }
+            };
+            if duplicate {
                 return Err(Error::new_spanned(
                     &param.name,
-                    "unknown argument, expected `timer_resolution`",
+                    format!("duplicate `{name}` argument"),
                 ));
             }
-            if args.timer_resolution.is_some() {
-                return Err(Error::new_spanned(
-                    &param.name,
-                    "duplicate `timer_resolution` argument",
-                ));
+
+            if name == "timer_resolution" {
+                args.timer_resolution = Some(param.lit_int().ok_or_else(|| {
+                    param.value_error("`timer_resolution` value must be an integer literal")
+                })?);
+            } else {
+                args.task_callbacks = Some(parse_task_callbacks(&param)?);
             }
-            args.timer_resolution = Some(param.lit_int().ok_or_else(|| {
-                param.value_error("`timer_resolution` value must be an integer literal")
-            })?);
         }
 
         Ok(args)
@@ -187,7 +224,7 @@ mod tests {
     fn unknown_arg() {
         assert_eq!(
             err("foo = 1"),
-            "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval`, `timer_resolution` or `rt`"
+            "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval`, `timer_resolution`, `task_callbacks` or `rt`"
         );
         assert!(parse("panic_handling = true, signals = true").is_ok());
     }
@@ -196,12 +233,13 @@ mod tests {
     ///
     /// HOW:
     /// - Parse all value arguments and compare the generated runtime and
-    ///   builder calls, including `.timer_resolution(2)`.
+    ///   builder calls, including `.timer_resolution(2)` and a
+    ///   `.task_callbacks(..)` call passing the given path.
     /// - Parse wrongly typed and duplicate arguments and compare their errors.
     #[test]
     fn args() {
         let mut args = parse(
-            r#"name = "srv", signals = true, ping_interval = 250, timer_resolution = 2, rt = my::Rt,"#,
+            r#"name = "srv", signals = true, ping_interval = 250, timer_resolution = 2, task_callbacks = my::cbs, rt = my::Rt,"#,
         )
         .ok()
         .unwrap();
@@ -209,7 +247,7 @@ mod tests {
         assert_eq!(
             args.gen_sys_config(&Ident::new("main", proc_macro2::Span::call_site()))
                 .to_string(),
-            r#". name ("srv") . ping_interval (250) . timer_resolution (2) . signals (true)"#
+            r#". name ("srv") . ping_interval (250) . timer_resolution (2) . signals (true) . task_callbacks (my :: cbs)"#
         );
 
         assert_eq!(err("name = 1"), "`name` value must be an string literal");
@@ -233,6 +271,10 @@ mod tests {
             err("timer_resolution = 2, timer_resolution = 4"),
             "duplicate `timer_resolution` argument"
         );
+        assert_eq!(
+            err("task_callbacks = 1"),
+            "`task_callbacks` value must be a path"
+        );
         assert_eq!(err("rt = \"x\""), "`rt` value must be a type");
         assert_eq!(err("rt = a, rt = b"), "duplicate `rt` argument");
     }
@@ -244,11 +286,12 @@ mod tests {
             .to_string()
     }
 
-    /// STATEMENT: The `test` macro accepts only `timer_resolution` and turns it into a builder call.
+    /// STATEMENT: The `test` macro accepts only `timer_resolution` and
+    /// `task_callbacks` and turns them into builder calls.
     ///
     /// HOW:
-    /// - Parse empty arguments and `timer_resolution = 1` and compare the
-    ///   generated builder calls.
+    /// - Parse empty arguments, `timer_resolution = 1` and `task_callbacks`
+    ///   and compare the generated builder calls.
     /// - Parse unknown, `main`-only, wrongly typed and duplicate arguments and
     ///   compare their errors.
     #[test]
@@ -262,8 +305,12 @@ mod tests {
         };
         assert_eq!(cfg(""), "");
         assert_eq!(cfg("timer_resolution = 1"), ". timer_resolution (1)");
+        assert_eq!(
+            cfg("task_callbacks = cbs, timer_resolution = 1"),
+            ". timer_resolution (1) . task_callbacks (cbs)"
+        );
 
-        let unknown = "unknown argument, expected `timer_resolution`";
+        let unknown = "unknown argument, expected `timer_resolution` or `task_callbacks`";
         assert_eq!(test_err("foo = 1"), unknown);
         assert_eq!(test_err("name = \"t\""), unknown);
         assert_eq!(
@@ -273,6 +320,14 @@ mod tests {
         assert_eq!(
             test_err("timer_resolution = 2, timer_resolution = 4"),
             "duplicate `timer_resolution` argument"
+        );
+        assert_eq!(
+            test_err("task_callbacks = \"cbs\""),
+            "`task_callbacks` value must be a path"
+        );
+        assert_eq!(
+            test_err("task_callbacks = a, task_callbacks = b"),
+            "duplicate `task_callbacks` argument"
         );
     }
 }

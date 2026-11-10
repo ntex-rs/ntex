@@ -110,10 +110,11 @@ pub fn set_stopping(stopping: bool) {
 
 /// Spawns a future on the current Compio runtime and returns its join handle.
 ///
-/// The future and output need not be `Send`. Registered task callbacks are
-/// applied. Dropping the handle detaches the task unless
+/// The future and output need not be `Send`. The current system's
+/// [`TaskCallbacks`](crate::TaskCallbacks) are applied. Dropping the handle detaches the task unless
 /// [`cancel_on_drop`](JoinHandle::cancel_on_drop) is enabled. The runtime must
-/// keep being driven for it to make progress. An ntex system is not required.
+/// keep being driven for it to make progress. An ntex system is not required,
+/// without one no task callbacks are applied.
 ///
 /// If the runtime is shutting down, the future is dropped without running and
 /// the returned handle resolves to [`JoinError`].

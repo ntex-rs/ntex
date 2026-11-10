@@ -10,7 +10,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::arbiter::Arbiter;
 use crate::pool::{PoolMetrics, ThreadPool};
-use crate::{BlockingResult, Builder, Handle, HashMap, Runner, SystemRunner};
+use crate::{BlockingResult, Builder, Handle, HashMap, Runner, SystemRunner, TaskCallbacks};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -67,6 +67,7 @@ pub struct SystemConfig {
     pub(super) pool_recv_timeout: Duration,
     pub(super) timer_resolution: u8,
     pub(super) testing: bool,
+    pub(super) task_callbacks: Option<fn() -> TaskCallbacks>,
     pub(super) runner: Arc<dyn Runner>,
 }
 
@@ -167,12 +168,14 @@ impl System {
     /// Set current running system
     #[doc(hidden)]
     pub fn set_current(sys: System) {
+        crate::task::set_callbacks(sys.0.config.task_callbacks.map(|f| f()));
         CURRENT.with(|s| {
             *s.borrow_mut() = Some(sys);
         });
     }
 
     pub(crate) fn register_arbiter(&self, arb: Arbiter) {
+        crate::task::set_callbacks(self.0.config.task_callbacks.map(|f| f()));
         CURRENT.with(|s| {
             *s.borrow_mut() = Some(self.clone());
         });
@@ -182,6 +185,7 @@ impl System {
     }
 
     pub(crate) fn unregister_arbiter(&self, id: Id) {
+        crate::task::set_callbacks(None);
         CURRENT.with(|s| {
             *s.borrow_mut() = None;
         });
@@ -197,6 +201,7 @@ impl System {
     }
 
     pub(super) fn remove_current() {
+        crate::task::set_callbacks(None);
         CURRENT.with(|cell| {
             cell.borrow_mut().take();
         });
@@ -424,6 +429,14 @@ impl SystemConfig {
     pub fn timer_resolution(&self) -> u8 {
         self.timer_resolution
     }
+
+    #[inline]
+    /// Returns the task callbacks factory, if set.
+    ///
+    /// See [`Builder::task_callbacks`].
+    pub fn task_callbacks(&self) -> Option<fn() -> TaskCallbacks> {
+        self.task_callbacks
+    }
 }
 
 impl fmt::Debug for System {
@@ -444,6 +457,7 @@ impl fmt::Debug for SystemConfig {
             .field("testing", &self.testing)
             .field("stack_size", &self.stack_size)
             .field("timer_resolution", &self.timer_resolution)
+            .field("task_callbacks", &self.task_callbacks)
             .finish()
     }
 }
