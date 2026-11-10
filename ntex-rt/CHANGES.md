@@ -1,5 +1,13 @@
 # Changes
 
+## [4.8.0] - Unreleased
+
+* Add `Runtime::run_ready()`, it runs ready tasks within the current turn,
+  so drivers can run tasks between chunks of events without ending the turn
+
+* `Runtime::poll_histogram()` records whole runtime turns, including driver-event
+  processing before `poll()`, instead of the time spent inside `poll()`
+
 ## [4.7.0] - 2026-11-10
 
 * Replace process-wide `task_callbacks()` and `task_opt_callbacks()`

@@ -278,12 +278,9 @@ impl RunnableQueue {
             }
         }
 
-        // tasks from other threads may schedule local tasks
-        let more_tasks = !self.local_queue.is_empty() || !self.wake_queue.is_empty();
-        if !more_tasks {
-            self.idle.set(true);
-        }
-        more_tasks
+        // tasks from other threads may schedule local tasks; `Runtime::poll`
+        // ends the turn when nothing remains
+        !self.local_queue.is_empty() || !self.wake_queue.is_empty()
     }
 
     /// Runs a task while publishing its location and tracking self-wake streaks.

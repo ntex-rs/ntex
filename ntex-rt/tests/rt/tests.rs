@@ -259,6 +259,62 @@ fn awake_skips_local_notify() {
     assert_eq!(rt.poll(), PollResult::Pending);
 }
 
+/// STATEMENT: `run_ready` runs tasks without ending the turn, so time stays at turn
+/// start and later local scheduling does not notify.
+///
+/// HOW:
+/// - Mark the runtime awake, record `now`, sleep, spawn a task and call `run_ready`.
+/// - Check the task ran, `now` still returns the turn start and nothing notified.
+/// - Spawn a second task, check it does not notify, then `poll` it and check it ran.
+/// - Check `now` advances once `poll` ends the turn.
+#[test]
+fn run_ready_keeps_turn() {
+    use std::sync::atomic::Ordering;
+
+    let cnt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let rt = Runtime::new(Box::new(CountNotify(cnt.clone())));
+    let ran = Rc::new(Cell::new(0));
+
+    rt.awake();
+    let start = rt.now();
+    std::thread::sleep(Duration::from_millis(5));
+    let r = ran.clone();
+    drop(rt.spawn(async move { r.set(r.get() + 1) }));
+    rt.run_ready();
+    assert_eq!(ran.get(), 1);
+    assert_eq!(rt.now(), start);
+
+    // still awake, the scheduled task is picked up by the final poll
+    let r = ran.clone();
+    drop(rt.spawn(async move { r.set(r.get() + 1) }));
+    assert_eq!(cnt.load(Ordering::Relaxed), 0);
+    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(ran.get(), 2);
+    assert_eq!(cnt.load(Ordering::Relaxed), 0);
+    assert!(rt.now() > start);
+}
+
+/// STATEMENT: `poll_histogram` records whole turns, from driver wake-up to the end of `poll`.
+///
+/// HOW:
+/// - Mark the runtime awake, sleep 5ms to stand for driver-event processing, then `poll`.
+/// - Check the one recorded turn falls in a bucket starting at 4ms or later.
+#[test]
+fn poll_histogram_records_turn() {
+    let rt = Runtime::new(Box::new(NoopNotify));
+    rt.awake();
+    std::thread::sleep(Duration::from_millis(5));
+    assert_eq!(rt.poll(), PollResult::Pending);
+
+    let hist = rt.poll_histogram();
+    assert_eq!(hist.count(), 1);
+    let idx = hist.buckets().iter().position(|c| *c != 0).unwrap();
+    assert!(
+        Histogram::bucket_range(idx).0 >= Duration::from_millis(4),
+        "{hist:?}"
+    );
+}
+
 /// STATEMENT: Remote submissions notify once per batch until polling clears the wake flag.
 ///
 /// HOW:
