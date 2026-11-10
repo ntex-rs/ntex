@@ -310,7 +310,7 @@ impl Handle {
         None
     }
 
-    /// Returns the histogram of runtime poll durations, not available on Tokio.
+    /// Returns the histogram of runtime turn durations, not available on Tokio.
     ///
     /// Always returns `None`, the method exists for compatibility with the
     /// other runtime backends.

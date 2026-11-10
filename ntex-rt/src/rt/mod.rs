@@ -376,11 +376,15 @@ impl Runtime {
     /// This does not install the runtime as current; [`block_on`](Self::block_on)
     /// establishes that context before invoking the driver.
     pub fn poll(&self) -> PollResult {
-        let start = Instant::now();
+        // a turn starts when the driver wakes up or the previous poll finished,
         // tasks scheduled from other threads do not end the idle state
-        if self.queue.idle.get() {
+        let start = if self.queue.idle.get() {
+            let start = Instant::now();
             self.queue.busy.start(start);
-        }
+            start
+        } else {
+            self.queue.poll_start.get()
+        };
 
         let result = if self.stop.get() {
             PollResult::Ready
@@ -408,6 +412,20 @@ impl Runtime {
             self.queue.busy.stop(now);
         }
         result
+    }
+
+    /// Runs a bounded batch of ready tasks within the current turn.
+    ///
+    /// Unlike [`poll`](Self::poll), the turn does not end: the runtime stays
+    /// awake, [`now`](Self::now) keeps the turn start and busy time is not
+    /// split. Drivers use it to run tasks between chunks of events, then call
+    /// [`poll`](Self::poll) before blocking. Must be called after
+    /// [`awake`](Self::awake). Does nothing once the runtime is stopped.
+    pub fn run_ready(&self) {
+        debug_assert!(!self.queue.idle.get(), "`run_ready` called while idle");
+        if !self.stop.get() {
+            self.queue.run();
+        }
     }
 
     /// Returns the start of the current runtime turn.
@@ -477,11 +495,14 @@ impl Runtime {
         self.queue.self_wakes.load(Ordering::Relaxed)
     }
 
-    /// Returns the histogram of [`poll`](Self::poll) durations.
+    /// Returns the histogram of runtime turn durations.
     ///
-    /// Measures time spent inside `poll`, excluding driver-event processing
-    /// before the call. Calls returning [`PollResult::Ready`] are not recorded.
-    /// Long polls can delay driver events and increase scheduling latency.
+    /// A turn starts when the driver wakes up, see [`awake`](Self::awake), or
+    /// the previous [`poll`](Self::poll) returned [`PollResult::PollAgain`],
+    /// and ends when `poll` returns. It includes driver-event processing and
+    /// tasks run by [`run_ready`](Self::run_ready). Calls returning
+    /// [`PollResult::Ready`] are not recorded. Long turns delay driver events
+    /// and increase scheduling latency.
     pub fn poll_histogram(&self) -> Histogram {
         self.queue.poll_histogram.snapshot()
     }
@@ -646,7 +667,7 @@ impl Handle {
         unsafe { task.as_ref() }
     }
 
-    /// Returns the histogram of runtime poll durations.
+    /// Returns the histogram of runtime turn durations.
     ///
     /// See [`Runtime::poll_histogram`]. Always returns `Some`.
     pub fn poll_histogram(&self) -> Option<Histogram> {
