@@ -1,5 +1,5 @@
 use std::{
-    cell, fmt, future::Future, marker, mem, ops, pin, rc::Rc, task::Context, task::Poll,
+    cell, fmt, future::Future, marker, mem, ops, pin, pin::Pin, rc::Rc, task::Context, task::Poll,
     task::Waker,
 };
 
@@ -525,25 +525,29 @@ impl<S, St> fmt::Debug for Ctx<'_, S, St> {
 }
 
 // Hand-written to keep nested service readiness futures shallow, see `RunCheck`.
-struct ReadyCall<'a, F, Fut, O> {
-    check: RunCheck<'a, F, Fut>,
-    waiters: &'a WaitersRef,
-    idx: u32,
-    in_call: bool,
-    // Pending call-time check that bypassed the gate owner.
-    key: Option<u32>,
-    // A started check that has not completed.
-    active: bool,
-    _t: marker::PhantomData<O>,
-}
+pin_project_lite::pin_project! {
+    struct ReadyCall<'a, F, Fut, O> {
+        #[pin]
+        check: RunCheck<'a, F, Fut>,
+        waiters: &'a WaitersRef,
+        idx: u32,
+        in_call: bool,
+        // Pending call-time check that bypassed the gate owner.
+        key: Option<u32>,
+        // A started check that has not completed.
+        active: bool,
+        _t: marker::PhantomData<O>,
+    }
 
-impl<F, Fut, O> Drop for ReadyCall<'_, F, Fut, O> {
-    fn drop(&mut self) {
-        if self.key.is_some() {
-            self.waiters.remove_call(&mut self.key);
-            self.waiters.wake_checks();
-        } else if self.active && self.waiters.cur.get() == self.idx {
-            self.waiters.notify();
+    impl<F, Fut, O> PinnedDrop for ReadyCall<'_, F, Fut, O> {
+        fn drop(this: Pin<&mut Self>) {
+            let this = this.project();
+            if this.key.is_some() {
+                this.waiters.remove_call(this.key);
+                this.waiters.wake_checks();
+            } else if *this.active && this.waiters.cur.get() == *this.idx {
+                this.waiters.notify();
+            }
         }
     }
 }
@@ -556,23 +560,22 @@ where
 {
     type Output = Result<O, E>;
 
-    fn poll(self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: `check` is pinned in place.
-        let this = unsafe { self.get_unchecked_mut() };
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
         let mut restarted = false;
         loop {
-            this.active = true;
-            let mut check = unsafe { pin::Pin::new_unchecked(&mut this.check) };
+            *this.active = true;
+            let mut check = this.check.as_mut();
             let f = |cx: &mut Context<'_>| check.as_mut().poll(cx);
-            let result = if this.in_call {
-                this.waiters.run_call(this.idx, &mut this.key, cx, f)
+            let result = if *this.in_call {
+                this.waiters.run_call(*this.idx, this.key, cx, f)
             } else {
-                this.waiters.run(this.idx, cx, f)
+                this.waiters.run(*this.idx, cx, f)
             };
             let Poll::Ready(result) = result else {
                 return Poll::Pending;
             };
-            this.active = false;
+            *this.active = false;
             match result {
                 // Scheduling another waiter can invalidate the completed check.
                 Ok(generation) if !this.check.scope().is_current(generation) => {}

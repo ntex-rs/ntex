@@ -9,8 +9,8 @@ where
     B: Future,
 {
     Join {
-        fut_a: MaybeDone::Pending(fut_a),
-        fut_b: MaybeDone::Pending(fut_b),
+        fut_a: MaybeDone::pending(fut_a),
+        fut_b: MaybeDone::pending(fut_b),
     }
     .await
 }
@@ -54,23 +54,17 @@ where
     I: IntoIterator,
     I::Item: Future,
 {
-    let elems: Box<[_]> = i.into_iter().map(MaybeDone::Pending).collect();
     JoinAll {
-        elems: elems.into(),
+        elems: i
+            .into_iter()
+            .map(|f| MaybeDone::pending(Box::pin(f)))
+            .collect(),
     }
 }
 
+// Each future is boxed, so elements are `Unpin` and need no slice pin projection.
 pub(crate) struct JoinAll<T: Future> {
-    elems: Pin<Box<[MaybeDone<T>]>>,
-}
-
-fn iter_pin_mut<T>(slice: Pin<&mut [T]>) -> impl Iterator<Item = Pin<&mut T>> {
-    // Safety: `std` _could_ make this unsound if it were to decide Pin's
-    // invariants aren't required to transmit through slices. Otherwise this has
-    // the same safety as a normal field pin projection.
-    unsafe { slice.get_unchecked_mut() }
-        .iter_mut()
-        .map(|t| unsafe { Pin::new_unchecked(t) })
+    elems: Box<[MaybeDone<Pin<Box<T>>>]>,
 }
 
 impl<T> Future for JoinAll<T>
@@ -79,18 +73,19 @@ where
 {
     type Output = Vec<T::Output>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
         let mut all_done = true;
 
-        for elem in iter_pin_mut(self.elems.as_mut()) {
-            if elem.poll(cx).is_pending() {
+        for elem in &mut this.elems {
+            if Pin::new(elem).poll(cx).is_pending() {
                 all_done = false;
             }
         }
         if all_done {
-            let mut elems = mem::replace(&mut self.elems, Box::pin([]));
-            let result = iter_pin_mut(elems.as_mut())
-                .map(|e| e.take_output().unwrap())
+            let result = mem::take(&mut this.elems)
+                .iter_mut()
+                .map(|e| Pin::new(e).take_output().unwrap())
                 .collect();
             Poll::Ready(result)
         } else {

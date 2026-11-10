@@ -1,7 +1,7 @@
 //! Future and stream utilities.
 use std::future::{Future, poll_fn};
+use std::pin::Pin;
 use std::task::{Context, Poll, ready};
-use std::{mem, pin::Pin};
 
 pub use futures_core::{Stream, TryFuture};
 
@@ -31,26 +31,29 @@ where
     poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
 }
 
-enum MaybeDone<F>
-where
-    F: Future,
-{
-    Pending(F),
-    Done(F::Output),
-    Gone,
+pin_project_lite::pin_project! {
+    #[project = MaybeDoneProj]
+    #[project_replace = MaybeDoneReplace]
+    enum MaybeDone<F: Future> {
+        Pending { #[pin] fut: F },
+        Done { output: F::Output },
+        Gone,
+    }
 }
 
 impl<F: Future> MaybeDone<F> {
-    fn take_output(self: Pin<&mut Self>) -> Option<F::Output> {
+    fn pending(fut: F) -> Self {
+        MaybeDone::Pending { fut }
+    }
+
+    fn take_output(mut self: Pin<&mut Self>) -> Option<F::Output> {
         match &*self {
-            Self::Done(_) => {}
-            Self::Pending(_) | Self::Gone => return None,
+            Self::Done { .. } => {}
+            Self::Pending { .. } | Self::Gone => return None,
         }
-        unsafe {
-            match mem::replace(self.get_unchecked_mut(), Self::Gone) {
-                MaybeDone::Done(output) => Some(output),
-                _ => unreachable!(),
-            }
+        match self.as_mut().project_replace(Self::Gone) {
+            MaybeDoneReplace::Done { output } => Some(output),
+            _ => unreachable!(),
         }
     }
 }
@@ -59,15 +62,13 @@ impl<F: Future> Future for MaybeDone<F> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        unsafe {
-            match self.as_mut().get_unchecked_mut() {
-                MaybeDone::Pending(f) => {
-                    let res = ready!(Pin::new_unchecked(f).poll(cx));
-                    self.set(Self::Done(res));
-                }
-                MaybeDone::Done(_) => {}
-                MaybeDone::Gone => panic!("MaybeDone polled after value taken"),
+        match self.as_mut().project() {
+            MaybeDoneProj::Pending { fut } => {
+                let output = ready!(fut.poll(cx));
+                self.set(Self::Done { output });
             }
+            MaybeDoneProj::Done { .. } => {}
+            MaybeDoneProj::Gone => panic!("MaybeDone polled after value taken"),
         }
         Poll::Ready(())
     }
@@ -86,10 +87,10 @@ mod tests {
     /// - Complete a ready future, take its output, and verify a second take returns `None`.
     #[ntex::test]
     async fn maybe_done_take_output() {
-        let mut fut = pin!(MaybeDone::Pending(pending::<()>()));
+        let mut fut = pin!(MaybeDone::pending(pending::<()>()));
         assert!(fut.as_mut().take_output().is_none());
 
-        let mut fut = pin!(MaybeDone::Pending(ready(1)));
+        let mut fut = pin!(MaybeDone::pending(ready(1)));
         fut.as_mut().await;
         assert_eq!(fut.as_mut().take_output(), Some(1));
         // the output is taken once
@@ -103,7 +104,7 @@ mod tests {
     #[ntex::test]
     #[should_panic(expected = "MaybeDone polled after value taken")]
     async fn maybe_done_poll_after_take() {
-        let mut fut = pin!(MaybeDone::Pending(ready(1)));
+        let mut fut = pin!(MaybeDone::pending(ready(1)));
         fut.as_mut().await;
         assert_eq!(fut.as_mut().take_output(), Some(1));
         fut.as_mut().await;
@@ -119,11 +120,11 @@ mod tests {
     #[test]
     fn miri_maybe_done_takes_output_once() {
         let mut cx = Context::from_waker(std::task::Waker::noop());
-        let mut fut = pin!(MaybeDone::Pending(pending::<String>()));
+        let mut fut = pin!(MaybeDone::pending(pending::<String>()));
         assert!(fut.as_mut().poll(&mut cx).is_pending());
         assert!(fut.as_mut().take_output().is_none());
 
-        let mut fut = pin!(MaybeDone::Pending(ready("a".to_string())));
+        let mut fut = pin!(MaybeDone::pending(ready("a".to_string())));
         assert!(fut.as_mut().poll(&mut cx).is_ready());
         assert_eq!(fut.as_mut().take_output(), Some("a".to_string()));
         assert!(fut.as_mut().take_output().is_none());

@@ -17,6 +17,9 @@ pub enum Either<A, B> {
 
 impl<A, B> Either<A, B> {
     fn project(self: Pin<&mut Self>) -> Either<Pin<&mut A>, Pin<&mut B>> {
+        // `pin-project-lite` does not support tuple variants.
+        // SAFETY: structural pinning; the variant value is never moved out
+        // of a pinned `Either`, and `Either` has no `Drop` impl.
         unsafe {
             match self.get_unchecked_mut() {
                 Either::Left(a) => Either::Left(Pin::new_unchecked(a)),

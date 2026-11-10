@@ -338,7 +338,7 @@ trait OnWorkerStart<Cfg>: Send {
 
 struct OnWorkerStartImpl<F, Cfg> {
     f: F,
-    st: PhantomData<Cfg>,
+    st: PhantomData<fn() -> Cfg>,
 }
 
 fn on_worker_start<F, Cfg>(f: F) -> Box<dyn OnWorkerStart<Cfg> + Send>
@@ -366,7 +366,3 @@ where
         Box::pin(async move { (f)(rt).await })
     }
 }
-
-// SAFETY: Send cannot be provided authomatically because of R param
-// but R always get executed in one thread and never leave it
-unsafe impl<F, Cfg> Send for OnWorkerStartImpl<F, Cfg> where F: Send {}
