@@ -1,5 +1,13 @@
 # Changes
 
+## [4.10.2] - 2026-11-12
+
+* polling: Read up to 512 events per poll and run ready tasks after every 8
+  dispatched events
+
+* polling: Ignore events queued for a released stream or connect when its slot
+  is reused, `ReactorApi` ids are `u64` with the low 48 bits available
+
 ## [4.10.1] - 2026-11-12
 
 * io-uring: Remove unused `ReactorApi::cancel_all_sync()`

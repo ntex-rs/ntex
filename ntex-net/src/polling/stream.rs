@@ -7,7 +7,7 @@ use ntex_rt::{Arbiter, syscall};
 use slab::Slab;
 use socket2::Socket;
 
-use super::{Event, Handler, PollMode, Reactor, ReactorApi};
+use super::{Event, Handler, Key, PollMode, Reactor, ReactorApi};
 use crate::helpers::Queue;
 
 const MAX_WRITE_SIZE: usize = 256 * 1024;
@@ -54,6 +54,7 @@ pub(super) struct StreamItem {
     io: Socket,
     flags: Flags,
     ctx: IoContext,
+    generation: u16,
 }
 
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
@@ -67,6 +68,8 @@ struct StreamOpsInner {
     mode: PollMode,
     delayed_feed: Queue<IdType>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
+    /// Generation of the next registered stream
+    generation: Cell<u16>,
 }
 
 impl StreamOps {
@@ -87,6 +90,7 @@ impl StreamOps {
                     mode,
                     delayed_feed: Queue::new(),
                     streams: Cell::new(Some(Box::new(Slab::new()))),
+                    generation: Cell::new(0),
                 });
                 inner = Some(ops.clone());
                 Box::new(StreamOpsHandler { inner: ops })
@@ -106,17 +110,21 @@ impl StreamOps {
         ctx: IoContext,
     ) -> (StreamCtl, WeakStreamCtl) {
         let fd = io.as_raw_fd();
+        let generation = self.0.generation.get();
+        self.0.generation.set(generation.wrapping_add(1));
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
                 io,
                 ctx,
                 flags: Flags::RD,
+                generation,
             };
             StreamCtl {
-                id: streams.insert(item) as u32,
+                id: u32::try_from(streams.insert(item)).expect("Too many streams"),
                 inner: self.0.clone(),
             }
         });
+        let key = Key::new(stream.id, generation).id();
 
         // Read interest is armed from the start, a new connection almost
         // always reads first. The io task then finds `Flags::RD` set and needs
@@ -130,11 +138,9 @@ impl StreamOps {
             // stream, which saves a delete and an add.
             self.0
                 .api
-                .modify_with_mode_deferred(fd, stream.id, event, self.0.mode);
+                .modify_with_mode_deferred(fd, key, event, self.0.mode);
         } else {
-            self.0
-                .api
-                .attach_with_mode(fd, stream.id, event, self.0.mode);
+            self.0.api.attach_with_mode(fd, key, event, self.0.mode);
         }
 
         let weak = WeakStreamCtl {
@@ -160,11 +166,15 @@ impl Handler for StreamOpsHandler {
     /// announce it early, ahead of that input, which is of no use while read
     /// back-pressure holds the input back.
     fn event(&mut self, id: usize, ev: Event) {
+        let key = Key::from_id(id);
+        let id = key.idx;
         self.inner.with(|streams| {
-            if !streams.contains(id) {
+            let Some(io) = streams
+                .get_mut(id as usize)
+                .filter(|io| io.generation == key.generation)
+            else {
                 return;
-            }
-            let io = &mut streams[id];
+            };
             // kqueue reports read and write separately, an earlier event of
             // the same poll may have detached the stream.
             if io.flags.contains(Flags::DETACHED) {
@@ -224,10 +234,10 @@ impl Handler for StreamOpsHandler {
                     io::Error::new(io::ErrorKind::ConnectionReset, "transport error")
                 });
                 io.ctx.stop(Some(err));
-                self.inner.detach(id as u32, io);
+                self.inner.detach(id, io);
             } else if ev.is_interrupt() {
                 io.ctx.stop(None);
-                self.inner.detach(id as u32, io);
+                self.inner.detach(id, io);
             } else if self.inner.mode != PollMode::Level
                 || prev != io.flags & (Flags::RD | Flags::WR)
             {
@@ -237,14 +247,18 @@ impl Handler for StreamOpsHandler {
                     io.tag(),
                     io.fd()
                 );
-                self.inner.modify(id as u32, io, renew_rd, renew_wr);
+                self.inner.modify(id, io, renew_rd, renew_wr);
             }
         });
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
+        let key = Key::from_id(id);
         self.inner.with(|streams| {
-            if let Some(io) = streams.get_mut(id) {
+            if let Some(io) = streams
+                .get_mut(key.idx as usize)
+                .filter(|io| io.generation == key.generation)
+            {
                 log::trace!("{}: {:?}-Failed err({err:?})", io.tag(), io.fd());
                 io.ctx.stop(Some(err));
             }
@@ -321,15 +335,20 @@ impl StreamOpsInner {
     /// Sets poll interest, `Flags::RD` and `Flags::WR` must match it.
     fn modify(&self, id: u32, item: &StreamItem, rd: bool, wr: bool) {
         if !item.flags.contains(Flags::DETACHED) {
-            self.api
-                .modify_with_mode_deferred(item.fd(), id, Event::new(0, rd, wr), self.mode);
+            self.api.modify_with_mode_deferred(
+                item.fd(),
+                Key::new(id, item.generation).id(),
+                Event::new(0, rd, wr),
+                self.mode,
+            );
         }
     }
 
     fn detach(&self, id: u32, item: &mut StreamItem) {
         if !item.flags.contains(Flags::DETACHED) {
             item.flags.insert(Flags::DETACHED);
-            self.api.detach(item.fd(), id);
+            self.api
+                .detach(item.fd(), Key::new(id, item.generation).id());
         }
     }
 
@@ -905,6 +924,8 @@ mod tests {
         ops: StreamOps,
         handler: StreamOpsHandler,
         id: usize,
+        /// Handler id of the stream
+        key: usize,
         peer: UnixStream,
         _ctl: StreamCtl,
         _reactor: Reactor,
@@ -930,8 +951,10 @@ mod tests {
                 cfg.into(),
             );
             let ctl = ctl.take().unwrap();
+            let generation = ops.0.with(|streams| streams[ctl.id as usize].generation);
             Fixture {
                 id: ctl.id as usize,
+                key: Key::new(ctl.id, generation).id() as usize,
                 handler: StreamOpsHandler {
                     inner: ops.0.clone(),
                 },
@@ -944,8 +967,8 @@ mod tests {
         }
 
         fn fire(&mut self, ev: Event) {
-            let id = self.id;
-            self.handler.event(id, ev);
+            let key = self.key;
+            self.handler.event(key, ev);
         }
 
         fn flags(&self) -> Flags {
@@ -1112,14 +1135,64 @@ mod tests {
     #[ntex::test]
     async fn reactor_error_stops_the_stream() {
         let mut fixture = Fixture::new();
-        let id = fixture.id;
-        fixture.handler.error(id, io::Error::other("reactor error"));
+        let key = fixture.key;
+        fixture
+            .handler
+            .error(key, io::Error::other("reactor error"));
         // an unknown stream is ignored
-        fixture.handler.error(id + 100, io::Error::other("unknown"));
+        fixture
+            .handler
+            .error(key + 100, io::Error::other("unknown"));
 
         let closed = !fixture.io.is_active();
         fixture.teardown();
         assert!(closed, "reactor error did not stop the stream");
+    }
+
+    /// STATEMENT: Events queued for a released stream do not reach a new
+    /// stream that reuses its slot.
+    ///
+    /// HOW:
+    /// - Register a stream, drop it and run a tick so its slot is released.
+    /// - Register a second stream and confirm it reuses the slot with another
+    ///   generation.
+    /// - Deliver a reactor error, and on epoll a `HUP` event, with the old id
+    ///   and confirm the new stream stays active and attached.
+    /// - Deliver a reactor error with the new id and confirm it stops the
+    ///   stream, so the old id was ignored only because of its generation.
+    #[ntex::test]
+    async fn stale_event_skips_reused_slot() {
+        let first = Fixture::new();
+        let (id, key) = (first.id, first.key);
+        let Fixture {
+            io, ops, _ctl: ctl, ..
+        } = first;
+        drop(ctl);
+        drop(io);
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .tick();
+        assert!(ops.0.with(|streams| !streams.contains(id)));
+
+        let mut fixture = Fixture::new();
+        assert_eq!(fixture.id, id, "slot was not reused");
+        assert_ne!(fixture.key, key, "generation was not changed");
+
+        fixture.handler.error(key, io::Error::other("stale"));
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        fixture.handler.event(key, Event::none(0).with_interrupt());
+        let active = fixture.io.is_active();
+        let detached = fixture.flags().contains(Flags::DETACHED);
+
+        let new_key = fixture.key;
+        fixture.handler.error(new_key, io::Error::other("current"));
+        let stopped = !fixture.io.is_active();
+        fixture.teardown();
+
+        assert!(active, "stale event stopped the new stream");
+        assert!(!detached, "stale event detached the new stream");
+        assert!(stopped, "event for the new stream was ignored");
     }
 
     /// A new stream is registered with read interest armed, the first read

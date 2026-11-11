@@ -1,4 +1,4 @@
-use std::{cell::RefCell, io, mem, os::fd::AsRawFd, os::fd::RawFd, rc::Rc, task::Poll};
+use std::{cell::Cell, cell::RefCell, io, mem, os::fd::AsRawFd, os::fd::RawFd, rc::Rc, task::Poll};
 
 use ntex_io::Io;
 use ntex_rt::{Arbiter, syscall};
@@ -6,7 +6,7 @@ use ntex_service::cfg::SharedCfg;
 use slab::Slab;
 use socket2::{SockAddr, Socket};
 
-use super::{Event, Handler, Reactor, ReactorApi, TcpStream, UnixStream, stream::StreamOps};
+use super::{Event, Handler, Key, Reactor, ReactorApi, TcpStream, UnixStream, stream::StreamOps};
 use crate::channel::{self, Cancel, Receiver, Sender};
 
 #[derive(Clone)]
@@ -21,6 +21,7 @@ struct Item {
     cfg: SharedCfg,
     sender: Sender<Io>,
     uds: bool,
+    generation: u16,
 }
 
 struct ConnectOpsInner {
@@ -29,6 +30,8 @@ struct ConnectOpsInner {
     connects: RefCell<Slab<Item>>,
     /// Connects with dropped receivers, released by the next tick
     canceled: RefCell<Vec<u32>>,
+    /// Generation of the next connect
+    generation: Cell<u16>,
 }
 
 impl Item {
@@ -49,6 +52,7 @@ impl ConnectOps {
                     streams,
                     connects: RefCell::new(Slab::new()),
                     canceled: RefCell::new(Vec::new()),
+                    generation: Cell::new(0),
                 });
                 inner = Some(ops.clone());
                 Box::new(ConnectOpsBatcher { inner: ops })
@@ -87,16 +91,21 @@ impl ConnectOps {
             let fd = sock.as_raw_fd();
             let mut connects = self.0.connects.borrow_mut();
             let entry = connects.vacant_entry();
-            let id = entry.key() as u32;
+            let id = u32::try_from(entry.key()).expect("Too many connects");
+            let generation = self.0.generation.get();
+            self.0.generation.set(generation.wrapping_add(1));
             let (sender, rx) = channel::with_cancel(self.0.clone(), id);
             entry.insert(Item {
                 sock,
                 cfg,
                 sender,
                 uds,
+                generation,
             });
             drop(connects);
-            self.0.api.attach(fd, id, Event::writable(0));
+            self.0
+                .api
+                .attach(fd, Key::new(id, generation).id(), Event::writable(0));
             rx
         }
     }
@@ -111,8 +120,13 @@ impl Cancel for ConnectOpsInner {
 
 impl Handler for ConnectOpsBatcher {
     fn event(&mut self, id: usize, ev: Event) {
+        let key = Key::from_id(id);
+        let id = key.idx as usize;
         let mut connects = self.inner.connects.borrow_mut();
-        if let Some(item) = connects.get(id) {
+        if let Some(item) = connects
+            .get(id)
+            .filter(|item| item.generation == key.generation)
+        {
             log::trace!(
                 "{}: {:?}-Connect rd({:?}) wr({:?}) {:?}",
                 item.cfg.tag(),
@@ -143,7 +157,7 @@ impl Handler for ConnectOpsBatcher {
 
                 match res {
                     Ok(_) if item.sender.is_canceled() => {
-                        self.inner.api.detach(item.fd(), id as u32);
+                        self.inner.api.detach(item.fd(), key.id());
                         crate::helpers::close_socket(item.sock);
                     }
                     // The socket stays attached, the stream takes the
@@ -162,7 +176,7 @@ impl Handler for ConnectOpsBatcher {
                         }
                     }
                     Err(err) => {
-                        self.inner.api.detach(item.fd(), id as u32);
+                        self.inner.api.detach(item.fd(), key.id());
                         let _ = item.sender.send(Err(err));
                         crate::helpers::close_socket(item.sock);
                     }
@@ -170,22 +184,27 @@ impl Handler for ConnectOpsBatcher {
             } else {
                 self.inner
                     .api
-                    .attach(item.fd(), id as u32, Event::writable(0));
+                    .attach(item.fd(), key.id(), Event::writable(0));
             }
         }
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
+        let key = Key::from_id(id);
+        let id = key.idx as usize;
         let mut connects = self.inner.connects.borrow_mut();
 
-        if connects.contains(id) {
+        if connects
+            .get(id)
+            .is_some_and(|item| item.generation == key.generation)
+        {
             let Item {
                 sock, sender, cfg, ..
             } = connects.remove(id);
             log::trace!("{}: Connect {id:?} is failed {err:?}", cfg.tag());
 
             let _ = sender.send(Err(err));
-            self.inner.api.detach(sock.as_raw_fd(), id as u32);
+            self.inner.api.detach(sock.as_raw_fd(), key.id());
             crate::helpers::close_socket(sock);
         } else {
             log::error!("Connect {id:?} is failed {err:?}");
@@ -208,7 +227,9 @@ impl Handler for ConnectOpsBatcher {
             {
                 let item = connects.remove(id);
                 log::trace!("{}: Connect {id:?} is canceled", item.cfg.tag());
-                self.inner.api.detach(item.fd(), id as u32);
+                self.inner
+                    .api
+                    .detach(item.fd(), Key::new(id as u32, item.generation).id());
                 crate::helpers::close_socket(item.sock);
             }
         }
@@ -265,6 +286,74 @@ mod tests {
         drop(rx2);
         handler.tick();
         assert!(ops.0.connects.borrow().is_empty());
+        handler.cleanup();
+    }
+
+    /// STATEMENT: Events queued for a released connect do not reach a new
+    /// connect that reuses its slot.
+    ///
+    /// HOW:
+    /// - Start a connect, cancel it and run a tick so its slot is released.
+    /// - Start a second connect and confirm it reuses the slot with another
+    ///   generation.
+    /// - Deliver a reactor error and a writable event with the old id and
+    ///   confirm the new connect stays pending.
+    /// - Deliver a reactor error with the new id and confirm it fails the
+    ///   connect.
+    #[ntex::test]
+    async fn stale_event_skips_reused_slot() {
+        let reactor = Reactor::new().unwrap();
+        let ops = ConnectOps::get(&reactor);
+        let mut handler = ConnectOpsBatcher {
+            inner: ops.0.clone(),
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = SockAddr::from(listener.local_addr().unwrap());
+        let connect = || {
+            let sock = Socket::new(addr.domain(), socket2::Type::STREAM, None).unwrap();
+            ops.connect(
+                crate::helpers::prep_socket(sock).unwrap(),
+                &addr,
+                SharedCfg::default(),
+                false,
+            )
+        };
+        let key = || {
+            let connects = ops.0.connects.borrow();
+            let (id, item) = connects.iter().next().unwrap();
+            Key::new(id as u32, item.generation)
+        };
+
+        let rx = connect();
+        if ops.0.connects.borrow().is_empty() {
+            // connected without waiting, nothing to reuse
+            return;
+        }
+        let old = key();
+        drop(rx);
+        handler.tick();
+        assert!(ops.0.connects.borrow().is_empty());
+
+        let rx = connect();
+        if ops.0.connects.borrow().is_empty() {
+            return;
+        }
+        let new = key();
+        assert_eq!(new.idx, old.idx, "slot was not reused");
+        assert_ne!(new, old, "generation was not changed");
+
+        let old = old.id() as usize;
+        handler.error(old, io::Error::other("stale"));
+        handler.event(old, Event::writable(0));
+        assert_eq!(
+            ops.0.connects.borrow().len(),
+            1,
+            "stale event reached the connect"
+        );
+
+        handler.error(new.id() as usize, io::Error::other("current"));
+        assert!(ops.0.connects.borrow().is_empty());
+        assert!(rx.await.is_err());
         handler.cleanup();
     }
 }
