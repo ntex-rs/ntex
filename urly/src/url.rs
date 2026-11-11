@@ -91,12 +91,21 @@ pub(crate) fn assemble_target(
 /// Builds an origin-form request-target, a path not starting with `//` and an
 /// optional query, without copying `data`.
 ///
+/// `query` is the position of the first `?` in `data`, if known.
+///
 /// Produces the same URL as [`assemble_target`] with the split components.
-pub(crate) fn origin_form(data: ByteString) -> Url {
+pub(crate) fn origin_form(data: ByteString, query: Option<Option<usize>>) -> Url {
     debug_assert!(data.starts_with('/') && !data.starts_with("//"));
     debug_assert!(data.len() <= parse::MAX_LEN);
+    let query = match query {
+        Some(None) => None,
+        // only an actual `?` is a char boundary
+        Some(Some(i)) if data.as_bytes().get(i) == Some(&b'?') => Some(i),
+        _ => data.find('?'),
+    };
+    debug_assert_eq!(query, data.find('?'), "{data:?}");
     let len = data.len() as u16;
-    let path_end = data.find('?').map_or(len, |i| i as u16);
+    let path_end = query.map_or(len, |i| i as u16);
     Url {
         data,
         scheme_end: 0,
@@ -333,6 +342,30 @@ impl Url {
     /// ```
     pub fn parse_target(src: impl Into<Bytes>) -> Result<Url, InvalidUrl> {
         parse::parse_target(src.into())
+    }
+
+    /// Parses an HTTP request-target that is already UTF-8.
+    ///
+    /// Same as [`Url::parse_target`] without the UTF-8 check, for callers
+    /// whose parser has already established that the target is ASCII or UTF-8.
+    ///
+    /// `query` is the position of the first `?` in `src`, `None` if `src` has
+    /// no `?`, as found by the caller's parser, so the target is not searched
+    /// again. A position that is not a `?` is ignored.
+    ///
+    /// ```
+    /// use ntex_bytes::ByteString;
+    /// use urly::Url;
+    ///
+    /// let url = Url::parse_target_str(ByteString::from_static("/a?b=1"), Some(2)).unwrap();
+    /// assert_eq!(url.path(), "/a");
+    /// assert_eq!(url.query().unwrap(), "b=1");
+    /// ```
+    pub fn parse_target_str(
+        src: impl Into<ByteString>,
+        query: Option<usize>,
+    ) -> Result<Url, InvalidUrl> {
+        parse::parse_target_str(src.into(), Some(query))
     }
 
     /// Builds an unvalidated request-target from HTTP/2 pseudo-header components.
