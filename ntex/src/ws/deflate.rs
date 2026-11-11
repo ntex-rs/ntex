@@ -29,6 +29,11 @@ const NO_CONTEXT_MAX_SKIPPED: usize = 32;
 /// parameters accepted by the server are available from
 /// [`Codec::deflate()`](super::Codec::deflate) of the established connection.
 ///
+/// On the server, this value holds the parameters the server accepts, see
+/// [`DeflateConfig::negotiate()`]. The server uses at most the configured
+/// window sizes, and asks the client to use the configured context takeover
+/// and the client window size, if the client allows it.
+///
 /// A [`Codec`](super::Codec) applies the agreed parameters with
 /// [`Codec::set_deflate()`](super::Codec::set_deflate).
 ///
@@ -250,6 +255,142 @@ impl DeflateConfig {
             return Err(invalid());
         }
         Ok(Some(agreed))
+    }
+
+    #[must_use]
+    /// Selects the client's offer of the extension for a server.
+    ///
+    /// The offers of the request's `Sec-WebSocket-Extensions` headers are
+    /// checked in the client's order of preference, the first valid offer is
+    /// accepted. Returns the agreed parameters and the
+    /// `Sec-WebSocket-Extensions` value of the handshake response. Apply the
+    /// parameters to the server's codec with
+    /// [`Codec::set_deflate()`](super::Codec::set_deflate).
+    ///
+    /// Returns `None` if the client does not offer the extension, or all
+    /// offers are invalid, the server then declines the extension.
+    ///
+    /// ```rust
+    /// use ntex::http::header::{HeaderMap, HeaderValue, SEC_WEBSOCKET_EXTENSIONS};
+    /// use ntex::ws::{self, DeflateConfig};
+    ///
+    /// let mut headers = HeaderMap::new();
+    /// headers.insert(
+    ///     SEC_WEBSOCKET_EXTENSIONS,
+    ///     HeaderValue::from_static("permessage-deflate; client_max_window_bits"),
+    /// );
+    ///
+    /// let mut codec = ws::Codec::new();
+    /// let cfg = DeflateConfig::new().set_server_no_context_takeover(true);
+    /// if let Some((agreed, response)) = cfg.negotiate(&headers) {
+    ///     assert_eq!(response, "permessage-deflate; server_no_context_takeover");
+    ///     codec = codec.set_deflate(agreed);
+    /// }
+    /// ```
+    pub fn negotiate(&self, headers: &HeaderMap) -> Option<(Self, HeaderValue)> {
+        let agreed = headers
+            .get_all(SEC_WEBSOCKET_EXTENSIONS)
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .find_map(|offer| self.negotiate_offer(offer))?;
+        let response = agreed.response();
+        Some((agreed, response))
+    }
+
+    /// Returns the agreed parameters of an offer, `None` if the offer is
+    /// declined.
+    ///
+    /// An offer with unknown, duplicated or invalid parameters is declined
+    /// (RFC 7692 §7).
+    fn negotiate_offer(&self, offer: &str) -> Option<Self> {
+        let mut params = offer.split(';').map(str::trim);
+        if !params
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case(EXTENSION))
+        {
+            return None;
+        }
+
+        let mut agreed = DeflateConfig {
+            level: self.level,
+            client_no_context_takeover: self.client_no_context_takeover,
+            server_no_context_takeover: self.server_no_context_takeover,
+            // the client's window is limited only if the client allows it
+            client_max_window_bits: None,
+            server_max_window_bits: self.server_max_window_bits,
+        };
+        let (mut client_ctx, mut server_ctx) = (false, false);
+        let (mut client_bits, mut server_bits) = (false, false);
+        for param in params {
+            let (name, val) = match param.split_once('=') {
+                Some((name, val)) => (name.trim(), Some(unquote(val.trim())?)),
+                None => (param, None),
+            };
+
+            if name.eq_ignore_ascii_case(CLIENT_NO_CONTEXT_TAKEOVER) {
+                if client_ctx || val.is_some() {
+                    return None;
+                }
+                client_ctx = true;
+                agreed.client_no_context_takeover = true;
+            } else if name.eq_ignore_ascii_case(SERVER_NO_CONTEXT_TAKEOVER) {
+                if server_ctx || val.is_some() {
+                    return None;
+                }
+                server_ctx = true;
+                agreed.server_no_context_takeover = true;
+            } else if name.eq_ignore_ascii_case(CLIENT_MAX_WINDOW_BITS) {
+                if client_bits {
+                    return None;
+                }
+                client_bits = true;
+                // the value is optional in an offer
+                agreed.client_max_window_bits = match val {
+                    Some(val) => {
+                        let bits = window_bits(val)?;
+                        Some(
+                            self.client_max_window_bits
+                                .map_or(bits, |max| max.min(bits)),
+                        )
+                    }
+                    None => self.client_max_window_bits,
+                };
+            } else if name.eq_ignore_ascii_case(SERVER_MAX_WINDOW_BITS) {
+                let bits = val.and_then(window_bits)?;
+                if server_bits {
+                    return None;
+                }
+                server_bits = true;
+                agreed.server_max_window_bits = Some(
+                    self.server_max_window_bits
+                        .map_or(bits, |max| max.min(bits)),
+                );
+            } else {
+                return None;
+            }
+        }
+        Some(agreed)
+    }
+
+    /// Creates the `Sec-WebSocket-Extensions` value of a server response
+    /// with the agreed parameters.
+    fn response(&self) -> HeaderValue {
+        let mut response = String::from(EXTENSION);
+        if self.client_no_context_takeover {
+            response.push_str("; ");
+            response.push_str(CLIENT_NO_CONTEXT_TAKEOVER);
+        }
+        if self.server_no_context_takeover {
+            response.push_str("; ");
+            response.push_str(SERVER_NO_CONTEXT_TAKEOVER);
+        }
+        if let Some(bits) = self.client_max_window_bits {
+            let _ = write!(response, "; {CLIENT_MAX_WINDOW_BITS}={bits}");
+        }
+        if let Some(bits) = self.server_max_window_bits {
+            let _ = write!(response, "; {SERVER_MAX_WINDOW_BITS}={bits}");
+        }
+        HeaderValue::try_from(response).unwrap()
     }
 }
 
@@ -695,6 +836,196 @@ mod tests {
             offer.accept(&headers),
             Err(WsClientError::InvalidWebSocketExtensions(_))
         ));
+    }
+
+    fn negotiate(cfg: &DeflateConfig, values: &[&'static str]) -> Option<(DeflateConfig, String)> {
+        cfg.negotiate(&response(values))
+            .map(|(agreed, res)| (agreed, res.to_str().unwrap().to_owned()))
+    }
+
+    /// STATEMENT: A server declines the extension when no valid deflate offer is present.
+    ///
+    /// HOW:
+    /// - Negotiate without an extension header, with other extensions, and with non-text headers.
+    /// - Negotiate offers with unknown, malformed, duplicated, or out-of-range parameters and assert each is declined.
+    #[test]
+    fn negotiate_declined() {
+        let cfg = DeflateConfig::new();
+        assert_eq!(cfg.negotiate(&HeaderMap::new()), None);
+        assert_eq!(negotiate(&cfg, &["x-webkit-deflate-frame"]), None);
+        assert_eq!(negotiate(&cfg, &["permessage-deflate-x, x-ext"]), None);
+        assert_eq!(negotiate(&cfg, &[""]), None);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            SEC_WEBSOCKET_EXTENSIONS,
+            HeaderValue::from_bytes(b"permessage-deflate; \xff").unwrap(),
+        );
+        assert_eq!(cfg.negotiate(&headers), None);
+
+        for value in [
+            // unknown or malformed parameters
+            "permessage-deflate; unknown",
+            "permessage-deflate; unknown=1",
+            "permessage-deflate;",
+            "permessage-deflate; client_no_context_takeover=1",
+            "permessage-deflate; server_no_context_takeover=\"\"",
+            // duplicated parameters
+            "permessage-deflate; client_no_context_takeover; client_no_context_takeover",
+            "permessage-deflate; server_no_context_takeover; server_no_context_takeover",
+            "permessage-deflate; client_max_window_bits; client_max_window_bits",
+            "permessage-deflate; client_max_window_bits=10; client_max_window_bits=10",
+            "permessage-deflate; server_max_window_bits=10; server_max_window_bits=10",
+            // invalid window sizes
+            "permessage-deflate; server_max_window_bits",
+            "permessage-deflate; client_max_window_bits=7",
+            "permessage-deflate; client_max_window_bits=16",
+            "permessage-deflate; server_max_window_bits=09",
+            "permessage-deflate; server_max_window_bits=+9",
+            "permessage-deflate; server_max_window_bits=256",
+            "permessage-deflate; server_max_window_bits=\"10",
+        ] {
+            assert_eq!(negotiate(&cfg, &[value]), None, "{value}");
+        }
+    }
+
+    /// STATEMENT: A server accepts the client's limits, applies its own limits, and answers with the agreed parameters.
+    ///
+    /// HOW:
+    /// - Negotiate plain, case/spacing/quoting variants and requested limits; compare agreed configs and response headers.
+    /// - Negotiate with server limits, with and without client window offers, and check the smaller window wins.
+    #[test]
+    fn negotiate_params() {
+        let cfg = DeflateConfig::new().set_compression_level(1);
+        assert_eq!(
+            negotiate(&cfg, &["permessage-deflate"]),
+            Some((cfg.clone(), "permessage-deflate".to_owned()))
+        );
+        // the client's window is not limited without a value
+        assert_eq!(
+            negotiate(&cfg, &["permessage-deflate; client_max_window_bits"]),
+            Some((cfg.clone(), "permessage-deflate".to_owned()))
+        );
+
+        let (agreed, res) = negotiate(
+            &cfg,
+            &[
+                "Permessage-Deflate ; Client_No_Context_Takeover;server_no_context_takeover ; \
+               client_max_window_bits = 10; server_max_window_bits=\"9\"",
+            ],
+        )
+        .unwrap();
+        assert_eq!(agreed.compression_level(), 1);
+        assert!(agreed.client_no_context_takeover());
+        assert!(agreed.server_no_context_takeover());
+        assert_eq!(agreed.client_max_window_bits(), Some(10));
+        assert_eq!(agreed.server_max_window_bits(), Some(9));
+        assert_eq!(
+            res,
+            "permessage-deflate; client_no_context_takeover; server_no_context_takeover; \
+             client_max_window_bits=10; server_max_window_bits=9"
+        );
+
+        // the server applies its own limits
+        let cfg = DeflateConfig::new()
+            .set_client_no_context_takeover(true)
+            .set_server_no_context_takeover(true)
+            .set_client_max_window_bits(10)
+            .set_server_max_window_bits(11);
+        let (agreed, res) = negotiate(&cfg, &["permessage-deflate"]).unwrap();
+        assert_eq!(agreed.client_max_window_bits(), None);
+        assert_eq!(agreed.server_max_window_bits(), Some(11));
+        assert_eq!(
+            res,
+            "permessage-deflate; client_no_context_takeover; server_no_context_takeover; \
+             server_max_window_bits=11"
+        );
+        let (agreed, _) = negotiate(&cfg, &["permessage-deflate; client_max_window_bits"]).unwrap();
+        assert_eq!(agreed.client_max_window_bits(), Some(10));
+        let (agreed, _) = negotiate(
+            &cfg,
+            &["permessage-deflate; client_max_window_bits=12; server_max_window_bits=12"],
+        )
+        .unwrap();
+        assert_eq!(agreed.client_max_window_bits(), Some(10));
+        assert_eq!(agreed.server_max_window_bits(), Some(11));
+        let (agreed, _) = negotiate(
+            &cfg,
+            &["permessage-deflate; client_max_window_bits=9; server_max_window_bits=8"],
+        )
+        .unwrap();
+        assert_eq!(agreed.client_max_window_bits(), Some(9));
+        assert_eq!(agreed.server_max_window_bits(), Some(8));
+    }
+
+    /// STATEMENT: A server accepts the first valid deflate offer in the client's order of preference.
+    ///
+    /// HOW:
+    /// - Negotiate comma-separated and repeated headers where earlier offers are invalid or other extensions.
+    /// - Assert the first valid deflate offer is the agreed one.
+    #[test]
+    fn negotiate_offers() {
+        let cfg = DeflateConfig::new();
+        let (agreed, res) = negotiate(
+            &cfg,
+            &["x-ext, permessage-deflate; unknown, permessage-deflate; server_max_window_bits=10, \
+               permessage-deflate"],
+        )
+        .unwrap();
+        assert_eq!(agreed.server_max_window_bits(), Some(10));
+        assert_eq!(res, "permessage-deflate; server_max_window_bits=10");
+
+        let (agreed, _) = negotiate(
+            &cfg,
+            &[
+                "permessage-deflate; client_max_window_bits=7",
+                "permessage-deflate; server_no_context_takeover",
+            ],
+        )
+        .unwrap();
+        assert!(agreed.server_no_context_takeover());
+    }
+
+    /// STATEMENT: A client accepts the server's response to its offer with the same agreed parameters.
+    ///
+    /// HOW:
+    /// - Negotiate client offers with server configs and pass the response to the client's `accept`.
+    /// - Compare the agreed parameters of both sides, apart from the local compression level.
+    #[test]
+    fn negotiate_accept() {
+        let offers = [
+            DeflateConfig::new(),
+            DeflateConfig::new()
+                .set_client_no_context_takeover(true)
+                .set_client_max_window_bits(9),
+            DeflateConfig::new()
+                .set_server_no_context_takeover(true)
+                .set_server_max_window_bits(12),
+        ];
+        let servers = [
+            DeflateConfig::new(),
+            DeflateConfig::new()
+                .set_client_no_context_takeover(true)
+                .set_server_no_context_takeover(true)
+                .set_client_max_window_bits(10)
+                .set_server_max_window_bits(10),
+        ];
+        for offer in &offers {
+            for server in &servers {
+                let mut headers = HeaderMap::new();
+                headers.insert(SEC_WEBSOCKET_EXTENSIONS, offer.offer());
+                let (agreed, res) = server.negotiate(&headers).unwrap();
+
+                let mut headers = HeaderMap::new();
+                headers.insert(SEC_WEBSOCKET_EXTENSIONS, res);
+                let client = offer.accept(&headers).unwrap().unwrap();
+                assert_eq!(
+                    client,
+                    agreed.set_compression_level(offer.compression_level()),
+                    "{offer:?} {server:?}"
+                );
+            }
+        }
     }
 
     /// STATEMENT: Deflate round trips preserve payloads, reuse history, omit final trailers, and enforce expanded-size bounds.
