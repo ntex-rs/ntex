@@ -1,8 +1,16 @@
 # Changes
 
-## [4.10.1] - Unreleased
+## [4.10.1] - 2026-11-12
 
 * io-uring: Remove unused `ReactorApi::cancel_all_sync()`
+
+* polling: Close an aborted stream without querying `SO_LINGER`
+
+* polling: Hand a finished connect's registration over to the stream with one
+  interest update instead of a delete and an add
+
+* Read the shutdown drain with `MSG_DONTWAIT` on Unix instead of switching the
+  socket to non-blocking mode
 
 ## [4.10.0] - 2026-11-11
 

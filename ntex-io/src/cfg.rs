@@ -141,7 +141,7 @@ impl IoConfig {
 
             write_timeout: Seconds(0),
             write_size: BytePageSize::Size16,
-            write_backpressure: BytePageSize::Size16.capacity(),
+            write_backpressure: BytePageSize::Size64.capacity(),
             write_buf_threshold: BytePageSize::Size16.half_capacity(),
             metrics: false,
         }
@@ -629,7 +629,7 @@ impl IoConfig {
     /// Output is held in [`BytePages`](ntex_bytes::BytePages), which are sized
     /// by [`set_write_size`](Self::set_write_size).
     ///
-    /// By default, the high watermark is approximately 16 KiB.
+    /// The default high watermark is 64 KiB.
     ///
     /// # Panics
     ///
@@ -677,7 +677,7 @@ mod tests {
         assert_eq!(cfg.read_size_max(), BytePageSize::Size64);
         assert_eq!(cfg.read_backpressure(), default);
         assert_eq!(cfg.read_half(), default / 2);
-        assert_eq!(cfg.write_backpressure(), BytePageSize::Size16.capacity());
+        assert_eq!(cfg.write_backpressure(), BytePageSize::Size64.capacity());
 
         // the read size does not change the backpressure watermark
         let cfg = cfg

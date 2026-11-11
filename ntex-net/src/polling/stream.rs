@@ -38,6 +38,8 @@ bitflags::bitflags! {
         const RD_PAUSED   = 0b0000_1000;
         const DROPPED_PRI = 0b0001_0000;
         const DROPPED_SEC = 0b0010_0000;
+        /// The linger timeout is zero, closing the socket cannot wait.
+        const ABORTED     = 0b0100_0000;
     }
 }
 
@@ -95,7 +97,14 @@ impl StreamOps {
     }
 
     /// Register new stream
-    pub(crate) fn register(&self, io: Socket, ctx: IoContext) -> (StreamCtl, WeakStreamCtl) {
+    /// Registers a stream, `attached` tells whether `io` is still attached to
+    /// the reactor by the connect that opened it.
+    pub(crate) fn register(
+        &self,
+        io: Socket,
+        attached: bool,
+        ctx: IoContext,
+    ) -> (StreamCtl, WeakStreamCtl) {
         let fd = io.as_raw_fd();
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
@@ -115,9 +124,18 @@ impl StreamOps {
         //
         // Hangup is never subscribed: epoll and `poll` report `HUP` and `ERR`
         // whatever the interest, and kqueue ignores the bit.
-        self.0
-            .api
-            .attach_with_mode(fd, stream.id, Event::new(0, true, false), self.0.mode);
+        let event = Event::new(0, true, false);
+        if attached {
+            // The connect registration is taken over under the key of the
+            // stream, which saves a delete and an add.
+            self.0
+                .api
+                .modify_with_mode_deferred(fd, stream.id, event, self.0.mode);
+        } else {
+            self.0
+                .api
+                .attach_with_mode(fd, stream.id, event, self.0.mode);
+        }
 
         let weak = WeakStreamCtl {
             id: stream.id,
@@ -327,7 +345,7 @@ impl StreamOpsInner {
 
         if item.flags.contains(Flags::DROPPED_SEC) {
             let item = streams.remove(idx);
-            close_fd(fd);
+            close_fd(fd, item.flags);
             mem::forget(item.io);
         } else {
             item.flags.insert(Flags::DROPPED_PRI);
@@ -341,7 +359,7 @@ impl StreamOpsInner {
 
         if item.flags.contains(Flags::DROPPED_PRI) {
             let item = streams.remove(idx);
-            close_fd(item.fd());
+            close_fd(item.fd(), item.flags);
             mem::forget(item.io);
         } else {
             item.flags.insert(Flags::DROPPED_SEC);
@@ -450,9 +468,11 @@ impl StreamCtl {
     /// The descriptor itself is released when this handle is dropped.
     pub(crate) fn abort(&self) {
         self.inner.with(|streams| {
-            let fd = streams[self.id as usize].fd();
+            let item = &mut streams[self.id as usize];
             // SAFETY: the stream entry owns the fd until this handle is dropped
-            unsafe { crate::helpers::with_sock_ref(fd, crate::helpers::abort_socket) };
+            if unsafe { crate::helpers::with_sock_ref(item.fd(), crate::helpers::abort_socket) } {
+                item.flags.insert(Flags::ABORTED);
+            }
         });
     }
 
@@ -576,15 +596,16 @@ impl StreamItem {
 /// Closing a non-blocking socket does not wait, except on platforms where a
 /// non-zero `SO_LINGER` timeout makes `close()` wait for unsent output even
 /// then. Only the application can set it, before handing the stream over, and
-/// such a close runs in the blocking pool.
-fn close_fd(fd: os::fd::RawFd) {
+/// such a close runs in the blocking pool. An aborted stream has a zero timeout,
+/// so it is closed inline without querying it.
+fn close_fd(fd: os::fd::RawFd, flags: Flags) {
     fn close(fd: os::fd::RawFd) {
         if let Err(err) = syscall!(libc::close(fd)) {
             log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
         }
     }
 
-    if lingers(fd) {
+    if !flags.contains(Flags::ABORTED) && lingers(fd) {
         ntex_rt::spawn_blocking(move || close(fd)).detach();
     } else {
         close(fd);
@@ -693,7 +714,7 @@ mod tests {
 
     impl IoStream for TestStream {
         fn start(self, ctx: IoContext) -> Box<dyn Handle> {
-            let (ctl, weak) = self.ops.register(self.socket, ctx);
+            let (ctl, weak) = self.ops.register(self.socket, false, ctx);
             self.ctl.set(Some(ctl));
             Box::new(TestHandle { _ctl: weak })
         }

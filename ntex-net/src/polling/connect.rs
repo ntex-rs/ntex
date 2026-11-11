@@ -74,9 +74,11 @@ impl ConnectOps {
                 }
                 Ok(_) => {
                     if uds {
-                        Receiver::new(Ok(Io::new(UnixStream(sock, self.0.streams.clone()), cfg)))
+                        let stream = UnixStream(sock, self.0.streams.clone(), false);
+                        Receiver::new(Ok(Io::new(stream, cfg)))
                     } else {
-                        Receiver::new(Ok(Io::new(TcpStream(sock, self.0.streams.clone()), cfg)))
+                        let stream = TcpStream(sock, self.0.streams.clone(), false);
+                        Receiver::new(Ok(Io::new(stream, cfg)))
                     }
                 }
             }
@@ -139,25 +141,28 @@ impl Handler for ConnectOpsBatcher {
                     Err(io::Error::from_raw_os_error(err))
                 };
 
-                self.inner.api.detach(item.fd(), id as u32);
                 match res {
                     Ok(_) if item.sender.is_canceled() => {
+                        self.inner.api.detach(item.fd(), id as u32);
                         crate::helpers::close_socket(item.sock);
                     }
+                    // The socket stays attached, the stream takes the
+                    // registration over with a single interest update.
                     Ok(_) => {
                         if item.uds {
                             let _ = item.sender.send(Ok(Io::new(
-                                UnixStream(item.sock, self.inner.streams.clone()),
+                                UnixStream(item.sock, self.inner.streams.clone(), true),
                                 item.cfg,
                             )));
                         } else {
                             let _ = item.sender.send(Ok(Io::new(
-                                TcpStream(item.sock, self.inner.streams.clone()),
+                                TcpStream(item.sock, self.inner.streams.clone(), true),
                                 item.cfg,
                             )));
                         }
                     }
                     Err(err) => {
+                        self.inner.api.detach(item.fd(), id as u32);
                         let _ = item.sender.send(Err(err));
                         crate::helpers::close_socket(item.sock);
                     }

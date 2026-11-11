@@ -10,7 +10,13 @@ pub use ::ntex_polling::{Event, PollMode};
 compile_error!("Only 64bit platforms are supported");
 
 /// Tcp stream wrapper for neon `TcpStream`
-struct TcpStream(socket2::Socket, stream::StreamOps);
+///
+/// The flag tells whether the socket is still attached to the reactor by the
+/// connect that opened it.
+struct TcpStream(socket2::Socket, stream::StreamOps, bool);
 
 /// Tcp stream wrapper for neon `UnixStream`
-struct UnixStream(socket2::Socket, stream::StreamOps);
+///
+/// The flag tells whether the socket is still attached to the reactor by the
+/// connect that opened it.
+struct UnixStream(socket2::Socket, stream::StreamOps, bool);

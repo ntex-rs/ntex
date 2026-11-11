@@ -7,8 +7,8 @@ use super::stream::{StreamCtl, WeakStreamCtl};
 
 impl ntex_io::IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
-        let super::TcpStream(io, ops) = self;
-        let (sctl, weak) = ops.register(io, ctx.clone());
+        let super::TcpStream(io, ops, attached) = self;
+        let (sctl, weak) = ops.register(io, attached, ctx.clone());
         spawn_detached(async move { run(sctl, ctx).await });
 
         Box::new(HandleWrapper(weak))
@@ -17,8 +17,8 @@ impl ntex_io::IoStream for super::TcpStream {
 
 impl ntex_io::IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
-        let super::UnixStream(io, ops) = self;
-        let (sctl, weak) = ops.register(io, ctx.clone());
+        let super::UnixStream(io, ops, attached) = self;
+        let (sctl, weak) = ops.register(io, attached, ctx.clone());
         spawn_detached(async move { run(sctl, ctx).await });
 
         Box::new(HandleWrapper(weak))
