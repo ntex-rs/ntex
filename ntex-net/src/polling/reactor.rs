@@ -289,6 +289,7 @@ impl crate::Reactor for Reactor {
             TcpStream(
                 crate::helpers::prep_socket(Socket::from(stream))?,
                 StreamOps::get(self),
+                false,
             ),
             cfg,
         ))
@@ -300,6 +301,7 @@ impl crate::Reactor for Reactor {
             UnixStream(
                 crate::helpers::prep_socket(Socket::from(stream))?,
                 StreamOps::get(self),
+                false,
             ),
             cfg,
         ))

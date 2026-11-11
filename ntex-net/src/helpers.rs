@@ -66,9 +66,10 @@ pub(crate) fn shutdown_result(res: std::io::Result<()>) -> std::io::Result<()> {
 /// truncated response is indistinguishable from a complete one.
 ///
 /// A failure is ignored: the connection is being torn down either way, and the
-/// only consequence is that the peer sees a graceful close.
-pub(crate) fn abort_socket(sock: &socket2::SockRef<'_>) {
-    let _ = sock.set_linger(Some(std::time::Duration::ZERO));
+/// only consequence is that the peer sees a graceful close. Returns whether the
+/// linger timeout is now zero.
+pub(crate) fn abort_socket(sock: &socket2::SockRef<'_>) -> bool {
+    sock.set_linger(Some(std::time::Duration::ZERO)).is_ok()
 }
 
 /// Maximum amount of input discarded by [`drain_socket()`], in 4kB chunks.
@@ -83,8 +84,8 @@ const MAX_DRAIN_CHUNKS: usize = 16;
 /// aborting at that point would lose exactly the output the graceful shutdown
 /// just drained.
 ///
-/// This is a best effort: the socket is switched to non-blocking mode and read
-/// until it is empty or [`MAX_DRAIN_CHUNKS`] have been discarded, so a peer that
+/// This is a best effort: the socket is read without blocking until it is
+/// empty or [`MAX_DRAIN_CHUNKS`] have been discarded, so a peer that
 /// keeps sending cannot hold the shutdown up. Input that arrives after the last
 /// read can still abort the connection, that race cannot be closed.
 ///
@@ -97,15 +98,23 @@ const MAX_DRAIN_CHUNKS: usize = 16;
 /// read the socket: either run this on the thread that drives the connection,
 /// or only once no read operation can be in flight or be started anymore.
 pub(crate) fn drain_socket(sock: &socket2::SockRef<'_>) {
-    if sock.set_nonblocking(true).is_err() {
-        return;
-    }
+    // Unix reads with `MSG_DONTWAIT` and leaves the mode of the socket alone,
+    // which saves the `fcntl` calls of switching it to non-blocking mode.
+    #[cfg(unix)]
+    let flags = libc::MSG_DONTWAIT;
+    #[cfg(not(unix))]
+    let flags = {
+        if sock.set_nonblocking(true).is_err() {
+            return;
+        }
+        0
+    };
 
     let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 4096];
     for _ in 0..MAX_DRAIN_CHUNKS {
         // a zero-length read is a clean eof, an error is either `WouldBlock`
         // on an empty queue or a peer that is gone; nothing is left either way
-        match sock.recv(&mut buf) {
+        match sock.recv_with_flags(&mut buf, flags) {
             Ok(0) | Err(_) => break,
             Ok(_) => (),
         }
