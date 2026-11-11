@@ -4,8 +4,8 @@
 
 * ws: Add server-side `permessage-deflate` negotiation with `DeflateConfig::negotiate()`
 
-* web: `web::ws::start()` and `web::ws::start_with()` accept `permessage-deflate` if the
-  server's `SharedCfg` has a `WsClientConfig` with `set_deflate()`
+* web: `web::ws::start()` and `web::ws::start_with()` accept `permessage-deflate` if it is
+  enabled with `HttpServiceConfig::set_ws_deflate()`
 
 ## [4.7.1] - 2026-11-11
 
