@@ -4,6 +4,9 @@
 
 * ws: Add server-side `permessage-deflate` negotiation with `DeflateConfig::negotiate()`
 
+* web: `web::ws::start()` and `web::ws::start_with()` accept `permessage-deflate` if the
+  server's `SharedCfg` has a `WsClientConfig` with `set_deflate()`
+
 ## [4.7.1] - 2026-11-11
 
 * Add `RequestHead::stream` to enable stream view in http services
