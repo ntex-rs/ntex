@@ -15,10 +15,13 @@ use super::{TcpStream, UnixStream, stream::StreamOps};
 use crate::channel::Receiver;
 
 pub trait Handler {
-    /// Submitted interest
+    /// Submitted interest, `id` is the one passed to [`ReactorApi`].
+    ///
+    /// Tasks run between chunks of events of one poll, so `id` may belong to
+    /// a registration released by a task after the poll.
     fn event(&mut self, id: usize, event: Event);
 
-    /// Operation submission has failed
+    /// Operation submission has failed, `id` is the one passed to [`ReactorApi`].
     fn error(&mut self, id: usize, err: io::Error);
 
     /// Process deferred work after events and before the driver waits.
@@ -35,13 +38,16 @@ type HandlerItem = Box<dyn Handler>;
 enum Change {
     Error {
         batch: usize,
-        user_data: u32,
+        user_data: u64,
         error: io::Error,
     },
 }
 
 #[derive(Debug)]
 /// Polling reactor api.
+///
+/// Ids identify registrations to the handler, only their low 48 bits are
+/// available.
 pub struct ReactorApi {
     id: usize,
     batch: u64,
@@ -54,7 +60,7 @@ impl ReactorApi {
     ///
     /// `fd` must be attached to the driver before using register/unregister
     /// methods.
-    pub fn attach(&self, fd: RawFd, id: u32, event: Event) {
+    pub fn attach(&self, fd: RawFd, id: u64, event: Event) {
         self.attach_with_mode(fd, id, event, PollMode::Oneshot);
     }
 
@@ -62,8 +68,8 @@ impl ReactorApi {
     ///
     /// `fd` must be attached to the driver before using register/unregister
     /// methods.
-    pub fn attach_with_mode(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
-        event.key = (u64::from(id) | self.batch) as usize;
+    pub fn attach_with_mode(&self, fd: RawFd, id: u64, mut event: Event, mode: PollMode) {
+        event.key = self.key(id);
         // SAFETY: Internal stream callers keep `fd` open and detach it before closing it.
         if let Err(err) = unsafe { self.poll.add_with_mode(fd, event, mode) } {
             self.change(Change::Error {
@@ -75,7 +81,7 @@ impl ReactorApi {
     }
 
     /// Detach an fd from the driver.
-    pub fn detach(&self, fd: RawFd, id: u32) {
+    pub fn detach(&self, fd: RawFd, id: u64) {
         // SAFETY: Internal stream callers keep `fd` open until detachment returns.
         if let Err(err) = self.poll.delete(unsafe { BorrowedFd::borrow_raw(fd) }) {
             self.change(Change::Error {
@@ -87,13 +93,13 @@ impl ReactorApi {
     }
 
     /// Register interest for specified file descriptor.
-    pub fn modify(&self, fd: RawFd, id: u32, event: Event) {
+    pub fn modify(&self, fd: RawFd, id: u64, event: Event) {
         self.modify_with_mode(fd, id, event, PollMode::Oneshot);
     }
 
     /// Register interest for specified file descriptor.
-    pub fn modify_with_mode(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
-        event.key = (u64::from(id) | self.batch) as usize;
+    pub fn modify_with_mode(&self, fd: RawFd, id: u64, mut event: Event, mode: PollMode) {
+        event.key = self.key(id);
 
         let result = self
             .poll
@@ -108,8 +114,8 @@ impl ReactorApi {
     /// On kqueue the change is submitted together with the next wait, saving
     /// a syscall. A failure of a deferred change is reported as a readable
     /// and writable event.
-    pub fn modify_with_mode_deferred(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
-        event.key = (u64::from(id) | self.batch) as usize;
+    pub fn modify_with_mode_deferred(&self, fd: RawFd, id: u64, mut event: Event, mode: PollMode) {
+        event.key = self.key(id);
 
         let result = self
             .poll
@@ -123,7 +129,7 @@ impl ReactorApi {
         self.poll.supports_level()
     }
 
-    fn check(&self, id: u32, result: io::Result<()>) {
+    fn check(&self, id: u64, result: io::Result<()>) {
         if let Err(err) = result {
             self.change(Change::Error {
                 batch: self.id,
@@ -131,6 +137,12 @@ impl ReactorApi {
                 error: err,
             });
         }
+    }
+
+    /// Event key of `id`, ids are limited to 48 bits.
+    fn key(&self, id: u64) -> usize {
+        debug_assert_eq!(id & !Reactor::DATA_MASK, 0, "id {id:#x} exceeds 48 bits");
+        (id | self.batch) as usize
     }
 
     fn change(&self, ev: Change) {
@@ -156,12 +168,15 @@ impl Reactor {
     const BATCH_MASK: u64 = 0xFFFF_0000_0000_0000;
     const DATA_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
-    /// Events handled per poll, tasks run between batches.
+    /// Events read per poll.
+    const EVENTS_CAPACITY: u32 = 512;
+
+    /// Events handled between task runs.
     ///
-    /// Small batches let a connection write its response while its socket
-    /// state is still in cache. With 2048, ~1K busy connections per worker ran
-    /// ~20% slower in HTTP/1 benchmarks.
-    const EVENTS_CAPACITY: u32 = 16;
+    /// Small chunks let a connection write its response while its socket
+    /// state is still in cache. Handling 2048 events at once with ~1K busy
+    /// connections per worker ran ~20% slower in HTTP/1 benchmarks.
+    const EVENTS_PER_CHUNK: usize = 8;
 
     pub fn new() -> io::Result<Self> {
         Reactor::with_capacity(Self::EVENTS_CAPACITY)
@@ -334,7 +349,18 @@ impl ntex_rt::Driver for Reactor {
             rt.awake();
 
             let mut handlers = self.handlers.take().unwrap();
-            for event in events.iter() {
+            for (idx, event) in events.iter().enumerate() {
+                if idx != 0 && idx % Self::EVENTS_PER_CHUNK == 0 {
+                    // Run the tasks woken by the previous chunk within the
+                    // same runtime turn. Handlers are released, so tasks
+                    // can register new ones. A task can also release a
+                    // registration with events still queued, handlers check
+                    // the generation in their ids.
+                    self.tick(&mut handlers);
+                    self.handlers.set(Some(handlers));
+                    rt.run_ready();
+                    handlers = self.handlers.take().unwrap();
+                }
                 let key = event.key as u64;
                 let batch = ((key & Self::BATCH_MASK) >> Self::BATCH) as usize;
                 handlers[batch].event((key & Self::DATA_MASK) as usize, event);
@@ -437,7 +463,7 @@ mod tests {
         struct TickErrors {
             api: ReactorApi,
             socket: OsUnixStream,
-            next: Option<u32>,
+            next: Option<u64>,
             errors: Rc<RefCell<Vec<usize>>>,
         }
 

@@ -1,6 +1,9 @@
 # Changes
 
-## [4.8.0] - unreleased
+## [4.8.0] - 2026-11-12
+
+* http: Skip UTF-8 validation and the query search of ASCII request targets, and UTF-8
+  validation of `Content-Length` values, in the HTTP/1 decoder
 
 * ws: Add server-side `permessage-deflate` negotiation with `DeflateConfig::negotiate()`
 

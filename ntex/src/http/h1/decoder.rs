@@ -416,26 +416,17 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                 log::trace!("multiple Content-Length or Transfer-Encoding with Content-Length");
                 return Err(DecodeError::Header);
             }
-            header::CONTENT_LENGTH => match value.to_str() {
-                Ok(s) if s.trim_start().starts_with('+') => {
-                    log::trace!("illegal Content-Length: {s:?}");
-                    return Err(DecodeError::Header);
-                }
-                Ok(s) => {
-                    if let Ok(len) = atoi_simd::parse::<u64, true, true>(s.as_bytes()) {
-                        // accept 0 lengths here and remove them in `decode` after all
-                        // headers have been processed to prevent request smuggling issues
-                        st.content_length = Some(len);
-                    } else {
-                        log::trace!("illegal Content-Length: {s:?}");
-                        return Err(DecodeError::Header);
-                    }
-                }
-                Err(_) => {
+            // digits only: no sign, whitespace or other bytes
+            header::CONTENT_LENGTH => {
+                if let Ok(len) = atoi_simd::parse::<u64, true, false>(value.as_bytes()) {
+                    // accept 0 lengths here and remove them in `decode` after all
+                    // headers have been processed to prevent request smuggling issues
+                    st.content_length = Some(len);
+                } else {
                     log::trace!("illegal Content-Length: {value:?}");
                     return Err(DecodeError::Header);
                 }
-            },
+            }
             // transfer-encoding
             header::TRANSFER_ENCODING if st.flags.contains(Flags::SEEN_TE) => {
                 log::trace!("Transfer-Encoding header usage is not allowed");
@@ -553,7 +544,15 @@ impl MessageType for Request {
                 src.advance_to(req.path.start);
                 let target = src.split_to(req.path.end - req.path.start);
                 src.advance_to(pos - req.path.end);
-                let mut uri = Url::parse_target(target)?;
+                let mut uri = if req.path_ascii {
+                    // the parser found the first `?` during its scan
+                    let query = req.query.map(|q| q - req.path.start);
+                    // SAFETY: the parser checked that the target is ASCII
+                    let target = unsafe { ByteString::from_bytes_unchecked(target) };
+                    Url::parse_target_str(target, query)?
+                } else {
+                    Url::parse_target(target)?
+                };
                 let version = if req.version == 1 {
                     Version::HTTP_11
                 } else {
@@ -2750,6 +2749,28 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Request targets are UTF-8 checked unless the parser reports
+    /// them as ASCII.
+    ///
+    /// HOW:
+    /// - Decode an ASCII target, which skips the UTF-8 check, and compare its
+    ///   path and query.
+    /// - Decode targets with invalid UTF-8 in the path and the query and require
+    ///   a parse error.
+    #[test]
+    fn test_http_request_parser_target_utf8() {
+        let mut buf = BytesMut::from("GET /a/b?c=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.uri().path_and_query(), "/a/b?c=1");
+
+        for target in [&b"/caf\xC3"[..], b"/a?q=\xFF"] {
+            let mut buf = BytesMut::copy_from_slice(
+                [b"GET ", target, b" HTTP/1.1\r\nhost: localhost\r\n\r\n"].concat(),
+            );
+            expect_parse_err!(&mut buf);
+        }
+    }
+
     /// STATEMENT: A request target beginning with two slashes remains a path, not an authority.
     ///
     /// HOW:
@@ -3286,13 +3307,23 @@ mod tests {
         }
     }
 
-    /// STATEMENT: Content-length parsing rejects trailing nondigits and non-text bytes.
+    /// STATEMENT: Content-length parsing accepts only an in-range run of ASCII digits.
     ///
     /// HOW:
-    /// - Decode numeric-plus-letter and high-byte length values and expect header errors.
+    /// - Decode trailing-letter, high-byte, empty, embedded-space, signed and
+    ///   `u64`-overflowing length values and expect header errors.
     #[test]
     fn test_illegal_content_length() {
-        for value in [&b"12a"[..], b"\xff1"] {
+        for value in [
+            &b"12a"[..],
+            b"\xff1",
+            b"1\xff",
+            b"",
+            b"1 2",
+            b"-0",
+            b"+0",
+            b"18446744073709551616",
+        ] {
             let mut buf = BytesMut::from(&b"GET /test HTTP/1.1\r\ncontent-length: "[..]);
             buf.extend_from_slice(value);
             buf.extend_from_slice(b"\r\n\r\n");
