@@ -81,6 +81,8 @@ pub struct HttpServiceConfig {
     pub(super) payload_read_rate: Option<FrameReadRate>,
     pub(super) write_timeout: Seconds,
     pub(super) half_close: bool,
+    #[cfg(all(feature = "ws", feature = "compress"))]
+    pub(crate) ws_deflate: Option<crate::ws::DeflateConfig>,
 
     config: CfgContext,
 }
@@ -131,6 +133,8 @@ impl HttpServiceConfig {
             payload_read_rate: None,
             write_timeout: Seconds::ZERO,
             half_close: false,
+            #[cfg(all(feature = "ws", feature = "compress"))]
+            ws_deflate: None,
             config: CfgContext::default(),
         }
     }
@@ -282,6 +286,21 @@ impl HttpServiceConfig {
     /// disabled by default.
     pub fn set_half_close(mut self, enabled: bool) -> Self {
         self.half_close = enabled;
+        self
+    }
+
+    #[must_use]
+    #[cfg(all(feature = "ws", feature = "compress"))]
+    /// Accepts the WebSocket `permessage-deflate` extension (RFC 7692).
+    ///
+    /// [`web::ws::start()`](crate::web::ws::start) accepts the client's offer
+    /// within the limits of `cfg`, see
+    /// [`DeflateConfig::negotiate()`](crate::ws::DeflateConfig::negotiate).
+    /// Text and binary messages are then compressed in both directions.
+    ///
+    /// The extension is not accepted by default.
+    pub fn set_ws_deflate(mut self, cfg: crate::ws::DeflateConfig) -> Self {
+        self.ws_deflate = Some(cfg);
         self
     }
 

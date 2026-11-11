@@ -6,7 +6,7 @@ use std::{io, time::Duration};
 
 use ntex::codec::{BytesCodec, Decoder, Encoder};
 use ntex::http::test::{TestServer, server as test_server};
-use ntex::http::{HttpService, Response, body::BodySize, h1, header};
+use ntex::http::{HttpService, HttpServiceConfig, Response, body::BodySize, h1, header};
 use ntex::io::{DispatchItem, Dispatcher};
 use ntex::service::Pipeline;
 use ntex::util::{BytePages, ByteString, Bytes, BytesMut};
@@ -635,9 +635,9 @@ async fn compressed_close_reason_is_rejected() {
 
 /// Starts a web echo server, `deflate` is the server's extension configuration.
 fn web_deflate_server(deflate: Option<DeflateConfig>) -> web::test::TestServer {
-    let mut cfg = WsClientConfig::new();
+    let mut cfg = HttpServiceConfig::new();
     if let Some(deflate) = deflate {
-        cfg = cfg.set_deflate(deflate);
+        cfg = cfg.set_ws_deflate(deflate);
     }
     web::test::server_with(
         web::test::config().server_cfg(SharedCfg::new("SRV").add(cfg)),
@@ -721,7 +721,7 @@ async fn web_roundtrip<F: ntex::io::Filter>(conn: ws::WsConnection<F>) -> Vec<bo
 /// STATEMENT: The web WebSocket server accepts a deflate offer when the extension is configured.
 ///
 /// HOW:
-/// - Configure deflate in the server's `SharedCfg` and connect a client offering it.
+/// - Enable deflate with `HttpServiceConfig::set_ws_deflate` and connect a client offering it.
 /// - Assert the response header and negotiated codec, then exchange data, control, and fragmented messages and assert the server compresses data frames.
 #[ntex::test]
 async fn web_deflate_accepted() {

@@ -8,7 +8,7 @@ use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{Ctx, IntoService, Pipeline, Service, apply_fn};
 use crate::web::HttpRequest;
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
-use crate::{Cfg, SharedCfg, rt, time::Seconds};
+use crate::{SharedCfg, rt, time::Seconds};
 
 thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS")
@@ -62,8 +62,8 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 /// is sent and the connection is closed.
 ///
 /// With the `compress` feature, the `permessage-deflate` extension is accepted
-/// if the server's [`SharedCfg`] has a [`WsClientConfig`](crate::ws::WsClientConfig)
-/// with [`WsClientConfig::set_deflate()`](crate::ws::WsClientConfig::set_deflate).
+/// if it is enabled with
+/// [`HttpServiceConfig::set_ws_deflate()`](crate::http::HttpServiceConfig::set_ws_deflate).
 ///
 /// Control frames are passed to the service too. If it returns `None` for
 /// a ping and hasn't sent a pong through a sink meanwhile, a pong with the
@@ -127,8 +127,8 @@ where
 /// is sent and the connection is closed.
 ///
 /// With the `compress` feature, the `permessage-deflate` extension is accepted
-/// if the server's [`SharedCfg`] has a [`WsClientConfig`](crate::ws::WsClientConfig)
-/// with [`WsClientConfig::set_deflate()`](crate::ws::WsClientConfig::set_deflate).
+/// if it is enabled with
+/// [`HttpServiceConfig::set_ws_deflate()`](crate::http::HttpServiceConfig::set_ws_deflate).
 pub async fn start_with<S, Err>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
@@ -161,10 +161,11 @@ where
 
     #[allow(unused_mut)]
     let mut ws_codec = ws::Codec::new();
-    let cfg: Cfg<ws::WsClientConfig> = io.shared().get();
     #[cfg(feature = "compress")]
-    if let Some((agreed, value)) = cfg
-        .deflate
+    if let Some((agreed, value)) = io
+        .shared()
+        .get::<crate::http::HttpServiceConfig>()
+        .ws_deflate
         .as_ref()
         .and_then(|deflate| deflate.negotiate(req.headers()))
     {
@@ -179,7 +180,7 @@ where
     log::trace!("Ws handshake verification completed for {:?}", req.path());
 
     // create sink, it is also the dispatcher's codec
-    let sink = WsSink::new(io.get_ref(), ws_codec, cfg);
+    let sink = WsSink::new(io.get_ref(), ws_codec, io.shared().get());
 
     // create ws service
     // SAFETY: the HTTP dispatcher has transferred ownership of `io` to this

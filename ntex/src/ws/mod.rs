@@ -16,7 +16,9 @@
 //! With the `compress` feature, the client can negotiate the
 //! `permessage-deflate` extension (RFC 7692), see
 //! [`WsClientConfig::set_deflate()`]. The server accepts it with
-//! [`DeflateConfig::negotiate()`].
+//! [`DeflateConfig::negotiate()`], or with
+//! [`HttpServiceConfig::set_ws_deflate()`](crate::http::HttpServiceConfig::set_ws_deflate)
+//! for [`web::ws::start()`](crate::web::ws::start).
 mod cfg;
 mod client;
 mod codec;

@@ -26,7 +26,7 @@ pub struct WsClientConfig {
     pub(super) headers: HeaderMap,
     pub(super) server_mode: bool,
     #[cfg(feature = "compress")]
-    pub(crate) deflate: Option<super::DeflateConfig>,
+    pub(super) deflate: Option<super::DeflateConfig>,
     #[cfg(feature = "cookie")]
     pub(super) cookies: Option<CookieJar>,
 
@@ -201,11 +201,6 @@ impl WsClientConfig {
     /// accepts the offer with parameters the client did not allow.
     ///
     /// The extension is not offered by default.
-    ///
-    /// On the server, [`web::ws::start()`](crate::web::ws::start) accepts the
-    /// client's offer within the limits of this value, if the configuration is
-    /// stored in the server's [`SharedCfg`](crate::SharedCfg), see
-    /// [`DeflateConfig::negotiate()`](super::DeflateConfig::negotiate).
     ///
     /// ```rust
     /// use ntex::ws::{DeflateConfig, WsClientConfig};
