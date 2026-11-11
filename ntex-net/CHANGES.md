@@ -1,5 +1,9 @@
 # Changes
 
+## [4.10.1] - Unreleased
+
+* io-uring: Remove unused `ReactorApi::cancel_all_sync()`
+
 ## [4.10.0] - 2026-11-11
 
 * tokio: Read through tokio's `try_read_buf` instead of exposing the read

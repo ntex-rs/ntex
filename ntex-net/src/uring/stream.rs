@@ -715,8 +715,13 @@ impl Handler for StreamOpsHandler {
     }
 
     fn abandon(&mut self) {
-        // operations and provided buffers live in `StreamOpsInner`, the
-        // leaked handler keeps it alive
+        // Operations and provided buffers live in `StreamOpsInner`, the
+        // leaked handler keeps it alive, and the ring with it. Sockets are
+        // still closed: an issued operation holds its own file reference, so
+        // the socket stays valid until it completes, while skipping the close
+        // would leak the descriptor for the life of the process. This relies
+        // on stream operations not using `IOSQE_ASYNC`, drain or links, which
+        // resolve the file after `io_uring_enter` returns.
         self.cleanup();
     }
 
