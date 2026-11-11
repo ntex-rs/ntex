@@ -8,7 +8,7 @@ use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{Ctx, IntoService, Pipeline, Service, apply_fn};
 use crate::web::HttpRequest;
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
-use crate::{SharedCfg, rt, time::Seconds};
+use crate::{Cfg, SharedCfg, rt, time::Seconds};
 
 thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS")
@@ -60,6 +60,10 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 ///
 /// If the handshake fails for an upgrade request, the handshake error response
 /// is sent and the connection is closed.
+///
+/// With the `compress` feature, the `permessage-deflate` extension is accepted
+/// if the server's [`SharedCfg`] has a [`WsClientConfig`](crate::ws::WsClientConfig)
+/// with [`WsClientConfig::set_deflate()`](crate::ws::WsClientConfig::set_deflate).
 ///
 /// Control frames are passed to the service too. If it returns `None` for
 /// a ping and hasn't sent a pong through a sink meanwhile, a pong with the
@@ -121,6 +125,10 @@ where
 ///
 /// If the handshake fails for an upgrade request, the handshake error response
 /// is sent and the connection is closed.
+///
+/// With the `compress` feature, the `permessage-deflate` extension is accepted
+/// if the server's [`SharedCfg`] has a [`WsClientConfig`](crate::ws::WsClientConfig)
+/// with [`WsClientConfig::set_deflate()`](crate::ws::WsClientConfig::set_deflate).
 pub async fn start_with<S, Err>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
@@ -134,7 +142,8 @@ where
     log::trace!("Start ws handshake verification for {:?}", req.path());
 
     // ws handshake
-    let res = match handshake_response(req, subprotocol) {
+    #[allow(unused_mut)]
+    let mut res = match handshake_response(req, subprotocol) {
         Ok(res) => res,
         Err(err) => {
             reject(req, err).await;
@@ -150,12 +159,27 @@ where
     let io = item.0;
     let codec = item.1;
 
+    #[allow(unused_mut)]
+    let mut ws_codec = ws::Codec::new();
+    let cfg: Cfg<ws::WsClientConfig> = io.shared().get();
+    #[cfg(feature = "compress")]
+    if let Some((agreed, value)) = cfg
+        .deflate
+        .as_ref()
+        .and_then(|deflate| deflate.negotiate(req.headers()))
+    {
+        log::trace!("Ws permessage-deflate is accepted {agreed:?}");
+        res.headers_mut()
+            .insert(header::SEC_WEBSOCKET_EXTENSIONS, value);
+        ws_codec = ws_codec.set_deflate(agreed);
+    }
+
     io.encode(h1::Message::Item((res, BodySize::Empty)), &codec)
         .map_err(|_| HandshakeError::NoWebsocketUpgrade)?;
     log::trace!("Ws handshake verification completed for {:?}", req.path());
 
     // create sink, it is also the dispatcher's codec
-    let sink = WsSink::new(io.get_ref(), ws::Codec::new(), io.shared().get());
+    let sink = WsSink::new(io.get_ref(), ws_codec, cfg);
 
     // create ws service
     // SAFETY: the HTTP dispatcher has transferred ownership of `io` to this

@@ -1,4 +1,5 @@
-//! `permessage-deflate` negotiation and compressed messages of the WebSocket client.
+//! `permessage-deflate` negotiation and compressed messages of the WebSocket client
+//! and server.
 #![cfg(all(feature = "ws", feature = "compress"))]
 use std::sync::{Arc, Mutex, mpsc};
 use std::{io, time::Duration};
@@ -9,8 +10,9 @@ use ntex::http::{HttpService, Response, body::BodySize, h1, header};
 use ntex::io::{DispatchItem, Dispatcher};
 use ntex::service::Pipeline;
 use ntex::util::{BytePages, ByteString, Bytes, BytesMut};
+use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, DeflateConfig, WsClient, WsClientConfig, error::WsClientError};
-use ntex::{time::Seconds, time::timeout};
+use ntex::{SharedCfg, time::Seconds, time::timeout};
 
 /// Server side codec, records the first byte of each received frame.
 #[derive(Clone)]
@@ -629,4 +631,196 @@ async fn compressed_close_reason_is_rejected() {
         ),
         "{item:?}"
     );
+}
+
+/// Starts a web echo server, `deflate` is the server's extension configuration.
+fn web_deflate_server(deflate: Option<DeflateConfig>) -> web::test::TestServer {
+    let mut cfg = WsClientConfig::new();
+    if let Some(deflate) = deflate {
+        cfg = cfg.set_deflate(deflate);
+    }
+    web::test::server_with(
+        web::test::config().server_cfg(SharedCfg::new("SRV").add(cfg)),
+        async |_| {
+            App::new().service(
+                web::resource("/").route(web::to(async move |req: HttpRequest| {
+                    let _ = web::ws::start(&req, None, async |frame| {
+                        Ok::<_, io::Error>(match frame {
+                            ws::Frame::Text(text) => {
+                                Some(ws::Message::Text(ByteString::try_from(text).unwrap()))
+                            }
+                            ws::Frame::Binary(bin) => Some(ws::Message::Binary(bin)),
+                            ws::Frame::Continuation(item) => Some(ws::Message::Continuation(item)),
+                            _ => None,
+                        })
+                    })
+                    .await;
+                })),
+            )
+        },
+    )
+}
+
+/// Exchanges messages with a web echo server, returns the RSV1 bits of the
+/// frames received by the client.
+async fn web_roundtrip<F: ntex::io::Filter>(conn: ws::WsConnection<F>) -> Vec<bool> {
+    let (io, codec, _) = conn.into_inner();
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let spy = Spy {
+        codec,
+        received: received.clone(),
+    };
+    let large = compressible(32 * 1024);
+
+    let messages = [
+        (
+            ws::Message::Text("Hello".into()),
+            ws::Frame::Text("Hello".into()),
+        ),
+        (
+            ws::Message::Binary(large.clone()),
+            ws::Frame::Binary(large.clone()),
+        ),
+        (
+            ws::Message::Ping("ping".into()),
+            ws::Frame::Pong("ping".into()),
+        ),
+        (
+            ws::Message::Continuation(ws::Item::FirstText("Hello, ".into())),
+            ws::Frame::Continuation(ws::Item::FirstText("Hello, ".into())),
+        ),
+        (
+            ws::Message::Continuation(ws::Item::Last("world".into())),
+            ws::Frame::Continuation(ws::Item::Last("world".into())),
+        ),
+    ];
+    for (msg, expected) in messages {
+        io.send(msg, &spy).await.unwrap();
+        let frame = timeout(Seconds(5), io.recv(&spy))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(frame, expected);
+    }
+
+    io.send(ws::Message::Close(Some(ws::CloseCode::Normal.into())), &spy)
+        .await
+        .unwrap();
+    let frame = io.recv(&spy).await.unwrap().unwrap();
+    assert_eq!(frame, ws::Frame::Close(Some(ws::CloseCode::Normal.into())));
+
+    received
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|b| b & 0x40 != 0)
+        .collect()
+}
+
+/// STATEMENT: The web WebSocket server accepts a deflate offer when the extension is configured.
+///
+/// HOW:
+/// - Configure deflate in the server's `SharedCfg` and connect a client offering it.
+/// - Assert the response header and negotiated codec, then exchange data, control, and fragmented messages and assert the server compresses data frames.
+#[ntex::test]
+async fn web_deflate_accepted() {
+    let srv = web_deflate_server(Some(DeflateConfig::new()));
+    let conn = WsClient::new(
+        srv.url("/"),
+        client_cfg(DeflateConfig::new()).set_address(srv.addr()),
+    )
+    .connect()
+    .await
+    .unwrap();
+    assert_eq!(
+        conn.response()
+            .headers()
+            .get(header::SEC_WEBSOCKET_EXTENSIONS)
+            .unwrap(),
+        "permessage-deflate"
+    );
+    assert_eq!(conn.codec().deflate(), Some(&DeflateConfig::new()));
+    assert_eq!(
+        web_roundtrip(conn).await,
+        [true, true, false, true, false, false]
+    );
+}
+
+/// STATEMENT: The web WebSocket server applies its own deflate limits to the agreed parameters.
+///
+/// HOW:
+/// - Configure context takeover and window limits on the server and connect a default client.
+/// - Assert the response header and negotiated codec, then exchange messages and assert small messages are sent uncompressed.
+#[ntex::test]
+async fn web_deflate_server_limits() {
+    let srv = web_deflate_server(Some(
+        DeflateConfig::new()
+            .set_client_no_context_takeover(true)
+            .set_server_no_context_takeover(true)
+            .set_client_max_window_bits(9)
+            .set_server_max_window_bits(10),
+    ));
+    let conn = WsClient::new(
+        srv.url("/"),
+        client_cfg(DeflateConfig::new()).set_address(srv.addr()),
+    )
+    .connect()
+    .await
+    .unwrap();
+    assert_eq!(
+        conn.response()
+            .headers()
+            .get(header::SEC_WEBSOCKET_EXTENSIONS)
+            .unwrap(),
+        "permessage-deflate; client_no_context_takeover; server_no_context_takeover; \
+         client_max_window_bits=9; server_max_window_bits=10"
+    );
+    assert_eq!(
+        conn.codec().deflate(),
+        Some(
+            &DeflateConfig::new()
+                .set_client_no_context_takeover(true)
+                .set_server_no_context_takeover(true)
+                .set_client_max_window_bits(9)
+                .set_server_max_window_bits(10)
+        )
+    );
+    assert_eq!(
+        web_roundtrip(conn).await,
+        [false, true, false, true, false, false]
+    );
+}
+
+/// STATEMENT: The web WebSocket server does not use deflate unless both sides enable it.
+///
+/// HOW:
+/// - Connect a deflate-offering client to a server without the extension, and a plain client to a deflate server.
+/// - Assert no extension response header, no negotiated codec deflate, and uncompressed frames.
+#[ntex::test]
+async fn web_deflate_declined() {
+    let srv = web_deflate_server(None);
+    let conn = WsClient::new(
+        srv.url("/"),
+        client_cfg(DeflateConfig::new()).set_address(srv.addr()),
+    )
+    .connect()
+    .await
+    .unwrap();
+    assert!(
+        conn.response()
+            .headers()
+            .get(header::SEC_WEBSOCKET_EXTENSIONS)
+            .is_none()
+    );
+    assert_eq!(conn.codec().deflate(), None);
+    assert!(web_roundtrip(conn).await.iter().all(|rsv1| !rsv1));
+
+    let srv = web_deflate_server(Some(DeflateConfig::new()));
+    let conn = WsClient::new(srv.url("/"), WsClientConfig::new().set_address(srv.addr()))
+        .connect()
+        .await
+        .unwrap();
+    assert_eq!(conn.codec().deflate(), None);
+    assert!(web_roundtrip(conn).await.iter().all(|rsv1| !rsv1));
 }
