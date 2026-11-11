@@ -1,5 +1,11 @@
 # Changes
 
+## [1.4.0] - 2026-11-12
+
+* Add `Url::parse_target_str()`, `Url::parse_target()` without the UTF-8 check
+  for targets already known to be UTF-8, taking the query position found by
+  the caller's parser
+
 ## [1.3.1] - 2026-11-11
 
 * `Url::parse_target()` builds origin-form targets such as `/a?b` directly

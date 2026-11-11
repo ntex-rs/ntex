@@ -127,18 +127,31 @@ pub(crate) fn normalize(c: &Components<'_>, orig: Option<&ByteString>) -> Result
 
 /// Parses HTTP request-target forms without validating or normalizing their components.
 pub(crate) fn parse_target(src: Bytes) -> Result<Url, InvalidUrl> {
+    // checked before the UTF-8 scan, so oversized input is not scanned
+    if src.len() > MAX_LEN {
+        return Err(InvalidUrl::new(ErrorKind::TooLong));
+    }
+    simdutf8::compat::from_utf8(&src).map_err(crate::url::utf8_error)?;
+    // SAFETY: UTF-8 is checked above; target syntax is checked separately.
+    parse_target_str(unsafe { ByteString::from_bytes_unchecked(src) }, None)
+}
+
+/// Parses an HTTP request-target that is already known to be UTF-8.
+///
+/// `query` is the position of the first `?`, if known.
+pub(crate) fn parse_target_str(
+    src: ByteString,
+    query: Option<Option<usize>>,
+) -> Result<Url, InvalidUrl> {
     if src.is_empty() {
         return Err(InvalidUrl::new(ErrorKind::Empty));
     }
     if src.len() > MAX_LEN {
         return Err(InvalidUrl::new(ErrorKind::TooLong));
     }
-    simdutf8::compat::from_utf8(&src).map_err(crate::url::utf8_error)?;
-    // SAFETY: UTF-8 is checked above; target syntax is checked separately.
-    let src = unsafe { ByteString::from_bytes_unchecked(src) };
     // the common origin-form needs no reassembly
     if src.starts_with('/') && !src.starts_with("//") {
-        return Ok(origin_form(src));
+        return Ok(origin_form(src, query));
     }
     let c = if src.starts_with('/') || src == "*" {
         let (path, query) = split_at_char(&src, '?');
@@ -375,7 +388,8 @@ mod tests {
     ///   fragment-like parts, and queries containing `?`, `/` and `:`, plus `//`
     ///   paths that must not take the fast path.
     /// - Assemble the same split components with `assemble_target`.
-    /// - Compare the string and every component accessor of both URLs.
+    /// - Compare the string and every component accessor of both URLs, and of
+    ///   `parse_target_str` given the position of the first `?`.
     #[test]
     fn origin_form_matches_assembly() {
         for target in [
@@ -416,6 +430,28 @@ mod tests {
             assert_eq!(fast.query(), slow.query(), "{target}");
             assert_eq!(fast.fragment(), slow.fragment(), "{target}");
             assert_eq!(fast.path_and_query(), slow.path_and_query(), "{target}");
+
+            let hinted = parse_target_str(src.clone(), Some(src.find('?'))).unwrap();
+            assert_eq!(hinted.as_str(), slow.as_str(), "{target}");
+            assert_eq!(hinted.path(), slow.path(), "{target}");
+            assert_eq!(hinted.query(), slow.query(), "{target}");
+        }
+    }
+
+    /// STATEMENT: `parse_target_str` ignores a query position that does not
+    /// point at a `?`, so a wrong position cannot split inside a character.
+    ///
+    /// HOW:
+    /// - Pass positions inside a multi-byte character, on a non-`?` byte and
+    ///   past the end of the target.
+    /// - Check the path and query are those of the first `?`.
+    #[test]
+    fn origin_form_ignores_bad_query_position() {
+        let src = ByteString::from("/\u{fc}b?q");
+        for pos in [2, 3, 100] {
+            let url = parse_target_str(src.clone(), Some(Some(pos))).unwrap();
+            assert_eq!(url.path(), "/\u{fc}b", "{pos}");
+            assert_eq!(url.query().unwrap(), "q", "{pos}");
         }
     }
 
