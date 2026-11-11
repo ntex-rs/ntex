@@ -10,7 +10,7 @@ use ntex_io::Io;
 use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
 use ntex_io_uring::opcode::{AsyncCancel, AsyncCancel2};
 use ntex_io_uring::squeue::{Entry as SEntry, PushError, SubmissionQueue};
-use ntex_io_uring::types::{CancelBuilder, Fd, SubmitArgs, Timespec};
+use ntex_io_uring::types::{CancelBuilder, SubmitArgs, Timespec};
 use ntex_io_uring::{IoUring, Probe, Submitter};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime};
 use ntex_service::cfg::SharedCfg;
@@ -50,7 +50,9 @@ pub trait Handler {
     ///
     /// Called instead of [`cleanup`](Self::cleanup). The handler is leaked
     /// afterwards, so memory referenced by the operations stays valid. It must
-    /// not release anything the kernel may still use.
+    /// not release anything the kernel may still use. Descriptors may be
+    /// closed, the shutdown flushed every submission and the kernel holds its
+    /// own file reference for each issued operation.
     fn abandon(&mut self) {}
 }
 
@@ -62,7 +64,8 @@ pub struct ReactorApi {
 
 impl ReactorApi {
     #[inline]
-    /// Check if kernel ver 6.1 or greater
+    /// Check if the ring was set up with `IORING_SETUP_SINGLE_ISSUER`, so the
+    /// kernel is 6.0 or greater and supports `IORING_RECVSEND_POLL_FIRST` (5.19)
     pub fn is_new(&self) -> bool {
         self.inner.flags.get().contains(Flags::NEW)
     }
@@ -105,15 +108,6 @@ impl ReactorApi {
         self.submit_inner(|en| {
             AsyncCancel::new(en, u64::from(id) | self.batch).user_data(Reactor::CANCEL);
         });
-    }
-
-    #[inline]
-    /// Attempt to sync cancel all requests.
-    pub fn cancel_all_sync(&self, fd: Fd) -> io::Result<()> {
-        self.inner
-            .ring
-            .submitter()
-            .register_sync_cancel(None, CancelBuilder::fd(fd).all())
     }
 
     /// Get whether a specific io-uring opcode is supported.
@@ -181,6 +175,7 @@ impl HandlerItem {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
+        /// Ring set up with `IORING_SETUP_SINGLE_ISSUER`, kernel 6.0 or greater
         const NEW      = 0b0000_0001;
     }
 }
@@ -671,7 +666,7 @@ impl ntex_rt::Driver for Reactor {
             if let Err(e) = result {
                 match e.raw_os_error() {
                     Some(libc::ETIME | libc::EBUSY | libc::EAGAIN | libc::EINTR) => {
-                        log::info!("Ring submit interrupted, {e:?}");
+                        log::debug!("Ring submit interrupted, {e:?}");
                     }
                     _ => break Err(e),
                 }
@@ -716,6 +711,7 @@ mod tests {
     use std::task::{Poll, Waker};
 
     use ntex_io_uring::opcode::{Nop, Read};
+    use ntex_io_uring::types::Fd;
     use ntex_rt::syscall;
 
     use super::notifier::NotifierState;
