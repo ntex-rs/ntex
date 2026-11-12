@@ -1467,4 +1467,19 @@ mod tests {
         assert_eq!(io.read_dst_size(), 0);
         assert!(ops.0.with(|st| st.streams[ctl.id].rd_op.is_none()));
     }
+
+    /// STATEMENT: `SendBuf` debug output shows the number of gathered pages and their
+    /// total length.
+    ///
+    /// HOW:
+    /// - Format an empty buffer, then one holding two pages of 5 and 3 bytes.
+    #[test]
+    fn send_buf_debug() {
+        let mut buf = SendBuf::new();
+        assert_eq!(format!("{buf:?}"), "SendBuf { pages: 0, len: 0 }");
+
+        buf.pages[0] = Some(BytePage::from(Bytes::from_static(b"hello")));
+        buf.pages[1] = Some(BytePage::from(Bytes::from_static(b"abc")));
+        assert_eq!(format!("{buf:?}"), "SendBuf { pages: 2, len: 8 }");
+    }
 }

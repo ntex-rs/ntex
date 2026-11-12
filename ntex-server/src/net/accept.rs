@@ -740,6 +740,25 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Only errors of a single connection let the accept loop
+    /// continue at once, other errors pause the listener.
+    ///
+    /// HOW:
+    /// - Check refused, aborted and reset connections are per-connection
+    ///   errors.
+    /// - Check resource and other errors are not.
+    #[test]
+    fn per_connection_errors() {
+        use io::ErrorKind::*;
+
+        for kind in [ConnectionRefused, ConnectionAborted, ConnectionReset] {
+            assert!(connection_error(&kind.into()), "{kind:?}");
+        }
+        for kind in [OutOfMemory, WouldBlock, PermissionDenied, Other] {
+            assert!(!connection_error(&kind.into()), "{kind:?}");
+        }
+    }
+
     struct Srv(Arc<AtomicUsize>);
 
     impl Service<(), Connection> for Srv {

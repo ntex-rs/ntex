@@ -16,5 +16,7 @@ help: the trait `IntoService<_, (), _>` is not implemented for `Echo`
 note: required by a bound in `Pipeline::<Req, Res, Err>::new`
   --> src/pipeline.rs
    |
+   | impl<Req, Res, Err> Pipeline<Req, Res, Err>
+...
    |     pub fn new<S, St>(st: St, service: impl IntoService<S, St, Req>) -> Self
    |                                             ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Pipeline::<Req, Res, Err>::new`

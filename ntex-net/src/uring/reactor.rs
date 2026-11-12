@@ -695,7 +695,7 @@ impl fmt::Debug for Reactor {
         f.debug_struct("Reactor")
             .field("fd", &self.fd)
             .field("hid", &self.hid)
-            .field("nodifier", &self.notifier)
+            .field("notifier", &self.notifier)
             .finish()
     }
 }
@@ -1183,6 +1183,52 @@ mod tests {
         let weak = Rc::downgrade(&reactor.inner);
         drop(reactor);
         assert!(weak.upgrade().is_none());
+    }
+
+    /// STATEMENT: Debug output shows the ring descriptor, the handler counter and the
+    /// notifier of the reactor, and the operation id batch of a handler api.
+    ///
+    /// HOW:
+    /// - Format a new reactor and check its fields.
+    /// - Register two handlers, format their apis and check the second batch starts at
+    ///   `1 << BATCH`, then check the reactor reports the new handler counter.
+    #[test]
+    fn debug_output() {
+        struct Noop;
+        impl Handler for Noop {
+            fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {}
+            fn canceled(&mut self, _: usize) {}
+            fn tick(&mut self) {}
+            fn cleanup(&mut self) {}
+        }
+
+        let Ok(reactor) = Reactor::new(4) else {
+            return;
+        };
+        let s = format!("{reactor:?}");
+        assert!(
+            s.starts_with(&format!(
+                "Reactor {{ fd: {}, hid: Cell {{ value: 0 }}, notifier: Notifier {{",
+                reactor.fd
+            )),
+            "{s}"
+        );
+
+        let apis = RefCell::new(Vec::new());
+        for _ in 0..2 {
+            reactor.register(|api| {
+                apis.borrow_mut().push(format!("{api:?}"));
+                Box::new(Noop)
+            });
+        }
+        assert_eq!(
+            apis.into_inner(),
+            [
+                "ReactorApi { batch: 0 }".to_string(),
+                format!("ReactorApi {{ batch: {} }}", 1u64 << Reactor::BATCH),
+            ]
+        );
+        assert!(format!("{reactor:?}").contains("hid: Cell { value: 2 }"));
     }
 
     #[test]

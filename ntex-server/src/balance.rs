@@ -598,6 +598,53 @@ mod tests {
         assert_eq!(b.least_loaded(|_| 0), 0);
     }
 
+    /// STATEMENT: A replaced worker starts with a fresh load state and the
+    /// next sample is taken at once.
+    ///
+    /// HOW:
+    /// - Make worker 0 busy and blocked, while worker 1 is idle.
+    /// - Reset worker 0 and check its utilization and blocked flag are
+    ///   cleared, while worker 1 keeps its state.
+    /// - Refresh within `REFRESH` of the last sample and check both workers
+    ///   are sampled again.
+    #[test]
+    fn reset_clears_worker_state() {
+        let t = Instant::now();
+        let mut b = balancer(2);
+        b.refresh(t, |_| sample(0, false));
+        b.refresh(t + REFRESH, |i| sample(if i == 0 { 100 } else { 0 }, false));
+        b.refresh(t + REFRESH * 2, |i| sample(100, i == 0));
+        assert!(b.states[0].util > 0.0 && b.is_blocked(0));
+        assert_eq!(b.ready, [1]);
+
+        b.reset(0);
+        assert!(b.states[0].util.abs() < f64::EPSILON);
+        assert!(!b.is_blocked(0));
+        assert!(b.states[0].at.is_none());
+        assert_eq!(b.states[1].busy, Some(MS * 100));
+
+        b.refresh(t + REFRESH * 2 + MS, |_| sample(100, false));
+        assert_eq!(b.ready, [0, 1]);
+    }
+
+    /// STATEMENT: Round robin stays within the worker list after workers are
+    /// removed.
+    ///
+    /// HOW:
+    /// - Send an item to the second of three workers, so the next turn is
+    ///   the third one.
+    /// - Remove a worker and check the next turn is the last remaining
+    ///   worker, then the turns wrap around to the first one.
+    #[test]
+    fn round_robin_after_removal() {
+        let mut b = balancer(3);
+        b.sent(1, 3);
+        b.remove(2);
+        assert_eq!(b.round_robin(2), 1);
+        b.sent(1, 2);
+        assert_eq!(b.round_robin(2), 0);
+    }
+
     #[ntex::test]
     async fn keeps_state_of_unavailable_workers() {
         let (a1, a2) = (ntex_rt::Arbiter::new(), ntex_rt::Arbiter::new());

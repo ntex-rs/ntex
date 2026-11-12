@@ -13,8 +13,9 @@ error[E0277]: `fn() -> impl Future<Output = Result<&'static str, MyError>> {inde
 note: required by a bound in `Route::<St, In>::to`
   --> src/web/route.rs
    |
+   | impl<St: State, In: 'static> Route<St, In> {
+...
    |     pub fn to<H, Args>(mut self, handler: H) -> Self
-   |            -- required by a bound in this associated function
    |     where
    |         H: Handler<St, Args> + 'static,
    |            ^^^^^^^^^^^^^^^^^ required by this bound in `Route::<St, In>::to`

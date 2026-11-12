@@ -366,3 +366,25 @@ where
         Box::pin(async move { (f)(rt).await })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// STATEMENT: Attaching a service to a name without a registered
+    /// listener panics with the name.
+    ///
+    /// HOW:
+    /// - Create a worker runtime without listeners and attach a service to
+    ///   `missing`.
+    #[test]
+    #[should_panic(expected = "Unknown service: \"missing\"")]
+    fn service_unknown_name_panics() {
+        let rt = ServiceRuntime::new((), HashMap::default());
+        rt.service(
+            "missing",
+            SharedCfg::default(),
+            ntex_service::fn_service(async |_: Io| Ok::<_, ()>(())),
+        );
+    }
+}

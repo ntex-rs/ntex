@@ -14,17 +14,19 @@ help: the trait `WebResponseError<_, _>` is not implemented for `MyError`
   = note: implement `WebResponseError<St, St::Error>` for `MyError`, where `St` is the application state; the default `error_response()` returns 500
   = note: or wrap the error with a helper such as `web::error::ErrorBadRequest(err)`
   = help: the following other types implement trait `WebResponseError<St, Err>`:
+            `!` implements `WebResponseError<St, Err>`
             `ClientPayloadError` implements `WebResponseError<St, DefaultError>`
             `ContentTypeError` implements `WebResponseError<St, DefaultError>`
             `DefaultError` implements `WebResponseError<St, DefaultError>`
             `HandshakeError` implements `WebResponseError<St, DefaultError>`
             `HttpError` implements `WebResponseError<St, DefaultError>`
-            `Infallible` implements `WebResponseError<St, Err>`
             `InternalError<T>` implements `WebResponseError<St, Err>`
             `JsonError` implements `WebResponseError<St, DefaultError>`
           and $N others
 note: required by a bound in `WebError::<St, Err>::from_err`
  --> src/web/error.rs
   |
+  | impl<St: 'static, Err: 'static> WebError<St, Err> {
+  |     /// Create `WebError` from an error that can be rendered for this domain.
   |     pub fn from_err<E: WebResponseError<St, Err>>(err: E) -> Self {
   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `WebError::<St, Err>::from_err`

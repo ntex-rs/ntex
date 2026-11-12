@@ -20,7 +20,6 @@ note: required by a bound in `apply`
  --> src/middleware.rs
   |
   | pub fn apply<Sf, St, Req, M>(
-  |        ----- required by a bound in this function
 ...
   |     M: Middleware<Sf::Service, St>,
   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `apply`
