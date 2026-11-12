@@ -4,8 +4,9 @@
 //! [`Builder::signals`](crate::Builder::signals). Only one system handles
 //! process signals at a time; subscriptions belong to the current system.
 //! Unix delivers hangup, interrupt, termination, and quit signals, plus
-//! best-effort fatal-signal notifications. Windows delivers Ctrl-C as
-//! [`Signal::Int`]. Application panics additionally require
+//! best-effort fatal-signal notifications with
+//! [`Builder::fatal_signals`](crate::Builder::fatal_signals). Windows delivers
+//! Ctrl-C as [`Signal::Int`]. Application panics additionally require
 //! [`Builder::panic_handling`](crate::Builder::panic_handling).
 use std::sync::{Arc, OnceLock, atomic::AtomicBool, atomic::Ordering, mpsc};
 use std::{cell::RefCell, future::poll_fn, panic, task::Poll};
@@ -50,6 +51,7 @@ pub enum Signal {
 pub enum PanicSource {
     /// A `SIGSEGV` or `SIGABRT` signal was received.
     ///
+    /// Requires [`Builder::fatal_signals`](crate::Builder::fatal_signals).
     /// Delivery is best effort; a fatal fault can terminate the process before
     /// the runtime or server handles this notification.
     Sig(&'static str),
@@ -155,53 +157,9 @@ static SIG_HANDLERS: Mutex<(
 ///
 /// Returns `false` if signals are handled by another system.
 pub(crate) fn start(sys: &System) -> bool {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-
     if let Some(_registration) = register_system(sys) {
-        use nix::sys::signal;
         use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR2};
         use signal_hook::{iterator::Signals, low_level::register};
-
-        ONCE.call_once(|| {
-            if let Err(e) = start_fatal_signal_thread() {
-                log::error!("Cannot start fatal signal handling thread: {e:?}");
-            }
-
-            // Use u128 for alignment.
-            let buf = Vec::leak(vec![0u128; 4096]);
-            let stack = libc::stack_t {
-                ss_sp: buf.as_ptr() as *mut libc::c_void,
-                ss_flags: 0,
-                ss_size: std::mem::size_of_val(buf),
-            };
-            let mut old = libc::stack_t {
-                ss_sp: std::ptr::null_mut(),
-                ss_flags: 0,
-                ss_size: 0,
-            };
-            // SAFETY: The aligned alternate stack is leaked, and both stack descriptors are valid for this call.
-            let result = unsafe { libc::sigaltstack(&raw const stack, &raw mut old) };
-            if result != 0 {
-                log::error!("Cannot set signal stack");
-            }
-
-            let sig_action = signal::SigAction::new(
-                signal::SigHandler::Handler(sig_segv),
-                signal::SaFlags::SA_ONSTACK,
-                signal::SigSet::empty(),
-            );
-            // SAFETY: `sig_segv` has the signal-handler ABI and only uses signal-safe operations.
-            unsafe {
-                match signal::sigaction(signal::SIGSEGV, &sig_action) {
-                    Ok(prev) => _ = PREV_SIGSEGV.set(prev),
-                    Err(_) => log::error!("Cannot install signal handler for SIGSEGV"),
-                }
-                match signal::sigaction(signal::SIGABRT, &sig_action) {
-                    Ok(prev) => _ = PREV_SIGABRT.set(prev),
-                    Err(_) => log::error!("Cannot install signal handler for SIGABRT"),
-                }
-            }
-        });
 
         // signal handlers only write to a self-pipe, signals are
         // dispatched from a regular thread
@@ -332,6 +290,62 @@ async fn signals(rx: oneshot::AsyncReceiver<()>) {
 static PREV_SIGSEGV: std::sync::OnceLock<nix::sys::signal::SigAction> = std::sync::OnceLock::new();
 #[cfg(target_family = "unix")]
 static PREV_SIGABRT: std::sync::OnceLock<nix::sys::signal::SigAction> = std::sync::OnceLock::new();
+
+#[cfg(target_family = "unix")]
+/// Installs the `SIGSEGV` and `SIGABRT` handlers, once per process.
+///
+/// Fatal signals are delivered as `Signal::Panic` only while signal
+/// handling is enabled.
+pub(crate) fn enable_fatal_signals() {
+    use nix::sys::signal;
+
+    static ONCE: std::sync::Once = std::sync::Once::new();
+
+    ONCE.call_once(|| {
+        if let Err(e) = start_fatal_signal_thread() {
+            log::error!("Cannot start fatal signal handling thread: {e:?}");
+        }
+
+        // Use u128 for alignment.
+        let buf = Vec::leak(vec![0u128; 4096]);
+        let stack = libc::stack_t {
+            ss_sp: buf.as_ptr() as *mut libc::c_void,
+            ss_flags: 0,
+            ss_size: std::mem::size_of_val(buf),
+        };
+        let mut old = libc::stack_t {
+            ss_sp: std::ptr::null_mut(),
+            ss_flags: 0,
+            ss_size: 0,
+        };
+        // SAFETY: The aligned alternate stack is leaked, and both stack descriptors are valid for this call.
+        let result = unsafe { libc::sigaltstack(&raw const stack, &raw mut old) };
+        if result != 0 {
+            log::error!("Cannot set signal stack");
+        }
+
+        let sig_action = signal::SigAction::new(
+            signal::SigHandler::Handler(sig_segv),
+            signal::SaFlags::SA_ONSTACK,
+            signal::SigSet::empty(),
+        );
+        // SAFETY: `sig_segv` has the signal-handler ABI and only uses signal-safe operations.
+        unsafe {
+            match signal::sigaction(signal::SIGSEGV, &sig_action) {
+                Ok(prev) => _ = PREV_SIGSEGV.set(prev),
+                Err(_) => log::error!("Cannot install signal handler for SIGSEGV"),
+            }
+            match signal::sigaction(signal::SIGABRT, &sig_action) {
+                Ok(prev) => _ = PREV_SIGABRT.set(prev),
+                Err(_) => log::error!("Cannot install signal handler for SIGABRT"),
+            }
+        }
+    });
+}
+
+#[cfg(not(target_family = "unix"))]
+/// Fatal signal handlers are only supported on Unix.
+pub(crate) fn enable_fatal_signals() {}
 
 // Both ends stay open for the process lifetime: a handler must never write to a
 // recycled descriptor or raise SIGPIPE if the delivery thread exits.

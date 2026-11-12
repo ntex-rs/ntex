@@ -1,5 +1,9 @@
 # Changes
 
+## [4.7.0] - 2026-11-12
+
+* Add `fatal_signals` argument to `main` macro
+
 ## [4.6.0] - 2026-11-10
 
 * Add `task_callbacks` argument to `main` and `test` macros

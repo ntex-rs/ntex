@@ -105,6 +105,8 @@ impl WorkerPool {
     /// When enabled, SIGQUIT, SIGSEGV, SIGABRT, application panics, and
     /// worker failures with "stop on panic" stop the server gracefully.
     /// SIGTERM always stops gracefully and SIGINT always stops immediately.
+    /// SIGSEGV and SIGABRT require runtime fatal signal handling, application
+    /// panics require runtime panic handling.
     ///
     /// By default, these events stop the server immediately.
     pub fn graceful_shutdown(mut self) -> Self {

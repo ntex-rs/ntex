@@ -1,5 +1,12 @@
 # Changes
 
+## [4.8.1] - 2026-11-12
+
+* Fatal signal handling is optional and disabled by default; `SIGSEGV` and
+  `SIGABRT` handlers are no longer installed by `System::enable_signals()`.
+  Use `Builder::fatal_signals(true)` to report them as `Signal::Panic`,
+  servers stop on fatal signals only when it is enabled
+
 ## [4.8.0] - 2026-11-11
 
 * Add `Runtime::run_ready()`, it runs ready tasks within the current turn,

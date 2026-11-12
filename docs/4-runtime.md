@@ -211,6 +211,11 @@ process signals available through `ntex::rt::signals`. Your application still
 decides how to shut down. ntex servers listen for signals while they run and
 handle their own shutdown.
 
+Fatal signal handling is off by default as well. On Unix,
+`Builder::fatal_signals(true)` installs process-wide `SIGSEGV` and `SIGABRT`
+handlers that report these signals as `Signal::Panic` while signal handling is
+enabled. The process still terminates.
+
 [`System`]: https://docs.ntex.rs/api/ntex_rt/struct.System.html
 [`SystemRunner`]: https://docs.ntex.rs/api/ntex_rt/struct.SystemRunner.html
 
@@ -355,6 +360,7 @@ It accepts these options:
 
 * `name = "..."` sets the system name;
 * `signals = true` or `false`;
+* `fatal_signals = true` or `false`;
 * `panic_handling = true` or `false`;
 * `ping_interval = N` in milliseconds, where zero turns off arbiter pings;
 * `rt = Type` selects a custom runtime runner.
@@ -377,7 +383,8 @@ The async function can return a value such as `Result<(), E>`, and the
 generated synchronous function returns it.
 
 Use `#[ntex::test]` to run an async test in a fresh system named after the test.
-The attribute marks it as a test system and turns off signal and panic handling.
+The attribute marks it as a test system and turns off signal, fatal signal, and
+panic handling.
 It also sets up ntex test logging:
 
 ```rust

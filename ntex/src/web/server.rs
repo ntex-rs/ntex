@@ -274,7 +274,8 @@ where
     ///
     /// When enabled, SIGQUIT, SIGSEGV, SIGABRT, and application panics stop the
     /// server gracefully. SIGTERM always stops the server gracefully, and SIGINT
-    /// always stops it immediately.
+    /// always stops it immediately. SIGSEGV and SIGABRT require runtime fatal
+    /// signal handling, application panics require runtime panic handling.
     ///
     /// By default, these events stop the server immediately.
     pub fn graceful_shutdown(mut self) -> Self {
