@@ -44,6 +44,13 @@ impl Payload {
     pub fn trailers(&self) -> Option<HeaderMap> {
         self.trailers.borrow().clone()
     }
+
+    /// Takes the trailer fields of a chunked payload.
+    ///
+    /// Like [`Payload::trailers`], without copying. Subsequent calls return `None`.
+    pub fn take_trailers(&self) -> Option<HeaderMap> {
+        self.trailers.borrow_mut().take()
+    }
 }
 
 impl From<Receiver<PayloadError>> for Payload {
