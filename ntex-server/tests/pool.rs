@@ -319,6 +319,48 @@ async fn pool_least_loaded_skips_blocked_worker() {
     srv.stop(false).await;
 }
 
+/// STATEMENT: A worker that was blocked receives items again as soon as it
+/// is no longer blocked, its blocked time does not count as load.
+///
+/// HOW:
+/// - Block one of two idle workers for 600 ms with the first item, wait until
+///   the item completed and 150 ms more for the next latency sample.
+/// - Submit 20 items 10 ms apart and confirm the recovered worker processes
+///   some of them; counting the blocked time would make it lose every
+///   comparison for about 500 ms.
+#[ntex::test]
+async fn pool_least_loaded_uses_recovered_worker() {
+    let c = Counters::default();
+    let (tx, rx) = mpsc::channel();
+    let mut cfg = Cfg::new(&c);
+    cfg.block_on = Some((0, Duration::from_millis(600)));
+    cfg.items = Some(tx);
+    let srv = pool().workers(2).run(cfg);
+    wait_for(|| c.created.load(Relaxed) == 2).await;
+    // wait for the first latency sample, see above
+    sleep(Millis(250)).await;
+
+    process(&srv, 0).await;
+    wait_for(|| c.threads().len() == 1).await;
+    let blocked = c.threads()[0].1.clone();
+    wait_for(|| rx.try_recv() == Ok(0)).await;
+    // the next latency sample ends the block
+    sleep(Millis(150)).await;
+
+    for i in 1..=20 {
+        process(&srv, i).await;
+        sleep(Millis(10)).await;
+    }
+    wait_for(|| c.threads().len() == 21).await;
+    let threads = c.threads();
+    assert!(
+        threads[1..].iter().any(|(_, name)| *name == blocked),
+        "{threads:?}"
+    );
+
+    srv.stop(false).await;
+}
+
 /// Items queued at a blocked worker are sent to another worker.
 #[ntex::test]
 async fn pool_reschedules_blocked_worker_queue() {

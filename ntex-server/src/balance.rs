@@ -18,7 +18,8 @@ pub enum LoadBalancing {
     /// Each item is sent to the less loaded of two randomly chosen workers.
     ///
     /// A worker's load is its runtime utilization, averaged over the last
-    /// ~250 ms. Workers whose utilization differs by less than 10% are compared
+    /// ~250 ms and not counting the time the runtime is blocked by a task.
+    /// Workers whose utilization differs by less than 10% are compared
     /// by their open connections plus queued items. Workers whose runtime
     /// is blocked by a task are skipped while another worker is available.
     LeastLoaded,
@@ -60,8 +61,10 @@ const LOCAL_LOAD_SLACK: usize = 16;
 #[derive(Copy, Clone, Debug, Default)]
 /// Worker runtime sample.
 pub(crate) struct Sample {
-    /// Total time the runtime has been busy.
+    /// Total time the runtime has been busy, including the current turn.
     busy: Option<Duration>,
+    /// How long the current runtime turn has been running.
+    turn: Duration,
     /// The runtime is blocked by a task.
     blocked: bool,
 }
@@ -70,7 +73,8 @@ impl Sample {
     fn of<T>(wrk: &Worker<T>, now: Instant) -> Sample {
         let arb = wrk.arbiter();
         let hnd = arb.handle();
-        let blocked = hnd.current_turn().is_some_and(|t| t >= BLOCKED)
+        let turn = hnd.current_turn().unwrap_or_default();
+        let blocked = turn >= BLOCKED
             || arb.latency().is_some_and(|l| {
                 l.stalled
                     || l.last_sample
@@ -78,6 +82,7 @@ impl Sample {
             });
         Sample {
             busy: hnd.busy_duration(),
+            turn,
             blocked,
         }
     }
@@ -93,7 +98,15 @@ struct State {
 
 impl State {
     fn update(&mut self, sample: Sample, now: Instant) {
-        if let (Some(busy), Some(prev), Some(at)) = (sample.busy, self.busy, self.at) {
+        // the busy time is taken at the start of the current turn, a turn
+        // counts once it ends
+        let busy = sample.busy.map(|b| b.saturating_sub(sample.turn));
+        let now = now.checked_sub(sample.turn).unwrap_or(now);
+        // a blocked worker is skipped, the time it is blocked is not load
+        if !self.blocked
+            && !sample.blocked
+            && let (Some(busy), Some(prev), Some(at)) = (busy, self.busy, self.at)
+        {
             let dt = now.saturating_duration_since(at);
             if !dt.is_zero() {
                 let used = busy.saturating_sub(prev).as_secs_f64() / dt.as_secs_f64();
@@ -101,7 +114,7 @@ impl State {
                 self.util += alpha * (used.min(1.0) - self.util);
             }
         }
-        self.busy = sample.busy;
+        self.busy = busy;
         self.at = Some(now);
         self.blocked = sample.blocked;
     }
@@ -382,8 +395,14 @@ mod tests {
     }
 
     fn sample(busy_ms: u32, blocked: bool) -> Sample {
+        turn(busy_ms, 0, blocked)
+    }
+
+    /// Sample taken `turn_ms` into the current runtime turn.
+    fn turn(busy_ms: u32, turn_ms: u32, blocked: bool) -> Sample {
         Sample {
             busy: Some(MS * busy_ms),
+            turn: MS * turn_ms,
             blocked,
         }
     }
@@ -409,6 +428,49 @@ mod tests {
         st.update(sample(0, false), t + MS * 700);
         st.update(sample(0, false), t + MS * 700);
         assert!((st.util - 0.25).abs() < 1e-9, "{}", st.util);
+    }
+
+    /// STATEMENT: The time a worker's runtime is blocked does not count
+    /// towards its utilization, and a long turn counts once it ends.
+    ///
+    /// HOW:
+    /// - Bring the utilization to 0.5, then sample a turn that starts at
+    ///   250 ms, at 50 ms into it, when it is blocked at 150 ms, and 10 ms
+    ///   after it ended at 300 ms; the utilization stays 0.5.
+    /// - Sample an idle period and confirm the utilization decays from 0.5.
+    /// - Sample a 50 ms turn that does not block, while it runs and after it
+    ///   ended, and confirm it counts as fully busy once it ends.
+    #[test]
+    fn blocked_time_is_not_utilization() {
+        let t = Instant::now();
+        let mut st = State::default();
+        st.update(sample(0, false), t);
+        st.update(sample(250, false), t + MS * 250);
+        assert!((st.util - 0.5).abs() < 1e-9, "{}", st.util);
+
+        st.update(turn(300, 50, false), t + MS * 300);
+        assert!((st.util - 0.5).abs() < 1e-9, "{}", st.util);
+        st.update(turn(400, 150, true), t + MS * 400);
+        assert!(st.blocked);
+        assert!((st.util - 0.5).abs() < 1e-9, "{}", st.util);
+        st.update(sample(550, false), t + MS * 560);
+        assert!(!st.blocked);
+        assert!((st.util - 0.5).abs() < 1e-9, "{}", st.util);
+
+        // idle for one time constant
+        st.update(sample(550, false), t + MS * 810);
+        assert!((st.util - 0.25).abs() < 1e-9, "{}", st.util);
+
+        // a turn from 810 ms to 860 ms
+        st.update(turn(570, 20, false), t + MS * 830);
+        assert!((st.util - 0.25).abs() < 1e-9, "{}", st.util);
+        st.update(sample(600, false), t + MS * 860);
+        let alpha = 50.0 / 300.0;
+        assert!(
+            (st.util - (0.25 + alpha * 0.75)).abs() < 1e-9,
+            "{}",
+            st.util
+        );
     }
 
     #[test]
