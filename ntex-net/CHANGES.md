@@ -1,5 +1,9 @@
 # Changes
 
+## [4.11.0] - Unreleased
+
+* Add `tcp_listener()` and `Listener` for accepting TCP connections on the native polling and io-uring reactors
+
 ## [4.10.3] - 2026-11-12
 
 * polling: Rearm a pending connect with a modify instead of re-adding its
