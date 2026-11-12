@@ -21,8 +21,8 @@ fn split(s: &str) -> Components<'_> {
         Some(n) => (Some(&s[..n]), &s[n + 1..]),
         None => (None, s),
     };
-    let (rest, fragment) = split_at_char(rest, '#');
-    let (rest, query) = split_at_char(rest, '?');
+    let (rest, fragment) = split_at_char(rest, b'#');
+    let (rest, query) = split_at_char(rest, b'?');
     let (authority, path) = match rest.strip_prefix("//") {
         Some(r) => {
             let (authority, path) = r.split_at(r.find('/').unwrap_or(r.len()));
@@ -154,7 +154,7 @@ pub(crate) fn parse_target_str(
         return Ok(origin_form(src, query));
     }
     let c = if src.starts_with('/') || src == "*" {
-        let (path, query) = split_at_char(&src, '?');
+        let (path, query) = split_at_char(&src, b'?');
         Components {
             path,
             query,
@@ -412,7 +412,7 @@ mod tests {
         ] {
             let src = ByteString::from(target);
             let fast = parse_target(src.clone().into_bytes()).unwrap();
-            let (path, query) = split_at_char(&src, '?');
+            let (path, query) = split_at_char(&src, b'?');
             let slow = assemble_target(
                 &Components {
                     path,

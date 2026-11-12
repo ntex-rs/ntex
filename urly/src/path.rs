@@ -175,7 +175,7 @@ impl PathAndQuery {
     /// assert_eq!(pq.query().unwrap(), "q=rust");
     /// ```
     pub fn new(src: &str) -> Result<&PathAndQuery, InvalidUrl> {
-        let (path, query) = split_at_char(src, '?');
+        let (path, query) = split_at_char(src, b'?');
         Path::new(path)?;
         if let Some(query) = query {
             Query::new(query).map_err(|e| e.offset(path.len() + 1))?;
@@ -197,11 +197,13 @@ impl PathAndQuery {
 
     /// Returns the path.
     pub fn path(&self) -> &Path {
-        Path::from_str_unchecked(split_at_char(&self.0, '?').0)
+        Path::from_str_unchecked(split_at_char(&self.0, b'?').0)
     }
 
     /// Returns the query, if present.
     pub fn query(&self) -> Option<&Query> {
-        split_at_char(&self.0, '?').1.map(Query::from_str_unchecked)
+        split_at_char(&self.0, b'?')
+            .1
+            .map(Query::from_str_unchecked)
     }
 }

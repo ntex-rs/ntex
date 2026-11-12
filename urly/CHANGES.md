@@ -1,5 +1,10 @@
 # Changes
 
+## [1.4.1] - 2026-11-12
+
+* Faster URL assembly and authority splitting: `?`, `#`, `@`, and `:` are found
+  8 bytes at a time, and assembled URLs are written into the buffer in one pass
+
 ## [1.4.0] - 2026-11-12
 
 * Add `Url::parse_target_str()`, `Url::parse_target()` without the UTF-8 check
