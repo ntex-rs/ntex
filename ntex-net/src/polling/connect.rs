@@ -182,9 +182,10 @@ impl Handler for ConnectOpsBatcher {
                     }
                 }
             } else {
+                // The socket is still registered, only rearm its interest.
                 self.inner
                     .api
-                    .attach(item.fd(), key.id(), Event::writable(0));
+                    .modify(item.fd(), key.id(), Event::writable(0));
             }
         }
     }
@@ -354,6 +355,46 @@ mod tests {
         handler.error(new.id() as usize, io::Error::other("current"));
         assert!(ops.0.connects.borrow().is_empty());
         assert!(rx.await.is_err());
+        handler.cleanup();
+    }
+
+    /// STATEMENT: An event without writability rearms a pending connect
+    /// without failing it.
+    ///
+    /// HOW:
+    /// - Start a connect that does not complete immediately.
+    /// - Deliver an event with no readiness for its key.
+    /// - Confirm no failed poller operation is queued and the connect is
+    ///   still pending; re-adding the registered fd failed with `EEXIST` on
+    ///   epoll.
+    #[ntex::test]
+    async fn non_writable_event_rearms_connect() {
+        let reactor = Reactor::new().unwrap();
+        let ops = ConnectOps::get(&reactor);
+        let mut handler = ConnectOpsBatcher {
+            inner: ops.0.clone(),
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = SockAddr::from(listener.local_addr().unwrap());
+        let sock = Socket::new(addr.domain(), socket2::Type::STREAM, None).unwrap();
+        let _rx = ops.connect(
+            crate::helpers::prep_socket(sock).unwrap(),
+            &addr,
+            SharedCfg::default(),
+            false,
+        );
+        let key = {
+            let connects = ops.0.connects.borrow();
+            let Some((id, item)) = connects.iter().next() else {
+                // connected without waiting, nothing to rearm
+                return;
+            };
+            Key::new(id as u32, item.generation).id() as usize
+        };
+
+        handler.event(key, Event::none(key));
+        assert!(!ops.0.api.has_changes(), "rearm failed in the poller");
+        assert_eq!(ops.0.connects.borrow().len(), 1);
         handler.cleanup();
     }
 }
