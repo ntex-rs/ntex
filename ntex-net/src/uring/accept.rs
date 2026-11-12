@@ -70,6 +70,10 @@ impl AcceptOps {
         })
     }
 
+    pub(crate) fn is_supported(&self) -> bool {
+        self.0.supported
+    }
+
     pub(crate) fn listener(&self, sock: net::TcpListener) -> io::Result<Listener> {
         if !self.0.supported {
             return Err(io::Error::new(
