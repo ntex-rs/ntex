@@ -103,6 +103,7 @@ impl<T> Worker<T> {
             if let Some(placement) = placement {
                 if placement.apply() {
                     log::info!("Set affinity to {placement} for worker {n2:?}");
+                    crate::affinity::set_current_cpu(placement.cpus().first().copied());
                     // the worker is not available before init completes,
                     // the balancer reads the CPUs once it is
                     let _ = cpus2.set(placement.cpus().into());
@@ -430,6 +431,8 @@ struct ServiceRunner<F: ServerConfiguration<Item = Req>, Req> {
     svc: Pipeline<Req, (), ()>,
     reqs: Queue<Req>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
+    /// Items accepted by the worker itself, dropped before `availability`
+    local: Option<Pin<Box<dyn Stream<Item = Req>>>>,
     availability: WorkerAvailabilityTx,
     metrics: Option<Arc<WorkerSlot>>,
 }
@@ -460,12 +463,14 @@ where
             Either::Left(Err(_)) | Either::Right(None) => return Err(()),
         };
         availability.set(true);
+        let local = factory.local_items();
 
         Ok(ServiceRunner {
             factory,
             svc,
             reqs,
             stop,
+            local,
             availability,
             metrics,
             name: name.to_string(),
@@ -496,12 +501,22 @@ where
                     }
                 }
 
-                if let Ok(item) = ready!(recv.as_mut().poll(cx)) {
-                    Poll::Ready(Ok(Some(item)))
-                } else {
-                    log::error!("Server is gone");
-                    Poll::Ready(Ok(None))
+                match recv.as_mut().poll(cx) {
+                    Poll::Ready(Ok(item)) => return Poll::Ready(Ok(Some(item))),
+                    Poll::Ready(Err(_)) => {
+                        log::error!("Server is gone");
+                        return Poll::Ready(Ok(None));
+                    }
+                    Poll::Pending => {}
                 }
+                if let Some(ref mut local) = self.local {
+                    match local.as_mut().poll_next(cx) {
+                        Poll::Ready(Some(item)) => return Poll::Ready(Ok(Some(item))),
+                        Poll::Ready(None) => self.local = None,
+                        Poll::Pending => {}
+                    }
+                }
+                Poll::Pending
             });
 
             match select(fut, stream_recv(&mut self.stop)).await {
@@ -522,6 +537,8 @@ where
                 Either::Right(Some(Shutdown { timeout, result })) => {
                     log::info!("Shutting down {:?} worker gracefuly", self.name);
                     self.availability.set(false);
+                    // close the worker's listeners before waiting for the service
+                    self.local = None;
 
                     let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
                     self.stop(timeout, Some(result)).await;
@@ -530,6 +547,7 @@ where
                 Either::Left(Ok(None)) | Either::Right(None) => {
                     log::info!("Shutting down {:?} worker", self.name);
                     self.availability.set(false);
+                    self.local = None;
                     self.stop(STOP_TIMEOUT, None).await;
                     return;
                 }

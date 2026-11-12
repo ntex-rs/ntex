@@ -7,6 +7,7 @@ mod accept;
 mod builder;
 mod config;
 mod factory;
+mod reuseport;
 mod service;
 mod socket;
 mod test;
@@ -94,10 +95,11 @@ mod tests {
             std::sync::Arc::new(NoConfig),
             vec![factory],
             DEFAULT_MAX_CONNS,
+            None,
         );
         assert_eq!(
             format!("{server:?}"),
-            "StreamServer { services: 1, max_conns: 25600 }"
+            "StreamServer { services: 1, max_conns: 25600, reuseport: None }"
         );
         let service = server.create().await.unwrap();
         let debug = format!("{service:?}");

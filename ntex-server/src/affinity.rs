@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt};
+use std::{cell::Cell, collections::BTreeMap, fmt};
 
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -128,6 +128,28 @@ impl Placement {
 /// (`SO_INCOMING_CPU`). Not supported on other platforms.
 pub(crate) fn incoming_cpu(stream: &std::net::TcpStream) -> Option<usize> {
     sys::incoming_cpu(stream).map(sys::index)
+}
+
+thread_local! {
+    static CURRENT_CPU: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Sets the index of the CPU the current worker thread is placed on.
+pub(crate) fn set_current_cpu(cpu: Option<usize>) {
+    CURRENT_CPU.with(|c| c.set(cpu));
+}
+
+/// Returns the index of the CPU the current worker thread is placed on.
+pub(crate) fn current_cpu() -> Option<usize> {
+    CURRENT_CPU.with(Cell::get)
+}
+
+/// Sets `SO_INCOMING_CPU` of the listener, so `SO_REUSEPORT` sends
+/// connections whose packets are processed on `cpu` to this listener.
+///
+/// Supported on Linux and Android.
+pub(crate) fn set_incoming_cpu(lst: &std::net::TcpListener, cpu: usize) -> std::io::Result<()> {
+    sys::set_incoming_cpu(lst, cpu)
 }
 
 impl fmt::Display for Placement {
@@ -263,7 +285,7 @@ fn interleave<T>(lists: Vec<Vec<T>>) -> Vec<T> {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod sys {
-    use std::{fs, mem, path::Path};
+    use std::{fs, io, mem, path::Path};
 
     use super::{Affinity, Cpu, CpuInfo};
 
@@ -414,13 +436,36 @@ mod sys {
         usize::try_from(cpu.num).unwrap_or(usize::MAX)
     }
 
-    pub(super) fn incoming_cpu(stream: &std::net::TcpStream) -> Option<Cpu> {
+    #[cfg(target_os = "linux")]
+    const SO_INCOMING_CPU: libc::c_int = libc::SO_INCOMING_CPU;
+    #[cfg(target_os = "android")]
+    const SO_INCOMING_CPU: libc::c_int = 49;
+
+    pub(super) fn set_incoming_cpu(lst: &std::net::TcpListener, cpu: usize) -> io::Result<()> {
         use std::os::fd::AsRawFd;
 
-        #[cfg(target_os = "linux")]
-        const SO_INCOMING_CPU: libc::c_int = libc::SO_INCOMING_CPU;
-        #[cfg(target_os = "android")]
-        const SO_INCOMING_CPU: libc::c_int = 49;
+        let cpu = libc::c_int::try_from(cpu).map_err(io::Error::other)?;
+        let len =
+            libc::socklen_t::try_from(mem::size_of::<libc::c_int>()).map_err(io::Error::other)?;
+        // SAFETY: the input buffer holds `len` bytes
+        let res = unsafe {
+            libc::setsockopt(
+                lst.as_raw_fd(),
+                libc::SOL_SOCKET,
+                SO_INCOMING_CPU,
+                (&raw const cpu).cast(),
+                len,
+            )
+        };
+        if res == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    pub(super) fn incoming_cpu(stream: &std::net::TcpStream) -> Option<Cpu> {
+        use std::os::fd::AsRawFd;
 
         let mut cpu: libc::c_int = -1;
         let mut len = libc::socklen_t::try_from(mem::size_of::<libc::c_int>()).ok()?;
@@ -784,6 +829,10 @@ mod sys {
         (before + cpu.num) as usize
     }
 
+    pub(super) fn set_incoming_cpu(_: &std::net::TcpListener, _: usize) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
     // sockets are pointer-sized, the output buffer has a few bytes
     #[allow(clippy::cast_possible_truncation)]
     pub(super) fn incoming_cpu(stream: &TcpStream) -> Option<Cpu> {
@@ -901,6 +950,10 @@ mod sys {
 
     pub(super) fn incoming_cpu(_: &std::net::TcpStream) -> Option<Cpu> {
         None
+    }
+
+    pub(super) fn set_incoming_cpu(_: &std::net::TcpListener, _: usize) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
     }
 
     pub(super) fn apply(_: Affinity, _: Cpu, _: &[Cpu]) -> bool {

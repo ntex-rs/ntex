@@ -1,5 +1,13 @@
 # Changes
 
+## [4.6.0] - 2026-11-12
+
+* Add `LoadBalancing::Reuseport`: on Linux, each worker accepts TCP connections
+  on its own `SO_REUSEPORT` socket, bound to the worker's CPU with
+  `SO_INCOMING_CPU`, instead of receiving them from the accept thread
+
+* Add `ServerConfiguration::local_items()` for items a worker produces itself
+
 ## [4.5.2] - 2026-11-12
 
 * Least loaded balancing no longer counts the time a worker's runtime is

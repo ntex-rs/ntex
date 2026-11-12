@@ -14,7 +14,7 @@ use super::{Server, Token};
 use crate::metrics::AcceptSlot;
 
 const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
-const ERR_TIMEOUT: Duration = Duration::from_millis(500);
+pub(super) const ERR_TIMEOUT: Duration = Duration::from_millis(500);
 const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
 const DEFAULT_BACKLOG: i32 = 2048;
 
@@ -210,10 +210,21 @@ impl AcceptLoop {
                 .iter()
                 .map(|(_, lst)| (String::new(), lst.local_addr().to_string())),
         );
+        let socks = socks
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (token, lst))| (idx, token, lst))
+            .collect();
+        self.start_with(socks, &srv);
+    }
 
+    /// Starts the accept loop for listeners with their metrics indexes.
+    ///
+    /// Blocks until the listeners are registered.
+    pub(crate) fn start_with(self, socks: Vec<(usize, Token, Listener)>, srv: &Server) {
         let num = self.inner.len();
         let mut groups: Vec<Vec<(usize, Token, Listener)>> = (0..num).map(|_| Vec::new()).collect();
-        for (idx, (token, lst)) in socks.into_iter().enumerate() {
+        for (idx, token, lst) in socks {
             if num > 1 {
                 for (n, lst) in replicate(&lst, num - 1, self.backlog)
                     .into_iter()
@@ -261,7 +272,7 @@ impl AcceptLoop {
 ///
 /// `SO_REUSEPORT` is enabled on `lst` and on the new listeners, so the
 /// kernel balances incoming connections between all of them.
-fn replicate(lst: &Listener, num: usize, backlog: i32) -> Vec<Listener> {
+pub(super) fn replicate(lst: &Listener, num: usize, backlog: i32) -> Vec<Listener> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     if let Listener::Tcp(lst) = lst {
         use socket2::{Domain, SockAddr, SockRef, Socket, Type};
@@ -688,11 +699,132 @@ fn delete_source(poller: &Poller, info: &ServerSocketInfo) {
 /// All other errors will incur a timeout before next `accept()` is performed.
 /// The timeout is useful to handle resource exhaustion errors like ENFILE
 /// and EMFILE. Otherwise, could enter into tight loop.
-fn connection_error(e: &io::Error) -> bool {
+pub(super) fn connection_error(e: &io::Error) -> bool {
     matches!(
         e.kind(),
         io::ErrorKind::ConnectionRefused
             | io::ErrorKind::ConnectionAborted
             | io::ErrorKind::ConnectionReset
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unused_async_trait_impl)]
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use ntex_service::{Ctx, Service};
+
+    use super::*;
+    use crate::{ServerConfiguration, ServerStatus, WorkerPool};
+
+    /// Configuration whose services count the connections they receive.
+    #[derive(Clone)]
+    struct Cfg(Arc<AtomicUsize>);
+
+    struct Srv(Arc<AtomicUsize>);
+
+    impl Service<(), Connection> for Srv {
+        type Res = ();
+        type Error = ();
+
+        async fn call(&self, _: Connection, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    impl ServerConfiguration for Cfg {
+        type Item = Connection;
+        type Service = Srv;
+
+        async fn create(&self) -> io::Result<Srv> {
+            Ok(Srv(self.0.clone()))
+        }
+    }
+
+    async fn wait_for(what: &str, f: impl Fn() -> bool) {
+        for _ in 0..500 {
+            if f() {
+                return;
+            }
+            sleep(Millis(10)).await;
+        }
+        panic!("{what} is not met");
+    }
+
+    /// STATEMENT: Connections accepted while the server is unavailable are
+    /// kept in the backlog until the server is ready again and the accept
+    /// loop is resumed.
+    ///
+    /// HOW:
+    /// - Start an accept loop with `AcceptLoop::start` for a server that
+    ///   does not pause the loop itself.
+    /// - Connect and check the connection is delivered only after the loop
+    ///   is resumed, and the listener metrics report its address.
+    /// - Pause the server, connect, and check the connection is kept in the
+    ///   backlog and the accept loop is paused.
+    /// - Resume the loop while the server is still paused and check the
+    ///   connection stays in the backlog.
+    /// - Resume the server and the loop and check the queued and a new
+    ///   connection are delivered.
+    /// - Terminate the loop and check the listener is closed.
+    #[ntex::test]
+    async fn backlog_while_server_unavailable() {
+        let received = Arc::new(AtomicUsize::new(0));
+        let srv = WorkerPool::new()
+            .name("test")
+            .workers(1)
+            .disable_signals()
+            .run(Cfg(received.clone()));
+        while srv.status() != ServerStatus::Ready {
+            srv.status_changed().await;
+        }
+
+        let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = lst.local_addr().unwrap();
+        let mut accept = AcceptLoop::new();
+        accept.name("test");
+        accept.testing();
+        let notify = accept.notify();
+        accept.start(vec![(Token(0), Listener::from_tcp(lst))], srv.clone());
+
+        // the loop starts paused until the server is ready
+        let _c1 = std::net::TcpStream::connect(addr).unwrap();
+        sleep(Millis(100)).await;
+        assert_eq!(received.load(Ordering::SeqCst), 0);
+        notify.send(AcceptorCommand::Resume);
+        wait_for("first connection", || received.load(Ordering::SeqCst) == 1).await;
+        let m = srv.metrics();
+        assert_eq!(m.listeners[0].addr, addr.to_string());
+        assert_eq!(m.listeners[0].accepted, 1);
+
+        srv.pause().await;
+        let _c2 = std::net::TcpStream::connect(addr).unwrap();
+        wait_for("backlog", || srv.metrics().accept_backlog == 1).await;
+        assert_eq!(srv.metrics().accept_pauses, 1);
+
+        notify.send(AcceptorCommand::Resume);
+        sleep(Millis(100)).await;
+        assert_eq!(srv.metrics().accept_backlog, 1);
+        assert_eq!(received.load(Ordering::SeqCst), 1);
+
+        srv.resume().await;
+        notify.send(AcceptorCommand::Resume);
+        wait_for("backlog connection", || {
+            received.load(Ordering::SeqCst) == 2
+        })
+        .await;
+        assert_eq!(srv.metrics().accept_backlog, 0);
+        let _c3 = std::net::TcpStream::connect(addr).unwrap();
+        wait_for("third connection", || received.load(Ordering::SeqCst) == 3).await;
+
+        notify.send(AcceptorCommand::Terminate);
+        wait_for("closed listener", || {
+            std::net::TcpStream::connect(addr).is_err()
+        })
+        .await;
+        assert_eq!(srv.metrics().listeners[0].accepted, 3);
+        srv.stop(false).await;
+    }
 }

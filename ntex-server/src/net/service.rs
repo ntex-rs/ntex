@@ -1,13 +1,15 @@
-use std::{fmt, io, sync::Arc};
+use std::{fmt, io, pin::Pin, sync::Arc};
 
 use ntex_io::{IoConfig, IoMetricsGroup};
 use ntex_service::{BindCtx, Ctx, Service, cfg::SharedCfg};
-use ntex_util::{HashMap, future::join_all, services::Counter, services::counter::CounterGuard};
+use ntex_util::future::{Stream, join_all};
+use ntex_util::{HashMap, services::Counter, services::counter::CounterGuard};
 
 use crate::{ServerAppConfig, ServerConfiguration, metrics::WorkerSlot};
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService};
+use super::reuseport::Reuseport;
 use super::{Token, socket::Connection};
 
 /// Worker configuration for network servers.
@@ -20,6 +22,7 @@ pub struct StreamServer<Cfg> {
     state: Arc<Cfg>,
     services: Vec<FactoryServiceType<Cfg>>,
     max_conns: usize,
+    reuseport: Option<Arc<Reuseport>>,
 }
 
 impl<Cfg: ServerAppConfig> StreamServer<Cfg> {
@@ -28,12 +31,14 @@ impl<Cfg: ServerAppConfig> StreamServer<Cfg> {
         state: Arc<Cfg>,
         services: Vec<FactoryServiceType<Cfg>>,
         max_conns: usize,
+        reuseport: Option<Arc<Reuseport>>,
     ) -> Self {
         Self {
             accept,
             state,
             services,
             max_conns,
+            reuseport,
         }
     }
 }
@@ -43,6 +48,7 @@ impl<Cfg> fmt::Debug for StreamServer<Cfg> {
         f.debug_struct("StreamServer")
             .field("services", &self.services.len())
             .field("max_conns", &self.max_conns)
+            .field("reuseport", &self.reuseport)
             .finish()
     }
 }
@@ -84,21 +90,33 @@ impl<Cfg: ServerAppConfig> ServerConfiguration for StreamServer<Cfg> {
 
     /// Pause the server.
     fn pause(&self) {
+        if let Some(ref rp) = self.reuseport {
+            rp.pause();
+        }
         self.accept.send(AcceptorCommand::Pause);
     }
 
     /// Resume the server.
     fn resume(&self) {
+        if let Some(ref rp) = self.reuseport {
+            rp.resume();
+        }
         self.accept.send(AcceptorCommand::Resume);
     }
 
     /// Terminate the server.
     fn terminate(&self) {
+        if let Some(ref rp) = self.reuseport {
+            rp.stop();
+        }
         self.accept.send(AcceptorCommand::Terminate);
     }
 
     /// Stop the server.
     async fn stop(&self) {
+        if let Some(ref rp) = self.reuseport {
+            rp.stop();
+        }
         let (tx, rx) = oneshot::channel();
         self.accept.send(AcceptorCommand::Stop(tx));
         let _ = rx.await;
@@ -106,6 +124,12 @@ impl<Cfg: ServerAppConfig> ServerConfiguration for StreamServer<Cfg> {
 
     fn incoming_cpu(&self, con: &Connection) -> Option<usize> {
         con.incoming_cpu()
+    }
+
+    /// Accept connections on the worker's own listeners.
+    fn local_items(&self) -> Option<Pin<Box<dyn Stream<Item = Connection>>>> {
+        let local = self.reuseport.as_ref()?.local()?;
+        Some(Box::pin(local))
     }
 }
 
@@ -116,6 +140,7 @@ impl<Cfg: ServerAppConfig> Clone for StreamServer<Cfg> {
             accept: self.accept.clone(),
             services: self.services.iter().map(|s| s.clo()).collect(),
             max_conns: self.max_conns,
+            reuseport: self.reuseport.clone(),
         }
     }
 }

@@ -41,6 +41,32 @@ pub enum LoadBalancing {
     /// This is the default.
     #[default]
     IncomingCpu,
+    /// Each worker accepts connections on its own TCP listener.
+    ///
+    /// Every TCP listener is replicated with `SO_REUSEPORT`, one socket per
+    /// worker, and each worker accepts on its own socket on its own thread,
+    /// so connections do not pass through an accept thread. A worker accepts
+    /// only while its service is ready, e.g. below the
+    /// [`max_connections`](crate::net::ServerBuilder::max_connections) limit,
+    /// otherwise connections wait in its socket's listen backlog.
+    ///
+    /// The kernel chooses the socket of a new connection. A socket of a
+    /// worker placed on a CPU has `SO_INCOMING_CPU` set to that CPU, so the
+    /// connection goes to the worker on the CPU that processes its packets,
+    /// with Linux 6.1 or later. Otherwise, and for packets processed on a
+    /// CPU without a worker, the kernel chooses by a hash of the connection
+    /// address. Spread the network interrupts, e.g. with RSS or RPS, over
+    /// the worker CPUs, see [`Affinity`](crate::Affinity).
+    ///
+    /// Connections are not rebalanced: connections waiting for a busy or
+    /// restarting worker are not taken by other workers. Connections queued
+    /// on a socket are reset when the server stops.
+    ///
+    /// Requires Linux or Android and the native `polling` or `io-uring`
+    /// runtime. Otherwise, and for Unix domain sockets and items submitted
+    /// with [`Server::process`](crate::Server::process), it works like
+    /// [`IncomingCpu`](Self::IncomingCpu).
+    Reuseport,
 }
 
 /// Minimum interval between worker load samples.
@@ -204,10 +230,14 @@ impl Balancer {
     }
 
     /// Returns `true` if [`select`](Self::select) uses the incoming CPU of
-    /// items, i.e. the mode is [`LoadBalancing::IncomingCpu`] and some
+    /// items, i.e. the mode is [`LoadBalancing::IncomingCpu`] or
+    /// [`LoadBalancing::Reuseport`] and some
     /// workers are placed on CPUs.
     pub(crate) fn uses_incoming_cpu<T>(&mut self, workers: &[Worker<T>]) -> bool {
-        if self.mode != LoadBalancing::IncomingCpu {
+        if !matches!(
+            self.mode,
+            LoadBalancing::IncomingCpu | LoadBalancing::Reuseport
+        ) {
             return false;
         }
         if self.local_stale {
@@ -228,7 +258,7 @@ impl Balancer {
     ) -> (usize, Option<bool>) {
         match self.mode {
             LoadBalancing::RoundRobin => (self.round_robin(workers.len()), None),
-            LoadBalancing::LeastLoaded | LoadBalancing::IncomingCpu => {
+            LoadBalancing::LeastLoaded | LoadBalancing::IncomingCpu | LoadBalancing::Reuseport => {
                 let now = Instant::now();
                 self.refresh(now, |idx| Sample::of(&workers[idx], now));
                 let load = |idx: usize| workers[idx].load();

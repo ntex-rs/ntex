@@ -100,6 +100,21 @@ pub trait ServerConfiguration: Send + Clone + 'static {
         let _ = item;
         None
     }
+
+    /// Returns a source of items the worker produces itself.
+    ///
+    /// Called on the worker thread, once the worker's first service is
+    /// created. Items of the source are passed to the worker's service like
+    /// items sent to the worker. The source is polled only while the service
+    /// is ready, so it is subject to the service's backpressure. It is kept
+    /// when the service is re-created, and dropped when it ends or the worker
+    /// stops. Network servers use it for
+    /// [`LoadBalancing::Reuseport`]. The default returns `None`.
+    fn local_items(
+        &self,
+    ) -> Option<std::pin::Pin<Box<dyn ntex_util::future::Stream<Item = Self::Item>>>> {
+        None
+    }
 }
 
 #[cfg(test)]

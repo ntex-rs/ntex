@@ -8,9 +8,10 @@ use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::{Affinity, LoadBalancing, NoConfig, Server, ServerAppConfig, WorkerPool};
 
-use super::accept::AcceptLoop;
+use super::accept::{AcceptLoop, replicate};
 use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
+use super::reuseport::{Reuseport, Sockets};
 use super::{Connection, StreamServer, Token, socket::Listener};
 
 /// Builder for a network server.
@@ -391,28 +392,67 @@ where
             "Server should have at least one bound socket"
         );
         self.accept.acceptors(self.acceptors);
+
+        let names: Vec<_> = self
+            .sockets
+            .iter()
+            .map(|sock| (sock.1.clone(), sock.2.local_addr().to_string()))
+            .collect();
+        let use_reuseport = self.pool.balancing == LoadBalancing::Reuseport && {
+            let supported = cfg!(any(target_os = "linux", target_os = "android"))
+                && ntex_net::is_tcp_listener_supported();
+            if !supported {
+                log::warn!("Reuseport load balancing is not supported, using an accept thread");
+            }
+            supported
+        };
+
+        let workers = self.pool.num;
+        let mut slots: Vec<Sockets> = (0..workers).map(|_| Vec::new()).collect();
+        let mut accept_socks = Vec::new();
+        for (idx, (token, name, lst)) in self.sockets.into_iter().enumerate() {
+            log::info!("Starting \"{name}\" service on {lst}");
+            if use_reuseport && let Listener::Tcp(_) = lst {
+                let copies = replicate(&lst, workers - 1, self.backlog);
+                if copies.len() == workers - 1
+                    && let Listener::Tcp(lst) = lst
+                {
+                    slots[0].push((idx, token, lst));
+                    for (n, copy) in copies.into_iter().enumerate() {
+                        match copy {
+                            Listener::Tcp(copy) => slots[n + 1].push((idx, token, copy)),
+                            // replicate() creates tcp listeners only
+                            #[cfg(unix)]
+                            Listener::Uds(_) => {}
+                        }
+                    }
+                    continue;
+                }
+                log::warn!("Cannot replicate {lst}, using an accept thread");
+            }
+            accept_socks.push((idx, token, lst));
+        }
+        let reuseport = (use_reuseport && slots.iter().any(|s| !s.is_empty()))
+            .then(|| Arc::new(Reuseport::new(slots)));
+
         let srv = StreamServer::new(
             self.accept.notify(),
             self.state,
             self.services,
             self.max_conns,
+            reuseport.clone(),
         );
         let svc = self.pool.run(srv);
 
-        svc.metrics_ref().listeners(
-            self.sockets
-                .iter()
-                .map(|sock| (sock.1.clone(), sock.2.local_addr().to_string())),
-        );
-        let sockets = self
-            .sockets
-            .into_iter()
-            .map(|sock| {
-                log::info!("Starting \"{}\" service on {}", sock.1, sock.2);
-                (sock.0, sock.2)
-            })
-            .collect();
-        self.accept.start(sockets, svc.clone());
+        svc.metrics_ref().listeners(names);
+        if let Some(rp) = reuseport
+            && let Some(metrics) = svc.metrics_ref().accept_slot()
+        {
+            rp.set_metrics(metrics);
+        }
+        if !accept_socks.is_empty() {
+            self.accept.start_with(accept_socks, &svc);
+        }
 
         svc
     }

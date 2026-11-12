@@ -205,7 +205,7 @@ impl Period {
 pub(crate) struct Metrics {
     epoch: Instant,
     workers: Box<[Arc<WorkerSlot>]>,
-    accept: OnceLock<AcceptSlot>,
+    accept: OnceLock<Arc<AcceptSlot>>,
     incoming_cpu_hits: AtomicU64,
     incoming_cpu_misses: AtomicU64,
     rescheduled: AtomicU64,
@@ -253,20 +253,27 @@ impl Metrics {
     where
         I: IntoIterator<Item = (String, String)>,
     {
-        self.accept.get_or_init(|| AcceptSlot {
-            epoch: self.epoch,
-            listeners: listeners
-                .into_iter()
-                .map(|(name, addr)| ListenerSlot {
-                    name,
-                    addr,
-                    ..Default::default()
-                })
-                .collect(),
-            paused: Period::default(),
-            paused_loops: Mutex::new(0),
-            backlog: AtomicUsize::new(0),
+        self.accept.get_or_init(|| {
+            Arc::new(AcceptSlot {
+                epoch: self.epoch,
+                listeners: listeners
+                    .into_iter()
+                    .map(|(name, addr)| ListenerSlot {
+                        name,
+                        addr,
+                        ..Default::default()
+                    })
+                    .collect(),
+                paused: Period::default(),
+                paused_loops: Mutex::new(0),
+                backlog: AtomicUsize::new(0),
+            })
         })
+    }
+
+    /// Returns the listener metrics, if registered.
+    pub(crate) fn accept_slot(&self) -> Option<Arc<AcceptSlot>> {
+        self.accept.get().cloned()
     }
 
     pub(crate) fn snapshot(&self) -> ServerMetrics {
