@@ -26,7 +26,8 @@
     clippy::missing_panics_doc,
     clippy::unused_async_trait_impl
 )]
-use std::{any::Any, io, net, net::SocketAddr, panic};
+use std::task::{Context, Poll};
+use std::{any::Any, fmt, future::poll_fn, io, net, net::SocketAddr, panic};
 
 use ntex_io::Io;
 use ntex_rt::{BlockFuture, Driver, Runner};
@@ -68,6 +69,67 @@ pub trait Reactor: Driver {
     #[cfg(unix)]
     /// Converts a standard-library Unix stream into an [`Io`] value.
     fn from_unix_stream(&self, _: std::os::unix::net::UnixStream, _: SharedCfg) -> io::Result<Io>;
+
+    /// Registers a TCP listener with the reactor.
+    ///
+    /// The default implementation returns an [`io::ErrorKind::Unsupported`]
+    /// error.
+    fn tcp_listener(&self, sock: net::TcpListener) -> io::Result<Listener> {
+        drop(sock);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "tcp listener is not supported by the reactor",
+        ))
+    }
+}
+
+/// Reactor specific part of a [`Listener`].
+pub(crate) trait ListenerOps {
+    fn poll_accept(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<(net::TcpStream, SocketAddr)>>;
+
+    fn local_addr(&self) -> io::Result<SocketAddr>;
+}
+
+/// TCP listener that accepts connections through the current reactor.
+///
+/// Created by [`tcp_listener`]. The listener is bound to the thread that
+/// created it. Dropping it deregisters the socket from the reactor and closes
+/// it.
+pub struct Listener(Box<dyn ListenerOps>);
+
+impl Listener {
+    #[allow(dead_code)]
+    pub(crate) fn new<T: ListenerOps + 'static>(ops: T) -> Self {
+        Listener(Box::new(ops))
+    }
+
+    /// Accepts a new incoming connection.
+    ///
+    /// Returns the connected stream and the address of the peer. The stream
+    /// may be in blocking or non-blocking mode depending on the platform,
+    /// [`from_tcp_stream`] switches it to the mode the reactor needs.
+    ///
+    /// Dropping the returned future before it completes does not lose a
+    /// connection, the next call returns it.
+    pub async fn accept(&mut self) -> io::Result<(net::TcpStream, SocketAddr)> {
+        poll_fn(|cx| self.0.poll_accept(cx)).await
+    }
+
+    /// Returns the local address the listener is bound to.
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.0.local_addr()
+    }
+}
+
+impl fmt::Debug for Listener {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Listener")
+            .field("local_addr", &self.local_addr().ok())
+            .finish()
+    }
 }
 
 #[inline]
@@ -120,6 +182,26 @@ pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io>
 /// `#[ntex::main]`, `#[ntex::test]`, or an ntex `System`.
 pub fn from_unix_stream(stream: std::os::unix::net::UnixStream, cfg: SharedCfg) -> io::Result<Io> {
     with_current(|driver| driver.from_unix_stream(stream, cfg))
+}
+
+#[inline]
+/// Registers a TCP listener with the current reactor.
+///
+/// The socket must be bound, listening and in non-blocking mode; set it with
+/// [`net::TcpListener::set_nonblocking`]. A blocking socket stalls the
+/// runtime thread in [`Listener::accept`].
+///
+/// Only the native `polling` and `io-uring` reactors support listeners. The
+/// Tokio, Compio and IOCP reactors return an [`io::ErrorKind::Unsupported`]
+/// error. The socket is closed on error.
+///
+/// # Panics
+///
+/// Panics if called outside an ntex runtime, for example from a plain thread
+/// or a runtime from another crate. Call it from code running under
+/// `#[ntex::main]`, `#[ntex::test]`, or an ntex `System`.
+pub fn tcp_listener(sock: net::TcpListener) -> io::Result<Listener> {
+    with_current(|driver| driver.tcp_listener(sock))
 }
 
 fn with_current<T, F: FnOnce(&dyn Reactor) -> T>(f: F) -> T {
