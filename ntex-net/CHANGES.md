@@ -1,5 +1,10 @@
 # Changes
 
+## [4.10.3] - 2026-11-12
+
+* polling: Rearm a pending connect with a modify instead of re-adding its
+  registered socket, which failed the connect on epoll
+
 ## [4.10.2] - 2026-11-12
 
 * polling: Read up to 512 events per poll and run ready tasks after every 8

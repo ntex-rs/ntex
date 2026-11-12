@@ -149,6 +149,13 @@ impl ReactorApi {
         // SAFETY: This thread-local queue is borrowed only for this non-reentrant push.
         unsafe { (*self.changes.get()).push_back(ev) };
     }
+
+    /// Whether a failed poller operation is queued.
+    #[cfg(test)]
+    pub(super) fn has_changes(&self) -> bool {
+        // SAFETY: Thread-local queue, no push or pop overlaps this read.
+        unsafe { !(*self.changes.get()).is_empty() }
+    }
 }
 
 /// Polling reactor.
