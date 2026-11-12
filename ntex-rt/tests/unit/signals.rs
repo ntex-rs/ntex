@@ -403,6 +403,47 @@ fn os_signal_delivered() {
     assert!(!is_enabled());
 }
 
+#[cfg(target_family = "unix")]
+/// STATEMENT: Fatal signal handlers are installed only when fatal signal handling is enabled.
+///
+/// HOW:
+/// - Run a system with signal handling only and check that `sig_segv` handles neither `SIGSEGV`
+///   nor `SIGABRT`.
+/// - Run a system built with `fatal_signals(true)` and check that `sig_segv` handles both.
+#[test]
+fn fatal_signals_disabled_by_default() {
+    fn installed(sig: i32) -> bool {
+        // SAFETY: `sigaction` is plain data, all zeroes is a valid value.
+        let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+        // SAFETY: A null new action only queries the current action into `old`.
+        let rc = unsafe { libc::sigaction(sig, std::ptr::null(), &raw mut old) };
+        assert_eq!(rc, 0);
+        old.sa_sigaction == sig_segv as extern "C" fn(i32) as usize
+    }
+
+    let _lock = LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    System::build()
+        .signals(true)
+        .build(TestRunner)
+        .block_on(async {
+            assert!(System::current().signals());
+            assert!(!installed(libc::SIGSEGV));
+            assert!(!installed(libc::SIGABRT));
+        });
+
+    System::build()
+        .signals(true)
+        .fatal_signals(true)
+        .build(TestRunner)
+        .block_on(async {
+            assert!(installed(libc::SIGSEGV));
+            assert!(installed(libc::SIGABRT));
+        });
+}
+
 #[cfg(target_family = "windows")]
 /// STATEMENT: Windows signal handling can be disabled and reenabled by the same system.
 ///
@@ -467,16 +508,18 @@ fn signal_child(test: &str, mode: &str) -> std::process::ExitStatus {
 }
 
 #[cfg(target_os = "linux")]
-/// STATEMENT: Real aborts and memory faults still terminate signal-enabled processes.
+/// STATEMENT: Real aborts and memory faults still terminate processes with fatal signal handling.
 ///
 /// HOW:
-/// - Trigger aborts and protected-memory faults in child processes on owner and worker threads.
+/// - Enable fatal signal handling, then trigger aborts and protected-memory faults in child
+///   processes on owner and worker threads.
 /// - Check termination by the expected signal, including while shared locks are held.
 #[test]
 fn fatal_signals_terminate_process() {
     use std::os::unix::process::ExitStatusExt;
 
     if let Some(mode) = signal_child_mode() {
+        enable_fatal_signals();
         System::new("test", TestRunner).block_on(async {
             System::current().enable_signals();
             let other_thread = mode.starts_with("thread-");
@@ -550,13 +593,15 @@ fn raise_fatal_signal(sig: i32) {
 /// STATEMENT: Explicit fatal-signal notifications avoid deadlock and preserve errno.
 ///
 /// HOW:
-/// - In child processes, raise signals with shared locks held and with the notification pipe full.
+/// - In child processes with fatal signal handling, raise signals with shared locks held and with
+///   the notification pipe full.
 /// - Check named notifications, preserved errno, and isolation of signals raised after fork.
 #[test]
 fn fatal_signal_notifications() {
     use std::os::fd::AsRawFd;
 
     if let Some(mode) = signal_child_mode() {
+        enable_fatal_signals();
         System::new("test", TestRunner).block_on(async move {
             System::current().enable_signals();
             if mode == "full" {
@@ -633,12 +678,14 @@ fn fatal_signal_notifications() {
 /// STATEMENT: A delivered fatal-signal notification stops a running server cleanly.
 ///
 /// HOW:
-/// - Start a server in a child process and raise an abort or segmentation signal.
+/// - Start a server in a child process built with `fatal_signals(true)` and raise an abort or
+///   segmentation signal.
 /// - Await server completion and verify its stopped status and successful child exit.
 #[test]
 fn fatal_signal_stops_server() {
     if let Some(mode) = signal_child_mode() {
-        ntex::rt::System::new("test", ntex::rt::DefaultRuntime).block_on(async move {
+        let sys = ntex::rt::System::build().name("test").fatal_signals(true);
+        sys.build(ntex::rt::DefaultRuntime).block_on(async move {
             let srv = ntex::server::build()
                 .workers(1)
                 .graceful_shutdown()

@@ -15,6 +15,7 @@ fn builder_options() {
         .name("opts")
         .signals(false)
         .panic_handling(false)
+        .fatal_signals(false)
         .enable_signals()
         .disable_signals()
         .stack_size(2 * 1024 * 1024)

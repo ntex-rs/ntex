@@ -7,6 +7,7 @@ use crate::{TaskCallbacks, driver::Runner, signals, system::System, system::Syst
 ///
 /// Obtain a builder from [`System::build`]. Use [`build`](Self::build) to create
 /// a [`SystemRunner`], then run the event loop or block on a future.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
     name: String,
@@ -20,6 +21,8 @@ pub struct Builder {
     latency_interval: usize,
     /// Signal handling
     signals: bool,
+    /// Fatal signal handling
+    fatal_signals: bool,
     /// Panic handling
     panics: bool,
     /// Thread pool config
@@ -42,6 +45,7 @@ impl Builder {
             ping_threshold: 1000,
             latency_interval: 100,
             signals: false,
+            fatal_signals: false,
             panics: false,
             testing: false,
             pool_limit: 256,
@@ -82,6 +86,21 @@ impl Builder {
     /// is disabled.
     pub fn panic_handling(mut self, eanbled: bool) -> Self {
         self.panics = eanbled;
+        self
+    }
+
+    #[must_use]
+    /// Enables or disables installation of the process-wide `SIGSEGV` and
+    /// `SIGABRT` handlers at startup.
+    ///
+    /// When fatal signal handling is enabled, the application can receive
+    /// best-effort `Signal::Panic(PanicSource::Sig(..))` signals while signal
+    /// handling is enabled. The process still terminates as it would without
+    /// the handlers. The handlers are installed once and remain installed for
+    /// the process lifetime; `false` does not remove handlers installed earlier.
+    /// Has no effect on non-Unix platforms. By default, installation is disabled.
+    pub fn fatal_signals(mut self, enabled: bool) -> Self {
+        self.fatal_signals = enabled;
         self
     }
 
@@ -202,11 +221,12 @@ impl Builder {
     #[must_use]
     /// Configures the system for testing.
     ///
-    /// Sets the testing flag and disables signal and panic handling on this
-    /// builder. Subsequent calls can enable either again.
+    /// Sets the testing flag and disables signal, fatal signal, and panic
+    /// handling on this builder. Subsequent calls can enable them again.
     pub fn testing(mut self) -> Self {
         self.testing = true;
         self.signals = false;
+        self.fatal_signals = false;
         self.panics = false;
         self
     }
@@ -247,8 +267,8 @@ impl Builder {
     /// Creates a system runner from an existing system configuration.
     ///
     /// The supplied configuration determines the name, runtime runner, and all
-    /// other system settings. Only this builder's signal and panic-handling
-    /// settings are used. No event loop is started by this method.
+    /// other system settings. Only this builder's signal, fatal signal, and
+    /// panic-handling settings are used. No event loop is started by this method.
     pub fn build_with(self, config: SystemConfig) -> SystemRunner {
         let runner = config.runner.clone();
 
@@ -257,6 +277,7 @@ impl Builder {
             config,
             runner,
             signals: self.signals,
+            fatal_signals: self.fatal_signals,
             panics: self.panics,
             _t: PhantomData,
         }
@@ -272,6 +293,7 @@ pub struct SystemRunner {
     config: SystemConfig,
     runner: Arc<dyn Runner>,
     signals: bool,
+    fatal_signals: bool,
     panics: bool,
     _t: PhantomData<Rc<()>>,
 }
@@ -310,10 +332,14 @@ impl SystemRunner {
             config,
             runner,
             signals,
+            fatal_signals,
             panics,
             ..
         } = self;
 
+        if fatal_signals {
+            signals::enable_fatal_signals();
+        }
         if panics {
             signals::enable_panic_handling();
         }
@@ -364,10 +390,14 @@ impl SystemRunner {
             config,
             runner,
             signals,
+            fatal_signals,
             panics,
             ..
         } = self;
 
+        if fatal_signals {
+            signals::enable_fatal_signals();
+        }
         if panics {
             signals::enable_panic_handling();
         }

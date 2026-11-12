@@ -1320,8 +1320,10 @@ If several servers share a system, call `disable_signals()` consistently and
 stop the appropriate server controllers yourself. Do the same if your
 application installs its own signal policy.
 
-Unix signal handling installs fatal-signal notifications. Application-panic
-notifications also require runtime panic handling.
+Fatal-signal notifications require runtime fatal signal handling
+(`Builder::fatal_signals(true)` or `#[ntex::main(fatal_signals = true)]`), and
+application-panic notifications require runtime panic handling. Both are off
+by default.
 
 Fatal-signal shutdown is best effort. The operating system may terminate the
 process before graceful cleanup finishes. On Windows, Ctrl-C arrives as the

@@ -301,6 +301,9 @@ pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// - `name = "..."` - name of the system. Defaults to the function name.
 /// - `signals = true/false` - handle process signals. Off by default.
+/// - `fatal_signals = true/false` - report `SIGSEGV` and `SIGABRT` as
+///   `Signal::Panic`, the process still terminates. Unix only, only useful
+///   together with `signals = true`. Off by default.
 /// - `panic_handling = true/false` - report application panics as
 ///   `Signal::Panic`. Only useful together with `signals = true`. Off by
 ///   default.
