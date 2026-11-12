@@ -841,6 +841,129 @@ mod tests {
         wrk.stop(Millis::ZERO).await;
     }
 
+    /// Configuration whose services count completed shutdowns after a delay.
+    #[derive(Clone)]
+    struct DelayCfg(Arc<AtomicUsize>);
+
+    struct DelaySrv(Arc<AtomicUsize>);
+
+    impl Service<(), usize> for DelaySrv {
+        type Res = ();
+        type Error = ();
+
+        async fn call(&self, _: usize, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            Ok(())
+        }
+
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
+            sleep(Millis(300)).await;
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl ServerConfiguration for DelayCfg {
+        type Item = usize;
+        type Service = DelaySrv;
+
+        async fn create(&self) -> std::io::Result<DelaySrv> {
+            Ok(DelaySrv(self.0.clone()))
+        }
+    }
+
+    async fn ready_server(graceful_cfg: bool) -> (Server<usize>, Arc<AtomicUsize>) {
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let mut pool = WorkerPool::new().name("test").workers(1).disable_signals();
+        if graceful_cfg {
+            pool = pool.graceful_shutdown();
+        }
+        let srv = pool.run(DelayCfg(shutdowns.clone()));
+        while srv.status() != ServerStatus::Ready {
+            srv.status_changed().await;
+        }
+        (srv, shutdowns)
+    }
+
+    /// STATEMENT: `SIGINT` stops the server immediately, `SIGTERM` stops it
+    /// gracefully, `SIGQUIT` and fatal signals or panics follow
+    /// `graceful_shutdown`, and `SIGHUP` is ignored.
+    ///
+    /// HOW:
+    /// - For each signal and `graceful_shutdown` setting, start a one-worker
+    ///   server whose service shutdown takes 300 ms, deliver the signal, and
+    ///   wait for the server to stop.
+    /// - A graceful stop waits for the service shutdown, so the shutdown is
+    ///   counted once the server is stopped; a non-graceful stop does not.
+    /// - Deliver `SIGHUP` and check the server stays `Ready` without shutting
+    ///   down its service.
+    #[ntex::test]
+    async fn signals_stop_server() {
+        let bt = ntex::error::Backtrace::with_current();
+        let cases = [
+            (Signal::Int, true, 0),
+            (Signal::Term, false, 1),
+            (Signal::Quit, false, 0),
+            (Signal::Quit, true, 1),
+            (Signal::Panic(PanicSource::Sig("SIGSEGV")), true, 1),
+            (Signal::Panic(PanicSource::Sig("SIGSEGV")), false, 0),
+            (
+                Signal::Panic(PanicSource::App("boom".into(), bt.clone())),
+                true,
+                1,
+            ),
+            (Signal::Panic(PanicSource::App("boom".into(), bt)), false, 0),
+        ];
+        for (sig, graceful_cfg, expected) in cases {
+            let (srv, shutdowns) = ready_server(graceful_cfg).await;
+            let name = format!("{sig:?}, graceful_shutdown({graceful_cfg})");
+            srv.signal(sig);
+            srv.clone().await.unwrap();
+            assert_eq!(srv.status(), ServerStatus::Stopped, "{name}");
+            assert_eq!(shutdowns.load(Ordering::SeqCst), expected, "{name}");
+        }
+
+        let (srv, shutdowns) = ready_server(true).await;
+        srv.signal(Signal::Hup);
+        // the command loop handles commands in order
+        srv.pause().await;
+        srv.resume().await;
+        assert_eq!(srv.status(), ServerStatus::Ready);
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
+        srv.stop(true).await;
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    /// STATEMENT: Commands queued while the server stops are answered once
+    /// the stop completes.
+    ///
+    /// HOW:
+    /// - Start a graceful stop of a server whose service shutdown takes
+    ///   300 ms.
+    /// - Queue a pause, a resume, a second non-graceful stop, and a wait for
+    ///   the server future.
+    /// - Check all of them complete after the graceful stop has shut the
+    ///   service down, and the server is `Stopped`.
+    #[ntex::test]
+    async fn commands_during_stop_are_answered() {
+        let (srv, shutdowns) = ready_server(false).await;
+        let stop = srv.stop(true);
+        let pause = srv.pause();
+        let resume = srv.resume();
+        let stop2 = srv.stop(false);
+        let wait = srv.clone();
+
+        let res = timeout(Millis(5000), async {
+            stop.await;
+            assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+            pause.await;
+            resume.await;
+            stop2.await;
+            wait.await
+        })
+        .await;
+        assert!(matches!(res, Ok(Ok(()))));
+        assert_eq!(srv.status(), ServerStatus::Stopped);
+    }
+
     /// An item submitted after the server passed the status check and
     /// closed its router is returned, not queued.
     #[test]

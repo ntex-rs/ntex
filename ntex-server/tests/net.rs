@@ -953,3 +953,349 @@ async fn test_acceptors_uds_single_thread() {
         .unwrap();
     srv.stop(false).await;
 }
+
+/// Returns whether workers accept connections themselves with
+/// `LoadBalancing::Reuseport` on the current runtime.
+#[cfg(target_os = "linux")]
+fn reuseport_active() -> bool {
+    ntex_net::is_tcp_listener_supported()
+}
+
+/// Opens a connection that sends a message without waiting for the reply.
+#[cfg(target_os = "linux")]
+async fn send_hello(addr: net::SocketAddr) -> Io {
+    let io = ntex_net::tcp_connect(addr, SharedCfg::default())
+        .await
+        .unwrap();
+    io.send(Bytes::from_static(b"hello"), &BytesCodec)
+        .await
+        .unwrap();
+    io
+}
+
+/// Waits for the reply to `send_hello`.
+#[cfg(target_os = "linux")]
+async fn recv_hello(io: &Io) {
+    let msg = ntex::time::timeout(Millis(5000), io.recv(&BytesCodec))
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg, Bytes::from_static(b"hello"));
+}
+
+/// STATEMENT: With `LoadBalancing::Reuseport`, every worker accepts
+/// connections on its own `SO_REUSEPORT` socket without an accept thread,
+/// and stopping the server closes all sockets. On a runtime without
+/// worker-side accept, the accept thread serves the listener.
+///
+/// HOW:
+/// - Start three workers without CPU affinity, so the kernel spreads
+///   connections by hash, on a pre-bound listener.
+/// - With worker-side accept, check that no accept thread runs and three
+///   sockets listen on the port; otherwise check for one accept thread and
+///   one socket.
+/// - Open 30 connections and check that each echoes, that the listener and
+///   worker metrics count 30 connections, and, with worker-side accept,
+///   that every worker took some.
+/// - Stop the server and check that all sockets close and connecting fails.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_reuseport_workers_accept() {
+    let (lst, addr) = local_listener();
+    let srv = build()
+        .name("rpw")
+        .workers(3)
+        .affinity(Affinity::Disabled)
+        .load_balancing(LoadBalancing::Reuseport)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    wait_ready(&srv).await;
+    let active = reuseport_active();
+    if active {
+        assert!(accept_threads("rpw").is_empty());
+        assert_eq!(listen_sockets(addr.port()), 3);
+    } else {
+        assert_eq!(accept_threads("rpw"), ["rpw:accept"]);
+        assert_eq!(listen_sockets(addr.port()), 1);
+    }
+
+    let mut conns = Vec::new();
+    for _ in 0..30 {
+        let io = ntex_net::tcp_connect(addr, SharedCfg::default())
+            .await
+            .unwrap();
+        ntex::time::timeout(Millis(5000), check_echo(&io))
+            .await
+            .unwrap();
+        conns.push(io);
+    }
+    let m = srv.metrics();
+    assert_eq!(m.listeners[0].accepted, 30);
+    assert_eq!(m.workers.iter().map(|w| w.items).sum::<u64>(), 30);
+    if active {
+        assert!(m.workers.iter().all(|w| w.items > 0), "{:?}", m.workers);
+    }
+
+    srv.stop(false).await;
+    // a non-graceful stop does not wait for the workers to close their sockets
+    wait_for(|| listen_sockets(addr.port()) == 0).await;
+    assert!(net::TcpStream::connect(addr).is_err());
+}
+
+/// STATEMENT: Pause and resume reach the workers' own listeners.
+///
+/// HOW:
+/// - Start two workers with `LoadBalancing::Reuseport`, wait until the
+///   server is ready and pause it.
+/// - Open 12 connections that send a message, and check that none is
+///   accepted while paused and that the pause is counted.
+/// - Resume the server and check that every connection echoes and the
+///   listener metrics count 12 accepted connections.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_reuseport_pause_resume() {
+    let (lst, addr) = local_listener();
+    let srv = build()
+        .workers(2)
+        .load_balancing(LoadBalancing::Reuseport)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    wait_ready(&srv).await;
+
+    srv.pause().await;
+    // the listeners handle the command asynchronously
+    sleep(Millis(100)).await;
+
+    let mut conns = Vec::new();
+    for _ in 0..12 {
+        conns.push(send_hello(addr).await);
+    }
+    sleep(Millis(200)).await;
+    let m = srv.metrics();
+    assert_eq!(m.listeners[0].accepted, 0);
+    assert!(m.accept_paused_duration > Duration::ZERO, "{m:?}");
+
+    srv.resume().await;
+    for io in &conns {
+        recv_hello(io).await;
+    }
+    assert_eq!(srv.metrics().listeners[0].accepted, 12);
+    srv.stop(false).await;
+}
+
+/// STATEMENT: A worker at its connection limit stops accepting, so new
+/// connections wait in the listen backlog until a connection closes.
+///
+/// HOW:
+/// - Start one worker with `LoadBalancing::Reuseport` and
+///   `max_connections(1)`.
+/// - Open a connection and check that it echoes.
+/// - Open a second connection that sends a message, and check that it gets
+///   no reply and is not accepted within 300 ms.
+/// - Close the first connection and check that the second one echoes and
+///   two connections are accepted.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_reuseport_max_connections() {
+    let (lst, addr) = local_listener();
+    let srv = build()
+        .workers(1)
+        .max_connections(1)
+        .load_balancing(LoadBalancing::Reuseport)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    wait_ready(&srv).await;
+
+    let first = send_hello(addr).await;
+    recv_hello(&first).await;
+
+    let second = send_hello(addr).await;
+    let res = ntex::time::timeout(Millis(300), second.recv(&BytesCodec)).await;
+    assert!(res.is_err(), "{res:?}");
+    assert_eq!(srv.metrics().listeners[0].accepted, 1);
+
+    first.close();
+    drop(first);
+    recv_hello(&second).await;
+    assert_eq!(srv.metrics().listeners[0].accepted, 2);
+    srv.stop(false).await;
+}
+
+/// STATEMENT: A worker keeps accepting on its own listener after its
+/// service is re-created.
+///
+/// HOW:
+/// - Start one worker with `LoadBalancing::Reuseport` whose service fails
+///   its first readiness check.
+/// - Wait until the failed service is shut down, then check that a new
+///   connection echoes and is counted by the listener metrics.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_reuseport_service_recreated() {
+    let (lst, addr) = local_listener();
+    let ready = Arc::new(AtomicUsize::new(0));
+    let shutdown = Arc::new(AtomicUsize::new(0));
+    let (r, s) = (ready.clone(), shutdown.clone());
+    let srv = build()
+        .workers(1)
+        .load_balancing(LoadBalancing::Reuseport)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async move |_: &()| {
+            ReadySrv {
+                ready: r.clone(),
+                shutdown: s.clone(),
+            }
+        })
+        .unwrap()
+        .run();
+    wait_for(|| shutdown.load(Relaxed) == 1).await;
+
+    let io = send_hello(addr).await;
+    recv_hello(&io).await;
+    assert_eq!(srv.metrics().listeners[0].accepted, 1);
+    srv.stop(false).await;
+}
+
+/// STATEMENT: Unix domain listeners are served by the accept thread while
+/// TCP listeners of the same server use the workers' own sockets.
+///
+/// HOW:
+/// - Start two workers with `LoadBalancing::Reuseport`, a TCP and a Unix
+///   domain listener.
+/// - Check that one accept thread runs and, with worker-side accept, that
+///   two sockets listen on the TCP port.
+/// - Check that both listeners echo and each counts one connection.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_reuseport_with_uds() {
+    let (lst, addr) = local_listener();
+    let path = std::env::temp_dir().join(format!("ntex-reuseport-{}.sock", std::process::id()));
+    let srv = build()
+        .name("rpu")
+        .workers(2)
+        .load_balancing(LoadBalancing::Reuseport)
+        .disable_signals()
+        .listen("tcp", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .bind_uds("uds", &path, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+    wait_ready(&srv).await;
+    assert_eq!(accept_threads("rpu"), ["rpu:accept"]);
+    let sockets = if reuseport_active() { 2 } else { 1 };
+    assert_eq!(listen_sockets(addr.port()), sockets);
+
+    let io = send_hello(addr).await;
+    recv_hello(&io).await;
+    let io = ntex_net::unix_connect(&path, SharedCfg::default())
+        .await
+        .unwrap();
+    ntex::time::timeout(Millis(5000), check_echo(&io))
+        .await
+        .unwrap();
+    let m = srv.metrics();
+    assert_eq!(m.listeners[0].accepted, 1);
+    assert_eq!(m.listeners[1].accepted, 1);
+    srv.stop(false).await;
+}
+
+/// Echo service whose shutdown waits until its own connections close.
+#[cfg(target_os = "linux")]
+struct DrainSrv {
+    active: Arc<AtomicUsize>,
+    drained: Arc<AtomicUsize>,
+}
+
+#[cfg(target_os = "linux")]
+impl Service<(), Io> for DrainSrv {
+    type Res = ();
+    type Error = ();
+
+    async fn call(&self, io: Io, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+        self.active.fetch_add(1, Relaxed);
+        let res = echo(io).await;
+        self.active.fetch_sub(1, Relaxed);
+        res
+    }
+
+    async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
+        while self.active.load(Relaxed) > 0 {
+            sleep(Millis(10)).await;
+        }
+        self.drained.fetch_add(1, Relaxed);
+    }
+}
+
+/// STATEMENT: A graceful stop with `LoadBalancing::Reuseport` closes the
+/// workers' sockets right away, while open connections are served until
+/// the worker services shut down.
+///
+/// HOW:
+/// - Start two workers with `LoadBalancing::Reuseport` whose services wait
+///   for their connections to close on shutdown.
+/// - Open a connection and check that it echoes.
+/// - Start a graceful stop, wait until no socket listens on the port, and
+///   check that new connections are refused, the open connection still
+///   echoes, and the stop has not completed.
+/// - Close the connection and check that the stop completes after both
+///   services drained.
+#[cfg(target_os = "linux")]
+#[ntex::test]
+async fn test_reuseport_graceful_stop() {
+    let (lst, addr) = local_listener();
+    let drained = Arc::new(AtomicUsize::new(0));
+    let d = drained.clone();
+    let srv = build()
+        .workers(2)
+        .load_balancing(LoadBalancing::Reuseport)
+        .graceful_shutdown_timeout(Millis(5000))
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async move |_: &()| {
+            DrainSrv {
+                active: Arc::new(AtomicUsize::new(0)),
+                drained: d.clone(),
+            }
+        })
+        .unwrap()
+        .run();
+    wait_ready(&srv).await;
+
+    let io = send_hello(addr).await;
+    recv_hello(&io).await;
+
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let (s, st) = (srv.clone(), stopped.clone());
+    ntex::rt::spawn(async move {
+        s.stop(true).await;
+        st.store(1, Relaxed);
+    });
+    wait_for(|| listen_sockets(addr.port()) == 0).await;
+    assert!(net::TcpStream::connect(addr).is_err());
+
+    check_echo(&io).await;
+    sleep(Millis(100)).await;
+    assert_eq!(stopped.load(Relaxed), 0);
+    assert_eq!(drained.load(Relaxed), 1);
+
+    io.close();
+    drop(io);
+    wait_for(|| stopped.load(Relaxed) == 1).await;
+    assert_eq!(drained.load(Relaxed), 2);
+}

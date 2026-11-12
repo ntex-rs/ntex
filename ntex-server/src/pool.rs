@@ -161,7 +161,8 @@ impl WorkerPool {
     /// workers, which helps when connections are long-lived or their load is
     /// uneven, and prefers the worker on the CPU that receives a connection's
     /// network packets. [`LoadBalancing::RoundRobin`] sends them to the
-    /// workers in turn.
+    /// workers in turn. [`LoadBalancing::Reuseport`] lets each worker accept
+    /// TCP connections on its own `SO_REUSEPORT` socket on Linux.
     pub fn load_balancing(mut self, balancing: LoadBalancing) -> Self {
         self.balancing = balancing;
         self
