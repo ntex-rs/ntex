@@ -8,9 +8,6 @@ on:
       - '**'
   pull_request:
 
-env:
-  VCPKGRS_DYNAMIC: 1
-
 jobs:
   build_and_test:
     strategy:
@@ -40,12 +37,6 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2.8.2
 
-      - name: Cache vcpkg
-        uses: actions/cache@v5
-        with:
-          path: C:\vcpkg\installed\
-          key: x86_64-pc-windows-msvc-openssl
-
       - name: Cache cargo registry
         uses: actions/cache@v5
         with:
@@ -64,21 +55,10 @@ jobs:
       - name: Install nasm
         uses: ilammy/setup-nasm@v1
 
-      - name: Cache openssl
-        uses: actions/cache@v5
-        with:
-          path: C:\vcpkg\installed\x64-windows\
-          key: x86_64-openssl
-
-      - name: Install OpenSSL
+      - name: Use preinstalled OpenSSL
         run: |
-          $env:VCPKG_MANIFEST_MODE = 'OFF'
-          vcpkg integrate install
-          vcpkg install --clean-after-build openssl:x64-windows
-          Copy-Item C:\vcpkg\installed\x64-windows\bin\libcrypto-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libcrypto.dll
-          Copy-Item C:\vcpkg\installed\x64-windows\bin\libssl-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libssl.dll
-          Get-ChildItem C:\vcpkg\installed\x64-windows\bin
-          Get-ChildItem C:\vcpkg\installed\x64-windows\lib
+          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL\lib\VC\x64\MD" >> $env:GITHUB_ENV
 
       - name: Clippy (neon)
         if: matrix.version == 'stable'
