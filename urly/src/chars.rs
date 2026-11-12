@@ -140,12 +140,81 @@ pub(crate) fn lowercase(s: Cow<'_, str>) -> Cow<'_, str> {
     }
 }
 
-/// Splits `s` at the first `c`.
-pub(crate) fn split_at_char(s: &str, c: char) -> (&str, Option<&str>) {
-    match s.split_once(c) {
-        Some((head, tail)) => (head, Some(tail)),
+/// Splits `s` at the first ASCII `c`.
+pub(crate) fn split_at_char(s: &str, c: u8) -> (&str, Option<&str>) {
+    debug_assert!(c.is_ascii());
+    match find_byte(s.as_bytes(), c) {
+        Some(i) => (&s[..i], Some(&s[i + 1..])),
         None => (s, None),
     }
+}
+
+// Word-at-a-time byte search: XOR a word with `c` repeated in every byte,
+// then look for a zero byte. Words are loaded little-endian, so byte `i` of
+// the slice is bits `8 * i..8 * i + 8` on every target. Faster than `memchr`
+// for the short strings found in URLs.
+const LO: u64 = 0x0101_0101_0101_0101;
+const HI: u64 = 0x8080_8080_8080_8080;
+
+#[inline(always)]
+fn word(b: &[u8]) -> u64 {
+    u64::from_le_bytes(b[..8].try_into().unwrap())
+}
+
+/// Sets the high bit of the lowest zero byte of `w`, and possibly of bytes
+/// above it; zero if `w` has no zero byte.
+#[inline(always)]
+fn first_zero(w: u64) -> u64 {
+    w.wrapping_sub(LO) & !w & HI
+}
+
+/// Sets the high bit of exactly the zero bytes of `w`.
+#[inline(always)]
+fn zero_bytes(w: u64) -> u64 {
+    const M7: u64 = !HI;
+    !((w & M7).wrapping_add(M7) | w | M7)
+}
+
+/// Returns the position of the first `c` in `b`.
+pub(crate) fn find_byte(b: &[u8], c: u8) -> Option<usize> {
+    let pat = LO * u64::from(c);
+    let mut off = 0;
+    for ch in b.as_chunks::<16>().0 {
+        if first_zero(word(ch) ^ pat) | first_zero(word(&ch[8..]) ^ pat) != 0 {
+            break;
+        }
+        off += 16;
+    }
+    let (words, tail) = b[off..].as_chunks::<8>();
+    for w in words {
+        let z = first_zero(word(w) ^ pat);
+        if z != 0 {
+            return Some(off + (z.trailing_zeros() / 8) as usize);
+        }
+        off += 8;
+    }
+    let pos = tail.iter().position(|&x| x == c)?;
+    Some(off + pos)
+}
+
+/// Returns the position of the last `c` in `b`.
+pub(crate) fn rfind_byte(b: &[u8], c: u8) -> Option<usize> {
+    if b.len() < 8 {
+        return b.iter().rposition(|&x| x == c);
+    }
+    let last = |z: u64| (63 - z.leading_zeros()) as usize / 8;
+    let pat = LO * u64::from(c);
+    let mut end = b.len();
+    while end >= 8 {
+        let z = zero_bytes(word(&b[end - 8..]) ^ pat);
+        if z != 0 {
+            return Some(end - 8 + last(z));
+        }
+        end -= 8;
+    }
+    // the first `end` bytes, read as the low bytes of the first word
+    let z = zero_bytes(word(b) ^ pat) & ((1 << (end * 8)) - 1);
+    (z != 0).then(|| last(z))
 }
 
 #[cfg(test)]
@@ -193,5 +262,43 @@ mod tests {
         assert_eq!(pct_at(b"a%4", 1), None);
         assert_eq!(char_at("aé", 1), 'é');
         assert_eq!(char_at("a", 1), '\0');
+    }
+
+    /// STATEMENT: `find_byte` and `rfind_byte` return the same positions as a
+    /// byte-by-byte scan, with no false matches on bytes near the needle.
+    ///
+    /// HOW:
+    /// - Fill buffers of 0 to 47 bytes with a cycle of `0x3e`, `0xbf`, `0x80`,
+    ///   `0xff`, and `0x00`; `0x3e` and `0xbf` differ from `?` by one bit.
+    /// - Put `?` at no position, one position, or two positions.
+    /// - Compare both functions with `position` and `rposition`.
+    #[test]
+    fn byte_search() {
+        let check = |b: &[u8]| {
+            assert_eq!(
+                find_byte(b, b'?'),
+                b.iter().position(|&x| x == b'?'),
+                "{b:?}"
+            );
+            assert_eq!(
+                rfind_byte(b, b'?'),
+                b.iter().rposition(|&x| x == b'?'),
+                "{b:?}"
+            );
+        };
+        for len in 0..48 {
+            let base: Vec<u8> = (0..len)
+                .map(|i| [0x3e, 0xbf, 0x80, 0xff, 0][i % 5])
+                .collect();
+            check(&base);
+            for i in 0..len {
+                for j in i..len {
+                    let mut b = base.clone();
+                    b[i] = b'?';
+                    b[j] = b'?';
+                    check(&b);
+                }
+            }
+        }
     }
 }

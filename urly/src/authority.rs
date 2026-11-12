@@ -71,13 +71,13 @@ impl Authority {
     /// assert_eq!(auth.host_port(), "example.com:8080");
     /// ```
     pub fn host_port(&self) -> &str {
-        self.0.rsplit_once('@').map_or(&self.0, |(_, hp)| hp)
+        chars::rfind_byte(self.0.as_bytes(), b'@').map_or(&self.0, |i| &self.0[i + 1..])
     }
 }
 
 /// Splits an authority into userinfo, host and port.
 pub(crate) fn split(s: &str) -> (Option<&str>, &str, Option<&str>) {
-    let (userinfo, hp) = match s.rfind('@') {
+    let (userinfo, hp) = match chars::rfind_byte(s.as_bytes(), b'@') {
         Some(i) => (Some(&s[..i]), &s[i + 1..]),
         None => (None, s),
     };
@@ -93,7 +93,7 @@ pub(crate) fn split(s: &str) -> (Option<&str>, &str, Option<&str>) {
         }
         return (userinfo, hp, None);
     }
-    match hp.rfind(':') {
+    match chars::rfind_byte(hp.as_bytes(), b':') {
         Some(i) => (userinfo, &hp[..i], Some(&hp[i + 1..])),
         None => (userinfo, hp, None),
     }
@@ -223,6 +223,32 @@ mod tests {
         assert_eq!(split("[::1]"), (None, "[::1]", None));
         assert_eq!(split("[::1]x"), (None, "[::1]x", None));
         assert_eq!(split("b:"), (None, "b", Some("")));
+    }
+
+    /// STATEMENT: `split` and `host_port` use the last `@` and the last `:` in
+    /// authorities longer than one 8-byte word.
+    ///
+    /// HOW:
+    /// - Split authorities with several `@` and `:`, where the last separator
+    ///   falls in a full word or in the shorter leading bytes.
+    /// - Check the userinfo, host, and port, including an IPv6 host with a port.
+    /// - Check `host_port` on a long authority with userinfo.
+    #[test]
+    fn split_long_authority() {
+        assert_eq!(
+            split("user:pass@word@example.com:8443"),
+            (Some("user:pass@word"), "example.com", Some("8443"))
+        );
+        assert_eq!(split("ab:cdefghijk"), (None, "ab", Some("cdefghijk")));
+        assert_eq!(split("a@bcdefghijk"), (Some("a"), "bcdefghijk", None));
+        assert_eq!(split("abcdefgh:1"), (None, "abcdefgh", Some("1")));
+        assert_eq!(split("example.com"), (None, "example.com", None));
+        assert_eq!(
+            split("user@[2001:db8::1]:443"),
+            (Some("user"), "[2001:db8::1]", Some("443"))
+        );
+        let auth = Authority::new("user:pw@example.com:8080").unwrap();
+        assert_eq!(auth.host_port(), "example.com:8080");
     }
 
     #[test]
