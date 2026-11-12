@@ -2,9 +2,8 @@ use std::num::NonZeroUsize;
 use std::{cell::Cell, cmp, fmt, rc::Rc, rc::Weak};
 
 use crate::HashMap;
-use crate::time::Millis;
 
-use super::wheel::{TIMER, TimerEntry};
+use super::{TIMER, TimerEntry};
 
 /// A reusable, local one-shot callback timer.
 ///
@@ -28,60 +27,31 @@ use super::wheel::{TIMER, TimerEntry};
 /// Runtime shutdown suppresses pending delivery. A surviving handle retains
 /// its callback and can be explicitly reset in a new runtime on the same thread.
 /// Starting a new runtime does not automatically rearm the handle.
-///
-/// # Examples
-///
-/// Retain local state across invocations, cancel an arm, then reuse the timer:
-///
-/// ```
-/// use std::{cell::Cell, rc::Rc};
-/// use ntex::time::{CallbackTimer, Millis, sleep};
-///
-/// #[ntex::main]
-/// async fn main() {
-///     let calls = Rc::new(Cell::new(0));
-///     let count = calls.clone();
-///     let timer = CallbackTimer::new(Millis::ZERO, move || {
-///         count.set(count.get() + 1);
-///     });
-///     assert_eq!(calls.get(), 0); // Zero duration never invokes inline.
-///     sleep(Millis(50)).await;
-///     assert!(timer.is_elapsed());
-///     assert_eq!(calls.get(), 1);
-///
-///     timer.reset(Millis(1_000));
-///     timer.cancel();
-///     assert!(timer.is_elapsed());
-///
-///     timer.reset(Millis::ZERO);
-///     sleep(Millis(50)).await;
-///     assert_eq!(calls.get(), 2);
-/// }
-/// ```
-pub struct CallbackTimer {
+pub struct CallbackHandle {
     pub(super) hnd: NonZeroUsize,
     pub(super) state: Rc<CallbackState>,
 }
 
-impl CallbackTimer {
-    /// Arms a callback after `duration`, using the wheel's rounding and limits.
+impl CallbackHandle {
+    #[allow(clippy::missing_panics_doc)] // unwraps only check wheel invariants
+    /// Arms a callback after `millis`, using the wheel's rounding and limits.
     ///
     /// The base granularity is approximately 16 ms by default, see
-    /// [`Builder::timer_resolution`](ntex_rt::Builder::timer_resolution);
+    /// [`Builder::timer_resolution`](crate::Builder::timer_resolution);
     /// longer delays use coarser rounding, and delays beyond the wheel's
     /// capacity (about 24 days at 16 ms) are clamped. Callback delivery may be
     /// delayed further while the runtime is busy.
     ///
-    /// A zero duration waits for a subsequent timer tick, as with [`crate::time::Sleep`];
-    /// the callback is never invoked inline.
-    pub fn new(duration: Millis, callback: impl Fn() + 'static) -> Self {
+    /// A zero delay waits for a subsequent timer tick; the callback is never
+    /// invoked inline.
+    pub fn new(millis: u64, callback: impl Fn() + 'static) -> Self {
         let state = Rc::new(CallbackState {
             callback: Box::new(callback),
             arm: Cell::new(0),
             pending: Cell::new(true),
         });
         TIMER.with(|timer| {
-            let (idx, expiry) = timer.calc_bucket(u64::from(cmp::max(duration.0, 1)));
+            let (idx, expiry) = timer.calc_bucket(cmp::max(millis, 1));
             let no = timer.with_wheel(|wheel| {
                 let no = wheel.timers.insert(TimerEntry {
                     bucket: None,
@@ -113,16 +83,17 @@ impl CallbackTimer {
         })
     }
 
+    #[allow(clippy::missing_panics_doc)] // unwraps only check wheel invariants
     /// Arms another invocation, invalidating any previous pending delivery.
     ///
     /// This also suppresses an expired invocation that has been queued but has
     /// not started. It can be called before or after expiration or cancellation.
     ///
-    /// A zero duration waits for a subsequent tick. Resetting from within the
+    /// A zero delay waits for a subsequent tick. Resetting from within the
     /// callback arms a new invocation, which survives completion of the old one.
-    pub fn reset(&self, duration: Millis) {
+    pub fn reset(&self, millis: u64) {
         TIMER.with(|timer| {
-            let (idx, expiry) = timer.calc_bucket(u64::from(cmp::max(duration.0, 1)));
+            let (idx, expiry) = timer.calc_bucket(cmp::max(millis, 1));
             timer.with_wheel(|wheel| {
                 let ticket = wheel
                     .callbacks
@@ -161,15 +132,15 @@ impl CallbackTimer {
     }
 }
 
-impl fmt::Debug for CallbackTimer {
+impl fmt::Debug for CallbackHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CallbackTimer")
+        f.debug_struct("CallbackHandle")
             .field("handle", &self.hnd)
             .finish_non_exhaustive()
     }
 }
 
-impl Drop for CallbackTimer {
+impl Drop for CallbackHandle {
     fn drop(&mut self) {
         self.state.pending.set(false);
         let _ = TIMER.try_with(|timer| {

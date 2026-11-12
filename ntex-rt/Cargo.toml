@@ -34,6 +34,7 @@ ntex-error = { workspace = true }
 
 atomic-waker = { workspace = true }
 async-channel = { workspace = true }
+bitflags = { workspace = true }
 crossbeam-channel = { workspace = true }
 crossbeam-queue = { workspace = true }
 foldhash = { workspace = true }
@@ -44,6 +45,7 @@ nix = { workspace = true, features = ["signal"] }
 oneshot = { workspace = true }
 parking_lot = { workspace = true }
 scoped-tls = { workspace = true }
+slab = { workspace = true }
 
 compio-driver = { workspace = true, optional = true }
 compio-runtime = { workspace = true, optional = true }

@@ -28,7 +28,6 @@ ntex-rt = { workspace = true }
 backoff = { workspace = true }
 bitflags = { workspace = true }
 foldhash = { workspace = true }
-futures-timer = { workspace = true }
 futures-core = { workspace = true }
 hashbrown = { workspace = true, features = ["serde"] }
 log = { workspace = true }
