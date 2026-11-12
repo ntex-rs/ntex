@@ -633,7 +633,6 @@ impl ntex_rt::Driver for Reactor {
                     if unsafe { !(*self.inner.changes.get()).is_empty() } {
                         break true;
                     }
-                    turns = 0;
                 }
             };
 

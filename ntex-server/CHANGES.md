@@ -1,5 +1,11 @@
 # Changes
 
+## [4.5.2] - 2026-11-12
+
+* Least loaded balancing no longer counts the time a worker's runtime is
+  blocked by a task as utilization; a recovered worker receives connections
+  again right away instead of after up to ~600 ms
+
 ## [4.5.1] - 2026-11-09
 
 * The accept loop's error back-off timer is created on the system thread, as
