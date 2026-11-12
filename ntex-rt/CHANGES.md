@@ -1,5 +1,10 @@
 # Changes
 
+## [4.9.0] - Unreleased
+
+* Add `time` module with the timer wheel moved from `ntex-util`: `TimerHandle`,
+  `CallbackHandle` and `system_time()`; delays are in milliseconds (`u64`)
+
 ## [4.8.1] - 2026-11-12
 
 * Fatal signal handling is optional and disabled by default; `SIGSEGV` and

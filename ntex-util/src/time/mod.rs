@@ -8,15 +8,123 @@
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-use std::{cmp, future::Future, future::poll_fn, pin::Pin, task, task::Poll};
+use std::{cmp, future::Future, future::poll_fn, pin::Pin, task, task::Poll, time::Instant};
 
-mod callbacks;
+use ntex_rt::time::CallbackHandle;
+
 mod types;
-mod wheel;
 
-pub use self::callbacks::CallbackTimer;
 pub use self::types::{Millis, Seconds};
-pub use self::wheel::{TimerHandle, now, system_time};
+pub use ntex_rt::time::{TimerHandle, system_time};
+
+/// Returns the start of the current runtime turn, see [`ntex_rt::now()`].
+///
+/// Tasks polled in the same turn observe the same instant on neon and compio,
+/// on tokio this is [`Instant::now()`].
+#[inline]
+pub fn now() -> Instant {
+    ntex_rt::now()
+}
+
+/// A reusable, local one-shot callback timer.
+///
+/// Each construction or reset arms one invocation of the retained callback.
+/// The callback may capture `Rc` state; this handle is neither `Send` nor `Sync`
+/// and cannot be cloned. Keep the handle alive until the callback should run.
+/// Dropping it cancels pending delivery, including an expired callback that has
+/// not started, and releases its captures. An active invocation retains its
+/// captures until it finishes.
+///
+/// Expiration and cancellation retain the callback for reuse. The callback
+/// implements `Fn`, so use interior mutability for state that changes between
+/// invocations.
+///
+/// Callbacks run outside wheel access and may create, reset, cancel or drop
+/// timers, including themselves. They must be short, synchronous and
+/// non-blocking. Callbacks due on the same tick have no guaranteed order.
+///
+/// Callback panics propagate through the runtime. They may stop the shared
+/// driver and disarm other timers; remaining callbacks need not be delivered.
+/// Runtime shutdown suppresses pending delivery. A surviving handle retains
+/// its callback and can be explicitly reset in a new runtime on the same thread.
+/// Starting a new runtime does not automatically rearm the handle.
+///
+/// # Examples
+///
+/// Retain local state across invocations, cancel an arm, then reuse the timer:
+///
+/// ```
+/// use std::{cell::Cell, rc::Rc};
+/// use ntex::time::{CallbackTimer, Millis, sleep};
+///
+/// #[ntex::main]
+/// async fn main() {
+///     let calls = Rc::new(Cell::new(0));
+///     let count = calls.clone();
+///     let timer = CallbackTimer::new(Millis::ZERO, move || {
+///         count.set(count.get() + 1);
+///     });
+///     assert_eq!(calls.get(), 0); // Zero duration never invokes inline.
+///     sleep(Millis(50)).await;
+///     assert!(timer.is_elapsed());
+///     assert_eq!(calls.get(), 1);
+///
+///     timer.reset(Millis(1_000));
+///     timer.cancel();
+///     assert!(timer.is_elapsed());
+///
+///     timer.reset(Millis::ZERO);
+///     sleep(Millis(50)).await;
+///     assert_eq!(calls.get(), 2);
+/// }
+/// ```
+#[derive(Debug)]
+pub struct CallbackTimer(CallbackHandle);
+
+impl CallbackTimer {
+    /// Arms a callback after `duration`, using the wheel's rounding and limits.
+    ///
+    /// The base granularity is approximately 16 ms by default, see
+    /// [`Builder::timer_resolution`](ntex_rt::Builder::timer_resolution);
+    /// longer delays use coarser rounding, and delays beyond the wheel's
+    /// capacity (about 24 days at 16 ms) are clamped. Callback delivery may be
+    /// delayed further while the runtime is busy.
+    ///
+    /// A zero duration waits for a subsequent timer tick, as with [`Sleep`];
+    /// the callback is never invoked inline.
+    pub fn new(duration: Millis, callback: impl Fn() + 'static) -> Self {
+        CallbackTimer(CallbackHandle::new(u64::from(duration.0), callback))
+    }
+
+    /// Arms another invocation, invalidating any previous pending delivery.
+    ///
+    /// This also suppresses an expired invocation that has been queued but has
+    /// not started. It can be called before or after expiration or cancellation.
+    ///
+    /// A zero duration waits for a subsequent tick. Resetting from within the
+    /// callback arms a new invocation, which survives completion of the old one.
+    pub fn reset(&self, duration: Millis) {
+        self.0.reset(u64::from(duration.0));
+    }
+
+    /// Disarms the timer and suppresses pending delivery, retaining the callback.
+    ///
+    /// This also suppresses an expired invocation that has not started. Calling
+    /// this method on an already disarmed timer is harmless.
+    ///
+    /// An invocation that has already started cannot be interrupted.
+    pub fn cancel(&self) {
+        self.0.cancel();
+    }
+
+    /// Returns `true` when disarmed, including after cancellation or shutdown.
+    ///
+    /// Expiration marks the timer elapsed before callback delivery. This query
+    /// does not indicate whether the callback has run.
+    pub fn is_elapsed(&self) -> bool {
+        self.0.is_elapsed()
+    }
+}
 
 /// Waits until `dur` has elapsed.
 ///
@@ -744,5 +852,82 @@ mod tests {
         let dl = Deadline::new(Millis(10_000));
         let hnd = dl.hnd.as_ref().unwrap();
         poll_pair(&|cx| dl.poll_elapsed(cx), &|| hnd.elapse());
+    }
+
+    /// STATEMENT: Timers with different deadlines progress alongside a recurring interval.
+    ///
+    /// HOW:
+    /// - Spawn an interval task and await shorter and longer sleeps followed by another short sleep.
+    /// - On non-macOS targets, verify each elapsed duration stays within its configured bounds.
+    #[ntex::test]
+    #[allow(unused_variables, clippy::used_underscore_binding)]
+    async fn test_timer() {
+        crate::spawn(async {
+            let s = interval(Millis(25));
+            loop {
+                s.tick().await;
+            }
+        });
+        let time = Instant::now();
+        let fut1 = sleep(Millis(1000));
+        let fut2 = sleep(Millis(200));
+
+        fut2.await;
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _elapsed = time.elapsed();
+            assert!(
+                _elapsed > time::Duration::from_millis(200)
+                    && _elapsed < time::Duration::from_millis(300),
+                "elapsed: {_elapsed:?}"
+            );
+        }
+
+        fut1.await;
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _elapsed = time.elapsed();
+            assert!(
+                _elapsed > time::Duration::from_secs(1)
+                    && _elapsed < time::Duration::from_millis(1200), // osx
+                "elapsed: {_elapsed:?}",
+            );
+        }
+
+        let time = Instant::now();
+        sleep(Millis(25)).await;
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _elapsed = time.elapsed();
+            assert!(
+                _elapsed > time::Duration::from_millis(20)
+                    && _elapsed < time::Duration::from_millis(50),
+                "elapsed: {_elapsed:?}",
+            );
+        }
+    }
+
+    /// STATEMENT: The timer futures and `CallbackTimer` hold a thread-local timer
+    /// handle, so they are not `Send`.
+    ///
+    /// HOW:
+    /// - Define a trait with a blanket impl for all types and a second impl for
+    ///   `Send` types.
+    /// - Resolve the trait item with an inferred parameter for `Sleep`, `Deadline`,
+    ///   `Interval`, and `CallbackTimer`; it compiles only if exactly one impl
+    ///   applies, i.e. the type is not `Send`.
+    #[test]
+    fn timer_futures_are_thread_local() {
+        trait NotSend<A> {
+            fn check() {}
+        }
+        impl<T: ?Sized> NotSend<()> for T {}
+        impl<T: ?Sized + Send> NotSend<u8> for T {}
+
+        <Sleep as NotSend<_>>::check();
+        <Deadline as NotSend<_>>::check();
+        <Interval as NotSend<_>>::check();
+        <CallbackTimer as NotSend<_>>::check();
     }
 }

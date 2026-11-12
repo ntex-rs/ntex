@@ -1,5 +1,12 @@
 # Changes
 
+## [4.9.1] - Unreleased
+
+* Timer wheel moved to `ntex_rt::time`; `TimerHandle`, `system_time()` and
+  `now()` are re-exported, `CallbackTimer` wraps `ntex_rt::time::CallbackHandle`
+
+* Drop `futures-timer` dependency
+
 ## [4.9.0] - 2026-11-09
 
 * Add `services::ordered`: `Ordered` runs one service concurrently and enters

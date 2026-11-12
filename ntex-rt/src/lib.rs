@@ -94,6 +94,7 @@ mod system;
 mod task;
 #[cfg(test)]
 mod testing;
+pub mod time;
 mod watchdog;
 
 #[doc(hidden)]
