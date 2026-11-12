@@ -191,7 +191,7 @@ struct ServiceRuntimeInner {
 impl<Cfg> fmt::Debug for ServiceRuntime<Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let inner = self.1.borrow();
-        f.debug_struct("ServiceRuntimer")
+        f.debug_struct("ServiceRuntime")
             .field("names", &inner.names)
             .finish()
     }

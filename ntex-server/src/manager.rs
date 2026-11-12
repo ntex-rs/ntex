@@ -964,6 +964,31 @@ mod tests {
         assert_eq!(srv.status(), ServerStatus::Stopped);
     }
 
+    /// STATEMENT: `Routing` diagnostics show the worker count and whether
+    /// the router is closed.
+    ///
+    /// HOW:
+    /// - Create a router without workers and check its debug output.
+    /// - Add a worker, close the router, and check the output again.
+    #[ntex::test]
+    async fn debug_routing() {
+        let callback: IncomingCpu<usize> = Box::new(|_| None);
+        let r = Routing::new(Balancer::new(LoadBalancing::IncomingCpu), 1, callback);
+        assert_eq!(
+            format!("{r:?}"),
+            "Routing { workers: 0, closed: false, .. }"
+        );
+
+        let mut wrk = Worker::start("test".into(), Cfg, None);
+        assert_eq!(wrk.wait_for_status().await, WorkerStatus::Available);
+        {
+            let mut router = r.lock();
+            router.workers.push(wrk);
+            router.closed = true;
+        }
+        assert_eq!(format!("{r:?}"), "Routing { workers: 1, closed: true, .. }");
+    }
+
     /// An item submitted after the server passed the status check and
     /// closed its router is returned, not queued.
     #[test]

@@ -722,6 +722,24 @@ mod tests {
     #[derive(Clone)]
     struct Cfg(Arc<AtomicUsize>);
 
+    /// STATEMENT: `AcceptLoop` diagnostics show the thread name and the
+    /// number of accept threads.
+    ///
+    /// HOW:
+    /// - Create an accept loop and set the server name.
+    /// - Check the debug output has the `{name}:accept` name, one acceptor
+    ///   and the notify handles.
+    #[test]
+    fn debug_accept_loop() {
+        let mut accept = AcceptLoop::new();
+        accept.name("srv");
+        let debug = format!("{accept:?}");
+        assert!(
+            debug.starts_with("AcceptLoop { name: \"srv:accept\", acceptors: 1, notify: "),
+            "{debug}"
+        );
+    }
+
     struct Srv(Arc<AtomicUsize>);
 
     impl Service<(), Connection> for Srv {
