@@ -70,7 +70,6 @@ jobs:
     runs-on: windows-latest
     env:
       CARGO_TERM_COLOR: always
-      VCPKGRS_DYNAMIC: 1
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@nextest
@@ -98,19 +97,10 @@ jobs:
       - name: Install nasm
         uses: ilammy/setup-nasm@v1
 
-      - name: Cache openssl
-        uses: actions/cache@v5
-        with:
-          path: C:\vcpkg\installed\x64-windows\
-          key: x86_64-openssl
-
-      - name: Install OpenSSL
+      - name: Use preinstalled OpenSSL
         run: |
-          $env:VCPKG_MANIFEST_MODE = 'OFF'
-          vcpkg integrate install
-          vcpkg install --clean-after-build openssl:x64-windows
-          Copy-Item C:\vcpkg\installed\x64-windows\bin\libcrypto-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libcrypto.dll
-          Copy-Item C:\vcpkg\installed\x64-windows\bin\libssl-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libssl.dll
+          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL\lib\VC\x64\MD" >> $env:GITHUB_ENV
 
       - name: Clean coverage results
         run: cargo +nightly llvm-cov clean --workspace
