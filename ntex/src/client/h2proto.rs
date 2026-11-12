@@ -106,7 +106,8 @@ static TRAILERS: HeaderValue = HeaderValue::from_static("trailers");
 fn h2_headers(req: &ClientRawRequest) -> HeaderMap {
     let empty = HeaderMap::new();
     let extra_headers = req.headers.as_ref().unwrap_or(&empty);
-    let mut hdrs = HeaderMap::new();
+    // pooled, encoding the request returns the map to the pool
+    let mut hdrs = h2::get_header_map();
     for (name, value) in req
         .head
         .headers
@@ -167,7 +168,8 @@ async fn get_response(
             match pseudo.status {
                 Some(status) => {
                     let mut head = ResponseHead::new(status, Version::HTTP_2);
-                    head.headers = headers;
+                    // the empty head map is reused by the decoder
+                    h2::release_header_map(std::mem::replace(&mut head.headers, headers));
 
                     let payload = if eof {
                         Payload::None

@@ -432,7 +432,7 @@ where
 
                     let mut res = Response::new(status).drop_body();
                     let head = res.head_mut();
-                    h2::recycle_header_map(mem::replace(&mut head.headers, headers));
+                    h2::release_header_map(mem::replace(&mut head.headers, headers));
                     prepare_response(head, &mut BodySize::Empty);
                     let _ = stream.send_response(status, &head.headers, true);
 
@@ -474,7 +474,7 @@ where
         head.version = Version::HTTP_2;
         head.method = method;
         // the pooled head map is empty, the h2 decoder reuses its allocation
-        h2::recycle_header_map(mem::replace(&mut head.headers, headers));
+        h2::release_header_map(mem::replace(&mut head.headers, headers));
         head.io = CurrentIo::Ref(io);
         head.id = self.id;
 

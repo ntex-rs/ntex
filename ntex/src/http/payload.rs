@@ -106,6 +106,17 @@ impl Payload {
             _ => None,
         }
     }
+
+    /// Takes the trailer fields received at the end of the payload.
+    ///
+    /// Like [`Payload::trailers`], without copying. Subsequent calls return `None`.
+    pub fn take_trailers(&self) -> Option<HeaderMap> {
+        match self {
+            Payload::H1(pl) => pl.take_trailers(),
+            Payload::H2(pl) => pl.take_trailers(),
+            _ => None,
+        }
+    }
 }
 
 impl Stream for Payload {

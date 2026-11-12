@@ -1,5 +1,14 @@
 # Changes
 
+## [4.8.1] - Unreleased
+
+* http: Add `Payload::take_trailers()` to take trailer fields without copying them
+
+* http: Return unread HTTP/2 trailer maps to the `ntex-h2` header map pool
+
+* client: HTTP/2 requests build their header map from the `ntex-h2` header map pool,
+  and the response head returns its unused map to it
+
 ## [4.8.0] - 2026-11-12
 
 * http: Skip UTF-8 validation and the query search of ASCII request targets, and UTF-8

@@ -76,6 +76,17 @@ impl Payload {
             None
         }
     }
+
+    /// Takes the trailer fields received at the end of the payload.
+    ///
+    /// Like [`Payload::trailers`], without copying. Subsequent calls return `None`.
+    pub fn take_trailers(&self) -> Option<HeaderMap> {
+        if self.inner.items.borrow().is_empty() {
+            self.inner.trailers.borrow_mut().take()
+        } else {
+            None
+        }
+    }
 }
 
 impl Drop for Payload {
@@ -138,6 +149,8 @@ impl PayloadSender {
     pub fn feed_trailers(&self, trailers: HeaderMap) {
         if let Some(shared) = self.inner.upgrade() {
             shared.feed_trailers(trailers);
+        } else {
+            h2::release_header_map(trailers);
         }
     }
 
@@ -221,7 +234,9 @@ impl Inner {
     }
 
     fn feed_trailers(&self, trailers: HeaderMap) {
-        if !self.flags.get().intersects(Flags::EOF | Flags::ERROR) {
+        if self.flags.get().intersects(Flags::EOF | Flags::ERROR) {
+            h2::release_header_map(trailers);
+        } else {
             *self.trailers.borrow_mut() = Some(trailers);
             self.insert_flags(Flags::EOF);
             self.task.wake();
@@ -252,6 +267,15 @@ impl Inner {
         } else {
             self.task.register(cx.waker());
             Poll::Pending
+        }
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // unread trailers return to the h2 header map pool
+        if let Some(trailers) = self.trailers.get_mut().take() {
+            h2::release_header_map(trailers);
         }
     }
 }
@@ -389,6 +413,7 @@ mod tests {
     /// HOW:
     /// - Feed data, trailers, and a late error, then check trailer visibility before and after reading the data.
     /// - Verify subsequent reads report EOF and retain the trailers.
+    /// - Take the trailers once and check later calls return `None`.
     #[crate::rt_test]
     async fn test_trailers_after_data() {
         let (io, server) = IoTest::create();
@@ -430,6 +455,55 @@ mod tests {
         assert_eq!(payload.trailers().unwrap().get("x-trailer").unwrap(), "1");
         assert!(payload.read().await.is_none());
         assert!(payload.trailers().is_some());
+        assert_eq!(
+            payload.take_trailers().unwrap().get("x-trailer").unwrap(),
+            "1"
+        );
+        assert!(payload.take_trailers().is_none());
+        assert!(payload.trailers().is_none());
+    }
+
+    /// STATEMENT: Unread or ignored HTTP/2 trailer maps return to the `ntex-h2` header map pool.
+    ///
+    /// HOW:
+    /// - Feed trailers with a distinctive capacity, drop the payload, and check `get_header_map` returns that capacity.
+    /// - Feed trailers after an error and after the payload is dropped, and check the same for each.
+    #[crate::rt_test]
+    async fn test_trailers_released_to_pool() {
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            false,
+            ByteString::from_static("localhost"),
+        );
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        sleep(Millis(50)).await;
+        let (snd, _rcv) = client
+            .send(Method::GET, "/".into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+        let trailers = || HeaderMap::with_capacity(40);
+        let cap = trailers().capacity();
+        assert_ne!(cap, h2::get_header_map().capacity());
+
+        // unread trailers
+        let (sender, payload) = Payload::create(snd.stream().empty_capacity());
+        sender.feed_trailers(trailers());
+        drop(payload);
+        assert_eq!(h2::get_header_map().capacity(), cap);
+
+        // ignored after an error
+        let (sender, _payload) = Payload::create(snd.stream().empty_capacity());
+        sender.set_error(PayloadError::Incomplete(None));
+        sender.feed_trailers(trailers());
+        assert_eq!(h2::get_header_map().capacity(), cap);
+
+        // the payload is dropped
+        let (sender, payload) = Payload::create(snd.stream().empty_capacity());
+        drop(payload);
+        sender.feed_trailers(trailers());
+        assert_eq!(h2::get_header_map().capacity(), cap);
     }
 
     /// STATEMENT: HTTP/2 payloads expose capacity in debug output and stream EOF after trailer-only completion.
