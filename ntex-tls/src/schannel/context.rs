@@ -1661,7 +1661,7 @@ mod tests {
     /// STATEMENT: Encryption gathers plaintext pages into records that tolerate fragmented delivery.
     ///
     /// HOW:
-    /// - Encrypt 20,000 bytes held in four pages and check the source drains into two records.
+    /// - Encrypt 20,000 bytes held in four pages into a `Size16` buffer and check the source drains into two records.
     /// - Feed ciphertext in 1000-byte chunks and verify all input is consumed and plaintext is unchanged.
     #[test]
     fn test_encrypt_records_span_pages() {
@@ -1673,11 +1673,11 @@ mod tests {
         }
         assert_eq!(src.num_pages(), 4);
 
-        let mut out = ntex_bytes::BytePages::default();
+        let mut out = ntex_bytes::BytePages::new(ntex_bytes::BytePageSize::Size16);
         client.encrypt_pages(&mut src, &mut out).unwrap();
         assert!(src.is_empty());
         let wire = out.freeze();
-        // a full page and the rest
+        // a full 16 KiB page and the rest
         assert_eq!(records(&wire).count(), 2);
 
         // records arrive in pieces
