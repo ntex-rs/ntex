@@ -774,6 +774,45 @@ async fn test_raw_tcp() {
     assert_eq!(&buf, b"test");
 }
 
+/// STATEMENT: Where worker-side accept and listener replication are not
+/// supported, `LoadBalancing::Reuseport` and several acceptors fall back to
+/// one accept thread that serves all workers.
+///
+/// HOW:
+/// - Start two workers with `Server::builder()`, `acceptors(3)` and
+///   `LoadBalancing::Reuseport` on a pre-bound listener.
+/// - Open 8 connections and check that each echoes and the listener metrics
+///   count 8 accepted connections.
+#[cfg(not(target_os = "linux"))]
+#[ntex::test]
+async fn test_reuseport_fallback() {
+    let (lst, addr) = local_listener();
+    let srv = ntex_server::Server::builder()
+        .name("rpf")
+        .workers(2)
+        .acceptors(3)
+        .load_balancing(LoadBalancing::Reuseport)
+        .disable_signals()
+        .listen("test", lst, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+
+    let mut conns = Vec::new();
+    for _ in 0..8 {
+        let io = ntex_net::tcp_connect(addr, SharedCfg::default())
+            .await
+            .unwrap();
+        ntex::time::timeout(Millis(5000), check_echo(&io))
+            .await
+            .unwrap();
+        conns.push(io);
+    }
+    assert_eq!(srv.metrics().listeners[0].accepted, 8);
+    srv.stop(false).await;
+}
+
 /// Waits until the server has started its workers.
 #[cfg(target_os = "linux")]
 async fn wait_ready(srv: &ntex_server::Server<ntex_server::net::Connection>) {

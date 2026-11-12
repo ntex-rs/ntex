@@ -917,6 +917,33 @@ mod tests {
         assert_eq!(reactor.ifs.load(Ordering::Relaxed), 3);
     }
 
+    /// Debug output shows the handler ids and the notify header, but not the
+    /// raw `OVERLAPPED` contents.
+    #[test]
+    fn debug_output() {
+        let reactor = Reactor::new().unwrap();
+        let hid = reactor.hid.get();
+        let s = format!("{reactor:?}");
+        assert!(s.starts_with("Reactor {"), "{s}");
+        assert!(s.contains(&format!("hid: Cell {{ value: {hid} }}")), "{s}");
+        assert!(
+            s.contains(r#"overlapped: Overlapped { base: "OVERLAPPED", hnd: 0, udata: 0 }"#),
+            "{s}"
+        );
+
+        reactor.register(|api| {
+            assert_eq!(
+                format!("{api:?}"),
+                format!("ReactorApi {{ hnd: {} }}", hid + 1)
+            );
+            Box::new(Dummy)
+        });
+        assert_eq!(
+            format!("{:?}", Overlapped::new(3, 7)),
+            r#"Overlapped { base: "OVERLAPPED", hnd: 3, udata: 7 }"#
+        );
+    }
+
     /// Accepted streams disable Nagle, as on the other backends.
     #[ntex::test]
     async fn from_tcp_stream_sets_nodelay() {

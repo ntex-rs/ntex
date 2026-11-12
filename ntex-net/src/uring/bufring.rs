@@ -174,3 +174,46 @@ impl std::fmt::Debug for BufRing {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::reactor::{Handler, Reactor};
+    use super::*;
+
+    struct Noop;
+
+    impl Handler for Noop {
+        fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {}
+        fn canceled(&mut self, _: usize) {}
+        fn tick(&mut self) {}
+        fn cleanup(&mut self) {}
+    }
+
+    /// STATEMENT: Debug output shows the buffer group id, the number of buffers and
+    /// their page size.
+    ///
+    /// HOW:
+    /// - Register a ring of four pages, skip if provided buffer rings are not
+    ///   supported.
+    /// - Format it and check the fields, then unregister it.
+    #[test]
+    fn debug_output() {
+        let Ok(reactor) = Reactor::new(4) else {
+            return;
+        };
+        reactor.register(|api| {
+            if let Some(mut ring) = BufRing::with_size(&api, 4, BytePageSize::Size4) {
+                assert_eq!(
+                    format!("{ring:?}"),
+                    format!(
+                        "BufRing {{ bgid: {}, entries: 4, size: {:?} }}",
+                        ring.bgid(),
+                        BytePageSize::Size4
+                    )
+                );
+                ring.unregister(&api).unwrap();
+            }
+            Box::new(Noop)
+        });
+    }
+}

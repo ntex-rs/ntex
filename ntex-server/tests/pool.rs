@@ -918,6 +918,33 @@ async fn pool_ready_failure_recreates_service() {
     srv.stop(false).await;
 }
 
+/// STATEMENT: A worker that re-creates its service after a failed readiness
+/// check stops without waiting for the new service.
+///
+/// HOW:
+/// - Start a worker whose service creation takes 300 ms and whose first
+///   readiness check fails.
+/// - Once the readiness check has failed, stop the worker while the service
+///   is re-created.
+/// - Check the stop completes before the creation would and no second
+///   service is created.
+#[ntex::test]
+async fn worker_stop_while_recreating_service() {
+    let c = Counters::default();
+    let mut cfg = Cfg::new(&c);
+    cfg.create_delay = Millis(300);
+    cfg.fail_ready = 1;
+
+    let wrk: Worker<usize> = Worker::start("wrk:recreate".to_string(), cfg, None);
+    wait_for(|| c.ready_failures.load(Relaxed) == 1).await;
+    assert_eq!(c.created.load(Relaxed), 1);
+
+    let res = ntex::time::timeout(Millis(200), wrk.stop(Millis(1000))).await;
+    assert_eq!(res, Ok(true));
+    sleep(Millis(400)).await;
+    assert_eq!(c.created.load(Relaxed), 1);
+}
+
 /// `stop_runtime` stops the current system with the server.
 #[test]
 fn pool_stop_runtime() {

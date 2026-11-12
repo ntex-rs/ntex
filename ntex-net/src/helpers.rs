@@ -182,3 +182,24 @@ impl<T> Queue<T> {
         unsafe { &mut *self.inner.get() }.push_back(item);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+
+    use super::*;
+
+    /// STATEMENT: `shutdown_result` reports a shutdown of a disconnected socket as
+    /// success and passes other results through.
+    ///
+    /// HOW:
+    /// - Map `Ok`, a `NotConnected` error and a `ConnectionReset` error.
+    /// - Check only the reset error is returned.
+    #[test]
+    fn shutdown_result_ignores_not_connected() {
+        assert!(shutdown_result(Ok(())).is_ok());
+        assert!(shutdown_result(Err(ErrorKind::NotConnected.into())).is_ok());
+        let err = shutdown_result(Err(Error::from(ErrorKind::ConnectionReset))).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ConnectionReset);
+    }
+}

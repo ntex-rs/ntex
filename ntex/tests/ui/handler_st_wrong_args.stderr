@@ -13,8 +13,9 @@ error[E0277]: `fn(u32) -> impl Future<Output = &'static str> {index}` is not a v
 note: required by a bound in `Route::<St, In>::to_with_state`
  --> src/web/route.rs
   |
+  | impl<St: State, In: 'static> Route<St, In> {
+...
   |     pub fn to_with_state<H, Args>(mut self, handler: H) -> Self
-  |            ------------- required by a bound in this associated function
   |     where
   |         H: HandlerSt<St, In, Args> + 'static,
   |            ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Route::<St, In>::to_with_state`

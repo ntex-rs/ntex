@@ -195,11 +195,14 @@ fn helpers_require_a_driver() {
     let _ = ntex_net::from_tcp_stream(sock, SharedCfg::default());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[ntex::test]
 #[should_panic(expected = "reactor is already set")]
 async fn nested_reactor() {
+    #[cfg(unix)]
     let reactor: Box<dyn ntex_net::Reactor> = Box::new(ntex_net::polling::Reactor::new().unwrap());
+    #[cfg(windows)]
+    let reactor: Box<dyn ntex_net::Reactor> = Box::new(ntex_net::iocp::Reactor::new().unwrap());
     ntex_net::with_reactor(&reactor, || ());
 }
 

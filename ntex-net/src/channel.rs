@@ -177,6 +177,23 @@ impl<T: fmt::Debug> fmt::Debug for Inner<T> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: A receiver created with a value is ready at once, without a sender,
+    /// and formatting it keeps the value.
+    ///
+    /// HOW:
+    /// - Create receivers holding a value and an error.
+    /// - Format the second one and check the output shows the error.
+    /// - Await them and check they return the value and the error unchanged.
+    #[ntex::test]
+    async fn receiver_new_is_ready() {
+        assert_eq!(Receiver::new(Ok(5)).await.unwrap(), 5);
+
+        let rx = Receiver::<()>::new(Err(io::Error::other("connect failed")));
+        assert!(format!("{rx:?}").contains("connect failed"));
+        let err = rx.recv().await.unwrap_err();
+        assert_eq!(err.to_string(), "connect failed");
+    }
+
     #[cfg(windows)]
     #[test]
     fn cancellation_only_while_pending() {

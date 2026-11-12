@@ -12,12 +12,12 @@ help: the trait `WebResponseError<(), DefaultError>` is not implemented for `MyE
   = note: implement `WebResponseError<St, St::Error>` for `MyError`, where `St` is the application state; the default `error_response()` returns 500
   = note: or wrap the error with a helper such as `web::error::ErrorBadRequest(err)`
   = help: the following other types implement trait `WebResponseError<St, Err>`:
+            `!` implements `WebResponseError<St, Err>`
             `ClientPayloadError` implements `WebResponseError<St, DefaultError>`
             `ContentTypeError` implements `WebResponseError<St, DefaultError>`
             `DefaultError` implements `WebResponseError<St, DefaultError>`
             `HandshakeError` implements `WebResponseError<St, DefaultError>`
             `HttpError` implements `WebResponseError<St, DefaultError>`
-            `Infallible` implements `WebResponseError<St, Err>`
             `InternalError<T>` implements `WebResponseError<St, Err>`
             `JsonError` implements `WebResponseError<St, DefaultError>`
           and $N others
