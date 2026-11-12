@@ -1,5 +1,14 @@
 # Changes
 
+## [1.15.2] - 2026-11-12
+
+* `BytePages::move_to()` copies less than 4 KiB of data from a current page
+  of 8 KiB or more (or an unsized buffer with at least 8 KiB capacity) into
+  the spare capacity of the destination current page instead of moving a
+  mostly empty page; it never allocates
+
+* `BytePages::default()` uses 8 KiB pages
+
 ## [1.15.1] - 2026-11-11
 
 * `BytePages` copies a slice that fits into the current page in place

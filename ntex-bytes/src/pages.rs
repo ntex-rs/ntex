@@ -297,37 +297,67 @@ impl BytePages {
     /// Moves all buffered data to the back of another [`BytePages`] value,
     /// leaving `self` empty.
     ///
-    /// Pages are moved as is, without copying or merging. The filled part of
-    /// the current page of `pages` is split off in front of the moved data,
-    /// its spare capacity stays available for later writes. The current page
-    /// of `self` is moved as a regular page.
+    /// Pages are moved as is, without merging. If the current page of `self`
+    /// is 8 KiB or bigger (for a buffer without a page size, its capacity is
+    /// at least 8 KiB) and holds less than 4 KiB, its data is copied into
+    /// the current page of `pages` if it fits there, so a mostly empty page
+    /// is not kept alive, and `self` keeps that page for later writes.
+    /// Otherwise the current page of `self` is moved as a regular page.
+    /// Nothing is allocated. The filled part of
+    /// the current page of `pages` is split off in front of moved pages, its
+    /// spare capacity stays available for later writes.
     pub fn move_to(&mut self, pages: &mut BytePages) {
         if self.is_empty() {
             return;
         }
 
-        if let Some(st) = pages.current.as_mut()
-            && st.len() != 0
-        {
-            let head = st.split_to(st.len());
-            pages.push_back(<BytePage as From<Bytes>>::from(Bytes { storage: head }));
-        }
+        let len = self.current_len();
+        let copy = len != 0
+            && len < APPEND_COPY_LIMIT
+            && len < pages.spare()
+            && self
+                .current
+                .as_ref()
+                .is_some_and(|st| match st.page_size() {
+                    BytePageSize::Size4 => false,
+                    BytePageSize::Unset => st.capacity() >= 8 * 1024,
+                    _ => true,
+                });
 
-        let src = self.st.as_mut().unwrap();
-        let dst = pages.st.as_mut().unwrap();
-        if dst.pages.is_empty() {
-            mem::swap(&mut src.pages, &mut dst.pages);
-            dst.len = mem::take(&mut src.len);
-        } else {
-            while let Some(page) = self.pop_front() {
-                pages.push_back(page);
+        if !self.pages().is_empty() {
+            pages.split_current();
+            let src = self.st.as_mut().unwrap();
+            let dst = pages.st.as_mut().unwrap();
+            if dst.pages.is_empty() {
+                mem::swap(&mut src.pages, &mut dst.pages);
+                dst.len = mem::take(&mut src.len);
+            } else {
+                while let Some(page) = self.pop_front() {
+                    pages.push_back(page);
+                }
             }
         }
 
-        if self.current_len() != 0
+        if copy {
+            let st = self.current.as_mut().unwrap();
+            pages.put_slice(st.as_ref());
+            st.truncate(0);
+        } else if len != 0
             && let Some(st) = self.current.take()
         {
+            pages.split_current();
             pages.push_back(BytePage::from(st));
+        }
+    }
+
+    // moves the filled part of the current page to the page list,
+    // the spare capacity stays in the current page
+    fn split_current(&mut self) {
+        if let Some(st) = self.current.as_mut()
+            && st.len() != 0
+        {
+            let head = st.split_to(st.len());
+            self.push_back(<BytePage as From<Bytes>>::from(Bytes { storage: head }));
         }
     }
 
@@ -516,7 +546,7 @@ impl fmt::Debug for BytePages {
 
 impl Default for BytePages {
     fn default() -> Self {
-        BytePages::new(BytePageSize::Size16)
+        BytePages::new(BytePageSize::Size8)
     }
 }
 
@@ -2082,7 +2112,8 @@ mod tests {
         assert_eq!(ptrs, moved);
 
         // small pages are not merged, the filled part of the current page
-        // of `dst` goes first and its spare capacity is kept
+        // of `dst` goes first and its spare capacity is kept, the 4 KiB
+        // current page of `src` is moved
         let mut dst = BytePages::new(BytePageSize::Size4);
         dst.extend_from_slice(b"first");
         dst.prepend(Bytes::copy_from_slice(b"0"));
@@ -2107,6 +2138,117 @@ mod tests {
         let mut src = BytePages::default();
         src.move_to(&mut dst);
         assert_eq!(dst.num_pages(), 6);
+    }
+
+    /// STATEMENT: `move_to` copies less than 4 KiB of current data from a page of 8 KiB or more only into existing spare capacity of the destination and never allocates for it.
+    ///
+    /// HOW:
+    /// - Move a 5-byte current page into a destination with a partially filled current page and check that the bytes are appended there, no page is added, and the source keeps its emptied page.
+    /// - Move into a destination without a current page and check that the source page pointer is moved instead.
+    /// - Move into a destination whose spare capacity is too small and check that the source page is moved after the split destination data.
+    /// - Move exactly `APPEND_COPY_LIMIT` bytes and check that the page is moved even though it would fit.
+    /// - Move a 5-byte current `Size4` page and check that the page is moved even though it would fit.
+    /// - Append `BytesMut` buffers without a page size as the current page; check that 5 bytes are copied from a buffer with at least 8 KiB capacity and moved from a smaller one, and that `APPEND_COPY_LIMIT` bytes are moved from a large one.
+    #[test]
+    fn move_to_copies_small_current() {
+        let mut src = BytePages::new(BytePageSize::Size8);
+        src.extend_from_slice(b"hello");
+        let src_ptr = src.iter().next().unwrap().as_ptr();
+        let mut dst = BytePages::new(BytePageSize::Size8);
+        dst.extend_from_slice(b"head ");
+        let dst_ptr = dst.iter().next().unwrap().as_ptr();
+        src.move_to(&mut dst);
+        assert!(src.is_empty());
+        assert_eq!(src.num_pages(), 0);
+        assert_eq!(dst.num_pages(), 1);
+        assert_eq!(dst.iter().next().unwrap(), b"head hello");
+        assert_eq!(dst.iter().next().unwrap().as_ptr(), dst_ptr);
+        src.extend_from_slice(b"again");
+        assert_eq!(src.iter().next().unwrap().as_ptr(), src_ptr);
+
+        // no current page in `dst`
+        let mut src = BytePages::new(BytePageSize::Size8);
+        src.extend_from_slice(b"hello");
+        let src_ptr = src.iter().next().unwrap().as_ptr();
+        let mut dst = BytePages::new(BytePageSize::Size8);
+        src.move_to(&mut dst);
+        assert_eq!(dst.num_pages(), 1);
+        assert_eq!(dst.iter().next().unwrap().as_ptr(), src_ptr);
+
+        // not enough spare capacity in `dst`
+        let mut src = BytePages::new(BytePageSize::Size8);
+        src.extend_from_slice(b"hello");
+        let src_ptr = src.iter().next().unwrap().as_ptr();
+        let mut dst = BytePages::new(BytePageSize::Size4);
+        dst.extend_from_slice(b"a");
+        let spare = dst.spare();
+        dst.extend_from_slice(&vec![b'a'; spare - 3]);
+        src.move_to(&mut dst);
+        let chunks: Vec<&[u8]> = dst.iter().collect();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), spare - 2);
+        assert_eq!(chunks[1], b"hello");
+        assert_eq!(chunks[1].as_ptr(), src_ptr);
+
+        // at the copy limit
+        let mut src = BytePages::new(BytePageSize::Size8);
+        src.extend_from_slice(&[b'x'; APPEND_COPY_LIMIT]);
+        let src_ptr = src.iter().next().unwrap().as_ptr();
+        let mut dst = BytePages::new(BytePageSize::Size16);
+        dst.extend_from_slice(b"head");
+        src.move_to(&mut dst);
+        let chunks: Vec<&[u8]> = dst.iter().collect();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].as_ptr(), src_ptr);
+
+        // 4 KiB page is not copied
+        let mut src = BytePages::new(BytePageSize::Size4);
+        src.extend_from_slice(b"hello");
+        let src_ptr = src.iter().next().unwrap().as_ptr();
+        let mut dst = BytePages::new(BytePageSize::Size8);
+        dst.extend_from_slice(b"head");
+        src.move_to(&mut dst);
+        let chunks: Vec<&[u8]> = dst.iter().collect();
+        assert_eq!(chunks, [&b"head"[..], &b"hello"[..]]);
+        assert_eq!(chunks[1].as_ptr(), src_ptr);
+
+        // unsized pages are copied if the capacity is at least 8 KiB
+        for (cap, copied) in [(10_000, true), (1000, false)] {
+            let mut buf = BytesMut::with_capacity(cap);
+            buf.extend_from_slice(b"hello");
+            let mut src = BytePages::new(BytePageSize::Size8);
+            src.append(buf);
+            let st = src.current.as_ref().unwrap();
+            assert_eq!(st.page_size(), BytePageSize::Unset);
+            assert_eq!(st.capacity() >= 8 * 1024, copied);
+            let mut dst = BytePages::new(BytePageSize::Size8);
+            dst.extend_from_slice(b"head");
+            src.move_to(&mut dst);
+            assert!(src.is_empty());
+            let chunks: Vec<&[u8]> = dst.iter().collect();
+            if copied {
+                assert_eq!(chunks, [&b"headhello"[..]]);
+            } else {
+                assert_eq!(chunks, [&b"head"[..], &b"hello"[..]]);
+            }
+        }
+
+        // the copy limit applies to unsized pages too
+        let mut buf = BytesMut::with_capacity(20_000);
+        buf.extend_from_slice(&[b'x'; APPEND_COPY_LIMIT]);
+        let mut src = BytePages::new(BytePageSize::Size8);
+        src.append(buf);
+        assert_eq!(
+            src.current.as_ref().unwrap().page_size(),
+            BytePageSize::Unset
+        );
+        let src_ptr = src.iter().next().unwrap().as_ptr();
+        let mut dst = BytePages::new(BytePageSize::Size16);
+        dst.extend_from_slice(b"head");
+        src.move_to(&mut dst);
+        let chunks: Vec<&[u8]> = dst.iter().collect();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].as_ptr(), src_ptr);
     }
 
     /// STATEMENT: Advancing a vector-backed page retains the correct suffix.
