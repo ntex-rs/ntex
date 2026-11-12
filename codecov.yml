@@ -1,3 +1,10 @@
+codecov:
+  notify:
+    after_n_builds: 2
+
+comment:
+  after_n_builds: 2
+
 ignore: # ignore codecoverage on following paths
   - "**/tests"
   - "**/benches"

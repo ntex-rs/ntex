@@ -8,6 +8,7 @@ on:
 
 jobs:
   coverage:
+    name: coverage - linux
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -61,4 +62,78 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
+          flags: linux
+          fail_ci_if_error: true
+
+  coverage-windows:
+    name: coverage - windows
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      VCPKGRS_DYNAMIC: 1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@nextest
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-x86_64-pc-windows-msvc
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate Cargo.lock
+        uses: actions-rs/cargo@v1
+        with:
+          command: generate-lockfile
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Install cmake
+        uses: lukka/get-cmake@latest
+
+      - name: Install nasm
+        uses: ilammy/setup-nasm@v1
+
+      - name: Cache openssl
+        uses: actions/cache@v5
+        with:
+          path: C:\vcpkg\installed\x64-windows\
+          key: x86_64-openssl
+
+      - name: Install OpenSSL
+        run: |
+          $env:VCPKG_MANIFEST_MODE = 'OFF'
+          vcpkg integrate install
+          vcpkg install --clean-after-build openssl:x64-windows
+          Copy-Item C:\vcpkg\installed\x64-windows\bin\libcrypto-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libcrypto.dll
+          Copy-Item C:\vcpkg\installed\x64-windows\bin\libssl-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libssl.dll
+
+      - name: Clean coverage results
+        run: cargo +nightly llvm-cov clean --workspace
+
+      - name: Code coverage (neon)
+        timeout-minutes: 20
+        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+
+      - name: Code coverage (tokio)
+        timeout-minutes: 20
+        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+
+      - name: Code coverage (compio)
+        timeout-minutes: 20
+        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+
+      - name: Generate coverage report
+        run: cargo +nightly llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          flags: windows
           fail_ci_if_error: true
