@@ -8,6 +8,10 @@ sends each connection to an available worker:
 listeners -> accept thread -> worker-local service
 ```
 
+On Linux and Android, `LoadBalancing::Reuseport` removes the accept thread:
+each worker accepts connections on its own listener. See
+[Per-worker listeners](#per-worker-listeners).
+
 The server manages sockets and workers without knowing the connection's
 protocol. Each worker's service decides how to handle the resulting `Io`,
 whether it carries HTTP, MQTT, or a custom protocol.
@@ -306,8 +310,10 @@ which CPUs run the process. Workers still spread across all allowed CPUs.
 
 Load balancing chooses which ready worker receives each new connection.
 The accept thread makes that choice and queues the connection to the worker.
-The worker turns the socket into an ntex `Io` and registers it with its own
-runtime. All later I/O for that connection runs on the same worker.
+With `LoadBalancing::Reuseport`, the kernel chooses instead, see
+[Per-worker listeners](#per-worker-listeners). The worker turns the socket
+into an ntex `Io` and registers it with its own runtime. All later I/O for
+that connection runs on the same worker.
 
 Items submitted with `Server::process()` follow the same dispatch rules on
 the submitting thread. While no worker is available, items wait in the
@@ -331,6 +337,10 @@ rules. Among those workers, `LoadBalancing` decides:
   for current-thread runtimes. Otherwise, the connection count decides.
 * `IncomingCpu`, the default, prefers a worker on the CPU that receives the
   connection's packets. Otherwise, it works like `LeastLoaded`.
+* `Reuseport` lets each worker accept TCP connections on its own
+  `SO_REUSEPORT` socket, without an accept thread. Linux and Android only,
+  see [Per-worker listeners](#per-worker-listeners). Other connections and
+  items work like `IncomingCpu`.
 
 For each connection, `IncomingCpu` follows these steps:
 
@@ -451,6 +461,56 @@ For the best locality, use one queue per worker and pin the queue interrupts
 to the worker CPUs. irqbalance may move them again unless you stop it or tell
 it to leave those interrupts alone.
 
+#### Per-worker listeners
+
+`LoadBalancing::Reuseport` removes the accept thread for TCP listeners on
+Linux and Android. ntex replicates every bound TCP socket with
+`SO_REUSEPORT`, one socket per worker, each with the `backlog()` length.
+Each worker accepts on its own sockets on its own thread, so connections
+never pass between threads.
+
+```rust,no_run
+use ntex::server::LoadBalancing;
+
+let builder = ntex::server::build()
+    .load_balancing(LoadBalancing::Reuseport);
+```
+
+The kernel chooses the socket for each new connection. ntex sets
+`SO_INCOMING_CPU` on the sockets of each worker placed on a CPU. On Linux 6.1
+or later, the kernel then sends the connection to the worker on the CPU that
+processed its packets. Connections processed on a CPU without a worker are
+spread by a hash of their addresses and ports, as are all connections with
+`Affinity::Disabled`. Spread the receive queues, or RPS, over the worker CPUs
+as described in the previous section.
+
+A worker accepts only while it is ready, for example below
+`max_connections()`. Otherwise, new connections wait in its socket's listen
+backlog. The kernel has already chosen the socket, so ntex cannot move them:
+
+* Utilization and blocked workers are not considered, and
+  [Rescheduling](#rescheduling) does not apply. A blocked worker delays the
+  connections queued on its socket until it unblocks.
+* A failed worker's sockets stay open. Its replacement accepts the
+  connections waiting there.
+* `Server::pause()` stops every worker from accepting.
+* When the server stops, workers close their sockets first. Connections
+  still in a listen backlog are reset. Accepted connections finish within
+  the graceful shutdown timeout as usual.
+
+The accept thread still handles:
+
+* Every listener on the tokio and compio runtimes. Reuseport requires the
+  `neon-polling` or `neon-uring` runtime. ntex logs a warning and falls back
+  to the accept thread.
+* Every listener on platforms other than Linux and Android.
+* Unix domain sockets.
+* A TCP listener that cannot be replicated, for example when binding a copy
+  fails. ntex logs `Cannot replicate <addr>, using an accept thread`.
+
+Those connections, and items from `Server::process()`, are balanced like
+`IncomingCpu`.
+
 ### Choosing the settings
 
 Start with the defaults, then compare the workers' `active_connections`
@@ -467,6 +527,15 @@ share a CPU; `IncomingCpu` chooses the least loaded of those workers.
 Use `LoadBalancing::RoundRobin` when you want connections assigned in turn,
 with blocked workers skipped as described in
 [Connection load balancing](#connection-load-balancing).
+
+Consider `LoadBalancing::Reuseport` on Linux when the accept thread limits
+the connection rate, for example with many short-lived connections. It
+scales accepting with the workers and avoids a thread hop per connection.
+It suits workers with similar connection costs that rarely block, because
+the kernel never moves connections away from a busy worker. Check the
+workers' `active_connections`, `not_ready_duration`, and `latency.stalls`
+for imbalance. With uneven connections or frequent stalls, stay with
+`IncomingCpu`.
 
 ## Controlling a running server
 
@@ -583,6 +652,12 @@ latency. For bursts of load, a larger `backlog()` keeps the operating system
 from dropping connection attempts. Pauses caused by `Server::pause()` count
 too, so account for maintenance windows when interpreting these numbers.
 
+With `LoadBalancing::Reuseport`, connections accepted by workers never wait
+in `accept_backlog`, and a worker that is not ready does not pause the
+other workers. Only `Server::pause()` counts in `accept_pauses` and
+`accept_paused_duration`. Use the workers' `not_ready_duration` to find
+workers whose sockets hold waiting connections.
+
 ### Incoming CPU
 
 These counters show how often `LoadBalancing::IncomingCpu` keeps a connection
@@ -595,7 +670,9 @@ on the CPU receiving its packets. Both fields are on `ServerMetrics`.
 
 Neither counter includes connections without a known incoming CPU. These
 include Windows loopback connections and servers on platforms other than
-Windows, Linux, and Android.
+Windows, Linux, and Android. Connections accepted by workers with
+`LoadBalancing::Reuseport` are not counted either, because the kernel
+chooses their worker.
 
 Many misses mean packets reach CPUs without workers, or workers on the
 receiving CPUs are busier than the others. The adapter might use CPUs outside
@@ -617,7 +694,8 @@ worker. This field is on `ServerMetrics`. See
 
 An occasional increase follows a worker restart or stall. A steady increase
 means workers are blocked often. Check `latency.stalls` for stalls and
-`current_task` for the blocking code in [Runtime](#runtime).
+`current_task` for the blocking code in [Runtime](#runtime). Connections
+accepted by workers with `LoadBalancing::Reuseport` are never rescheduled.
 
 ### Listeners
 
@@ -658,10 +736,13 @@ Compare worker metrics to check load balancing and find workers at capacity.
 
 Start by comparing `active_connections` and the rate of `items` across
 workers. They should be close with the default
-`LoadBalancing::IncomingCpu` or with `LoadBalancing::LeastLoaded`. A worker
+`LoadBalancing::IncomingCpu` or with `LoadBalancing::LeastLoaded`. With
+`LoadBalancing::Reuseport`, they follow the kernel's choice and depend on
+how the receive queues are spread over the worker CPUs. A worker
 with much higher `not_ready_duration` than the others points to long-lived
 or expensive connections pinned to it. If that duration grows on all
-workers together with `accept_paused_duration`, the server is at capacity.
+workers, together with `accept_paused_duration` when an accept thread is
+used, the server is at capacity.
 
 The connection limit can also stop workers that have CPU to spare. If
 `active_connections` reaches `max_connections()` while CPU is idle, raise

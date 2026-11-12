@@ -67,15 +67,19 @@ mod tests {
     /// HOW:
     /// - Configure one named listener and check its token, backlog and socket name in diagnostics.
     /// - Build the stream server and worker service, checking the factory count and token routing.
+    /// - Check the `ServiceRuntime` passed to `on_worker_start` lists the listener entry.
     #[ntex::test]
     async fn debug_network_services() {
         use crate::ServerConfiguration;
         use ntex_service::cfg::SharedCfg;
 
+        let runtime_debug = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let config = ServiceConfig::<NoConfig>::new(Token(7), 64);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         config.listen("debug-listener", listener);
-        config.on_worker_start(async |runtime| {
+        let rt_debug = runtime_debug.clone();
+        config.on_worker_start(async move |runtime| {
+            *rt_debug.lock().unwrap() = format!("{runtime:?}");
             runtime.service(
                 "debug-listener",
                 SharedCfg::default(),
@@ -106,6 +110,15 @@ mod tests {
         assert!(debug.starts_with("StreamService { tokens: {Token(7): (0, "));
         assert!(debug.contains("conns: Counter("));
         assert!(debug.contains("count: Cell { value: 0 }"));
+
+        let debug = runtime_debug.lock().unwrap().clone();
+        assert!(
+            debug.starts_with(
+                "ServiceRuntime { names: {\"debug-listener\": Entry { idx: 0, \
+                 name: \"debug-listener\", tokens: [(Token(7), "
+            ),
+            "{debug}"
+        );
     }
 
     #[test]
