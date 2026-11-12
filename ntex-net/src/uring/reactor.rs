@@ -406,6 +406,8 @@ impl Reactor {
     ) {
         let ring = &self.inner.ring;
         self.inner.notify_read.stop_arming();
+        // publish the entries consumed in the last turn before entering the kernel
+        cq.sync();
         // Operations queued during the last turn (`Close` of dropped
         // streams in particular) have not reached the kernel yet.
         self.flush(sq, submitter);
@@ -612,17 +614,12 @@ impl ntex_rt::Driver for Reactor {
             // to its socket while the socket is still hot in the cache.
             // All chunks belong to one runtime turn, and their submissions
             // share one `io_uring_enter` unless the submission queue fills.
-            // A turn handles at most one queue of completions, a flush may
-            // post more.
-            let mut chunks = cq.capacity().div_ceil(Self::CQES_PER_POLL);
             let more_cqes = loop {
                 if !self.poll_completions(&mut cq) {
                     break false;
                 }
-                chunks -= 1;
-                if chunks == 0 {
-                    break true;
-                }
+                rt.run_ready();
+
                 if sq.is_full() {
                     // flush the full queue without ending the turn; consumed
                     // entries are published first, the enter may post more
@@ -636,12 +633,9 @@ impl ntex_rt::Driver for Reactor {
                     if unsafe { !(*self.inner.changes.get()).is_empty() } {
                         break true;
                     }
+                    turns = 0;
                 }
-                rt.run_ready();
             };
-            // publish the consumed entries, the kernel would count them as
-            // pending completions and return from the next wait immediately
-            cq.sync();
 
             let more_tasks = match rt.poll() {
                 PollResult::Pending => false,
@@ -650,14 +644,20 @@ impl ntex_rt::Driver for Reactor {
             };
             let more_changes = self.apply_changes(sq);
 
+            // Publish the consumed entries before entering the kernel, it
+            // would count them as pending completions and return from the
+            // next wait immediately. Without deferred task running,
+            // completions may arrive during the turn, waiting would return
+            // immediately.
+            cq.sync();
+
             // submit publishes the queue tail, and skips the syscall if
             // there is nothing to submit and no deferred completions to post.
-            // Without deferred task running, completions may arrive during
-            // the turn, waiting would return immediately.
-            let result = if more_changes || more_tasks || more_cqes || {
-                cq.sync();
-                !cqueue::CompletionQueue::<'_, _>::is_empty(&cq)
-            } {
+            let result = if more_changes
+                || more_tasks
+                || more_cqes
+                || !cqueue::CompletionQueue::<'_, _>::is_empty(&cq)
+            {
                 submitter.submit()
             } else {
                 submitter.submit_and_wait(1)
