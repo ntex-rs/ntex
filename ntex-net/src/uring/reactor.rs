@@ -598,6 +598,10 @@ impl crate::Reactor for Reactor {
     fn tcp_listener(&self, sock: net::TcpListener) -> io::Result<crate::Listener> {
         super::accept::AcceptOps::get(self).listener(sock)
     }
+
+    fn is_tcp_listener_supported(&self) -> bool {
+        super::accept::AcceptOps::get(self).is_supported()
+    }
 }
 
 impl ntex_rt::Driver for Reactor {

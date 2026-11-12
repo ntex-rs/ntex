@@ -81,6 +81,13 @@ pub trait Reactor: Driver {
             "tcp listener is not supported by the reactor",
         ))
     }
+
+    /// Returns `true` if [`tcp_listener`](Self::tcp_listener) is supported.
+    ///
+    /// The default implementation returns `false`.
+    fn is_tcp_listener_supported(&self) -> bool {
+        false
+    }
 }
 
 /// Reactor specific part of a [`Listener`].
@@ -116,6 +123,19 @@ impl Listener {
     /// connection, the next call returns it.
     pub async fn accept(&mut self) -> io::Result<(net::TcpStream, SocketAddr)> {
         poll_fn(|cx| self.0.poll_accept(cx)).await
+    }
+
+    /// Polls for a new incoming connection.
+    ///
+    /// Same as [`accept`](Self::accept). On `Poll::Pending`, the waker of
+    /// the most recent call is woken when a connection may be accepted. A
+    /// listener that is not polled again keeps an accepted connection for
+    /// the next call.
+    pub fn poll_accept(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<(net::TcpStream, SocketAddr)>> {
+        self.0.poll_accept(cx)
     }
 
     /// Returns the local address the listener is bound to.
@@ -202,6 +222,14 @@ pub fn from_unix_stream(stream: std::os::unix::net::UnixStream, cfg: SharedCfg) 
 /// `#[ntex::main]`, `#[ntex::test]`, or an ntex `System`.
 pub fn tcp_listener(sock: net::TcpListener) -> io::Result<Listener> {
     with_current(|driver| driver.tcp_listener(sock))
+}
+
+/// Returns `true` if the current reactor supports [`tcp_listener`].
+///
+/// Returns `false` outside an ntex runtime. The `io-uring` reactor supports
+/// listeners if the kernel supports the `Accept` and `PollAdd` operations.
+pub fn is_tcp_listener_supported() -> bool {
+    CURRENT_DRIVER.is_set() && CURRENT_DRIVER.with(|d| d.is_tcp_listener_supported())
 }
 
 fn with_current<T, F: FnOnce(&dyn Reactor) -> T>(f: F) -> T {

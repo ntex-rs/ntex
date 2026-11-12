@@ -4,6 +4,8 @@
 
 * Add `tcp_listener()` and `Listener` for accepting TCP connections on the native polling and io-uring reactors
 
+* Add `is_tcp_listener_supported()` and `Listener::poll_accept()`
+
 ## [4.10.3] - 2026-11-12
 
 * polling: Rearm a pending connect with a modify instead of re-adding its
