@@ -5,6 +5,18 @@
 * Add `time` module with the timer wheel moved from `ntex-util`: `TimerHandle`,
   `CallbackHandle` and `system_time()`; delays are in milliseconds (`u64`)
 
+* The native `Runtime` owns its timer wheel: `Runtime::poll()` expires due
+  timers, no driver tasks are spawned. Handles created on a runtime are stale
+  after it is dropped, they report elapsed and ignore reset
+
+* `PollResult::Pending` holds the time until the next timer batch,
+  drivers must not wait longer
+
+* Add `RuntimeBuilder::timer_resolution()`
+
+* Timer drivers sleep with the Tokio timer on the `tokio` runtime instead of
+  the `futures-timer` thread, the Tokio runtime must have timers enabled
+
 ## [4.8.1] - 2026-11-12
 
 * Fatal signal handling is optional and disabled by default; `SIGSEGV` and

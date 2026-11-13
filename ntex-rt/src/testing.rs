@@ -44,6 +44,7 @@ impl Runner for TestRunner {
         #[cfg(feature = "tokio")]
         {
             let rt = tok_io::runtime::Builder::new_current_thread()
+                .enable_time()
                 .build()
                 .unwrap();
             tok_io::task::LocalSet::new().block_on(&rt, fut);
