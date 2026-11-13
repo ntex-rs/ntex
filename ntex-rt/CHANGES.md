@@ -1,6 +1,6 @@
 # Changes
 
-## [4.9.0] - Unreleased
+## [4.9.0] - 2026-11-13
 
 * Add `time` module with the timer wheel moved from `ntex-util`: `TimerHandle`,
   `CallbackHandle` and `system_time()`; delays are in milliseconds (`u64`)
@@ -16,6 +16,9 @@
 
 * Timer drivers sleep with the Tokio timer on the `tokio` runtime instead of
   the `futures-timer` thread, the Tokio runtime must have timers enabled
+
+* Timer drivers sleep with the compio timer on the `compio` runtime instead of
+  the `futures-timer` thread
 
 ## [4.8.1] - 2026-11-12
 

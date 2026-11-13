@@ -48,7 +48,7 @@
 //!
 //! # Native runtime
 //!
-//! Each native [`Runtime`](crate::Runtime) owns a wheel. `Runtime::poll`
+//! Each native [`Runtime`] owns a wheel. `Runtime::poll`
 //! expires due buckets before running tasks and reports the time until the
 //! next occupied bucket in `PollResult::Pending`, so the driver waits for
 //! I/O and timers in a single call. No driver tasks are spawned. The cached
@@ -233,7 +233,7 @@ fn with_slot<R>(hnd: NonZeroU64, f: impl FnOnce(&Rc<Timer>, usize) -> R) -> Opti
 /// timer on another thread, send a future that creates it there instead of
 /// one that already holds it.
 ///
-/// Inside a native [`Runtime`](crate::rt::Runtime) the timer is registered
+/// Inside a native [`Runtime`] the timer is registered
 /// with the wheel of that runtime. Once the runtime is dropped, or while it
 /// is not active on the thread, the handle is stale: it reports the timer as
 /// elapsed and ignores other operations.
@@ -1092,6 +1092,20 @@ mod tests {
         assert_eq!(calls.get(), 0);
     }
 
+    /// STATEMENT: `Timer` diagnostics report the wheel id without borrowing the wheel.
+    ///
+    /// HOW:
+    /// - Format the timer while the wheel is taken out by `with_wheel`.
+    /// - Check the output names the wheel id that forms the upper half of a timer handle.
+    #[test]
+    fn debug_timer() {
+        let timer = timer_state();
+        let callback = CallbackHandle::new(10_000, || {});
+        let expected = format!("Timer {{ id: {}, .. }}", callback.hnd.get() >> 32);
+        timer.with_wheel(|_| assert_eq!(format!("{timer:?}"), expected));
+        assert_eq!(format!("{timer:?}"), expected);
+    }
+
     fn timer_driver(timer: &Rc<Timer>) -> TimerDriver {
         TimerDriver {
             timer: timer.clone(),
@@ -1103,11 +1117,13 @@ mod tests {
 
     /// Polls `driver` once with a no-op waker.
     ///
-    /// With the `tokio` feature the driver sleep needs a Tokio runtime
+    /// With the `tokio` or `compio` feature the driver sleep needs a runtime
     /// context; the runtime is not driven, so the sleep never fires here.
     fn poll_driver(driver: &mut TimerDriver) -> Poll<()> {
+        let poll = || Pin::new(driver).poll(&mut Context::from_waker(Waker::noop()));
+
         #[cfg(feature = "tokio")]
-        let _guard = {
+        {
             static RT: std::sync::LazyLock<tok_io::runtime::Runtime> =
                 std::sync::LazyLock::new(|| {
                     tok_io::runtime::Builder::new_current_thread()
@@ -1115,9 +1131,18 @@ mod tests {
                         .build()
                         .unwrap()
                 });
-            RT.enter()
-        };
-        Pin::new(driver).poll(&mut Context::from_waker(Waker::noop()))
+            let _guard = RT.enter();
+            poll()
+        }
+        #[cfg(all(feature = "compio", not(feature = "tokio")))]
+        {
+            thread_local! {
+                static RT: compio_runtime::Runtime = compio_runtime::Runtime::new().unwrap();
+            }
+            RT.with(|rt| rt.enter(poll))
+        }
+        #[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
+        poll()
     }
 
     fn make_due(timer: &Timer) {
@@ -1975,7 +2000,8 @@ mod tests {
     ///
     /// HOW:
     /// - Schedule two deadlines and block inside the first wake past the second deadline.
-    /// - Verify the first driver poll expires only one timer and the next poll expires the other.
+    /// - Verify processing one time sample expires only one timer and a later sample
+    ///   expires the other.
     #[test]
     fn test_dispatch_uses_one_time_sample_for_wakers() {
         let timer = timer_state();
@@ -1998,12 +2024,18 @@ mod tests {
                 .checked_sub(Duration::from_millis(32))
                 .unwrap(),
         ));
-        let mut driver = timer_driver(&timer);
-        assert!(poll_driver(&mut driver).is_pending());
+        let generation = timer.generation.get();
+        assert!(matches!(
+            timer.process(Instant::now(), generation),
+            Processed::Next(_)
+        ));
         assert!(handles[0].is_elapsed());
         assert!(!handles[1].is_elapsed());
         assert_eq!(task.wakes.load(Ordering::Relaxed), 1);
-        assert!(poll_driver(&mut driver).is_pending());
+        assert!(matches!(
+            timer.process(Instant::now(), generation),
+            Processed::Idle
+        ));
         assert!(handles[1].is_elapsed());
         assert_eq!(task.wakes.load(Ordering::Relaxed), 2);
     }

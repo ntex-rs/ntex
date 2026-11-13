@@ -40,12 +40,47 @@ impl Sleep {
     }
 }
 
-/// Sleep of the driver tasks, backed by `futures-timer` without the `tokio`
+/// Sleep of the driver tasks, backed by the compio timer with the `compio`
 /// feature.
-#[cfg(not(feature = "tokio"))]
+///
+/// The compio sleep is created on the first poll, inside the driver task, so
+/// the driver can be built outside of the runtime context. compio sleeps
+/// cannot be reset, a reset drops the armed sleep.
+#[cfg(all(feature = "compio", not(feature = "tokio")))]
+pub(super) struct Sleep {
+    deadline: Instant,
+    inner: Option<Pin<Box<dyn Future<Output = ()>>>>,
+}
+
+#[cfg(all(feature = "compio", not(feature = "tokio")))]
+impl Sleep {
+    pub(super) fn new(deadline: Instant) -> Self {
+        Self {
+            deadline,
+            inner: None,
+        }
+    }
+
+    fn reset(&mut self, deadline: Instant) {
+        self.deadline = deadline;
+        self.inner = None;
+    }
+
+    fn poll(&mut self, cx: &mut task::Context<'_>) -> Poll<()> {
+        let deadline = self.deadline;
+        self.inner
+            .get_or_insert_with(|| Box::pin(compio_runtime::time::sleep_until(deadline)))
+            .as_mut()
+            .poll(cx)
+    }
+}
+
+/// Sleep of the driver tasks, backed by `futures-timer` without the `tokio`
+/// and `compio` features.
+#[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
 pub(super) struct Sleep(futures_timer::Delay);
 
-#[cfg(not(feature = "tokio"))]
+#[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
 impl Sleep {
     pub(super) fn new(deadline: Instant) -> Self {
         Self(futures_timer::Delay::new(

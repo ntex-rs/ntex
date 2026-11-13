@@ -379,7 +379,7 @@ impl Runtime {
     /// Polls the runtime and runs scheduled tasks.
     ///
     /// Runs bounded batches of ready tasks and remote submissions. Returns
-    /// [`PollResult::PollAgain`] if work remains, [`PollResult::Pending(None)`] if the
+    /// [`PollResult::PollAgain`] if work remains, [`PollResult::Pending`] if the
     /// driver may wait for events, or [`PollResult::Ready`] after the future
     /// supplied to [`block_on`](Self::block_on) completes.
     ///
