@@ -37,6 +37,7 @@ use crate::driver::{Driver, Notify, PollResult};
 use crate::handle::SpawnLocation;
 use crate::metrics::Histogram;
 use crate::remote::{Job, RemoteJoin, Runner};
+use crate::time::Timer;
 
 mod queue;
 pub(crate) mod task;
@@ -216,6 +217,8 @@ pub(crate) fn try_current_thread_id() -> Option<ThreadId> {
 pub struct Runtime {
     stop: Cell<bool>,
     queue: Arc<RunnableQueue>,
+    /// Timer wheel, its timers are expired by [`Runtime::poll`].
+    pub(crate) timer: Rc<Timer>,
     // tasks are polled and dropped on the thread that created the runtime
     _not_send: PhantomData<*const ()>,
 }
@@ -242,6 +245,7 @@ impl Runtime {
         Self {
             stop: Cell::new(false),
             queue,
+            timer: Timer::new_native(builder.timer_resolution),
             _not_send: PhantomData,
         }
     }
@@ -263,6 +267,12 @@ impl Runtime {
         } else {
             not_in_neon_runtime()
         }
+    }
+
+    /// Returns `true` if a native runtime is active on the current thread.
+    #[inline]
+    pub(crate) fn has_current() -> bool {
+        CURRENT_RUNTIME.is_set()
     }
 
     /// Returns [`Runtime::now`] of the runtime active on the current thread,
@@ -369,7 +379,7 @@ impl Runtime {
     /// Polls the runtime and runs scheduled tasks.
     ///
     /// Runs bounded batches of ready tasks and remote submissions. Returns
-    /// [`PollResult::PollAgain`] if work remains, [`PollResult::Pending`] if the
+    /// [`PollResult::PollAgain`] if work remains, [`PollResult::Pending(None)`] if the
     /// driver may wait for events, or [`PollResult::Ready`] after the future
     /// supplied to [`block_on`](Self::block_on) completes.
     ///
@@ -388,18 +398,28 @@ impl Runtime {
 
         let result = if self.stop.get() {
             PollResult::Ready
-        } else if self.queue.run() {
-            self.queue.add_poll(true);
-            PollResult::PollAgain
         } else {
-            self.queue.add_poll(false);
-            PollResult::Pending
+            // expired timers wake their tasks before the batch runs
+            self.timer.run_due();
+            if self.queue.run() {
+                PollResult::PollAgain
+            } else {
+                PollResult::Pending(None)
+            }
         };
 
         // a runtime that never idles stays visible, its busy period is read
         // from its start
         let now = Instant::now();
+        let result = match result {
+            PollResult::Pending(_) => match self.timer.next_deadline() {
+                Some(deadline) if deadline <= now => PollResult::PollAgain,
+                deadline => PollResult::Pending(deadline.map(|d| d - now)),
+            },
+            result => result,
+        };
         if result != PollResult::Ready {
+            self.queue.add_poll(result == PollResult::PollAgain);
             self.queue
                 .poll_histogram
                 .record(now.saturating_duration_since(start));
@@ -591,6 +611,7 @@ impl Drop for Runtime {
     fn drop(&mut self) {
         CURRENT_RUNTIME.set(self, || {
             self.queue.shutdown();
+            self.timer.shutdown();
         });
     }
 }
@@ -752,6 +773,7 @@ pub struct RuntimeBuilder {
     event_interval: usize,
     self_wake_limit: u32,
     self_wake_time: Duration,
+    timer_resolution: Option<u8>,
 }
 
 impl Default for RuntimeBuilder {
@@ -768,6 +790,7 @@ impl RuntimeBuilder {
             event_interval: 61,
             self_wake_limit: 10_000,
             self_wake_time: Duration::from_secs(1),
+            timer_resolution: None,
         }
     }
 
@@ -794,6 +817,24 @@ impl RuntimeBuilder {
     pub fn self_wake_threshold(&mut self, count: u32, duration: Duration) -> &mut Self {
         self.self_wake_limit = count.min(!REPORTED);
         self.self_wake_time = duration;
+        self
+    }
+
+    /// Sets the resolution of the runtime timer wheel, in milliseconds.
+    ///
+    /// The resolution must be a power of two between 1 and 16. By default,
+    /// the wheel uses [`Builder::timer_resolution`](crate::Builder::timer_resolution)
+    /// of the system that is current when the first timer is armed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `millis` is not a power of two between 1 and 16.
+    pub fn timer_resolution(&mut self, millis: u8) -> &mut Self {
+        assert!(
+            millis.is_power_of_two() && millis <= 16,
+            "timer resolution must be a power of two between 1 and 16 ms, got {millis}"
+        );
+        self.timer_resolution = Some(millis);
         self
     }
 

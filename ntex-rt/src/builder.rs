@@ -426,8 +426,9 @@ impl SystemRunner {
     ///
     /// # Panics
     ///
-    /// Panics if used without a compatible Tokio runtime context. Panics from
-    /// the future propagate to the caller.
+    /// Panics if used without a compatible Tokio runtime context. The runtime
+    /// must have timers enabled, otherwise the timer driver task panics.
+    /// Panics from the future propagate to the caller.
     pub async fn run_local<F, R>(self, fut: F) -> R
     where
         F: Future<Output = R> + 'static,

@@ -40,7 +40,7 @@ fn run_parked(rt: &Runtime, park: &ParkNotify, done: impl Fn() -> bool) {
             return;
         }
         match result {
-            PollResult::Pending => {
+            PollResult::Pending(_) => {
                 // A notification preceding the wait leaves a retained wake token.
                 park.0.wait();
                 rt.awake();
@@ -1076,7 +1076,7 @@ fn parked_remote_wake() {
         let st = Arc::new(State::default());
         rt.awake();
         let task = spawn(&rt, Fut(st.clone()));
-        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
         assert_eq!(st.polls.load(Ordering::Relaxed), 1);
         let (st2, w) = (st.clone(), st.waker());
         let th = thread::spawn(move || {

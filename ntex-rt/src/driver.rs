@@ -1,5 +1,5 @@
 //! Interfaces between the runtime and its event-loop driver.
-use std::{any::Any, cell::RefCell, fmt, io, panic, pin::Pin, rc::Rc};
+use std::{any::Any, cell::RefCell, fmt, io, panic, pin::Pin, rc::Rc, time::Duration};
 
 use crate::rt::Runtime;
 
@@ -83,7 +83,13 @@ pub enum PollResult {
     /// The future supplied to [`Runtime::block_on`] has completed; stop driving.
     Ready,
     /// No work is immediately runnable; the driver may wait for events.
-    Pending,
+    ///
+    /// Holds the time until the next batch of the runtime timers, measured
+    /// when `poll` returns. The driver must not wait longer and must call
+    /// [`Runtime::poll`] again once it passes. `None` if no timer is armed.
+    /// A timer armed after `poll` returns, outside of the runtime tasks, is
+    /// processed by the next `poll`.
+    Pending(Option<Duration>),
     /// Work remains; process external events without blocking, then poll again.
     PollAgain,
 }

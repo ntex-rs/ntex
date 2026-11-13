@@ -104,7 +104,7 @@ fn interrupted_scheduler_notifications() {
                 submit();
             }
             assert_eq!(calls.load(Ordering::Relaxed), 3 + round);
-            assert_eq!(rt.poll(), PollResult::Pending);
+            assert_eq!(rt.poll(), PollResult::Pending(None));
             assert_eq!(done.load(Ordering::Relaxed), 2 * (round + 1));
         }
     }
@@ -250,13 +250,13 @@ fn awake_skips_local_notify() {
     rt.awake();
     drop(rt.spawn(async {}));
     assert_eq!(cnt.load(Ordering::Relaxed), 0);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
 
     // the runtime is idle, the driver may block
     drop(rt.spawn(async {}));
     drop(rt.spawn(async {}));
     assert_eq!(cnt.load(Ordering::Relaxed), 1);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
 }
 
 /// STATEMENT: `run_ready` runs tasks without ending the turn, so time stays at turn
@@ -288,7 +288,7 @@ fn run_ready_keeps_turn() {
     let r = ran.clone();
     drop(rt.spawn(async move { r.set(r.get() + 1) }));
     assert_eq!(cnt.load(Ordering::Relaxed), 0);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert_eq!(ran.get(), 2);
     assert_eq!(cnt.load(Ordering::Relaxed), 0);
     assert!(rt.now() > start);
@@ -304,7 +304,7 @@ fn poll_histogram_records_turn() {
     let rt = Runtime::new(Box::new(NoopNotify));
     rt.awake();
     std::thread::sleep(Duration::from_millis(5));
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
 
     let hist = rt.poll_histogram();
     assert_eq!(hist.count(), 1);
@@ -396,7 +396,7 @@ fn remote_schedule_no_lost_wakeup() {
 
     // blocks like a driver, a lost wakeup times out
     while cnt.load(Ordering::Relaxed) < THREADS * TASKS {
-        if rt.poll() == PollResult::Pending {
+        if rt.poll() == PollResult::Pending(None) {
             let guard = ev.0.lock().unwrap();
             // the last tasks may have run in this poll
             let (mut guard, res) =
@@ -434,7 +434,7 @@ fn local_task_woken_by_remote_task() {
             Poll::Pending
         }
     })));
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
 
     let hnd = rt.handle();
     std::thread::spawn(move || {
@@ -447,7 +447,7 @@ fn local_task_woken_by_remote_task() {
 
     // the remote task schedules the local task, it must be polled again
     assert_eq!(rt.poll(), PollResult::PollAgain);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert!(done.load(Ordering::Relaxed));
 }
 
@@ -475,7 +475,7 @@ fn runtime_spawn_skips_owner_lookup() {
     assert!(THREAD_ID.with(Cell::get).is_none());
     THREAD_ID.with(|slot| slot.set(id));
 
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert_eq!(*block_on_thread(task).unwrap(), 42);
     block_on_thread(unchecked).unwrap();
     assert!(borrowed.get());
@@ -518,12 +518,12 @@ fn event_interval() {
         let rt = Runtime::builder()
             .event_interval(val)
             .build(Box::new(NoopNotify));
-        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
 
         drop(rt.spawn(async {}));
         drop(rt.spawn(async {}));
         assert_eq!(rt.poll(), PollResult::PollAgain);
-        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
     }
 
     // Remote commands exceed the per-turn command budget.
@@ -533,7 +533,7 @@ fn event_interval() {
     let tasks = iters(130, 2);
     let waker = cfg!(miri).then(|| {
         let task = rt.spawn(poll_fn(|cx| Poll::Ready(cx.waker().clone())));
-        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
         let waker = block_on_thread(task).unwrap();
         let header = std::ptr::NonNull::new(waker.data().cast_mut().cast()).unwrap();
         // Balance each queued acquisition and keep its source alive until the drain.
@@ -563,7 +563,7 @@ fn event_interval() {
     assert_eq!(rt.poll(), PollResult::PollAgain);
     assert_eq!(cnt.load(Ordering::Relaxed), tasks - 1);
     // Untouched tasks reclaim directly instead of consuming the FIFO budget.
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert_eq!(cnt.load(Ordering::Relaxed), tasks);
     drop(waker);
     drain(&rt);
@@ -604,7 +604,7 @@ fn now() {
             std::thread::sleep(Duration::from_millis(5));
         }));
     }
-    CURRENT_RUNTIME.set(&rt, || assert_eq!(rt.poll(), PollResult::Pending));
+    CURRENT_RUNTIME.set(&rt, || assert_eq!(rt.poll(), PollResult::Pending(None)));
     assert_eq!(*seen.borrow(), vec![(start, start), (start, start)]);
 
     // idle again after the queue is drained
@@ -624,7 +624,7 @@ fn local_schedule_while_idle_starts_turn() {
     rt.awake();
     let start = rt.now();
     std::thread::sleep(sleep);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     let busy = rt.busy_duration();
 
     // the driver wakes a task before blocking, the next turn starts here
@@ -634,7 +634,7 @@ fn local_schedule_while_idle_starts_turn() {
     assert_eq!(rt.now(), turn_start);
     assert!(turn_start >= start + sleep);
     let before_poll = turn_start.elapsed();
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     let after_poll = turn_start.elapsed();
     let total = rt.busy_duration();
     assert!(total >= busy + before_poll);
@@ -654,18 +654,18 @@ fn busy_duration() {
         .event_interval(1)
         .build(Box::new(NoopNotify));
     let hnd = rt.handle();
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
 
     // task time is counted
     drop(rt.spawn(async move { std::thread::sleep(sleep) }));
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     let busy = hnd.busy_duration().unwrap();
     assert!(busy >= sleep);
 
     // time between `awake` and `poll` is counted
     rt.awake();
     std::thread::sleep(sleep);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert!(hnd.busy_duration().unwrap() >= busy + sleep);
 
     // idle time is not counted
@@ -673,7 +673,7 @@ fn busy_duration() {
     std::thread::sleep(sleep);
     assert_eq!(rt.busy_duration(), busy);
     let poll_start = Instant::now();
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     let poll_elapsed = poll_start.elapsed();
     assert!(rt.busy_duration() <= busy + poll_elapsed);
 
@@ -687,7 +687,7 @@ fn busy_duration() {
 
     // time between busy polls is counted
     std::thread::sleep(sleep);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert!(rt.busy_duration() >= busy2 + sleep);
 }
 
@@ -711,7 +711,7 @@ fn busy_duration_during_turn() {
             // keep the turn running until the other thread checked it
             let _ = done_rx.recv();
         }));
-        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
         assert_eq!(rt.current_turn(), None);
     });
 
@@ -749,11 +749,11 @@ fn current_task() {
             tx.send((hnd, line)).unwrap();
             release_rx.recv().unwrap();
         }));
-        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
         polled_tx.send(()).unwrap();
 
         spawned_rx.recv().unwrap();
-        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
     });
 
     // the running task is visible from another thread
@@ -794,7 +794,7 @@ fn busy_duration_is_monotonic() {
         tx.send(rt.handle()).unwrap();
         for _ in 0..iters(100, 4) {
             drop(rt.spawn(async { thread::sleep(Duration::from_micros(500)) }));
-            assert_eq!(rt.poll(), PollResult::Pending);
+            assert_eq!(rt.poll(), PollResult::Pending(None));
             thread::sleep(Duration::from_micros(200));
         }
         done2.store(true, Ordering::Release);
@@ -825,14 +825,14 @@ fn poll_count() {
     let hnd = rt.handle();
     assert_eq!((rt.poll_count(), rt.poll_again_count()), (0, 0));
 
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert_eq!((rt.poll_count(), rt.poll_again_count()), (1, 0));
 
     // one task per poll, the first poll leaves a backlog
     drop(rt.spawn(async {}));
     drop(rt.spawn(async {}));
     assert_eq!(rt.poll(), PollResult::PollAgain);
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert_eq!(hnd.poll_count(), Some(3));
     assert_eq!(hnd.poll_again_count(), Some(1));
     assert_eq!(hnd.poll_histogram().unwrap().count(), 3);
@@ -858,7 +858,7 @@ fn schedule_while_clearing() {
         *waker2.borrow_mut() = Some(cx.waker().clone());
         Poll::<()>::Pending
     })));
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
     assert!(waker.borrow().is_some());
 
     // queued task wakes the waiting task while the queue is cleared
@@ -1028,7 +1028,7 @@ fn self_wake_streak() {
     assert!(now(&rt) > before);
     assert_eq!(start(&rt), now(&rt), "streak after the next poll");
     task.cancel();
-    assert_eq!(rt.poll(), PollResult::Pending);
+    assert_eq!(rt.poll(), PollResult::Pending(None));
 
     // Already awake, so the root spawn does not refresh the clock.
     rt.awake();
@@ -1106,7 +1106,7 @@ fn reentrant_self_wake_logger() {
             WARNINGS.set(&warnings, || {
                 rt.poll();
                 assert_eq!(warnings.get(), 1, "one warning per streak");
-                assert_eq!(rt.poll(), PollResult::Pending);
+                assert_eq!(rt.poll(), PollResult::Pending(None));
             });
         });
         assert_eq!(polls.get(), ready_at);
@@ -1130,7 +1130,7 @@ fn poll_until(rt: &Runtime, cond: impl Fn() -> bool) {
     CURRENT_RUNTIME.set(rt, || {
         while !cond() {
             assert!(start.elapsed() < WAIT, "timeout");
-            if rt.poll() == PollResult::Pending {
+            if rt.poll() == PollResult::Pending(None) {
                 thread::yield_now();
             }
         }
@@ -2445,4 +2445,135 @@ fn join_waker_replaced() {
         assert_eq!(a.0.load(Ordering::SeqCst), 0);
         assert_eq!(poll_with(&mut h, &b), Poll::Ready(2));
     }
+}
+
+/// STATEMENT: An idle poll reports the time until the next timer batch.
+///
+/// HOW:
+/// - Check an idle runtime without timers reports no timeout.
+/// - Arm a 100 ms timer on a 1 ms wheel and check `Pending` holds a timeout that
+///   ends no earlier than the timer and within the 8 ms bucket of the timer.
+#[test]
+fn poll_reports_next_timer_batch() {
+    let rt = RuntimeBuilder::new()
+        .timer_resolution(1)
+        .build(Box::new(NoopNotify));
+    CURRENT_RUNTIME.set(&rt, || {
+        assert_eq!(rt.poll(), PollResult::Pending(None));
+
+        let start = Instant::now();
+        let hnd = crate::time::TimerHandle::new(100);
+        let res = rt.poll();
+        let end = Instant::now();
+        match res {
+            // level 1 buckets of a 1 ms wheel are 8 ms wide
+            PollResult::Pending(Some(timeout)) => {
+                assert!(
+                    end + timeout >= start + Duration::from_millis(100),
+                    "{timeout:?}"
+                );
+                assert!(timeout <= Duration::from_millis(109), "{timeout:?}");
+            }
+            res => panic!("unexpected {res:?}"),
+        }
+        drop(hnd);
+    });
+}
+
+/// STATEMENT: A timer that becomes due while tasks run makes the poll ask for another pass.
+///
+/// HOW:
+/// - Spawn a task that arms a 1 ms timer and blocks the thread past its deadline.
+/// - Check the poll returns `PollAgain` without a notification and the next poll
+///   expires the timer and completes the waiting task.
+#[test]
+fn poll_again_for_due_timer() {
+    let rt = RuntimeBuilder::new()
+        .timer_resolution(1)
+        .build(Box::new(NoopNotify));
+    CURRENT_RUNTIME.set(&rt, || {
+        let task = rt.spawn(async {
+            let hnd = crate::time::TimerHandle::new(1);
+            thread::sleep(Duration::from_millis(10));
+            poll_fn(|cx| hnd.poll_elapsed(cx)).await;
+        });
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert!(!task.is_finished());
+        rt.poll();
+        assert!(task.is_finished());
+    });
+}
+
+/// STATEMENT: Timer tasks and callbacks are driven by `Runtime::poll` alone, with the runtime current.
+///
+/// HOW:
+/// - Spawn a task that sleeps 5 ms and arm a 5 ms callback that records `Runtime::has_current`.
+/// - Repeatedly poll and block for the reported timeout, never notifying the runtime.
+/// - Check both complete within the wait limit and the callback saw the runtime.
+#[test]
+fn poll_drives_timers() {
+    let rt = RuntimeBuilder::new()
+        .timer_resolution(1)
+        .build(Box::new(NoopNotify));
+    let called = Rc::new(Cell::new(None));
+    CURRENT_RUNTIME.set(&rt, || {
+        let task = rt.spawn(async {
+            let hnd = crate::time::TimerHandle::new(5);
+            poll_fn(|cx| hnd.poll_elapsed(cx)).await;
+        });
+        let flag = called.clone();
+        let cb = crate::time::CallbackHandle::new(5, move || {
+            flag.set(Some(Runtime::has_current()));
+        });
+
+        let start = Instant::now();
+        while !task.is_finished() || called.get().is_none() {
+            assert!(start.elapsed() < WAIT);
+            match rt.poll() {
+                PollResult::Pending(Some(timeout)) => thread::sleep(timeout),
+                PollResult::Pending(None) | PollResult::PollAgain => (),
+                PollResult::Ready => unreachable!(),
+            }
+        }
+        assert_eq!(called.get(), Some(true));
+        assert!(cb.is_elapsed());
+    });
+}
+
+/// STATEMENT: Timer handles of a dropped native runtime are stale and never reach another runtime.
+///
+/// HOW:
+/// - Arm a timer and a panicking callback in one runtime, then drop the runtime.
+/// - Check both report elapsed, and resets do nothing outside a runtime and inside a
+///   second runtime, whose wheel stays empty.
+/// - Drop the handles inside the second runtime without a panic.
+#[test]
+fn dropped_runtime_timers_are_stale() {
+    let rt = Runtime::new(Box::new(NoopNotify));
+    let (hnd, cb) = CURRENT_RUNTIME.set(&rt, || {
+        (
+            crate::time::TimerHandle::new(10_000),
+            crate::time::CallbackHandle::new(10_000, || panic!("callback after drop")),
+        )
+    });
+    assert!(rt.timer.next_deadline().is_some());
+    drop(rt);
+
+    assert!(hnd.is_elapsed());
+    assert!(cb.is_elapsed());
+    hnd.reset(1);
+    cb.reset(1);
+    assert!(hnd.is_elapsed());
+
+    let rt = Runtime::new(Box::new(NoopNotify));
+    CURRENT_RUNTIME.set(&rt, || {
+        hnd.reset(1);
+        cb.reset(1);
+        assert!(hnd.is_elapsed());
+        assert!(cb.is_elapsed());
+        assert!(rt.timer.next_deadline().is_none());
+        drop(hnd);
+        drop(cb);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
+    });
 }

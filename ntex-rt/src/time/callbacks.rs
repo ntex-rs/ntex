@@ -1,9 +1,9 @@
-use std::num::NonZeroUsize;
+use std::num::NonZeroU64;
 use std::{cell::Cell, cmp, fmt, rc::Rc, rc::Weak};
 
 use crate::HashMap;
 
-use super::{TIMER, TimerEntry};
+use super::{TimerEntry, with_slot, with_timer};
 
 /// A reusable, local one-shot callback timer.
 ///
@@ -24,11 +24,17 @@ use super::{TIMER, TimerEntry};
 ///
 /// Callback panics propagate through the runtime. They may stop the shared
 /// driver and disarm other timers; remaining callbacks need not be delivered.
-/// Runtime shutdown suppresses pending delivery. A surviving handle retains
-/// its callback and can be explicitly reset in a new runtime on the same thread.
-/// Starting a new runtime does not automatically rearm the handle.
+/// Runtime shutdown suppresses pending delivery. Outside of a native
+/// [`Runtime`](crate::rt::Runtime), a surviving handle retains its callback
+/// and can be explicitly reset in a new runtime on the same thread. Starting
+/// a new runtime does not automatically rearm the handle.
+///
+/// Inside a native runtime the callback is registered with the wheel of that
+/// runtime. Once the runtime is dropped, or while it is not active on the
+/// thread, the handle is stale: it reports the timer as elapsed and ignores
+/// resets.
 pub struct CallbackHandle {
-    pub(super) hnd: NonZeroUsize,
+    pub(super) hnd: NonZeroU64,
     pub(super) state: Rc<CallbackState>,
 }
 
@@ -50,7 +56,7 @@ impl CallbackHandle {
             arm: Cell::new(0),
             pending: Cell::new(true),
         });
-        TIMER.with(|timer| {
+        with_timer(|timer| {
             let (idx, expiry) = timer.calc_bucket(cmp::max(millis, 1));
             let no = timer.with_wheel(|wheel| {
                 let no = wheel.timers.insert(TimerEntry {
@@ -75,7 +81,7 @@ impl CallbackHandle {
                 no
             });
             let handle = Self {
-                hnd: NonZeroUsize::new(no).unwrap(),
+                hnd: timer.handle(no),
                 state,
             };
             timer.update_next_expiry(expiry);
@@ -92,7 +98,7 @@ impl CallbackHandle {
     /// A zero delay waits for a subsequent tick. Resetting from within the
     /// callback arms a new invocation, which survives completion of the old one.
     pub fn reset(&self, millis: u64) {
-        TIMER.with(|timer| {
+        with_slot(self.hnd, |timer, slot| {
             let (idx, expiry) = timer.calc_bucket(cmp::max(millis, 1));
             timer.with_wheel(|wheel| {
                 let ticket = wheel
@@ -100,13 +106,13 @@ impl CallbackHandle {
                     .as_mut()
                     .unwrap()
                     .entries
-                    .get_mut(&self.hnd.get())
+                    .get_mut(&slot)
                     .unwrap();
                 ticket.arm = ticket.arm.wrapping_add(1);
                 ticket.generation = timer.generation.get();
                 self.state.arm.set(ticket.arm);
                 self.state.pending.set(true);
-                wheel.relink(self.hnd.get(), idx);
+                wheel.relink(slot, idx);
             });
             timer.update_next_expiry(expiry);
         });
@@ -120,7 +126,9 @@ impl CallbackHandle {
     /// An invocation that has already started cannot be interrupted.
     pub fn cancel(&self) {
         self.state.pending.set(false);
-        TIMER.with(|timer| timer.with_wheel(|wheel| wheel.unlink(self.hnd.get())));
+        with_slot(self.hnd, |timer, slot| {
+            timer.with_wheel(|wheel| wheel.unlink(slot))
+        });
     }
 
     /// Returns `true` when disarmed, including after cancellation or shutdown.
@@ -128,7 +136,10 @@ impl CallbackHandle {
     /// Expiration marks the timer elapsed before callback delivery. This query
     /// does not indicate whether the callback has run.
     pub fn is_elapsed(&self) -> bool {
-        TIMER.with(|timer| timer.with_wheel(|wheel| wheel.timers[self.hnd.get()].bucket.is_none()))
+        with_slot(self.hnd, |timer, slot| {
+            timer.with_wheel(|wheel| wheel.timers[slot].bucket.is_none())
+        })
+        .unwrap_or(true)
     }
 }
 
@@ -143,16 +154,11 @@ impl fmt::Debug for CallbackHandle {
 impl Drop for CallbackHandle {
     fn drop(&mut self) {
         self.state.pending.set(false);
-        let _ = TIMER.try_with(|timer| {
+        with_slot(self.hnd, |timer, slot| {
             timer.with_wheel(|wheel| {
-                wheel.unlink(self.hnd.get());
-                wheel.timers.remove(self.hnd.get());
-                wheel
-                    .callbacks
-                    .as_mut()
-                    .unwrap()
-                    .entries
-                    .remove(&self.hnd.get());
+                wheel.unlink(slot);
+                wheel.timers.remove(slot);
+                wheel.callbacks.as_mut().unwrap().entries.remove(&slot);
             });
         });
     }
