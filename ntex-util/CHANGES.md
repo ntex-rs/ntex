@@ -1,6 +1,6 @@
 # Changes
 
-## [4.9.1] - Unreleased
+## [4.10.0] - Unreleased
 
 * Timer wheel moved to `ntex_rt::time`; `TimerHandle`, `system_time()` and
   `now()` are re-exported, `CallbackTimer` wraps `ntex_rt::time::CallbackHandle`

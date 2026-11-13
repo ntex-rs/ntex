@@ -290,6 +290,14 @@ impl Reactor {
             (false, ring)
         };
 
+        // runtime timers bound the wait, available since 5.11
+        if !ring.params().is_feature_ext_arg() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "io-uring driver requires Linux 5.11+ (IORING_FEAT_EXT_ARG)",
+            ));
+        }
+
         let mut probe = Probe::new();
         ring.submitter().register_probe(&mut probe)?;
 
@@ -628,7 +636,7 @@ impl ntex_rt::Driver for Reactor {
                 }
                 rt.run_ready();
 
-                if sq.is_full() {
+                if sq.len() >= 96 {
                     // flush the full queue without ending the turn; consumed
                     // entries are published first, the enter may post more
                     cq.sync();
@@ -644,9 +652,9 @@ impl ntex_rt::Driver for Reactor {
                 }
             };
 
-            let more_tasks = match rt.poll() {
-                PollResult::Pending => false,
-                PollResult::PollAgain => true,
+            let (more_tasks, timeout) = match rt.poll() {
+                PollResult::Pending(timeout) => (false, timeout),
+                PollResult::PollAgain => (true, None),
                 PollResult::Ready => break Ok(()),
             };
             let more_changes = self.apply_changes(sq);
@@ -666,6 +674,10 @@ impl ntex_rt::Driver for Reactor {
                 || !cqueue::CompletionQueue::<'_, _>::is_empty(&cq)
             {
                 submitter.submit()
+            } else if let Some(timeout) = timeout {
+                // wake up for the next batch of runtime timers
+                let ts = Timespec::from(timeout);
+                submitter.submit_with_args(1, &SubmitArgs::new().timespec(&ts))
             } else {
                 submitter.submit_and_wait(1)
             };
