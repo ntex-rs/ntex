@@ -13,17 +13,20 @@
 //! - [`tickets()`] takes tickets assigned by an external system, for example a
 //!   protocol codec that numbers packets in decode order.
 //!
+//! [`Tickets::cancel()`] or [`Ticket::cancel()`] cancels every outstanding ticket
+//! of a sequence, their turn waits return [`Canceled`].
+//!
 //! # Example
 //!
 //! ```
 //! use ntex_service::{Pipeline, fn_service};
-//! use ntex_util::services::ordered::Ordered;
+//! use ntex_util::services::ordered::{Canceled, Ordered};
 //!
 //! # #[ntex::main]
 //! # async fn main() {
 //! let svc = Ordered::new(
-//!     fn_service(async |req: u32| Ok::<_, ()>(req * 2)),
-//!     fn_service(async |val: u32| Ok::<_, ()>(val.to_string())),
+//!     fn_service(async |req: u32| Ok::<_, Canceled>(req * 2)),
+//!     fn_service(async |val: u32| Ok::<_, Canceled>(val.to_string())),
 //! );
 //! let pipeline = Pipeline::new((), svc);
 //! assert_eq!(pipeline.call(21).await, Ok("42".to_string()));
@@ -31,11 +34,23 @@
 //! ```
 use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
-use std::{collections::VecDeque, fmt, future::Future, future::poll_fn, pin::pin, rc::Rc};
+use std::{collections::VecDeque, error, fmt, future::Future, future::poll_fn, pin::pin, rc::Rc};
 
 use ntex_service::{BindCtx, Ctx, ReadyBinding, Service, ServiceFactory};
 
 use crate::task::LocalWaker;
+
+/// Error returned by a turn wait of a canceled ticket.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Canceled;
+
+impl fmt::Display for Canceled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Ticket is canceled")
+    }
+}
+
+impl error::Error for Canceled {}
 
 /// Position of a request in an ordered sequence.
 ///
@@ -43,7 +58,9 @@ use crate::task::LocalWaker;
 /// dropping a ticket before its turn skips its position.
 pub trait Turn {
     /// Polls until this ticket holds the turn.
-    fn poll_turn(&self, cx: &mut Context<'_>) -> Poll<()>;
+    ///
+    /// Returns `Err(Canceled)` if the ticket is canceled.
+    fn poll_turn(&self, cx: &mut Context<'_>) -> Poll<Result<(), Canceled>>;
 }
 
 /// Source of tickets for [`Ordered`].
@@ -64,9 +81,13 @@ pub trait Sequencer<Req> {
 ///
 /// Holding a ticket blocks the turn of every later ticket of the sequence,
 /// pass or drop it once its ordered side effect is done.
+///
+/// A canceled ticket keeps its position: its turn wait returns [`Canceled`] and
+/// dropping it passes or skips its turn as usual.
 pub struct Ticket {
     seq: u64,
     turns: Rc<Turns>,
+    passed: bool,
 }
 
 impl Ticket {
@@ -79,34 +100,74 @@ impl Ticket {
     #[inline]
     /// Returns `true` if this ticket holds the turn.
     pub fn is_turn(&self) -> bool {
-        self.turns.turn.get() == self.seq
+        !self.passed && self.turns.turn.get() == self.seq
+    }
+
+    #[inline]
+    /// Returns `true` if this ticket is canceled.
+    ///
+    /// Returns `false` after [`pass()`](Self::pass).
+    pub fn is_canceled(&self) -> bool {
+        !self.passed && self.turns.is_canceled(self.seq)
+    }
+
+    #[inline]
+    /// Returns `true` if this ticket is passed.
+    pub fn is_passed(&self) -> bool {
+        self.passed
     }
 
     /// Polls until this ticket holds the turn.
-    pub fn poll_turn(&self, cx: &mut Context<'_>) -> Poll<()> {
-        self.turns.poll_turn(self.seq, cx)
+    ///
+    /// Returns `Err(Canceled)` if the ticket is canceled, even if it holds the turn,
+    /// or if it is passed.
+    pub fn poll_turn(&self, cx: &mut Context<'_>) -> Poll<Result<(), Canceled>> {
+        if self.passed {
+            Poll::Ready(Err(Canceled))
+        } else {
+            self.turns.poll_turn(self.seq, cx)
+        }
     }
 
     /// Waits until this ticket holds the turn.
-    pub async fn turn(&self) {
-        poll_fn(|cx| self.poll_turn(cx)).await;
+    ///
+    /// Returns `Err(Canceled)` if the ticket is canceled, even if it holds the turn,
+    /// or if it is passed.
+    pub async fn turn(&self) -> Result<(), Canceled> {
+        poll_fn(|cx| self.poll_turn(cx)).await
     }
 
-    /// Releases the ticket, same as drop.
+    /// Releases the turn of this ticket, same as drop, but keeps the ticket.
     ///
-    /// If the ticket holds the turn, the turn passes to the next outstanding ticket.
-    pub fn pass(self) {}
+    /// If the ticket holds the turn, the turn passes to the next outstanding
+    /// ticket, otherwise its turn is skipped. The passed ticket can still
+    /// [`cancel()`](Self::cancel) the sequence. Passing again does nothing.
+    pub fn pass(&mut self) {
+        if !self.passed {
+            self.passed = true;
+            self.turns.release(self.seq);
+        }
+    }
+
+    /// Cancels every ticket of the sequence that is outstanding now.
+    ///
+    /// Turn waits of canceled tickets return [`Canceled`], tasks waiting for the
+    /// turn are woken. A ticket that already got its turn keeps running. Tickets
+    /// issued later are not canceled.
+    pub fn cancel(&self) {
+        self.turns.cancel();
+    }
 }
 
 impl Turn for Ticket {
-    fn poll_turn(&self, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll_turn(&self, cx: &mut Context<'_>) -> Poll<Result<(), Canceled>> {
         Ticket::poll_turn(self, cx)
     }
 }
 
 impl Drop for Ticket {
     fn drop(&mut self) {
-        self.turns.release(self.seq);
+        self.pass();
     }
 }
 
@@ -143,7 +204,13 @@ impl Tickets {
         Ticket {
             seq,
             turns: turns.clone(),
+            passed: false,
         }
+    }
+
+    /// Cancels every outstanding ticket, see [`Ticket::cancel()`].
+    pub fn cancel(&self) {
+        self.0.cancel();
     }
 }
 
@@ -171,6 +238,8 @@ struct Turns {
 struct Slot {
     /// Ticket is dropped, its turn is skipped.
     released: bool,
+    /// Ticket is canceled, its turn wait fails.
+    canceled: bool,
     /// Task waiting for the turn.
     waker: LocalWaker,
 }
@@ -182,13 +251,36 @@ impl Turns {
         seq.wrapping_sub(self.turn.get()) as usize
     }
 
-    fn poll_turn(&self, seq: u64, cx: &Context<'_>) -> Poll<()> {
-        if seq == self.turn.get() {
-            Poll::Ready(())
+    fn is_canceled(&self, seq: u64) -> bool {
+        self.slots.borrow()[self.index(seq)].canceled
+    }
+
+    fn poll_turn(&self, seq: u64, cx: &Context<'_>) -> Poll<Result<(), Canceled>> {
+        let idx = self.index(seq);
+        let slots = self.slots.borrow();
+        let slot = &slots[idx];
+        if slot.canceled {
+            Poll::Ready(Err(Canceled))
+        } else if idx == 0 {
+            Poll::Ready(Ok(()))
         } else {
-            let idx = self.index(seq);
-            self.slots.borrow()[idx].waker.register(cx.waker());
+            slot.waker.register(cx.waker());
             Poll::Pending
+        }
+    }
+
+    fn cancel(&self) {
+        let wakers: Vec<_> = self
+            .slots
+            .borrow_mut()
+            .iter_mut()
+            .filter_map(|slot| {
+                slot.canceled = true;
+                slot.waker.take()
+            })
+            .collect();
+        for waker in wakers {
+            waker.wake();
         }
     }
 
@@ -337,7 +429,9 @@ where
 /// ticket call `A` and `B` without waiting for a turn.
 ///
 /// Errors from `A` and from `B` readiness are returned immediately and pass the
-/// turn. Dropping the call future at any stage passes or skips its turn.
+/// turn. Dropping the call future at any stage passes or skips its turn. A
+/// canceled ticket returns [`Canceled`] converted to the error type instead of
+/// entering `B`.
 ///
 /// Readiness requires both services to be ready, so `B` backpressure applies to
 /// new requests. `B` has its own readiness cache ([`ReadyBinding`]).
@@ -418,6 +512,7 @@ impl<A: fmt::Debug, B: fmt::Debug, S: fmt::Debug> fmt::Debug for Ordered<A, B, S
 impl<A, B, S, St, Req> Service<St, Req> for Ordered<A, B, S>
 where
     A: Service<St, Req>,
+    A::Error: From<Canceled>,
     B: Service<St, A::Res, Error = A::Error>,
     S: Sequencer<Req>,
 {
@@ -459,7 +554,7 @@ where
         };
 
         let res = ctx.call(&self.a, req).await?;
-        poll_fn(|cx| ticket.poll_turn(cx)).await;
+        poll_fn(|cx| ticket.poll_turn(cx)).await?;
 
         // `ctx.call` enters `B::call` in the same poll as the successful
         // readiness check, `B`'s binding cache is valid until then
@@ -554,6 +649,7 @@ impl<A: fmt::Debug, B: fmt::Debug, S: fmt::Debug> fmt::Debug for OrderedFactory<
 impl<A, B, S, St, Req> ServiceFactory<St, Req> for OrderedFactory<A, B, S>
 where
     A: ServiceFactory<St, Req>,
+    A::Error: From<Canceled>,
     B: ServiceFactory<St, A::Res, Error = A::Error, InitError = A::InitError>,
     S: Sequencer<Req> + Clone,
 {
@@ -687,7 +783,7 @@ mod tests {
         let t3 = t.pop().unwrap();
         let t2 = t.pop().unwrap();
         let t1 = t.pop().unwrap();
-        let t0 = t.pop().unwrap();
+        let mut t0 = t.pop().unwrap();
 
         drop(t1);
         drop(t3);
@@ -720,7 +816,7 @@ mod tests {
         let mut t = issue(&tickets, 3);
         let t2 = t.pop().unwrap();
         let t1 = t.pop().unwrap();
-        let t0 = t.pop().unwrap();
+        let mut t0 = t.pop().unwrap();
 
         let flag = Arc::new(Flag(AtomicBool::new(false)));
         let waker = Waker::from(flag.clone());
@@ -732,7 +828,53 @@ mod tests {
         assert!(!flag.0.load(Ordering::SeqCst), "not woken before its turn");
         t0.pass();
         assert!(flag.0.load(Ordering::SeqCst));
-        assert!(fut.as_mut().poll(&mut cx).is_ready());
+        assert_eq!(fut.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    }
+
+    /// STATEMENT: Cancel fails the turn waits of outstanding tickets only and
+    /// keeps the sequence going.
+    /// HOW:
+    /// - Wait for the turn of the last of three tickets, cancel through a
+    ///   passed ticket that holds no slot anymore.
+    /// - Check the waiter is woken with `Canceled`, the turn owner is canceled too.
+    /// - Issue a ticket after the cancel, release the canceled ones and check it
+    ///   gets its turn; `Tickets::cancel()` cancels it.
+    #[test]
+    fn cancel_outstanding() {
+        let tickets = Tickets::new();
+        let mut t0 = tickets.issue();
+        t0.pass();
+        t0.pass();
+        assert!(t0.is_passed() && !t0.is_turn() && !t0.is_canceled());
+        let mut t = issue(&tickets, 3);
+        let t3 = t.pop().unwrap();
+        let t2 = t.pop().unwrap();
+        let t1 = t.pop().unwrap();
+
+        let flag = Arc::new(Flag(AtomicBool::new(false)));
+        let waker = Waker::from(flag.clone());
+        let mut cx = Context::from_waker(&waker);
+        {
+            let mut fut = pin!(t3.turn());
+            assert!(fut.as_mut().poll(&mut cx).is_pending());
+
+            t0.cancel();
+            assert!(flag.0.load(Ordering::SeqCst));
+            assert_eq!(fut.as_mut().poll(&mut cx), Poll::Ready(Err(Canceled)));
+        }
+        assert!(t1.is_turn() && t1.is_canceled() && t2.is_canceled());
+        assert_eq!(t1.poll_turn(&mut cx), Poll::Ready(Err(Canceled)));
+        assert_eq!(t0.poll_turn(&mut cx), Poll::Ready(Err(Canceled)));
+        assert!(!t0.is_canceled());
+        assert_eq!(Canceled.to_string(), "Ticket is canceled");
+
+        let t4 = tickets.issue();
+        assert!(!t4.is_canceled());
+        drop((t1, t2, t3));
+        assert_eq!(t4.poll_turn(&mut cx), Poll::Ready(Ok(())));
+
+        tickets.cancel();
+        assert_eq!(t4.poll_turn(&mut cx), Poll::Ready(Err(Canceled)));
     }
 
     #[derive(Debug)]
@@ -774,6 +916,15 @@ mod tests {
         }
     }
 
+    /// Error of a canceled ticket in `Ordered` tests.
+    const CANCELED: u32 = u32::MAX;
+
+    impl From<Canceled> for u32 {
+        fn from(_: Canceled) -> u32 {
+            CANCELED
+        }
+    }
+
     async fn first(msg: Msg) -> Result<u32, u32> {
         if msg.delay > 0 {
             sleep(Millis(msg.delay)).await;
@@ -790,6 +941,7 @@ mod tests {
         not_ready: Cell<bool>,
         fail_ready: Cell<bool>,
         delay: Cell<u32>,
+        shutdown: Cell<bool>,
         waker: LocalWaker,
         changed: ReadyNotifier,
     }
@@ -841,6 +993,52 @@ mod tests {
                 sleep(Millis(delay)).await;
             }
             Ok(id * 10)
+        }
+
+        async fn shutdown(&self, _: Ctx<'_, Self>) {
+            self.0.shutdown.set(true);
+        }
+    }
+
+    /// `A` that records binding and shutdown and can fail readiness with `1`.
+    #[derive(Clone, Default)]
+    struct Probe(Rc<ProbeInner>);
+
+    #[derive(Default)]
+    struct ProbeInner {
+        bound: Cell<bool>,
+        fail_ready: Cell<bool>,
+        shutdown: Cell<bool>,
+        changed: ReadyNotifier,
+    }
+
+    impl Probe {
+        fn fail_ready(&self, fail: bool) {
+            self.0.fail_ready.set(fail);
+            self.0.changed.notify();
+        }
+    }
+
+    impl Service<(), Msg> for Probe {
+        type Res = u32;
+        type Error = u32;
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            self.0.bound.set(true);
+            ctx.subscribe(&self.0.changed);
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), u32> {
+            let fail = self.0.fail_ready.get();
+            poll_fn(|_| Poll::Ready(if fail { Err(1) } else { Ok(()) })).await
+        }
+
+        async fn call(&self, msg: Msg, _: Ctx<'_, Self>) -> Result<u32, u32> {
+            first(msg).await
+        }
+
+        async fn shutdown(&self, _: Ctx<'_, Self>) {
+            self.0.shutdown.set(true);
         }
     }
 
@@ -939,14 +1137,15 @@ mod tests {
     }
 
     /// STATEMENT: Order holds when `B` readiness changes repeatedly during turns.
-    /// HOW: Toggle `B` readiness through `ReadyNotifier` while requests wait for turns.
+    /// HOW: Toggle `B` readiness through `ReadyNotifier` while requests wait for
+    /// turns; the toggle task ends with `B` ready.
     #[ntex::test]
     async fn b_readiness_toggles() {
         let sink = Sink::default();
         let pl = ordered(&sink);
 
         let toggle = sink.clone();
-        spawn(async move {
+        let toggler = spawn(async move {
             for i in 0..10 {
                 sleep(Millis(4)).await;
                 toggle.set_ready(i % 2 == 1);
@@ -958,6 +1157,83 @@ mod tests {
         let expected: Vec<_> = (1..=6).map(|id| Ok(id * 10)).collect();
         assert_eq!(results(handles).await, expected);
         assert_eq!(sink.entered(), vec![1, 2, 3, 4, 5, 6]);
+        timeout(Millis(1000), toggler).await.unwrap().unwrap();
+    }
+
+    /// STATEMENT: `Ordered` readiness waits for both services and returns
+    /// readiness errors from either.
+    ///
+    /// HOW:
+    /// - Fail `A` readiness and check `ready()` returns `A`'s error.
+    /// - Make `B` not ready, check `ready()` stays pending, then make `B` ready
+    ///   and check the same pending future completes.
+    /// - Fail `B` readiness once and check `ready()` returns `B`'s error.
+    #[ntex::test]
+    async fn ready_waits_for_both() {
+        let probe = Probe::default();
+        let sink = Sink::default();
+        let pl = Pipeline::new((), Ordered::new(probe.clone(), sink.clone()));
+
+        probe.fail_ready(true);
+        assert_eq!(pl.ready().await, Err(1));
+        probe.fail_ready(false);
+        assert_eq!(pl.ready().await, Ok(()));
+
+        sink.set_ready(false);
+        let mut ready = pin!(pl.ready());
+        assert!(
+            poll_fn(|cx| Poll::Ready(ready.as_mut().poll(cx)))
+                .await
+                .is_pending()
+        );
+        sleep(Millis(20)).await;
+        assert!(
+            poll_fn(|cx| Poll::Ready(ready.as_mut().poll(cx)))
+                .await
+                .is_pending()
+        );
+        sink.set_ready(true);
+        assert_eq!(timeout(Millis(1000), ready).await, Ok(Ok(())));
+
+        sink.fail_ready();
+        assert_eq!(pl.ready().await, Err(0));
+    }
+
+    /// STATEMENT: `Ordered` forwards binding and shutdown to both services.
+    /// HOW: Wrap a recording `A` and `B` in a pipeline, check `A` is bound after
+    /// `ready()` and a call succeeds, then shut the pipeline down and check both
+    /// saw the shutdown.
+    #[ntex::test]
+    async fn bind_and_shutdown_reach_both() {
+        let probe = Probe::default();
+        let sink = Sink::default();
+        let pl = Pipeline::new((), Ordered::new(probe.clone(), sink.clone()));
+
+        pl.ready().await.unwrap();
+        assert!(probe.0.bound.get());
+        assert_eq!(pl.call(Msg::new(1, 0)).await, Ok(10));
+        assert!(!probe.0.shutdown.get() && !sink.0.shutdown.get());
+
+        pl.shutdown().await;
+        assert!(probe.0.shutdown.get());
+        assert!(sink.0.shutdown.get());
+    }
+
+    /// STATEMENT: A cloned `Ordered` starts its own arrival sequence.
+    /// HOW: Clone a service built with `Arrival::default()`; a slow request in
+    /// the original does not block a request in the clone.
+    #[ntex::test]
+    async fn clone_has_own_sequence() {
+        let sink = Sink::default();
+        let svc = Ordered::new(fn_service(first), sink.clone()).sequencer(Arrival::default());
+        let pl1 = Pipeline::new((), svc.clone());
+        let pl2 = Pipeline::new((), svc);
+
+        let h1 = dispatch(&pl1, [Msg::new(1, 30), Msg::new(2, 0)]).await;
+        let h2 = dispatch(&pl2, [Msg::new(3, 0)]).await;
+        assert_eq!(results(h2).await, vec![Ok(30)]);
+        assert_eq!(results(h1).await, vec![Ok(10), Ok(20)]);
+        assert_eq!(sink.entered(), vec![3, 1, 2]);
     }
 
     /// STATEMENT: An `A` error is returned immediately and does not block later turns.
@@ -1050,16 +1326,23 @@ mod tests {
         assert_eq!(sink.entered(), vec![1, 2, 3]);
     }
 
-    /// STATEMENT: Requests rejected by the filter bypass turns.
-    /// HOW: An unordered request enters `B` while an earlier ordered one is in `A`.
+    /// STATEMENT: Requests rejected by the filter bypass turns, and their `A`
+    /// errors are returned without entering `B`.
+    /// HOW: An unordered request enters `B` while an earlier ordered one is in
+    /// `A`; a failing unordered request returns its `A` error.
     #[ntex::test]
     async fn unordered_bypass() {
         let sink = Sink::default();
         let pl = ordered(&sink);
 
-        let msgs = [Msg::new(1, 30), Msg::new(2, 0).unordered(), Msg::new(3, 0)];
+        let msgs = [
+            Msg::new(1, 30),
+            Msg::new(2, 0).unordered(),
+            Msg::new(3, 0),
+            Msg::new(4, 0).unordered().failed(),
+        ];
         let handles = dispatch(&pl, msgs).await;
-        assert_eq!(results(handles).await, vec![Ok(10), Ok(20), Ok(30)]);
+        assert_eq!(results(handles).await, vec![Ok(10), Ok(20), Ok(30), Err(4)]);
         assert_eq!(sink.entered(), vec![2, 1, 3]);
     }
 
@@ -1149,6 +1432,34 @@ mod tests {
         assert_eq!(sink.entered(), vec![5, 1, 3, 4]);
     }
 
+    /// STATEMENT: Requests with canceled tickets return `Canceled` without entering
+    /// `B`, later tickets are not affected.
+    /// HOW: Cancel external tickets while one request is in `A` and others wait
+    /// for the turn, then call with a ticket issued after the cancel.
+    #[ntex::test]
+    async fn canceled_tickets() {
+        let sink = Sink::default();
+        let svc = Ordered::new(fn_service(first), sink.clone())
+            .sequencer(tickets(|m: &mut Msg| m.ticket.take()));
+        let pl = Pipeline::new((), svc);
+
+        let tickets = Tickets::new();
+        let msgs = [
+            Msg::new(1, 30).ticket(tickets.issue()),
+            Msg::new(2, 0).ticket(tickets.issue()),
+            Msg::new(3, 0).ticket(tickets.issue()),
+        ];
+        let handles = dispatch(&pl, msgs).await;
+        sleep(Millis(10)).await;
+        tickets.cancel();
+        assert_eq!(results(handles).await, vec![Err(CANCELED); 3]);
+        assert_eq!(sink.entered(), Vec::<u32>::new());
+
+        let handles = dispatch(&pl, [Msg::new(4, 0).ticket(tickets.issue())]).await;
+        assert_eq!(results(handles).await, vec![Ok(40)]);
+        assert_eq!(sink.entered(), vec![4]);
+    }
+
     /// STATEMENT: The factory creates services with independent arrival sequences.
     /// HOW: A slow request in one service does not block a request in another.
     #[ntex::test]
@@ -1168,5 +1479,23 @@ mod tests {
         assert_eq!(results(h2).await, vec![Ok(30)]);
         assert_eq!(results(h1).await, vec![Ok(10), Ok(20)]);
         assert_eq!(sink.entered(), vec![3, 1, 2]);
+    }
+
+    /// STATEMENT: The factory returns the init error of `A` or `B`.
+    /// HOW: Create with a failing `A` factory and with a failing `B` factory,
+    /// check each init error.
+    #[ntex::test]
+    async fn factory_init_error() {
+        let factory = OrderedFactory::new(
+            fn_factory(async |(): &()| Err::<Probe, u32>(1)),
+            fn_factory(async |(): &()| Ok::<_, u32>(Sink::default())),
+        );
+        assert_eq!(factory.pipeline(()).await.err(), Some(1));
+
+        let factory = OrderedFactory::new(
+            fn_factory(async |(): &()| Ok::<_, u32>(Probe::default())),
+            fn_factory(async |(): &()| Err::<Sink, u32>(2)),
+        );
+        assert_eq!(factory.pipeline(()).await.err(), Some(2));
     }
 }
