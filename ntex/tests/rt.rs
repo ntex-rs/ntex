@@ -91,7 +91,9 @@ fn test_async() {
 ///
 /// HOW:
 /// - Implement `Runner` with a current-thread Tokio runtime and run a system with a short ping interval.
-/// - Assert submitted tasks observe the owning system ID and ping records are nonempty before stopping.
+/// - Assert submitted tasks observe the owning system ID.
+/// - Poll ping records on the system thread until the first ping round, then
+///   assert they are nonempty before stopping.
 #[cfg(feature = "tokio")]
 #[test]
 fn test_block_on() {
@@ -140,8 +142,16 @@ fn test_block_on() {
     // timers are thread-local, create the sleep on the system thread
     sys.handle().spawn_detached(async move {
         rt::spawn_detached(async move {
-            ntex::time::sleep(std::time::Duration::from_millis(100)).await;
-            System::list_arbiter_pings(|_, recs| tx.send(recs.clone()).unwrap());
+            // pings use their own clock, wait for the first round
+            let mut recs = Vec::new();
+            for _ in 0..200 {
+                ntex::time::sleep(std::time::Duration::from_millis(25)).await;
+                System::list_arbiter_pings(|_, r| recs.extend(r.iter().copied()));
+                if !recs.is_empty() {
+                    break;
+                }
+            }
+            let _ = tx.send(recs);
         });
     });
     let recs = rx.recv().unwrap();

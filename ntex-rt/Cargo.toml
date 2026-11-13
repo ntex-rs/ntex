@@ -48,7 +48,7 @@ scoped-tls = { workspace = true }
 slab = { workspace = true }
 
 compio-driver = { workspace = true, optional = true }
-compio-runtime = { workspace = true, optional = true }
+compio-runtime = { workspace = true, features = ["time"], optional = true }
 tok-io = { workspace = true, features = ["rt", "net", "time"], optional = true }
 
 [target.'cfg(target_family = "unix")'.dependencies]

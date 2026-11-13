@@ -611,6 +611,72 @@ mod tests {
         assert_ne!(o0, t0);
     }
 
+    /// STATEMENT: `Tickets` `Debug` reports the next sequence and the current turn.
+    /// HOW: Issue two tickets, check `next: 2, turn: 0`, drop the first one and
+    /// check that the turn moves to `1`.
+    #[test]
+    fn tickets_debug() {
+        let tickets = Tickets::new();
+        assert_eq!(format!("{tickets:?}"), "Tickets { next: 0, turn: 0 }");
+        let t0 = tickets.issue();
+        let _t1 = tickets.issue();
+        assert_eq!(format!("{tickets:?}"), "Tickets { next: 2, turn: 0 }");
+        drop(t0);
+        assert_eq!(format!("{tickets:?}"), "Tickets { next: 2, turn: 1 }");
+    }
+
+    /// STATEMENT: Sequencer `Debug` output shows ticket state and hides filters
+    /// and extractors.
+    /// HOW: Format a plain and a filtered `Arrival` after issuing a ticket, and a
+    /// `tickets()` sequencer; check the exact strings.
+    #[test]
+    fn sequencer_debug() {
+        let arrival = Arrival::new();
+        let _t = <Arrival as Sequencer<u32>>::ticket(&arrival, &mut 0);
+        assert_eq!(
+            format!("{arrival:?}"),
+            "Arrival { tickets: Tickets { next: 1, turn: 0 } }"
+        );
+
+        let filtered = Arrival::new().filter(|req: &u32| *req > 0);
+        assert_eq!(
+            format!("{filtered:?}"),
+            "Arrival { tickets: Tickets { next: 0, turn: 0 } }"
+        );
+
+        let external = tickets(|req: &mut Option<Ticket>| req.take());
+        assert_eq!(format!("{external:?}"), "External");
+    }
+
+    /// STATEMENT: `Ordered` and `OrderedFactory` `Debug` show both services and
+    /// the sequencer.
+    /// HOW: Build both with `Debug` stand-ins for `A` and `B`, with the default
+    /// sequencer and with `tickets()`, and check the exact strings.
+    #[test]
+    fn ordered_debug() {
+        let svc = Ordered::new("a", 1u8);
+        assert_eq!(
+            format!("{svc:?}"),
+            "Ordered { a: \"a\", b: 1, seq: Arrival { tickets: Tickets { next: 0, turn: 0 } } }"
+        );
+        let svc = svc.sequencer(tickets(|req: &mut Option<Ticket>| req.take()));
+        assert_eq!(
+            format!("{svc:?}"),
+            "Ordered { a: \"a\", b: 1, seq: External }"
+        );
+
+        let factory = OrderedFactory::new("a", 1u8);
+        assert_eq!(
+            format!("{factory:?}"),
+            "OrderedFactory { a: \"a\", b: 1, seq: Arrival { tickets: Tickets { next: 0, turn: 0 } } }"
+        );
+        let factory = factory.sequencer(tickets(|req: &mut Option<Ticket>| req.take()));
+        assert_eq!(
+            format!("{factory:?}"),
+            "OrderedFactory { a: \"a\", b: 1, seq: External }"
+        );
+    }
+
     /// STATEMENT: Passing the turn skips tickets dropped before their turn.
     /// HOW: Drop middle tickets out of order, pass the first, the last holds the turn.
     #[test]

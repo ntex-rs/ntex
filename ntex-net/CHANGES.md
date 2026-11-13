@@ -1,6 +1,6 @@
 # Changes
 
-## [4.12.0] - Unreleased
+## [4.12.0] - 2026-11-13
 
 * Native reactors wait for the next runtime timer batch instead of a timer
   driver task
