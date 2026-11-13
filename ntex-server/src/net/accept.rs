@@ -804,7 +804,8 @@ mod tests {
     /// - Resume the loop while the server is still paused and check the
     ///   connection stays in the backlog.
     /// - Resume the server and the loop and check the queued and a new
-    ///   connection are delivered.
+    ///   connection are delivered, and the listener metrics count three
+    ///   accepted connections.
     /// - Terminate the loop and check the listener is closed.
     #[ntex::test]
     async fn backlog_while_server_unavailable() {
@@ -855,13 +856,14 @@ mod tests {
         assert_eq!(srv.metrics().accept_backlog, 0);
         let _c3 = std::net::TcpStream::connect(addr).unwrap();
         wait_for("third connection", || received.load(Ordering::SeqCst) == 3).await;
+        assert_eq!(srv.metrics().listeners[0].accepted, 3);
 
+        // probe connections may be accepted before the loop handles `Terminate`
         notify.send(AcceptorCommand::Terminate);
         wait_for("closed listener", || {
             std::net::TcpStream::connect(addr).is_err()
         })
         .await;
-        assert_eq!(srv.metrics().listeners[0].accepted, 3);
         srv.stop(false).await;
     }
 }
