@@ -1,5 +1,15 @@
 # Changes
 
+## [4.11.0] - 2026-11-13
+
+* Breaking: `Ticket::turn()`, `Ticket::poll_turn()` and `Turn::poll_turn()` return
+  `Result<(), Canceled>`; `Ordered` requires `A::Error: From<Canceled>`
+
+* `Ticket::pass()` takes `&mut self` and keeps the ticket, add `Ticket::is_passed()`
+
+* Add `Tickets::cancel()` and `Ticket::cancel()` to cancel turn waits of all outstanding
+  tickets, `Ticket::is_canceled()`
+
 ## [4.10.0] - 2026-11-13
 
 * Timer wheel moved to `ntex_rt::time`; `TimerHandle`, `system_time()` and
