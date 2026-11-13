@@ -349,7 +349,7 @@ impl ntex_rt::Driver for Reactor {
 
         let result = loop {
             let timeout = match rt.poll() {
-                PollResult::Pending => None,
+                PollResult::Pending(timeout) => timeout,
                 PollResult::PollAgain => Some(Duration::ZERO),
                 PollResult::Ready => break Ok(()),
             };

@@ -1,6 +1,13 @@
 # Changes
 
-## [4.11.0] - Unreleased
+## [4.12.0] - Unreleased
+
+* Native reactors wait for the next runtime timer batch instead of a timer
+  driver task
+
+* io-uring: Require Linux 5.11+ (`IORING_FEAT_EXT_ARG`)
+
+## [4.11.0] - 2026-11-12
 
 * Add `tcp_listener()` and `Listener` for accepting TCP connections on the native polling and io-uring reactors
 

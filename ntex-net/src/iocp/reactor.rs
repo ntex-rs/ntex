@@ -200,7 +200,12 @@ impl ntex_rt::Driver for Reactor {
 
         let result = loop {
             let timeout = match rt.poll() {
-                PollResult::Pending => INFINITE,
+                PollResult::Pending(Some(timeout)) => {
+                    // round up, a shorter wait would poll before the timers are due
+                    let ms = timeout.as_nanos().div_ceil(1_000_000);
+                    u32::try_from(ms).unwrap_or(INFINITE - 1).min(INFINITE - 1)
+                }
+                PollResult::Pending(None) => INFINITE,
                 PollResult::PollAgain => 0,
                 PollResult::Ready => break Ok(()),
             };
