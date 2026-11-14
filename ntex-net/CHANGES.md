@@ -1,6 +1,6 @@
 # Changes
 
-## [4.12.1] - 2026-11-14
+## [4.12.1] - 2026-11-15
 
 * polling: Read sockets with `recv` instead of `read`
 

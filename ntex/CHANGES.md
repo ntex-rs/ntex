@@ -1,6 +1,6 @@
 # Changes
 
-## [4.8.1] - Unreleased
+## [4.8.1] - 2026-11-14
 
 * http: Add `Payload::take_trailers()` to take trailer fields without copying them
 
@@ -8,6 +8,8 @@
 
 * client: HTTP/2 requests build their header map from the `ntex-h2` header map pool,
   and the response head returns its unused map to it
+
+* ws: Unmask payloads shorter than 8 bytes, and unaligned payload edges, without `memcpy`
 
 ## [4.8.0] - 2026-11-12
 
