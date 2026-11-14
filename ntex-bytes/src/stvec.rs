@@ -757,7 +757,12 @@ pub(crate) fn release_shared_vec(ptr: *mut Header) {
     // SAFETY: Callers transfer one live allocation reference; only the final release recycles or
     // deallocates it.
     unsafe {
-        if (*ptr).ref_count.fetch_sub(1, Release) != 1 {
+        // A unique owner skips the read-modify-write: nobody else holds a
+        // reference that could clone the page. The count is left at 1, a
+        // recycled page resets it and a freed one is never read again. The
+        // load reads the value of the last `Release` decrement, so the fence
+        // below synchronizes with it as with a `fetch_sub`.
+        if (*ptr).ref_count.load(Relaxed) != 1 && (*ptr).ref_count.fetch_sub(1, Release) != 1 {
             return;
         }
 
