@@ -1,5 +1,10 @@
 # Changes
 
+## [4.7.3] - 2026-11-14
+
+* Reduce write path overhead: compute buffered output once per encode and write status
+  update, and keep the connection state touched on every I/O event in the same cache lines
+
 ## [4.7.2] - 2026-11-12
 
 * Raise the default write backpressure watermark from about 16 KiB to 64 KiB

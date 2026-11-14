@@ -20,15 +20,19 @@ use crate::IoRef;
 /// borrow.
 pub(crate) struct Stack(RefCell<Layers>);
 
+// `repr(C)` keeps the buffers touched on every write, `app` and `wire`, and
+// their write halves at the start, next to the hot fields of `IoState`.
+#[repr(C)]
 pub(crate) struct Layers {
     app: Buffer,
-    mid: Vec<Buffer>,
     wire: Option<Buffer>,
+    mid: Vec<Buffer>,
 }
 
+#[repr(C)]
 struct Buffer {
-    read: Cell<Option<BytesMut>>,
     write: RefCell<BytePages>,
+    read: Cell<Option<BytesMut>>,
 }
 
 impl fmt::Debug for Stack {
@@ -154,6 +158,15 @@ impl Stack {
     /// Returns the size of the transport-facing write buffer.
     pub(crate) fn write_dst_size(&self) -> usize {
         self.borrow().write_dst_size()
+    }
+
+    /// Returns `true` if a filter layer holds output back from the
+    /// transport-facing buffer.
+    ///
+    /// Same as `write_buf_size() != write_dst_size()`, but reads one buffer.
+    pub(crate) fn is_write_held(&self) -> bool {
+        let layers = self.borrow();
+        layers.wire.is_some() && layers.app.write_len() != 0
     }
 
     pub(crate) fn with_write_src<F, R>(&self, io: &IoRef, f: F) -> R

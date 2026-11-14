@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "4.7.2"
+version = "4.7.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
