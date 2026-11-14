@@ -1,5 +1,5 @@
 //! This is code from [Tungstenite project](https://github.com/snapview/tungstenite-rs)
-use std::{ptr::copy_nonoverlapping, slice};
+use std::slice;
 
 // Holds a slice guaranteed to be shorter than 8 bytes
 struct ShortSlice<'a>(&'a mut [u8]);
@@ -45,20 +45,12 @@ pub(crate) fn apply_mask(buf: &mut [u8], mask_u32: u32) {
 }
 
 #[inline]
-// TODO: copy_nonoverlapping here compiles to call memcpy. While it is not so
-// inefficient, it could be done better. The compiler does not understand that
-// a `ShortSlice` must be smaller than a u64.
 #[allow(clippy::needless_pass_by_value)]
 fn xor_short(buf: ShortSlice<'_>, mask: u64) {
-    // SAFETY: `ShortSlice` has fewer than eight bytes; both copies stay in bounds and use disjoint storage.
-    unsafe {
-        let (ptr, len) = (buf.0.as_mut_ptr(), buf.0.len());
-        let mut b: u64 = 0;
-        #[allow(trivial_casts)]
-        copy_nonoverlapping(ptr, (&raw mut b).cast::<u8>(), len);
-        b ^= mask;
-        #[allow(trivial_casts)]
-        copy_nonoverlapping((&raw const b).cast::<u8>(), ptr, len);
+    // A bytewise loop avoids the two `memcpy` calls a `u64` round-trip needs
+    // for a length the compiler cannot bound.
+    for (byte, m) in buf.0.iter_mut().zip(mask.to_ne_bytes()) {
+        *byte ^= m;
     }
 }
 
@@ -150,6 +142,34 @@ mod tests {
             apply_mask(&mut masked_fast[1..], mask_u32);
 
             assert_eq!(masked, masked_fast);
+        }
+    }
+
+    /// STATEMENT: Masking matches bytewise XOR for every short head and tail length.
+    ///
+    /// HOW:
+    /// - Mask slices of lengths 0 to 24 at offsets 0 to 7 of an aligned buffer, so
+    ///   heads and tails of 0 to 7 bytes and buffers without an aligned word occur.
+    /// - Compare each result with the safe bytewise reference implementation.
+    #[test]
+    fn test_apply_mask_short_segments() {
+        let mask = [0x6d, 0xb6, 0xb2, 0x80];
+        let mask_u32 = u32::from_ne_bytes(mask);
+        let mut buf = [0u8; 48];
+        let base = buf.as_ptr().align_offset(8);
+        let bytes = &mut buf[base..base + 40];
+
+        for offset in 0..8 {
+            for len in 0..=24 {
+                for (i, b) in bytes.iter_mut().enumerate() {
+                    *b = i as u8;
+                }
+                let mut expected = bytes[offset..offset + len].to_vec();
+                apply_mask_fallback(&mut expected, mask);
+
+                apply_mask(&mut bytes[offset..offset + len], mask_u32);
+                assert_eq!(bytes[offset..offset + len], expected[..], "{offset}/{len}");
+            }
         }
     }
 }

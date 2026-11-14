@@ -1,6 +1,6 @@
 # Changes
 
-## [1.15.3] - 2026-11-14
+## [1.15.3] - 2026-11-15
 
 * Releasing the last reference of a page skips the atomic decrement
 
