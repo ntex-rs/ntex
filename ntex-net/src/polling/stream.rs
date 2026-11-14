@@ -589,7 +589,9 @@ impl StreamItem {
                 let chunk_len = chunk.len();
                 let chunk_ptr = chunk.as_mut_ptr();
 
-                let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
+                // `recv` instead of `read`, it skips the generic file layer and is
+                // cheaper on macOS
+                let result = syscall!(break libc::recv(fd, chunk_ptr.cast(), chunk_len, 0));
                 #[cfg(feature = "trace")]
                 log::trace!("{tag}: {fd:?}-Rdt sz() = {result:?}");
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [4.12.1] - 2026-11-14
+
+* polling: Read sockets with `recv` instead of `read`
+
 ## [4.12.0] - 2026-11-13
 
 * Native reactors wait for the next runtime timer batch instead of a timer
