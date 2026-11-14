@@ -68,19 +68,12 @@ pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
 
+// `repr(C)` keeps the fields read on every I/O event, `flags`, `wr_inflight`
+// and the head of `buffer`, together at the start. The rest is ordered by
+// alignment, so no padding is added.
+#[repr(C)]
 pub(crate) struct IoState {
-    filter: FilterPtr,
-    pub(super) id: Cell<Id>,
-    pub(super) cfg: Cfg<IoConfig>,
     pub(super) flags: Flags,
-    pub(super) error: Cell<Option<io::Error>>,
-    pub(super) read_task: LocalWaker,
-    pub(super) write_task: LocalWaker,
-    dispatch_task: LocalWaker,
-    pub(super) buffer: Stack,
-    pub(super) handle: Cell<Option<Box<dyn Handle>>>,
-    pub(super) timeout: Cell<TimerHandle>,
-    pub(super) shutdown_timeout: Cell<Option<Sleep>>,
     /// Bytes handed to the transport that have not reached the peer yet.
     ///
     /// Completion based transports take ownership of write pages and keep them
@@ -90,21 +83,25 @@ pub(crate) struct IoState {
     /// The count saturates at `u32::MAX`. More than 4 GiB in flight is not
     /// tracked exactly, see [`Io::poll_flush`].
     pub(super) wr_inflight: Cell<u32>,
-    /// Page size of new read buffers.
-    ///
-    /// It adapts to the input between the configured min and max read sizes,
-    /// see [`IoState::track_read`].
-    rd_size: Cell<BytePageSize>,
-    /// Input read since the last read that did not fill its buffer.
-    rd_batch: Cell<u32>,
-    /// Consecutive read batches small enough for a smaller page.
-    rd_small: Cell<u8>,
+    pub(super) buffer: Stack,
+    pub(super) read_task: LocalWaker,
+    pub(super) write_task: LocalWaker,
+    dispatch_task: LocalWaker,
+    filter: FilterPtr,
+    pub(super) id: Cell<Id>,
+    pub(super) cfg: Cfg<IoConfig>,
+    pub(super) error: Cell<Option<io::Error>>,
+    pub(super) handle: Cell<Option<Box<dyn Handle>>>,
+    pub(super) shutdown_timeout: Cell<Option<Sleep>>,
+    pub(super) extensions: Extensions,
+    metrics: UnsafeCell<Arc<IoMetrics>>,
     /// Per-connection read buffer tracker, created on first use, see
     /// [`IoState::buf_tracker`].
     #[cfg(feature = "tracker")]
     rd_tracker: UnsafeCell<Option<ntex_bytes::BytesTracker>>,
-    pub(super) extensions: Extensions,
-    metrics: UnsafeCell<Arc<IoMetrics>>,
+    pub(super) timeout: Cell<TimerHandle>,
+    /// Input read since the last read that did not fill its buffer.
+    rd_batch: Cell<u32>,
     /// Read buffer size last reported to `metrics`, saturated at `u32::MAX`.
     rd_buffered: Cell<u32>,
     /// Read buffer capacity last reported to `metrics`, saturated at
@@ -112,6 +109,13 @@ pub(crate) struct IoState {
     rd_capacity: Cell<u32>,
     /// Write buffer size last reported to `metrics`, saturated at `u32::MAX`.
     wr_buffered: Cell<u32>,
+    /// Page size of new read buffers.
+    ///
+    /// It adapts to the input between the configured min and max read sizes,
+    /// see [`IoState::track_read`].
+    rd_size: Cell<BytePageSize>,
+    /// Consecutive read batches small enough for a smaller page.
+    rd_small: Cell<u8>,
     pub(super) close: Cell<Close>,
 }
 

@@ -364,18 +364,23 @@ impl IoState {
         }
     }
 
-    /// Enables write back-pressure once outstanding output reaches the high
-    /// watermark.
+    /// Enables write back-pressure once `outstanding`, the current
+    /// [`IoState::write_outstanding`], reaches the high watermark.
     ///
     /// Besides application writes, this is checked after deferred filter
     /// processing, which can grow the output, for example a filter that
     /// expands its input. Only the flag is set, no write is started.
-    pub(crate) fn enable_wr_backpressure_if_needed(&self) {
-        if !self.flags.is_wr_backpressure()
-            && self.is_wr_backpressure_needed(self.write_outstanding())
-        {
+    ///
+    /// Returns `true` if the dispatcher was woken. Its waker may poll inline
+    /// and queue more output, so values derived from the write buffer must be
+    /// read again.
+    pub(crate) fn enable_wr_backpressure_for(&self, outstanding: usize) -> bool {
+        if !self.flags.is_wr_backpressure() && self.is_wr_backpressure_needed(outstanding) {
             self.set_wr_backpressure();
             self.wake_dispatch_task();
+            true
+        } else {
+            false
         }
     }
 
@@ -419,7 +424,13 @@ impl IoState {
 
     /// Reports the current write buffer size to the metrics.
     pub(crate) fn sync_write_buffered(&self) {
-        let size = u32::try_from(self.write_outstanding()).unwrap_or(u32::MAX);
+        self.sync_write_buffered_for(self.write_outstanding());
+    }
+
+    /// Reports `outstanding`, the current [`IoState::write_outstanding`], as
+    /// the write buffer size to the metrics.
+    pub(crate) fn sync_write_buffered_for(&self, outstanding: usize) {
+        let size = u32::try_from(outstanding).unwrap_or(u32::MAX);
         let prev = self.wr_buffered.replace(size);
         self.metrics().update_write_buffered(prev, size);
     }

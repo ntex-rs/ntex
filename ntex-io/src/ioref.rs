@@ -588,6 +588,8 @@ impl IoRef {
 
         // wake write task if needsed
         let size = st.buffer.write_buf_size();
+        // set when a direct write may have changed the outstanding output
+        let mut wrote = false;
 
         #[cfg(feature = "trace")]
         log::trace!("{}: write-upd == buf:{size} flags:{:?}", st.tag(), st.flags);
@@ -605,6 +607,7 @@ impl IoRef {
             // out-of-order writes based on a configured threshold.
             if st.flags.is_direct_wr_enabled() && (force || size >= st.cfg.write_buf_threshold()) {
                 // Send data in-place
+                wrote = true;
                 let partial = self.call_write() == WakeWriteTask::Yes;
                 st.metrics().eager_write(partial);
                 if partial {
@@ -640,8 +643,15 @@ impl IoRef {
 
         // A direct write may have changed the amount of buffered data.
         // In-flight output counts too: it has not reached the peer yet.
-        st.enable_wr_backpressure_if_needed();
-        st.sync_write_buffered();
+        let mut outstanding = if wrote {
+            st.write_outstanding()
+        } else {
+            size + st.wr_inflight.get() as usize
+        };
+        if st.enable_wr_backpressure_for(outstanding) {
+            outstanding = st.write_outstanding();
+        }
+        st.sync_write_buffered_for(outstanding);
         Ok(())
     }
 

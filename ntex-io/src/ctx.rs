@@ -481,9 +481,7 @@ impl IoContext {
                     log::trace!("{}: Write buf is full, pause reading", st.tag());
                     st.flags.set_read_wr_backpressure();
                 }
-            } else if st.flags.is_write_paused()
-                && st.buffer.write_buf_size() != st.buffer.write_dst_size()
-            {
+            } else if st.flags.is_write_paused() && st.buffer.is_write_held() {
                 // A filter holds output back, the input may be what it
                 // waits for. The write task paused on that output, so
                 // it is scheduled to let the filter retry.
@@ -555,10 +553,12 @@ impl IoContext {
         if st.is_output_discarded() {
             // `f` stopped or aborted the connection, pages it took are gone
             st.wr_inflight.set(0);
+            st.sync_write_buffered();
         } else {
-            st.track_wr_inflight(before, st.buffer.write_buf_size());
+            let after = st.buffer.write_buf_size();
+            st.track_wr_inflight(before, after);
+            st.sync_write_buffered_for(after + st.wr_inflight.get() as usize);
         }
-        st.sync_write_buffered();
 
         result
     }
@@ -601,11 +601,13 @@ impl IoContext {
                 // Filter processing, here or in `with_write_dst`, may have
                 // grown the output. It is checked once the write attempt is
                 // accounted for, an eager write may have drained it already.
-                st.enable_wr_backpressure_if_needed();
-                st.sync_write_buffered();
-
-                let len = st.buffer.write_buf_size();
-                let outstanding = st.write_outstanding();
+                let mut len = st.buffer.write_buf_size();
+                let mut outstanding = len + st.wr_inflight.get() as usize;
+                if st.enable_wr_backpressure_for(outstanding) {
+                    len = st.buffer.write_buf_size();
+                    outstanding = len + st.wr_inflight.get() as usize;
+                }
+                st.sync_write_buffered_for(outstanding);
 
                 // A full flush completes once all output, including in-flight
                 // pages, reaches the peer. Write backpressure is released once
