@@ -382,17 +382,9 @@ mod serde {
     }
 }
 
-#[cfg(feature = "simd")]
 mod utf8 {
     pub(super) fn is_valid(input: &[u8]) -> bool {
         simdutf8::basic::from_utf8(input).is_ok()
-    }
-}
-
-#[cfg(not(feature = "simd"))]
-mod utf8 {
-    pub(super) fn is_valid(input: &[u8]) -> bool {
-        std::str::from_utf8(input).is_ok()
     }
 }
 

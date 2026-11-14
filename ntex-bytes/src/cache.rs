@@ -1,5 +1,5 @@
 //! Per-thread page cache and its statistics.
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::sync::{Arc, atomic::AtomicU64, atomic::Ordering::Relaxed};
 
 use crate::stvec::{Header, StorageVec};
@@ -15,7 +15,8 @@ const _: () = assert!(CLASSES == BytePageSize::Unset as usize);
 const DEFAULT_PAGES_CACHE: [usize; CLASSES] = [128, 64, 64, 32, 16, 8, 16, 2, 1];
 
 thread_local! {
-    static CACHE: Cell<Option<Box<Cache>>> = Cell::new(Some(Box::default()));
+    // inline, not boxed, the hot paths save a dependent load
+    static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
 }
 
 struct Cache {
@@ -49,8 +50,8 @@ impl Cache {
         let pages = &mut self.pages[class];
         if pages.len() > limit {
             self.metrics.remove_pages(class, pages.len() - limit);
-            // the cache is taken out of the thread-local, the released pages
-            // are freed instead of being cached again
+            // the cache is borrowed, the released pages are freed instead of
+            // being cached again
             pages.truncate(limit);
         }
     }
@@ -63,12 +64,7 @@ impl Cache {
 #[inline]
 fn with_cache<R>(f: impl FnOnce(&mut Cache) -> R) -> Option<R> {
     CACHE
-        .try_with(|c| {
-            let mut cst = c.take()?;
-            let res = f(&mut cst);
-            c.set(Some(cst));
-            Some(res)
-        })
+        .try_with(|c| c.try_borrow_mut().ok().map(|mut cst| f(&mut cst)))
         .ok()
         .flatten()
 }
@@ -162,12 +158,12 @@ pub(crate) fn set_page_cache_size(size: BytePageSize, count: usize) {
 #[cfg(test)]
 /// Replaces the cache of the current thread with an empty one.
 ///
-/// The old cache is taken out first, so its pages are freed rather than
-/// returned to the new cache.
+/// The old cache is dropped while the cache is borrowed, so its pages are
+/// freed rather than returned to the new cache.
 pub(crate) fn reset() {
     CACHE.with(|c| {
-        drop(c.take());
-        c.set(Some(Box::default()));
+        let mut cst = c.borrow_mut();
+        drop(std::mem::take(&mut *cst));
     });
 }
 
@@ -515,7 +511,7 @@ mod tests {
     ///
     /// HOW:
     /// - Set limits of one and zero, drop pages, and check cached counts.
-    /// - Take `CACHE`, drop a page and attempt a limit update, then verify no page was cached and limits stayed unchanged.
+    /// - Borrow `CACHE`, drop a page and attempt a limit update, then verify no page was cached and limits stayed unchanged.
     #[test]
     #[allow(deprecated)]
     fn pages_cache_size() {
@@ -535,32 +531,29 @@ mod tests {
         // the cache is in use, the page is freed
         crate::set_pages_cache(16);
         let st = StorageVec::sized(BytePageSize::Size16);
-        let cache = CACHE.with(Cell::take);
-        drop(st);
-        CACHE.with(|c| c.set(cache));
+        CACHE.with(|c| {
+            let _cst = c.borrow_mut();
+            drop(st);
+        });
         assert_eq!(cached_pages(BytePageSize::Size16), 0);
 
         // the setting is ignored while the cache is in use
-        let cache = CACHE.with(Cell::take);
-        crate::set_pages_cache(3);
-        CACHE.with(|c| c.set(cache));
+        CACHE.with(|c| {
+            let _cst = c.borrow_mut();
+            crate::set_pages_cache(3);
+        });
         assert_eq!(cache_limits(), [16; CLASSES]);
     }
 
     fn cache_limits() -> [usize; CLASSES] {
-        CACHE.with(|c| {
-            let cst = c.take().unwrap();
-            let limits = cst.limits;
-            c.set(Some(cst));
-            limits
-        })
+        CACHE.with(|c| c.borrow().limits)
     }
 
     /// STATEMENT: Per-size limits leave other classes unchanged and ignore invalid or reentrant updates.
     ///
     /// HOW:
     /// - Limit `Size64` to one, configure `Unset`, and check limits and retained `Size64` and `Size48` pages.
-    /// - Verify an update while `CACHE` is taken is ignored, then check a global limit applies to all classes.
+    /// - Verify an update while `CACHE` is borrowed is ignored, then check a global limit applies to all classes.
     #[test]
     #[allow(deprecated)]
     fn page_cache_size() {
@@ -582,9 +575,10 @@ mod tests {
         assert_eq!(cached_pages(BytePageSize::Size48), 2);
 
         // the setting is ignored while the cache is in use
-        let cache = CACHE.with(Cell::take);
-        crate::set_page_cache_size(BytePageSize::Size48, 3);
-        CACHE.with(|c| c.set(cache));
+        CACHE.with(|c| {
+            let _cst = c.borrow_mut();
+            crate::set_page_cache_size(BytePageSize::Size48, 3);
+        });
         assert_eq!(cache_limits(), expected);
 
         crate::set_pages_cache(2);

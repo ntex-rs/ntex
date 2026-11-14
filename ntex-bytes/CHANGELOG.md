@@ -1,5 +1,12 @@
 # Changes
 
+## [1.15.3] - 2026-11-14
+
+* Releasing the last reference of a page skips the atomic decrement
+
+* The per-thread page cache is stored inline in the thread-local instead of
+  a box taken out and put back on every access
+
 ## [1.15.2] - 2026-11-12
 
 * `BytePages::move_to()` copies less than 4 KiB of data from a current page
