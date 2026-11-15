@@ -726,7 +726,8 @@ mod tests {
     /// HOW:
     /// - Build targets from pseudo headers, including CONNECT, OPTIONS and double-slash paths.
     /// - Check raw components with processing disabled and reject malformed values when enabled.
-    /// - Check normalization length limits and preservation of OPTIONS asterisk-form.
+    /// - Check normalization length limits, preservation of OPTIONS asterisk-form and
+    ///   rejection of asterisk-form for other methods under every policy.
     #[test]
     fn test_request_uri() {
         let mut pseudo = h2::frame::PseudoHeaders::default();
@@ -828,7 +829,13 @@ mod tests {
         assert!(request_uri(&pseudo, TargetPolicy::Normalize).is_none());
 
         pseudo.path = Some("*".into());
-        assert!(!valid_target(&pseudo));
+        for policy in [
+            TargetPolicy::Raw,
+            TargetPolicy::Validate,
+            TargetPolicy::Normalize,
+        ] {
+            assert!(request_uri(&pseudo, policy).is_none());
+        }
         pseudo.method = Some(Method::OPTIONS);
         let (_, uri) = request_uri(&pseudo, TargetPolicy::Normalize).unwrap();
         assert_eq!(uri.path(), "*");
