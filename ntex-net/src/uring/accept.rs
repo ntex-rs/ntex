@@ -1,7 +1,8 @@
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::{cell::RefCell, io, mem, net, rc::Rc, task::Context, task::Poll, task::Waker};
+use std::{cell::RefCell, collections::VecDeque, io, mem, net, rc::Rc};
+use std::{task::Context, task::Poll, task::Waker};
 
-use ntex_io_uring::{opcode, types::Fd};
+use ntex_io_uring::{cqueue::more, opcode, types::Fd};
 use ntex_rt::Arbiter;
 use slab::Slab;
 use socket2::{SockAddr, SockAddrStorage};
@@ -10,6 +11,10 @@ use super::{Handler, Reactor, ReactorApi};
 use crate::{Listener, ListenerOps};
 
 type AcceptResult = io::Result<(net::TcpStream, net::SocketAddr)>;
+
+/// Accepted connections a listener queues before its multishot accept is
+/// canceled, it is armed again once the queue is drained
+const MAX_QUEUED: usize = 32;
 
 #[derive(Clone)]
 pub(crate) struct AcceptOps(Rc<AcceptOpsInner>);
@@ -23,6 +28,8 @@ enum State {
     Idle,
     /// `Accept` is submitted
     Accept,
+    /// Multishot `Accept` is submitted, it posts a completion per connection
+    Multi,
     /// `PollAdd` is submitted, the listener reported `EAGAIN`
     Poll,
 }
@@ -34,7 +41,9 @@ struct Entry {
     /// Peer address, written by the kernel
     addr: Box<(libc::sockaddr_storage, libc::socklen_t)>,
     state: State,
-    result: Option<AcceptResult>,
+    /// The multishot accept is canceled because the queue is full
+    paused: bool,
+    results: VecDeque<AcceptResult>,
     waker: Option<Waker>,
     /// The listener is dropped, the entry is released on completion
     dropped: bool,
@@ -43,6 +52,8 @@ struct Entry {
 struct AcceptOpsInner {
     api: ReactorApi,
     supported: bool,
+    /// Kernel supports multishot accept, available since 5.19
+    multishot: bool,
     entries: RefCell<Slab<Entry>>,
 }
 
@@ -59,6 +70,7 @@ impl AcceptOps {
                 let supported = api.is_supported(opcode::Accept::CODE)
                     && api.is_supported(opcode::PollAdd::CODE);
                 let ops = Rc::new(AcceptOpsInner {
+                    multishot: api.is_new(),
                     api,
                     supported,
                     entries: RefCell::new(Slab::new()),
@@ -87,7 +99,8 @@ impl AcceptOps {
             // SAFETY: all zeros is a valid `sockaddr_storage`
             addr: Box::new((unsafe { mem::zeroed() }, 0)),
             state: State::Idle,
-            result: None,
+            paused: false,
+            results: VecDeque::new(),
             waker: None,
             dropped: false,
         });
@@ -103,6 +116,17 @@ impl AcceptOps {
 impl AcceptOpsInner {
     fn submit_accept(&self, id: u32, entry: &mut Entry) {
         let fd = entry.sock.as_raw_fd();
+        if self.multishot {
+            entry.state = State::Multi;
+            // SAFETY: the slab owns the socket until the operation completes
+            unsafe {
+                self.api.submit(id, move |en| {
+                    opcode::AcceptMulti::new(en, Fd(fd)).flags(libc::SOCK_CLOEXEC);
+                });
+            }
+            return;
+        }
+
         entry.state = State::Accept;
         entry.addr.1 = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
         let addr = (&raw mut entry.addr.0).cast::<libc::sockaddr>();
@@ -128,6 +152,22 @@ impl AcceptOpsInner {
             });
         }
     }
+
+    fn push_result(&self, id: u32, entry: &mut Entry, res: AcceptResult) {
+        if entry.dropped {
+            // closes the accepted stream
+            return;
+        }
+        entry.results.push_back(res);
+        // the task stopped accepting, leave further connections in the backlog
+        if entry.state == State::Multi && !entry.paused && entry.results.len() >= MAX_QUEUED {
+            entry.paused = true;
+            self.api.cancel(id);
+        }
+        if let Some(waker) = entry.waker.take() {
+            waker.wake();
+        }
+    }
 }
 
 impl ListenerOps for TcpListener {
@@ -137,7 +177,7 @@ impl ListenerOps for TcpListener {
             return Poll::Ready(Err(io::Error::other("reactor is stopped")));
         };
 
-        if let Some(res) = entry.result.take() {
+        if let Some(res) = entry.results.pop_front() {
             return Poll::Ready(res);
         }
         if entry.state == State::Idle {
@@ -173,8 +213,10 @@ impl Drop for TcpListener {
                 // the completion releases the entry and closes the socket
                 entry.dropped = true;
                 entry.waker = None;
-                entry.result = None;
-                self.ops.api.cancel(self.id);
+                entry.results.clear();
+                if !entry.paused {
+                    self.ops.api.cancel(self.id);
+                }
             }
         }
     }
@@ -197,12 +239,28 @@ fn accepted(fd: RawFd, addr: &(libc::sockaddr_storage, libc::socklen_t)) -> Acce
     }
 }
 
+/// Multishot accept does not report the peer address, every completion would
+/// overwrite a shared buffer.
+fn accepted_multi(fd: RawFd) -> AcceptResult {
+    // SAFETY: the kernel returned a new connected socket owned by us
+    let stream = unsafe { net::TcpStream::from_raw_fd(fd) };
+    match stream.peer_addr() {
+        Ok(addr) => Ok((stream, addr)),
+        // the peer reset the connection before it was accepted
+        Err(err) if err.raw_os_error() == Some(libc::ENOTCONN) => {
+            Err(io::ErrorKind::ConnectionAborted.into())
+        }
+        Err(err) => Err(err),
+    }
+}
+
 impl Handler for AcceptOpsHandler {
     fn canceled(&mut self, id: usize) {
         log::trace!("accept-op is canceled {id:?}");
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(entry) = entries.get_mut(id) {
             entry.state = State::Idle;
+            entry.paused = false;
             if entry.dropped {
                 entries.remove(id);
             } else if let Some(waker) = entry.waker.take() {
@@ -211,16 +269,28 @@ impl Handler for AcceptOpsHandler {
         }
     }
 
-    fn completed(&mut self, id: usize, _: u32, result: io::Result<usize>) {
+    fn completed(&mut self, id: usize, flags: u32, result: io::Result<usize>) {
         log::trace!("accept-op is completed {id:?} result: {result:?}");
         let mut entries = self.inner.entries.borrow_mut();
         let Some(entry) = entries.get_mut(id) else {
             return;
         };
+
+        // multishot accept stays armed
+        if more(flags) {
+            if let Ok(fd) = result {
+                self.inner
+                    .push_result(id as u32, entry, accepted_multi(fd as RawFd));
+            }
+            return;
+        }
+
         let state = mem::replace(&mut entry.state, State::Idle);
+        entry.paused = false;
 
         let res = match result {
             Ok(fd) if state == State::Accept => accepted(fd as RawFd, &entry.addr),
+            Ok(fd) if state == State::Multi => accepted_multi(fd as RawFd),
             // the listener is readable
             Ok(_) => {
                 if entry.dropped {
@@ -237,7 +307,7 @@ impl Handler for AcceptOpsHandler {
             // a non-blocking listener fails instead of waiting on older kernels
             Err(err)
                 if !entry.dropped
-                    && state == State::Accept
+                    && state != State::Poll
                     && err.kind() == io::ErrorKind::WouldBlock =>
             {
                 self.inner.submit_poll(id as u32, entry);
@@ -250,10 +320,7 @@ impl Handler for AcceptOpsHandler {
             // closes the accepted stream and the listener
             entries.remove(id);
         } else {
-            entry.result = Some(res);
-            if let Some(waker) = entry.waker.take() {
-                waker.wake();
-            }
+            self.inner.push_result(id as u32, entry, res);
         }
     }
 
@@ -299,16 +366,20 @@ mod tests {
 
     /// The reactor is never run, submitted operations stay in its queue.
     fn setup() -> Option<(Reactor, AcceptOps, AcceptOpsHandler)> {
-        setup_with(true)
+        setup_with(true, false)
     }
 
-    fn setup_with(supported: bool) -> Option<(Reactor, AcceptOps, AcceptOpsHandler)> {
+    fn setup_with(
+        supported: bool,
+        multishot: bool,
+    ) -> Option<(Reactor, AcceptOps, AcceptOpsHandler)> {
         let reactor = Reactor::new(8).ok()?;
         let mut inner = None;
         reactor.register(|api| {
             let ops = Rc::new(AcceptOpsInner {
                 api,
                 supported,
+                multishot,
                 entries: RefCell::new(Slab::new()),
             });
             inner = Some(ops.clone());
@@ -340,6 +411,158 @@ mod tests {
     fn socket_fd() -> usize {
         let sock = net::TcpListener::bind("127.0.0.1:0").unwrap();
         usize::try_from(sock.into_raw_fd()).unwrap()
+    }
+
+    const F_MORE: u32 = 1 << 1;
+
+    /// A raw fd of an accepted connection, and the connected client.
+    fn connected_fd() -> (usize, net::TcpStream) {
+        let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = net::TcpStream::connect(lst.local_addr().unwrap()).unwrap();
+        let (sock, _) = lst.accept().unwrap();
+        (usize::try_from(sock.into_raw_fd()).unwrap(), client)
+    }
+
+    /// STATEMENT: A multishot accept queues every accepted connection with its
+    /// peer address, and is armed again after its final completion once the
+    /// queue is drained.
+    ///
+    /// HOW:
+    /// - Poll an accept and check a multishot accept is in flight.
+    /// - Deliver two completions with `F_MORE` and check the waker is called,
+    ///   the accept stays in flight and both connections are returned in order
+    ///   with the client addresses.
+    /// - Deliver a final completion and check the accept is idle, its
+    ///   connection is returned and the next poll arms a new multishot accept.
+    #[test]
+    fn multishot_accept_queues_connections() {
+        let Some((_reactor, ops, mut handler)) = setup_with(true, true) else {
+            return;
+        };
+        let mut listener = listener(&ops);
+        let (woken, waker) = waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(listener.0.poll_accept(&mut cx).is_pending());
+        assert_eq!(state(&ops), Some(State::Multi));
+
+        let (fd1, c1) = connected_fd();
+        let (fd2, c2) = connected_fd();
+        handler.completed(0, F_MORE, Ok(fd1));
+        handler.completed(0, F_MORE, Ok(fd2));
+        assert_eq!(woken.get(), 1);
+        assert_eq!(state(&ops), Some(State::Multi));
+        assert_eq!(handler.in_flight(), 1);
+
+        for client in [&c1, &c2] {
+            let Poll::Ready(Ok((_, addr))) = listener.0.poll_accept(&mut cx) else {
+                panic!("expected a connection");
+            };
+            assert_eq!(addr, client.local_addr().unwrap());
+        }
+        assert!(listener.0.poll_accept(&mut cx).is_pending());
+        assert_eq!(state(&ops), Some(State::Multi));
+
+        let (fd3, c3) = connected_fd();
+        handler.completed(0, 0, Ok(fd3));
+        assert_eq!(state(&ops), Some(State::Idle));
+        let Poll::Ready(Ok((_, addr))) = listener.0.poll_accept(&mut cx) else {
+            panic!("expected a connection");
+        };
+        assert_eq!(addr, c3.local_addr().unwrap());
+        assert!(listener.0.poll_accept(&mut cx).is_pending());
+        assert_eq!(state(&ops), Some(State::Multi));
+    }
+
+    /// STATEMENT: A multishot accept is canceled once `MAX_QUEUED` connections
+    /// wait to be returned, and is armed again only after the queue is drained.
+    ///
+    /// HOW:
+    /// - Poll an accept, then deliver `MAX_QUEUED` completions with `F_MORE`
+    ///   for unconnected sockets and check the accept is paused.
+    /// - Deliver one more completion and check it is still queued.
+    /// - Check an unconnected socket is returned as `ConnectionAborted`.
+    /// - Report the cancellation, then check the remaining connections are
+    ///   returned without arming an accept, and the poll after them arms a
+    ///   new multishot accept.
+    #[test]
+    fn multishot_accept_pauses_when_queue_is_full() {
+        let Some((_reactor, ops, mut handler)) = setup_with(true, true) else {
+            return;
+        };
+        let mut listener = listener(&ops);
+        let mut cx = Context::from_waker(Waker::noop());
+
+        assert!(listener.0.poll_accept(&mut cx).is_pending());
+        for _ in 0..MAX_QUEUED {
+            handler.completed(0, F_MORE, Ok(socket_fd()));
+        }
+        assert!(ops.0.entries.borrow()[0].paused);
+        handler.completed(0, F_MORE, Ok(socket_fd()));
+        assert_eq!(ops.0.entries.borrow()[0].results.len(), MAX_QUEUED + 1);
+
+        let Poll::Ready(Err(err)) = listener.0.poll_accept(&mut cx) else {
+            panic!("expected an error");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
+
+        handler.canceled(0);
+        assert_eq!(state(&ops), Some(State::Idle));
+        assert!(!ops.0.entries.borrow()[0].paused);
+        for _ in 0..MAX_QUEUED {
+            assert!(listener.0.poll_accept(&mut cx).is_ready());
+            assert_eq!(state(&ops), Some(State::Idle));
+        }
+        assert!(listener.0.poll_accept(&mut cx).is_pending());
+        assert_eq!(state(&ops), Some(State::Multi));
+    }
+
+    /// STATEMENT: A dropped listener closes connections its multishot accept
+    /// still delivers, and is released by the final completion.
+    ///
+    /// HOW:
+    /// - Poll an accept, drop the listener and check the entry is kept.
+    /// - Deliver a completion with `F_MORE` and check nothing is queued.
+    /// - Report the cancellation and check the entry is released.
+    #[test]
+    fn multishot_accept_of_dropped_listener() {
+        let Some((_reactor, ops, mut handler)) = setup_with(true, true) else {
+            return;
+        };
+        let mut listener = listener(&ops);
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(listener.0.poll_accept(&mut cx).is_pending());
+        drop(listener);
+
+        let (fd, _client) = connected_fd();
+        handler.completed(0, F_MORE, Ok(fd));
+        assert!(ops.0.entries.borrow()[0].results.is_empty());
+        assert_eq!(handler.in_flight(), 1);
+
+        handler.canceled(0);
+        assert!(ops.0.entries.borrow().is_empty());
+    }
+
+    /// STATEMENT: A multishot accept that fails with `EAGAIN` waits for the
+    /// listener to become readable and is armed again.
+    ///
+    /// HOW:
+    /// - Poll an accept, complete it with `WouldBlock` and check a `PollAdd`
+    ///   is in flight.
+    /// - Complete the poll and check a multishot accept is in flight again.
+    #[test]
+    fn multishot_accept_would_block_falls_back_to_poll() {
+        let Some((_reactor, ops, mut handler)) = setup_with(true, true) else {
+            return;
+        };
+        let mut listener = listener(&ops);
+        let mut cx = Context::from_waker(Waker::noop());
+
+        assert!(listener.0.poll_accept(&mut cx).is_pending());
+        handler.completed(0, 0, Err(io::ErrorKind::WouldBlock.into()));
+        assert_eq!(state(&ops), Some(State::Poll));
+        handler.completed(0, 0, Ok(1));
+        assert_eq!(state(&ops), Some(State::Multi));
     }
 
     /// STATEMENT: An accept that fails with `EAGAIN` waits for the listener to
@@ -374,7 +597,7 @@ mod tests {
         assert_eq!(state(&ops), Some(State::Accept));
 
         assert_eq!(woken.get(), 0);
-        assert!(ops.0.entries.borrow()[0].result.is_none());
+        assert!(ops.0.entries.borrow()[0].results.is_empty());
         assert!(listener.0.poll_accept(&mut cx).is_pending());
     }
 
@@ -539,7 +762,7 @@ mod tests {
     /// - Create a listener and check an `Unsupported` error is returned.
     #[test]
     fn unsupported_kernel_rejects_listener() {
-        let Some((_reactor, ops, _handler)) = setup_with(false) else {
+        let Some((_reactor, ops, _handler)) = setup_with(false, false) else {
             return;
         };
         let sock = net::TcpListener::bind("127.0.0.1:0").unwrap();

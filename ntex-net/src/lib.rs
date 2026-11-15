@@ -347,7 +347,8 @@ impl Runner for DefaultRuntime {
             #[cfg(all(target_os = "linux", feature = "neon-uring"))]
             {
                 let driver: Box<dyn Reactor> = Box::new(
-                    crate::uring::Reactor::new(2048).expect("Cannot construct io-uring reactor"),
+                    crate::uring::Reactor::new(crate::uring::Reactor::DEFAULT_ENTRIES)
+                        .expect("Cannot construct io-uring reactor"),
                 );
 
                 with_reactor(&driver, || {
@@ -361,7 +362,8 @@ impl Runner for DefaultRuntime {
             #[cfg(all(not(feature = "neon-uring"), not(feature = "neon-polling")))]
             {
                 #[cfg(target_os = "linux")]
-                let driver: Box<dyn Reactor> = if let Ok(reactor) = crate::uring::Reactor::new(2048)
+                let driver: Box<dyn Reactor> = if let Ok(reactor) =
+                    crate::uring::Reactor::new(crate::uring::Reactor::DEFAULT_ENTRIES)
                 {
                     Box::new(reactor)
                 } else {

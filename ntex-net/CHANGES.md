@@ -14,6 +14,12 @@
 * `from_tcp_stream()` no longer enables `TCP_NODELAY`; callers set socket
   options before converting the stream
 
+* io-uring: Reduce the ring size from 2048 submission and 4096 completion
+  entries to 256 and 512
+
+* io-uring: Accept connections with a multishot accept on Linux 6.0+, a
+  listener queues up to 32 accepted connections
+
 ## [4.12.1] - 2026-11-15
 
 * polling: Read sockets with `recv` instead of `read`
