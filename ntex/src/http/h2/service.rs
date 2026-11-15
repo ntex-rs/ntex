@@ -17,18 +17,23 @@ use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineFactory};
 use crate::service::{BindCtx, Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
 use crate::util::{Bytes, HashMap};
 
-use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
+use super::{payload::Payload, payload::PayloadSender};
 
 /// An HTTP/2 transport service.
 ///
 /// Construct this service with [`HttpService::h2`](crate::http::HttpService::h2).
+/// Request handling is delegated to the configured application service, while
+/// control events get their default action unless a control service is
+/// provided with [`control`](Self::control).
+///
 /// The application and control factories are instantiated for every accepted
 /// connection; see [factory scope](crate::http::HttpService#factory-scope).
 #[derive(derive_more::Debug)]
 #[debug("H2Service")]
 pub struct H2Service<F, Req: RequestState<Io<F>>, Err> {
     sf: crate::http::HttpPipeline<Req::State, Err>,
-    ctl: crate::http::Ctl2Pipeline<Req::State>,
+    /// Without a control service the default action is applied to every event.
+    ctl: Option<crate::http::Ctl2Pipeline<Req::State>>,
     config: DispatcherConfig,
 }
 
@@ -52,7 +57,7 @@ where
                     .map(Into::into)
                     .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
-            ctl: PipelineFactory::new(DefaultControlService),
+            ctl: None,
             config: DispatcherConfig::default(),
         }
     }
@@ -67,6 +72,9 @@ where
 {
     #[must_use]
     /// Provides the HTTP/2 control service.
+    ///
+    /// Unless this method is called, the default action is applied to each
+    /// control event without a service call.
     pub fn control<I, Sf>(self, ctl: I) -> Self
     where
         I: IntoServiceFactory<Sf, Req::State, h2::Control<Error<H2Error>>>,
@@ -76,11 +84,11 @@ where
     {
         H2Service {
             sf: self.sf,
-            ctl: PipelineFactory::new(
+            ctl: Some(PipelineFactory::new(
                 ctl.into_factory()
                     .map_err(|e| DispatchError::Service(e.fail()))
                     .map_init_err(|e| DispatchError::Service(e.fail())),
-            ),
+            )),
             config: self.config,
         }
     }
@@ -100,7 +108,10 @@ where
         let (st, io) = req.unpack();
 
         let svc = self.sf.create(st.clone()).await?;
-        let ctl = self.ctl.create(st).await?;
+        let ctl = match &self.ctl {
+            Some(ctl) => Some(ctl.create(st).await?),
+            None => None,
+        };
 
         let id = self.config.next_id();
         let ioref = io.get_ref();
@@ -136,7 +147,7 @@ pub(in crate::http) async fn handle<Err>(
     id: usize,
     io: IoBoxed,
     svc: Pipeline<Request, Response, Err>,
-    control: Pipeline<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
+    control: Option<Pipeline<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>>,
 ) -> Result<(), DispatchError>
 where
     Err: ResponseError + 'static,
@@ -155,8 +166,10 @@ where
 }
 
 /// Sets `GOAWAY` reason codes for connection level request errors.
+///
+/// Without a user control service the default action is applied to every event.
 struct ControlService {
-    inner: Pipeline<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
+    inner: Option<Pipeline<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>>,
 }
 
 impl Service<(), h2::Control<Error<H2Error>>> for ControlService {
@@ -164,15 +177,23 @@ impl Service<(), h2::Control<Error<H2Error>>> for ControlService {
     type Error = DispatchError;
 
     fn bind(&self, ctx: BindCtx<'_>) {
-        self.inner.bind_to(&ctx);
+        if let Some(inner) = &self.inner {
+            inner.bind_to(&ctx);
+        }
     }
 
     async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
-        self.inner.ready().await
+        if let Some(inner) = &self.inner {
+            inner.ready().await
+        } else {
+            Ok(())
+        }
     }
 
     async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
-        self.inner.shutdown().await;
+        if let Some(inner) = &self.inner {
+            inner.shutdown().await;
+        }
     }
 
     async fn call(
@@ -190,7 +211,12 @@ impl Service<(), h2::Control<Error<H2Error>>> for ControlService {
             }
             msg => msg,
         };
-        self.inner.call(msg).await
+        if let Some(inner) = &self.inner {
+            inner.call(msg).await
+        } else {
+            log::trace!("HTTP/2 Control message: {msg:?}");
+            Ok(msg.ack())
+        }
     }
 }
 
