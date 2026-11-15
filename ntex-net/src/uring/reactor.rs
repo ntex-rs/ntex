@@ -254,6 +254,14 @@ impl Reactor {
     /// 15% faster than handling the whole queue at once.
     const CQES_PER_POLL: usize = 16;
 
+    /// Default submission queue size, the completion queue is twice as large.
+    ///
+    /// Submissions are flushed mid-turn and on queue overflow, a small ring
+    /// keeps both queues in cache.
+    // Unused when the polling, tokio or compio runtime is selected.
+    #[allow(dead_code)]
+    pub(crate) const DEFAULT_ENTRIES: u32 = 256;
+
     /// Create io-uring driver
     pub fn new(capacity: u32) -> io::Result<Self> {
         let build = |no_sqarray: bool| {

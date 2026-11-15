@@ -164,3 +164,33 @@ async fn accept_on_unlistened_socket_fails() {
     let res = ntex::time::timeout(Duration::from_secs(5), lst.accept()).await;
     assert!(res.expect("accept is not completed").is_err());
 }
+
+/// STATEMENT: Connections waiting in the backlog are all accepted with their
+/// peer addresses, more of them than a listener queues at once.
+///
+/// HOW:
+/// - Connect 40 clients before accepting, more than the 32 connections the
+///   io-uring listener queues before it pauses accepting.
+/// - Accept 40 times and confirm the returned addresses are exactly the
+///   clients' local addresses.
+#[ntex::test]
+async fn accepts_backlog_beyond_queue_limit() {
+    if !supported() {
+        return;
+    }
+    let mut lst = tcp_listener(bind()).unwrap();
+    let addr = lst.local_addr().unwrap();
+
+    let clients: Vec<_> = (0..40)
+        .map(|_| net::TcpStream::connect(addr).unwrap())
+        .collect();
+    let mut expected: Vec<_> = clients.iter().map(|c| c.local_addr().unwrap()).collect();
+
+    let mut peers = Vec::new();
+    for _ in 0..clients.len() {
+        peers.push(lst.accept().await.unwrap().1);
+    }
+    expected.sort();
+    peers.sort();
+    assert_eq!(peers, expected);
+}
