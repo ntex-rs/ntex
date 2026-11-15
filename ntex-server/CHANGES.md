@@ -1,6 +1,6 @@
 # Changes
 
-## [4.6.1] - Unreleased
+## [4.6.1] - 2026-11-16
 
 * Enable `TCP_NODELAY` on TCP listeners; on Linux and Apple platforms accepted
   streams inherit it, so workers skip the `setsockopt` call per connection
