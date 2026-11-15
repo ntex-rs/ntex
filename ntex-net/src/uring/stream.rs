@@ -4,7 +4,6 @@ use ntex_bytes::{BufMut, BytePage, BytePages, Bytes, BytesMut, info::PageKind};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_io_uring::{cqueue, opcode, types::Fd};
 use ntex_rt::Arbiter;
-use ntex_util::channel::pool;
 use slab::Slab;
 use socket2::Socket;
 
@@ -127,6 +126,8 @@ bitflags::bitflags! {
         /// Input is streaming, receive into the connection's read buffer
         /// instead of a provided buffer
         const RD_DIRECT    = 0b1000_0000_0000;
+        /// A receive returned eof or an error, the receive queue is empty for good
+        const RD_EOF       = 0b1_0000_0000_0000;
     }
 }
 
@@ -173,9 +174,6 @@ enum Operation {
         id: StreamId,
         page: BytePage,
         state: SendState,
-    },
-    Shutdown {
-        tx: Option<pool::Sender<io::Result<()>>>,
     },
     Close {
         id: StreamId,
@@ -445,7 +443,6 @@ struct StreamOpsInner {
     api: ReactorApi,
     delayed_feed: Queue<IdType>,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
-    pool: pool::Pool<io::Result<()>>,
     default_flags: Flags,
 }
 
@@ -479,10 +476,6 @@ impl StreamOps {
                     api.is_supported(opcode::Close::CODE),
                     "opcode::Close is required for io-uring support"
                 );
-                assert!(
-                    api.is_supported(opcode::Shutdown::CODE),
-                    "opcode::Shutdown is required for io-uring support"
-                );
 
                 let mut ops = Slab::new();
                 ops.insert(Some(Operation::Nop));
@@ -492,7 +485,6 @@ impl StreamOps {
                     api,
                     default_flags,
                     delayed_feed: Queue::new(),
-                    pool: pool::new(),
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
                         streams: Streams::new(),
@@ -541,12 +533,6 @@ impl StreamOps {
     }
 }
 
-impl Operation {
-    fn shutdown(tx: pool::Sender<io::Result<()>>) -> Self {
-        Operation::Shutdown { tx: Some(tx) }
-    }
-}
-
 impl Handler for StreamOpsHandler {
     fn canceled(&mut self, user_data: usize) {
         self.inner
@@ -570,7 +556,7 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Nop | Operation::Close { .. } | Operation::Shutdown { .. } => {}
+                Operation::Nop | Operation::Close { .. } => {}
             });
     }
 
@@ -682,11 +668,6 @@ impl Handler for StreamOpsHandler {
                         // until the zero-copy notification arrives
                         st.ops[user_data] = Some(buf.into_op(id, state));
                         return;
-                    }
-                }
-                Operation::Shutdown { tx } => {
-                    if let Some(tx) = tx {
-                        let _ = tx.send(res.map(|_| ()));
                     }
                 }
                 Operation::Close { id } => {
@@ -960,6 +941,7 @@ impl StreamOpsStorage {
             }
             ref res if is_would_block(res) => self.recv(id, true, api),
             res => {
+                item.flags.insert(Flags::RD_EOF);
                 let res = match res {
                     Ok(size) if size > 0 => Err(io::Error::other("Received data without a buffer")),
                     res => res,
@@ -983,6 +965,11 @@ impl StreamOpsStorage {
     ) {
         let item = &mut self.streams[id];
         let nonempty = cqueue::sock_nonempty(flags);
+        // a socket error is reported only once queued data was read, and no
+        // more data arrives after it. `ECANCELED` is routed to `canceled()`
+        if matches!(res, Ok(0) | Err(_)) {
+            item.flags.insert(Flags::RD_EOF);
+        }
 
         // handle IORING_CQE_F_SOCK_NONEMPTY flag, more input is queued, keep
         // reading into the same buffer until it is full. The buffer is not
@@ -1265,11 +1252,11 @@ impl StreamItem {
 }
 
 impl StreamCtl {
-    pub(crate) async fn shutdown(&self, terminate: bool) -> io::Result<()> {
+    pub(crate) fn shutdown(&self, terminate: bool) -> io::Result<()> {
         if terminate {
             // The connection was force-closed, so it is released without the
             // graceful close: the receive queue is not drained and no
-            // `SHUT_RDWR` is submitted. The socket is aborted instead, so that
+            // `shutdown(2)` is called. The socket is aborted instead, so that
             // the peer sees an RST and cannot mistake a truncated stream for a
             // complete one. Dropping this handle submits the `Close` that
             // releases the descriptor.
@@ -1282,37 +1269,37 @@ impl StreamCtl {
             return Ok(());
         }
 
-        self.inner
-            .with(|storage| {
-                storage.pause_read(self.id, &self.inner.api);
-                #[cfg(feature = "trace")]
-                log::trace!(
-                    "{}: Shutdown ({:?})",
-                    storage.streams[self.id].ctx.tag(),
-                    self.id
-                );
-                let fd = storage.streams[self.id].fd();
-                if storage.streams[self.id].rd_op.is_none() {
-                    // `pause_read()` above only submits a cancel, so a recv can
-                    // still be in flight; draining now would race it. Nothing is
-                    // lost by skipping, that recv empties the queue itself.
-                    // SAFETY: the stream entry owns the fd until this handle is dropped
-                    unsafe { crate::helpers::with_sock_ref(fd.0, crate::helpers::drain_socket) };
-                }
-                let (tx, rx) = self.inner.pool.channel();
-                let op_id = storage.add_operation(Operation::shutdown(tx));
-                // SAFETY: the entry holds no pointers, the descriptor is
-                // closed by a later `Close` entry
-                unsafe {
-                    self.inner.api.submit(op_id, move |entry| {
-                        opcode::Shutdown::new(entry, fd, libc::SHUT_RDWR);
-                    });
-                }
-                rx
-            })
-            .await
-            .map_err(|_| io::Error::other("gone"))
-            .and_then(crate::helpers::shutdown_result)
+        self.inner.with(|storage| {
+            storage.pause_read(self.id, &self.inner.api);
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: Shutdown ({:?})",
+                storage.streams[self.id].ctx.tag(),
+                self.id
+            );
+            let fd = storage.streams[self.id].fd().0;
+            let item = &storage.streams[self.id];
+            let drain = item.rd_op.is_none() && !item.flags.contains(Flags::RD_EOF);
+            // `shutdown(2)` is called directly: io-uring always runs its
+            // `Shutdown` opcode on an io-wq worker thread, which costs a thread
+            // wakeup and preempts the reactor for every closed connection.
+            // Write readiness reports `Close` only after every send completed,
+            // so no queued send can be overtaken.
+            // SAFETY: the stream entry owns the fd until this handle is dropped
+            unsafe {
+                crate::helpers::with_sock_ref(fd, |sock| {
+                    if drain {
+                        // `pause_read()` above only submits a cancel, so a recv
+                        // can still be in flight; draining now would race it.
+                        // Nothing is lost by skipping, that recv empties the
+                        // queue itself. After eof or a reset the queue is empty
+                        // and the peer cannot send more, nothing is left to drain.
+                        crate::helpers::drain_socket(sock);
+                    }
+                    crate::helpers::shutdown_result(sock.shutdown(std::net::Shutdown::Both))
+                })
+            }
+        })
     }
 
     pub(crate) fn resume_read(&self) {
@@ -1466,6 +1453,46 @@ mod tests {
         assert!(ops.0.with(|st| !st.ops.contains(recv_op as usize)));
         assert_eq!(io.read_dst_size(), 0);
         assert!(ops.0.with(|st| st.streams[ctl.id].rd_op.is_none()));
+    }
+
+    /// STATEMENT: A graceful shutdown after a receive returned eof or a connection
+    /// reset does not read the socket, the receive queue is empty for good then.
+    ///
+    /// HOW:
+    /// - For eof and for `ECONNRESET`: register a stream and complete its receive
+    ///   with that result.
+    /// - Queue 4 bytes from the peer, which a real socket cannot see after eof or a
+    ///   reset, so a drain would be observable.
+    /// - Shut the stream down and check with `FIONREAD` the 4 bytes are still queued.
+    #[ntex::test]
+    async fn shutdown_after_eof_skips_drain() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        let mut handler = StreamOpsHandler {
+            inner: ops.0.clone(),
+        };
+
+        for res in [Ok(0), Err(libc::ECONNRESET)] {
+            let (_io, ctl, mut peer) = register(&ops);
+            ctl.resume_read();
+            let (fd, rd_op) = ops
+                .0
+                .with(|st| (st.streams[ctl.id].fd().0, st.streams[ctl.id].rd_op.unwrap()));
+            let res = res.map_err(io::Error::from_raw_os_error);
+            handler.completed(rd_op.get() as usize, 0, res);
+            assert!(ops.0.with(|st| st.streams[ctl.id].rd_op.is_none()));
+
+            std::io::Write::write_all(&mut peer, b"data").unwrap();
+            ctl.shutdown(false).unwrap();
+
+            let mut queued: libc::c_int = 0;
+            // SAFETY: `fd` is open, `queued` is a valid `c_int` for `FIONREAD`
+            let res = unsafe { libc::ioctl(fd, libc::FIONREAD, &raw mut queued) };
+            assert_eq!(res, 0);
+            assert_eq!(queued, 4);
+        }
     }
 
     /// STATEMENT: `SendBuf` debug output shows the number of gathered pages and their

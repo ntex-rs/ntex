@@ -225,7 +225,14 @@ fn nodelay_of(local: net::SocketAddr, peer: net::SocketAddr) -> bool {
     panic!("no socket for {local} -> {peer}");
 }
 
-/// Both connected and accepted streams disable Nagle.
+/// STATEMENT: Connected streams disable Nagle, while `from_tcp_stream` leaves
+/// `TCP_NODELAY` as the caller set it.
+///
+/// HOW:
+/// - Connect with `tcp_connect` and accept the peer on a plain listener.
+/// - Convert the accepted stream with `from_tcp_stream`.
+/// - Check the option is enabled on the connected socket and still disabled
+///   on the accepted one.
 #[cfg(unix)]
 #[ntex::test]
 async fn tcp_nodelay() {
@@ -240,6 +247,6 @@ async fn tcp_nodelay() {
     let server = ntex_net::from_tcp_stream(sock, SharedCfg::default()).unwrap();
 
     assert!(nodelay_of(peer, addr), "connected stream");
-    assert!(nodelay_of(addr, peer), "accepted stream");
+    assert!(!nodelay_of(addr, peer), "accepted stream");
     drop((client, server));
 }

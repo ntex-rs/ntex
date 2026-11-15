@@ -1,5 +1,19 @@
 # Changes
 
+## [4.12.2] - Unreleased
+
+* io-uring: Shut down sockets with `shutdown(2)` instead of the io-uring
+  `Shutdown` op, which always runs on an io-wq thread
+
+* io-uring: Leave sockets in their existing blocking mode, saving the `fcntl`
+  calls per connection
+
+* io-uring: Skip draining the receive queue on shutdown once a receive returned
+  eof or an error
+
+* `from_tcp_stream()` no longer enables `TCP_NODELAY`; callers set socket
+  options before converting the stream
+
 ## [4.12.1] - 2026-11-15
 
 * polling: Read sockets with `recv` instead of `read`

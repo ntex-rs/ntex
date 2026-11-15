@@ -553,12 +553,16 @@ impl AsRawFd for Reactor {
     }
 }
 
+// Sockets are left in their mode, which saves the `fcntl` calls of
+// `set_nonblocking()`. The io-uring socket operations do not depend on
+// `O_NONBLOCK`, they never block the submitting thread and wait for readiness
+// themselves. The direct syscalls on a socket (`recv` with `MSG_DONTWAIT`,
+// `shutdown`, socket options) do not block either.
 impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
         let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))
             .and_then(crate::helpers::prep_tcp_socket)
-            .and_then(crate::helpers::prep_socket)
             .map(move |sock| (addr, sock));
 
         match result {
@@ -569,9 +573,7 @@ impl crate::Reactor for Reactor {
 
     fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> Receiver<Io> {
         let result = SockAddr::unix(addr).and_then(|addr| {
-            Socket::new(addr.domain(), Type::STREAM, None)
-                .and_then(crate::helpers::prep_socket)
-                .map(move |sock| (addr, sock))
+            Socket::new(addr.domain(), Type::STREAM, None).map(move |sock| (addr, sock))
         });
 
         match result {
@@ -581,13 +583,8 @@ impl crate::Reactor for Reactor {
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
-        stream.set_nodelay(true)?;
-
         Ok(Io::new(
-            TcpStream(
-                crate::helpers::prep_socket(Socket::from(stream))?,
-                StreamOps::get(self),
-            ),
+            TcpStream(Socket::from(stream), StreamOps::get(self)),
             cfg,
         ))
     }
@@ -595,10 +592,7 @@ impl crate::Reactor for Reactor {
     #[cfg(unix)]
     fn from_unix_stream(&self, stream: OsUnixStream, cfg: SharedCfg) -> io::Result<Io> {
         Ok(Io::new(
-            UnixStream(
-                crate::helpers::prep_socket(Socket::from(stream))?,
-                StreamOps::get(self),
-            ),
+            UnixStream(Socket::from(stream), StreamOps::get(self)),
             cfg,
         ))
     }

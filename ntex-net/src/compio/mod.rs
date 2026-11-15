@@ -215,7 +215,6 @@ impl crate::Reactor for Reactor {
     }
 
     fn from_tcp_stream(&self, stream: std::net::TcpStream, cfg: SharedCfg) -> std::io::Result<Io> {
-        stream.set_nodelay(true)?;
         Ok(Io::new(
             TcpStream(compio_net::TcpStream::from_std(stream)?),
             cfg,
