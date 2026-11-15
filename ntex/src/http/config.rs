@@ -383,8 +383,10 @@ impl HttpServiceConfig {
     /// Application rewrites are not automatically validated or normalized again.
     ///
     /// HTTP/1 Host-header validation is controlled separately by
-    /// [`Self::set_host_validation`]. Mandatory protocol checks, UTF-8 and URL
-    /// representation limits remain enforced regardless of these settings.
+    /// [`Self::set_host_validation`]. Mandatory protocol checks, URL
+    /// representation limits and, for HTTP/1, rejection of raw non-ASCII
+    /// bytes in the request target remain enforced regardless of these
+    /// settings.
     /// The router's existing per-segment percent-decoding is also unchanged.
     ///
     /// ```
