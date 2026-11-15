@@ -29,7 +29,7 @@ pub struct HttpService<F, Req: RequestState<Io<F>>, Err> {
     sf: super::HttpPipeline<Req::State, Err>,
     /// Without a control service the default action is applied to every event.
     h1_ctl: Option<super::Ctl1Pipeline<Req::State, F, Err>>,
-    h2_ctl: super::Ctl2Pipeline<Req::State>,
+    h2_ctl: Option<super::Ctl2Pipeline<Req::State>>,
     config: DispatcherConfig,
 }
 
@@ -58,7 +58,7 @@ where
                     .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
             h1_ctl: None,
-            h2_ctl: PipelineFactory::new(h2::DefaultControlService),
+            h2_ctl: None,
             config: DispatcherConfig::default(),
         }
     }
@@ -129,9 +129,9 @@ where
     #[must_use]
     /// Provides the HTTP/2 control service.
     ///
-    /// A default service that acknowledges each HTTP/2 control event is used
-    /// unless this method is called. Like the application factory, `ctl` is
-    /// instantiated for every HTTP/2 connection.
+    /// Unless this method is called, the default action is applied to each
+    /// HTTP/2 control event without a service call. Like the application
+    /// factory, `ctl` is instantiated for every HTTP/2 connection.
     pub fn h2_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h2::Control<Error<H2Error>>>,
@@ -145,11 +145,11 @@ where
         HttpService {
             sf: self.sf,
             h1_ctl: self.h1_ctl,
-            h2_ctl: PipelineFactory::new(
+            h2_ctl: Some(PipelineFactory::new(
                 ctl.into_factory()
                     .map_err(|e| DispatchError::Service(e.fail()))
                     .map_init_err(|e| DispatchError::Control(e.fail())),
-            ),
+            )),
             config: self.config,
         }
     }
@@ -180,7 +180,10 @@ where
                 io.tag(),
                 io.query::<types::PeerAddr>().get(),
             );
-            let ctl = self.h2_ctl.create(st).await?;
+            let ctl = match &self.h2_ctl {
+                Some(ctl) => Some(ctl.create(st).await?),
+                None => None,
+            };
 
             h2::handle(id, io.into(), svc, ctl).await
         } else {

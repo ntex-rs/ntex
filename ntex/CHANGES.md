@@ -11,6 +11,9 @@
 
 * ws: Unmask payloads shorter than 8 bytes, and unaligned payload edges, without `memcpy`
 
+* http: The HTTP/2 control service is not set by default; without one the default
+  action is applied to each control event without a service call
+
 ## [4.8.0] - 2026-11-12
 
 * http: Skip UTF-8 validation and the query search of ASCII request targets, and UTF-8
