@@ -11,7 +11,7 @@ use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
 use ntex_io_uring::opcode::{AsyncCancel, AsyncCancel2};
 use ntex_io_uring::squeue::{Entry as SEntry, PushError, SubmissionQueue};
 use ntex_io_uring::types::{CancelBuilder, SubmitArgs, Timespec};
-use ntex_io_uring::{IoUring, Probe, Submitter};
+use ntex_io_uring::{EnterFlags, IoUring, Probe, Submitter};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
@@ -268,7 +268,6 @@ impl Reactor {
             let mut builder = IoUring::builder();
             builder
                 .setup_coop_taskrun()
-                .setup_taskrun_flag()
                 .setup_single_issuer()
                 .setup_defer_taskrun();
             if no_sqarray {
@@ -281,13 +280,11 @@ impl Reactor {
         // Create ring
         let (new, ring) = if let Ok(ring) = build(true) {
             log::info!(
-                "New io-uring driver with single-issuer, coop-taskrun, taskrun-flag, defer-taskrun, no-sqarray"
+                "New io-uring driver with single-issuer, coop-taskrun, defer-taskrun, no-sqarray"
             );
             (true, ring)
         } else if let Ok(ring) = build(false) {
-            log::info!(
-                "New io-uring driver with single-issuer, coop-taskrun, taskrun-flag, defer-taskrun"
-            );
+            log::info!("New io-uring driver with single-issuer, coop-taskrun, defer-taskrun");
             (true, ring)
         } else if let Ok(ring) = IoUring::builder().setup_single_issuer().build(capacity) {
             log::info!("New io-uring driver with single-issuer");
@@ -670,10 +667,24 @@ impl ntex_rt::Driver for Reactor {
 
             // submit publishes the queue tail, and skips the syscall if
             // there is nothing to submit and no deferred completions to post.
-            let result = if more_changes
-                || more_tasks
-                || more_cqes
-                || !cqueue::CompletionQueue::<'_, _>::is_empty(&cq)
+            let result = if more_tasks {
+                // Without the taskrun flag a plain submit never runs deferred
+                // task work, so a task that keeps the runtime busy would starve
+                // completions. GETEVENTS with no minimum posts them without waiting.
+                sq.sync();
+                // SAFETY: Valid arguments for an enter without extra arguments.
+                let res = unsafe {
+                    submitter.enter::<libc::sigset_t>(
+                        sq.len() as u32,
+                        0,
+                        EnterFlags::GETEVENTS.bits(),
+                        None,
+                    )
+                };
+                // the kernel consumes entries during the enter, even if it fails
+                sq.sync();
+                res
+            } else if more_changes || more_cqes || !cqueue::CompletionQueue::<'_, _>::is_empty(&cq)
             {
                 submitter.submit()
             } else if let Some(timeout) = timeout {
