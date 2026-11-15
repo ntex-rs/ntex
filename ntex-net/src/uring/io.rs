@@ -47,7 +47,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     // Handle io readiness
     let terminate = poll_fn(|cx| poll_readiness(&ctl, &ctx, cx)).await;
 
-    let result = ctl.shutdown(terminate).await;
+    let result = ctl.shutdown(terminate);
     ctx.stopped(result.err());
 }
 

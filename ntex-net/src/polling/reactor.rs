@@ -305,8 +305,6 @@ impl crate::Reactor for Reactor {
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
-        stream.set_nodelay(true)?;
-
         Ok(Io::new(
             TcpStream(
                 crate::helpers::prep_socket(Socket::from(stream))?,

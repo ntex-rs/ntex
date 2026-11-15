@@ -179,7 +179,6 @@ impl crate::Reactor for Reactor {
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
-        stream.set_nodelay(true)?;
         let addr = stream.peer_addr()?;
         let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
         self.reactor
@@ -949,9 +948,14 @@ mod tests {
         );
     }
 
-    /// Accepted streams disable Nagle, as on the other backends.
+    /// STATEMENT: `from_tcp_stream` leaves `TCP_NODELAY` as the caller set it.
+    ///
+    /// HOW:
+    /// - Accept a stream, which starts with `TCP_NODELAY` disabled.
+    /// - Convert it with `from_tcp_stream` and check the option is still
+    ///   disabled on the socket.
     #[ntex::test]
-    async fn from_tcp_stream_sets_nodelay() {
+    async fn from_tcp_stream_keeps_nodelay() {
         let reactor = Reactor::new().unwrap();
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let _client = net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -961,7 +965,7 @@ mod tests {
         let raw = stream.as_raw_socket();
         let io = crate::Reactor::from_tcp_stream(&reactor, stream, SharedCfg::default()).unwrap();
         // SAFETY: `io` keeps the socket open
-        assert!(unsafe { crate::helpers::with_sock_ref(raw, |s| s.tcp_nodelay()) }.unwrap());
+        assert!(!unsafe { crate::helpers::with_sock_ref(raw, |s| s.tcp_nodelay()) }.unwrap());
         drop(io);
     }
 

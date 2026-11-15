@@ -100,7 +100,6 @@ impl crate::Reactor for Reactor {
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> IoResult<Io> {
         stream.set_nonblocking(true)?;
-        stream.set_nodelay(true)?;
         Ok(Io::new(
             TcpStream(tok_io::net::TcpStream::from_std(stream)?),
             cfg,

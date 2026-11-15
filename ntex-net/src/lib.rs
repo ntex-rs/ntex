@@ -64,6 +64,12 @@ pub trait Reactor: Driver {
     fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> channel::Receiver<Io>;
 
     /// Converts a standard-library TCP stream into an [`Io`] value.
+    ///
+    /// The reactor does not change `TCP_NODELAY`; the stream keeps the value
+    /// it already has. Callers that need low latency must call
+    /// `stream.set_nodelay(true)` before converting the stream, unless the
+    /// option is already set, for example inherited from a listener with
+    /// `TCP_NODELAY` enabled on Linux and macOS.
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io>;
 
     #[cfg(unix)]
@@ -181,6 +187,24 @@ where
 
 #[inline]
 /// Converts a standard-library TCP stream into an [`Io`] value.
+///
+/// # `TCP_NODELAY`
+///
+/// This function does not change `TCP_NODELAY`; the stream keeps the value
+/// it already has. With the option disabled, Nagle's algorithm may delay
+/// small writes, so callers that need low latency must enable it first:
+///
+/// ```rust,no_run
+/// # fn convert(stream: std::net::TcpStream) -> std::io::Result<()> {
+/// stream.set_nodelay(true)?;
+/// let io = ntex_net::from_tcp_stream(stream, Default::default())?;
+/// # drop(io);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Streams accepted from a listener with `TCP_NODELAY` enabled inherit the
+/// option on Linux and macOS, so they do not need the extra call.
 ///
 /// # Panics
 ///
