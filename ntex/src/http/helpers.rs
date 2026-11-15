@@ -43,6 +43,13 @@ pub(crate) fn process_request_target(
     version: super::Version,
     uri: &mut urly::Url,
 ) -> Result<(), super::error::DecodeError> {
+    // RFC 9112 §3.2.4, RFC 9113 §8.3.1: asterisk-form is OPTIONS only,
+    // enforced regardless of the policy
+    if uri.path() == "*" && method != super::Method::OPTIONS {
+        return Err(super::error::DecodeError::InvalidInput(
+            "asterisk-form request-target is only valid for OPTIONS",
+        ));
+    }
     if policy == TargetPolicy::Raw {
         return Ok(());
     }

@@ -241,7 +241,7 @@ async fn test_h1_request_target_normalization() {
 /// HOW:
 /// - Send malformed escapes, fragments, authorities and asterisk forms over raw TCP.
 /// - Require successful fallback responses by default and `400` with validation-only
-///   or normalization enabled.
+///   or normalization enabled; `GET *` is always rejected with `400`.
 /// - Check rejected requests never enter application middleware.
 /// - Send an invalid Host header with either target setting and require `400` only
 ///   when transport Host validation is enabled.
@@ -301,6 +301,8 @@ async fn test_h1_request_target_validation() {
             }
             let rejected = if host == "invalid/host" {
                 validate_host
+            } else if target == "*" {
+                true
             } else {
                 mode != TargetMode::Raw
             };

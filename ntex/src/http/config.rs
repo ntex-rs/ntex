@@ -174,7 +174,8 @@ impl HttpServiceConfig {
     ///
     /// The line, including its line end, may occupy up to and including this
     /// number of bytes. Requests with a longer request line are rejected with
-    /// `414 URI Too Long`. The line is also limited by
+    /// `414 URI Too Long`, or with `400 Bad Request` when the method alone
+    /// exceeds the limit. The line is also limited by
     /// [`set_max_buf_size`](Self::set_max_buf_size). The default is 16 KiB.
     pub fn set_max_start_line_size(mut self, val: usize) -> Self {
         self.max_start_line_size = val;
@@ -320,10 +321,11 @@ impl HttpServiceConfig {
     /// Enables validation of the HTTP/1 `Host` request header.
     ///
     /// When enabled, requests are rejected with `400 Bad Request` if a
-    /// `Host` value is not a valid host and optional port. An empty `Host`
-    /// value is accepted. Requests with more than one `Host` header and
-    /// HTTP/1.1 requests without a `Host` header are always rejected,
-    /// regardless of this setting, see
+    /// `Host` value is not a valid host and optional port. Requests with more
+    /// than one `Host` header, HTTP/1.1 requests without a `Host` header and
+    /// requests with an empty `Host` value whose target has no authority
+    /// (origin-form or asterisk-form) are always rejected, regardless of this
+    /// setting, see
     /// [RFC 9112 section 3.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2).
     /// This setting does not affect HTTP/2. It is disabled by default.
     pub fn set_host_validation(mut self, enabled: bool) -> Self {
@@ -384,7 +386,8 @@ impl HttpServiceConfig {
     ///
     /// HTTP/1 Host-header validation is controlled separately by
     /// [`Self::set_host_validation`]. Mandatory protocol checks, URL
-    /// representation limits and, for HTTP/1, rejection of raw non-ASCII
+    /// representation limits, rejection of asterisk-form (`*`) targets for
+    /// methods other than OPTIONS and, for HTTP/1, rejection of raw non-ASCII
     /// bytes in the request target remain enforced regardless of these
     /// settings.
     /// The router's existing per-segment percent-decoding is also unchanged.

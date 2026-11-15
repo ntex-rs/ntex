@@ -24,6 +24,17 @@
   `400 Bad Request` regardless of `HttpServiceConfig::set_host_validation()`
   (RFC 9112 §3.2)
 
+* http: The HTTP/1 decoder rejects requests with an empty `Host` header with
+  `400 Bad Request` unless the request target is in absolute or authority form
+  (RFC 9110 §4.2.1)
+
+* http: HTTP/1 and HTTP/2 reject asterisk-form (`*`) request targets for methods other
+  than `OPTIONS` with `400 Bad Request` regardless of the request-target settings
+  (RFC 9112 §3.2.4, RFC 9113 §8.3.1)
+
+* http: The HTTP/1 decoder rejects a request method longer than the start-line limit
+  with `400 Bad Request` instead of `414 URI Too Long`
+
 ## [4.8.0] - 2026-11-12
 
 * http: Skip UTF-8 validation and the query search of ASCII request targets, and UTF-8

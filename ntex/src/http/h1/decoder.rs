@@ -216,6 +216,11 @@ impl<T: MessageType> MessageDecoder<T> {
         let len = src.len();
         let max_line = inner.cfg.max_start_line_size;
         if inner.val.is_none() {
+            // RFC 9112 §3: a method that alone exceeds the start-line limit
+            // is rejected as an invalid method, not as a long target
+            if T::REQUEST && len > max_line && !src[..=max_line].contains(&b' ') {
+                return Err(DecodeError::Method);
+            }
             // the parser resumes from `line_st`, so data of an incomplete
             // start line is not scanned again on the next read
             match T::decode(src, &mut inner.line, &mut inner.line_st, &inner.cfg)? {
@@ -314,6 +319,7 @@ bitflags::bitflags! {
         const WS_UPGRADE   = 0b1000_0000;
         const SEEN_HOST    = 0b0001_0000_0000;
         const TE_OTHER     = 0b0010_0000_0000;
+        const EMPTY_HOST   = 0b0100_0000_0000;
     }
 }
 
@@ -479,8 +485,11 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                     log::trace!("multiple Host headers not allowed");
                     return Err(DecodeError::Header);
                 }
-                // `Host = uri-host [ ":" port ]`, an empty value is allowed
-                if st.validate_host
+                // `Host = uri-host [ ":" port ]`, an empty value is checked
+                // against the target once the request is complete
+                if value.as_bytes().trim_ascii().is_empty() {
+                    st.flags.insert(Flags::EMPTY_HOST);
+                } else if st.validate_host
                     && !matches!(
                         value.to_str().map(urly::Authority::new),
                         Ok(Ok(host)) if host.userinfo().is_none()
@@ -599,6 +608,12 @@ impl MessageType for Request {
         // https://www.rfc-editor.org/rfc/rfc9112#section-3.2
         if self.version() >= Version::HTTP_11 && !st.flags.contains(Flags::SEEN_HOST) {
             log::trace!("no Host header specified for HTTP/1.1 request");
+            return Err(DecodeError::Header);
+        }
+        // RFC 9110 §4.2.1: an `http` URI with an empty host is invalid, an
+        // empty Host is accepted only when the target carries the authority
+        if st.flags.contains(Flags::EMPTY_HOST) && self.uri().authority().is_none() {
+            log::trace!("empty Host header for a target without authority");
             return Err(DecodeError::Header);
         }
 
@@ -915,6 +930,7 @@ impl SizeLine {
             SizeLine::Unknown => false,
             SizeLine::Lws => bytes.iter().all(|&b| b == b' ' || b == b'\t'),
             // any octet except control characters other than HTAB, `\r` ends the line
+            // and the complete line, with the extension grammar, is parsed again
             SizeLine::Ext => bytes
                 .iter()
                 .all(|&b| b == b'\t' || (b >= 0x20 && b != 0x7f)),
@@ -1364,13 +1380,13 @@ mod tests {
         }};
     }
 
-    /// STATEMENT: Opt-in decoding accepts asterisk-form only for OPTIONS.
+    /// STATEMENT: Asterisk-form is accepted only for OPTIONS, with or without target processing.
     ///
     /// HOW:
-    /// - Preserve `*` by default for OPTIONS and other methods.
-    /// - Enable target processing and check that only OPTIONS is accepted.
+    /// - Decode `OPTIONS *` with the default and the normalizing decoder and check `*` is kept.
+    /// - Decode `*` with other methods and require both decoders to reject it.
     #[test]
-    fn test_asterisk_form_validation_opt_in() {
+    fn test_asterisk_form_options_only() {
         let cfg: SharedCfg = SharedCfg::new("test")
             .add(HttpServiceConfig::new().set_request_target_normalization(true))
             .into();
@@ -1383,8 +1399,7 @@ mod tests {
         for method in ["GET", "POST", "HEAD", "CONNECT"] {
             let mut buf =
                 BytesMut::from(format!("{method} * HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
-            let req = parse_ready!(&mut buf.clone());
-            assert_eq!(req.path(), "*");
+            expect_parse_err!(&mut buf.clone());
             assert!(reader.decode(&mut buf).is_err(), "{method}");
         }
     }
@@ -1690,6 +1705,8 @@ mod tests {
     /// HOW:
     /// - Decode at-limit and oversized complete/partial lines, inspect exact errors, and accept a longer header.
     /// - Verify the default limit also rejects a large incomplete request target.
+    /// - Check a method longer than the limit fails with `DecodeError::Method`, while a
+    ///   shorter method followed by a long target keeps `StartLineTooLong`.
     #[test]
     fn test_max_start_line_size() {
         let cfg: SharedCfg = SharedCfg::new("test")
@@ -1736,6 +1753,23 @@ mod tests {
             reader.decode(&mut buf),
             Err(DecodeError::StartLineTooLong(_))
         ));
+
+        // a method longer than the limit is an invalid method, complete or not
+        for line in [
+            format!("{} / HTTP/1.1\r\nhost: a\r\n\r\n", "A".repeat(33)),
+            "A".repeat(33),
+        ] {
+            let reader = MessageDecoder::<Request>::new(cfg.get());
+            let mut buf = BytesMut::from(line.as_str());
+            assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::Method));
+        }
+        // a method that fits leaves the overflow to the target
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(format!("{} /aaa HTTP/1.1\r\n", "A".repeat(20)).as_str());
+        assert_eq!(
+            reader.decode(&mut buf).err(),
+            Some(DecodeError::StartLineTooLong(36))
+        );
     }
 
     /// STATEMENT: Request-head decoding preserves HTTP version, method, and path with or without body framing.
@@ -2474,15 +2508,17 @@ mod tests {
         assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
-    /// STATEMENT: HTTP/1.1 requests require exactly one `Host` header and any
-    /// request rejects duplicates; value checks are opt-in and responses are
-    /// not affected.
+    /// STATEMENT: HTTP/1.1 requests require exactly one `Host` header, any
+    /// request rejects duplicates and an empty Host unless the target has an
+    /// authority; other value checks are opt-in and responses are not affected.
     ///
     /// HOW:
-    /// - Enable validation and check rejection of missing, duplicate and invalid Host headers.
-    /// - Check accepted Host forms with validation enabled.
-    /// - With validation disabled by default or explicitly, check a missing HTTP/1.1 Host and
-    ///   duplicate Host lines in HTTP/1.1 and HTTP/1.0 are still rejected, an HTTP/1.0
+    /// - Enable validation and check rejection of missing, duplicate, empty and invalid Host headers.
+    /// - Check accepted Host forms with validation enabled, including an empty Host with
+    ///   absolute-form and authority-form targets.
+    /// - With validation disabled by default or explicitly, check a missing HTTP/1.1 Host,
+    ///   duplicate Host lines in HTTP/1.1 and HTTP/1.0 and an empty Host with origin-form or
+    ///   asterisk-form targets are still rejected, an HTTP/1.0
     ///   request without Host is accepted, and an invalid Host value is preserved.
     /// - Decode duplicate Host headers in a response with validation enabled.
     #[test]
@@ -2510,6 +2546,7 @@ mod tests {
             "GET / HTTP/1.1\r\nhost: a%\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: a{b}\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: \u{e9}\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost:\r\n\r\n",
         ] {
             let mut buf = BytesMut::from(req);
             assert_eq!(
@@ -2521,7 +2558,8 @@ mod tests {
 
         for req in [
             "GET / HTTP/1.0\r\n\r\n",
-            "GET / HTTP/1.1\r\nhost:\r\n\r\n",
+            "GET http://example.com/ HTTP/1.1\r\nhost:\r\n\r\n",
+            "CONNECT example.com:443 HTTP/1.1\r\nhost:\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: example.com\r\n\r\n",
             "GET / HTTP/1.1\r\nHost: example.com:8080\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: 127.0.0.1:80\r\n\r\n",
@@ -2546,6 +2584,8 @@ mod tests {
                 "GET / HTTP/1.1\r\n\r\n",
                 "GET / HTTP/1.1\r\nhost: a\r\nhost: a\r\n\r\n",
                 "GET / HTTP/1.0\r\nhost: a\r\nhost: b\r\n\r\n",
+                "GET / HTTP/1.1\r\nhost: \r\n\r\n",
+                "OPTIONS * HTTP/1.0\r\nhost:\r\n\r\n",
             ] {
                 let mut buf = BytesMut::from(req);
                 assert_eq!(
@@ -3238,7 +3278,7 @@ mod tests {
         }
 
         let (pl, mut buf) = chunked_payload();
-        buf.extend_from_slice(b"4 ;a=\"b\tc \x80\";d\t\r\ndata\r\n0\r\n\r\n");
+        buf.extend_from_slice(b"4 ;a=\"b\tc \x80\" ;d\r\ndata\r\n0\r\n\r\n");
         let chunk = pl.decode(&mut buf).unwrap().unwrap().chunk();
         assert_eq!(chunk, Bytes::from_static(b"data"));
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
@@ -3383,8 +3423,7 @@ mod tests {
         // valid lines
         for line in [
             &b"4;a=b;c\r\ndata"[..],
-            b"4 \t ;ext\t\x80\r\ndata",
-            b"4  \r\ndata",
+            b"4 \t ;ext\t=\t\"\x80\"\r\ndata",
             b"4\r\ndata",
         ] {
             assert_eq!(feed(line).unwrap(), b"data", "{line:?}");
