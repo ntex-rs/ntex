@@ -53,7 +53,7 @@ ntex-util = { path = "ntex-util" }
 urly = { path = "urly" }
 
 [workspace.dependencies]
-ntex = "4.8.1"
+ntex = "4.9.0"
 ntex-bytes = "1.15.3"
 ntex-codec = "2.0.0"
 ntex-dispatcher = "4.4.1"
