@@ -152,7 +152,8 @@ impl Reuseport {
                 .into_iter()
                 .map(|(idx, token, lst)| {
                     lst.set_nonblocking(true)?;
-                    Ok((idx, token, ntex_net::tcp_listener(lst)?))
+                    let nodelay = super::socket::tcp_nodelay(&lst);
+                    Ok((idx, token, nodelay, ntex_net::tcp_listener(lst)?))
                 })
                 .collect::<io::Result<Vec<_>>>()
         });
@@ -200,7 +201,8 @@ impl Drop for SlotGuard {
 
 /// Connections accepted on the listeners of one worker.
 pub(crate) struct LocalAccept {
-    socks: Vec<(usize, Token, ntex_net::Listener)>,
+    /// Listeners with their metrics index, token and inherited `TCP_NODELAY`.
+    socks: Vec<(usize, Token, bool, ntex_net::Listener)>,
     /// Listener polled first, for fairness.
     next: usize,
     /// Waits for server state changes.
@@ -255,7 +257,7 @@ impl Stream for LocalAccept {
         let num = this.socks.len();
         for n in 0..num {
             let pos = (this.next + n) % num;
-            let (idx, token, ref mut lst) = this.socks[pos];
+            let (idx, token, nodelay, ref mut lst) = this.socks[pos];
             loop {
                 match lst.poll_accept(cx) {
                     Poll::Ready(Ok((stream, _))) => {
@@ -264,6 +266,7 @@ impl Stream for LocalAccept {
                         return Poll::Ready(Some(Connection {
                             io: IoStream::Tcp(stream),
                             token,
+                            nodelay,
                         }));
                     }
                     Poll::Ready(Err(ref e)) if connection_error(e) => {

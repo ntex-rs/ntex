@@ -16,9 +16,15 @@ pub enum Stream {
 }
 
 impl Stream {
-    pub(crate) fn convert(self, cfg: SharedCfg) -> Result<Io, io::Error> {
+    /// Converts the stream, `nodelay` tells `TCP_NODELAY` is already set.
+    pub(crate) fn convert(self, nodelay: bool, cfg: SharedCfg) -> Result<Io, io::Error> {
         match self {
-            Stream::Tcp(stream) => ntex_net::from_tcp_stream(stream, cfg),
+            Stream::Tcp(stream) => {
+                if !nodelay {
+                    stream.set_nodelay(true)?;
+                }
+                ntex_net::from_tcp_stream(stream, cfg)
+            }
             #[cfg(unix)]
             Stream::Uds(stream) => ntex_net::from_unix_stream(stream, cfg),
         }
@@ -30,6 +36,8 @@ impl Stream {
 pub struct Connection {
     pub(crate) io: Stream,
     pub(crate) token: Token,
+    /// `TCP_NODELAY` is inherited from the listener.
+    pub(crate) nodelay: bool,
 }
 
 impl Connection {
@@ -100,7 +108,20 @@ impl fmt::Debug for SocketAddr {
 impl Listener {
     pub(super) fn from_tcp(lst: net::TcpListener) -> Self {
         let _ = lst.set_nonblocking(true);
+        // accepted sockets inherit the option, so workers skip setting it
+        if let Err(e) = socket2::SockRef::from(&lst).set_tcp_nodelay(true) {
+            log::warn!("Cannot set TCP_NODELAY for {lst:?}: {e}");
+        }
         Listener::Tcp(lst)
+    }
+
+    /// Returns `true` if accepted streams inherit `TCP_NODELAY`.
+    pub(crate) fn nodelay(&self) -> bool {
+        match self {
+            Listener::Tcp(lst) => tcp_nodelay(lst),
+            #[cfg(unix)]
+            Listener::Uds(_) => false,
+        }
     }
 
     #[cfg(unix)]
@@ -139,6 +160,18 @@ impl Listener {
             }
         }
     }
+}
+
+/// Returns `true` if streams accepted on `lst` inherit `TCP_NODELAY`.
+///
+/// Only Linux and Apple platforms are known to copy the option to accepted
+/// sockets.
+pub(crate) fn tcp_nodelay(lst: &net::TcpListener) -> bool {
+    cfg!(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple"
+    )) && socket2::SockRef::from(lst).tcp_nodelay().unwrap_or(false)
 }
 
 #[cfg(unix)]
@@ -205,6 +238,40 @@ mod tests {
         let lst = Listener::Tcp(net::TcpListener::from(socket));
         assert!(format!("{lst:?}").contains("TcpListener"));
         assert!(format!("{lst}").contains("127.0.0.1"));
+    }
+
+    /// STATEMENT: A server TCP listener enables `TCP_NODELAY` and accepted
+    /// streams inherit it, so workers may skip setting the option.
+    ///
+    /// HOW:
+    /// - Wrap a plain listener with `Listener::from_tcp`.
+    /// - Check `Listener::nodelay` matches the platform support.
+    /// - Accept a connection and read `TCP_NODELAY` on the accepted stream.
+    #[test]
+    fn listener_nodelay_is_inherited() {
+        let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = tcp.local_addr().unwrap();
+        let lst = Listener::from_tcp(tcp);
+        let supported = cfg!(any(
+            target_os = "linux",
+            target_os = "android",
+            target_vendor = "apple"
+        ));
+        assert_eq!(lst.nodelay(), supported);
+
+        let _client = net::TcpStream::connect(addr).unwrap();
+        let stream = loop {
+            match lst.accept() {
+                Ok(Some(Stream::Tcp(stream))) => break stream,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                res => panic!("unexpected accept result: {res:?}"),
+            }
+        };
+        if supported {
+            assert!(stream.nodelay().unwrap());
+        }
     }
 
     #[test]

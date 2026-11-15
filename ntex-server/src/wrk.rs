@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, ready};
 use std::{cmp, future::Future, future::poll_fn, hash, pin::Pin};
 
-use async_channel::{Receiver, Sender, TrySendError, unbounded};
+use async_channel::{Receiver, Sender, TryRecvError, TrySendError, unbounded};
 use event_listener::Event;
 
 use ntex_rt::{Arbiter, spawn};
@@ -478,8 +478,9 @@ where
     }
 
     async fn run(mut self) {
+        // kept across items, so its listener is not re-registered per item
+        let mut recv = std::pin::pin!(self.reqs.0.recv());
         loop {
-            let mut recv = std::pin::pin!(self.reqs.0.recv());
             let fut = poll_fn(|cx| {
                 match self.svc.poll_ready(cx) {
                     Poll::Ready(Ok(())) => {
@@ -501,13 +502,15 @@ where
                     }
                 }
 
-                match recv.as_mut().poll(cx) {
-                    Poll::Ready(Ok(item)) => return Poll::Ready(Ok(Some(item))),
-                    Poll::Ready(Err(_)) => {
+                // a cheap check of the server queue first, so local items
+                // cannot starve it
+                match self.reqs.0.try_recv() {
+                    Ok(item) => return Poll::Ready(Ok(Some(item))),
+                    Err(TryRecvError::Closed) => {
                         log::error!("Server is gone");
                         return Poll::Ready(Ok(None));
                     }
-                    Poll::Pending => {}
+                    Err(TryRecvError::Empty) => {}
                 }
                 if let Some(ref mut local) = self.local {
                     match local.as_mut().poll_next(cx) {
@@ -516,7 +519,17 @@ where
                         Poll::Pending => {}
                     }
                 }
-                Poll::Pending
+                match recv.as_mut().poll(cx) {
+                    Poll::Ready(Ok(item)) => {
+                        recv.set(self.reqs.0.recv());
+                        Poll::Ready(Ok(Some(item)))
+                    }
+                    Poll::Ready(Err(_)) => {
+                        log::error!("Server is gone");
+                        Poll::Ready(Ok(None))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
             });
 
             match select(fut, stream_recv(&mut self.stop)).await {
