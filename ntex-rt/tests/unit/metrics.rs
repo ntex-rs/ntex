@@ -112,3 +112,33 @@ fn stall_check() {
     assert_eq!(stats.check(t0 + ms(131), threshold), Stall::Started(ms(31)));
     assert_eq!(stats.metrics().unwrap().stalls, 2);
 }
+
+/// STATEMENT: Stalls are measured from the deadline of the pending sample, not the nominal interval.
+///
+/// HOW:
+/// - Set a pending deadline past `interval`, as the wheel rounds it up.
+/// - Check that time past `interval + threshold` but within the deadline plus threshold is not a stall.
+/// - Cross the deadline plus threshold and verify recovery reports the sample's lateness.
+/// - Record a late sample and check the stale deadline does not start a new stall.
+#[test]
+fn stall_check_deadline() {
+    let ms = Duration::from_millis;
+    let threshold = ms(20);
+    let stats = LatencyStats::default();
+    let t0 = Instant::now();
+    stats.base.set(t0).unwrap();
+    stats.interval.store(as_nanos(ms(10)), Ordering::Relaxed);
+
+    stats.expect(t0 + ms(40));
+    assert_eq!(stats.check(t0 + ms(55), threshold), Stall::None);
+    assert_eq!(stats.check(t0 + ms(61), threshold), Stall::Started(ms(61)));
+    stats.record(ms(30), t0 + ms(70));
+    assert_eq!(
+        stats.check(t0 + ms(71), threshold),
+        Stall::Recovered(ms(30))
+    );
+
+    stats.record(ms(60), t0 + ms(100));
+    assert_eq!(stats.check(t0 + ms(125), threshold), Stall::None);
+    assert_eq!(stats.check(t0 + ms(131), threshold), Stall::Started(ms(31)));
+}

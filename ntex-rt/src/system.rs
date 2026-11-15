@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use std::{cell::RefCell, fmt, future::Future, pin::Pin};
 
 use async_channel::{Receiver, Sender, unbounded};
-use futures_timer::Delay;
 use parking_lot::{Mutex, RwLock};
 
 use crate::arbiter::Arbiter;
@@ -543,11 +542,13 @@ pub struct PingRecord {
 }
 
 async fn ping_arbiters(sys: System) {
-    let interval = Duration::from_millis(sys.0.config.ping_interval as u64);
+    let interval = sys.0.config.ping_interval as u64;
+    let timer = crate::time::TimerHandle::new(0);
 
     loop {
         // interval between pings
-        Delay::new(interval).await;
+        timer.reset(interval);
+        std::future::poll_fn(|cx| timer.poll_elapsed(cx)).await;
 
         let start = Instant::now();
         let arbiters = sys.0.arbiters.lock();

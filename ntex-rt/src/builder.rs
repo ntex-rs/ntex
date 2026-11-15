@@ -147,9 +147,8 @@ impl Builder {
     #[must_use]
     /// Sets the arbiter stall threshold.
     ///
-    /// A watchdog thread marks an arbiter as stalled when it records no
-    /// latency sample for longer than the
-    /// [`latency_interval`](Self::latency_interval) plus this threshold, see
+    /// A watchdog thread marks an arbiter as stalled when its pending latency
+    /// sample is late by more than this threshold, see
     /// [`LatencyMetrics::stalls`](crate::metrics::LatencyMetrics::stalls). On Linux and
     /// Windows an attempt is made to create a backtrace for the stalled arbiter.
     ///

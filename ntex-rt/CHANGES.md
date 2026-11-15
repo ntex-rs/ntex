@@ -1,5 +1,11 @@
 # Changes
 
+## [4.9.1] - 2026-11-16
+
+* The latency sampler and arbiter pings sleep on the runtime timer wheel
+  instead of the `futures-timer` thread. Lateness is measured from the wheel
+  deadline, and stalls from the deadline of the pending sample
+
 ## [4.9.0] - 2026-11-13
 
 * Add `time` module with the timer wheel moved from `ntex-util`: `TimerHandle`,
