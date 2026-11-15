@@ -487,6 +487,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                 }
                 st.flags.insert(Flags::SEEN_HOST);
             }
+            header::HOST if Self::REQUEST => st.flags.insert(Flags::SEEN_HOST),
             header::UPGRADE | header::EXPECT if Self::ignore_http11_features(st) => (),
             header::UPGRADE => {
                 st.flags.insert(Flags::HAS_UPGRADE);
@@ -592,10 +593,8 @@ impl MessageType for Request {
             log::trace!("no Content-Length specified for HTTP/1.0 POST request");
             return Err(DecodeError::Header);
         }
-        if st.validate_host
-            && self.version() >= Version::HTTP_11
-            && !st.flags.contains(Flags::SEEN_HOST)
-        {
+        // https://www.rfc-editor.org/rfc/rfc9112#section-3.2
+        if self.version() >= Version::HTTP_11 && !st.flags.contains(Flags::SEEN_HOST) {
             log::trace!("no Host header specified for HTTP/1.1 request");
             return Err(DecodeError::Header);
         }
@@ -1504,7 +1503,7 @@ mod tests {
         let reader = MessageDecoder::<Request>::new(cfg.get());
         let mut buf = BytesMut::from("GET HTTPS://Example.COM:00443/a/../");
         assert!(reader.decode(&mut buf).unwrap().is_none());
-        buf.extend_from_slice(b"%74est?q=%7e HTTP/1.1\r\n\r\n");
+        buf.extend_from_slice(b"%74est?q=%7e HTTP/1.1\r\nhost: a\r\n\r\n");
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.uri().as_str(), "https://example.com/test?q=~");
 
@@ -1512,7 +1511,7 @@ mod tests {
         let mut buf = BytesMut::from(format!("GET {target} HTTP/1.1\r\n\r\n").as_str());
         assert!(matches!(reader.decode(&mut buf), Err(DecodeError::Uri)));
 
-        let mut buf = BytesMut::from("GET /.//%74est HTTP/1.1\r\n\r\n");
+        let mut buf = BytesMut::from("GET /.//%74est HTTP/1.1\r\nhost: a\r\n\r\n");
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.path(), "//test");
         assert!(req.uri().authority().is_none());
@@ -2472,11 +2471,15 @@ mod tests {
         assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
-    /// STATEMENT: HTTP/1 Host validation is opt-in and does not apply to responses.
+    /// STATEMENT: HTTP/1.1 requests require a `Host` header; duplicate and
+    /// value checks are opt-in and do not apply to responses.
     ///
     /// HOW:
     /// - Enable validation and check rejection of missing, duplicate and invalid Host headers.
-    /// - Check accepted Host forms and preservation of unchecked headers by default or explicit opt-out.
+    /// - Check accepted Host forms with validation enabled.
+    /// - With validation disabled by default or explicitly, check a missing HTTP/1.1 Host is
+    ///   still rejected, an HTTP/1.0 request without Host is accepted, and duplicate and
+    ///   userinfo Host headers are preserved.
     /// - Decode duplicate Host headers in a response with validation enabled.
     #[test]
     fn test_host_validation() {
@@ -2535,8 +2538,11 @@ mod tests {
             MessageDecoder::<Request>::default(),
             MessageDecoder::<Request>::new(disabled_cfg.get()),
         ] {
+            let mut buf = BytesMut::from("GET / HTTP/1.1\r\n\r\n");
+            assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::Header));
+
             let mut buf = BytesMut::from(
-                "GET / HTTP/1.1\r\n\r\n\
+                "GET / HTTP/1.0\r\n\r\n\
                  GET / HTTP/1.1\r\nhost: a\r\nhost: user@b\r\n\r\n",
             );
             assert!(reader.decode(&mut buf).unwrap().is_some());
@@ -3850,19 +3856,19 @@ mod tests {
         let cfg: SharedCfg = SharedCfg::new("test")
             .add(
                 HttpServiceConfig::new()
-                    .set_max_headers(2)
+                    .set_max_headers(3)
                     .set_host_validation(false),
             )
             .into();
 
         // repeated names count separately
         let reader = MessageDecoder::<Request>::new(cfg.get());
-        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\nX: 3\r\n\r\n");
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: a\r\nX: 1\r\nX: 2\r\nX: 3\r\n\r\n");
         assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::MaxHeaders));
 
         // count is kept across partial reads
         let reader = MessageDecoder::<Request>::new(cfg.get());
-        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n");
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: a\r\nX: 1\r\nX: 2\r\n");
         assert!(reader.decode(&mut buf).unwrap().is_none());
         buf.extend_from_slice(b"X: 3\r\n\r\n");
         assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::MaxHeaders));
@@ -3870,7 +3876,8 @@ mod tests {
         // count is reset for the next message
         let reader = MessageDecoder::<Request>::new(cfg.get());
         let mut buf = BytesMut::from(
-            "GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n\r\nGET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: a\r\nX: 1\r\nX: 2\r\n\r\n\
+             GET / HTTP/1.1\r\nhost: a\r\nX: 1\r\nX: 2\r\n\r\n",
         );
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.headers().get_all("x").count(), 2);

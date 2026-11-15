@@ -1,6 +1,6 @@
 # Changes
 
-## [4.8.1] - 2026-11-14
+## [4.9.0] - 2026-11-15
 
 * http: Add `Payload::take_trailers()` to take trailer fields without copying them
 
@@ -15,6 +15,9 @@
   action is applied to each control event without a service call
 
 * http: The HTTP/1 decoder rejects request targets with raw non-ASCII bytes with
+  `400 Bad Request` (RFC 9112 §3.2)
+
+* http: The HTTP/1 decoder rejects HTTP/1.1 requests without a `Host` header with
   `400 Bad Request` (RFC 9112 §3.2)
 
 ## [4.8.0] - 2026-11-12

@@ -321,11 +321,11 @@ impl HttpServiceConfig {
     ///
     /// When enabled, requests are rejected with `400 Bad Request` if they
     /// contain more than one `Host` header or a `Host` value that is not a
-    /// valid host and optional port. HTTP/1.1 requests without a `Host`
-    /// header are rejected as well, see
+    /// valid host and optional port. An empty `Host` value is accepted.
+    /// HTTP/1.1 requests without a `Host` header are always rejected,
+    /// regardless of this setting, see
     /// [RFC 9112 section 3.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2).
-    /// An empty `Host` value is accepted. This setting does not affect HTTP/2.
-    /// It is disabled by default.
+    /// This setting does not affect HTTP/2. It is disabled by default.
     pub fn set_host_validation(mut self, enabled: bool) -> Self {
         self.validate_host = enabled;
         self
