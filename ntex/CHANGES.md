@@ -20,6 +20,10 @@
 * http: The HTTP/1 decoder rejects HTTP/1.1 requests without a `Host` header with
   `400 Bad Request` (RFC 9112 §3.2)
 
+* http: The HTTP/1 decoder rejects requests with more than one `Host` header with
+  `400 Bad Request` regardless of `HttpServiceConfig::set_host_validation()`
+  (RFC 9112 §3.2)
+
 ## [4.8.0] - 2026-11-12
 
 * http: Skip UTF-8 validation and the query search of ASCII request targets, and UTF-8
