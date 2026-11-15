@@ -356,9 +356,11 @@ impl<S, E> PipelineInner<S, E> {
         S: Service<St, Req, Error = E>,
     {
         let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, st);
-        self.readiness
-            .ready(|| ctx.ready_generation(&self.s))
-            .await?;
+        if !self.waiters.scope().is_ready() {
+            self.readiness
+                .ready(|| ctx.ready_generation(&self.s))
+                .await?;
+        }
         self.s.call(req, ctx).await
     }
 }

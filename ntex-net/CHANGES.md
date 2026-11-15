@@ -1,6 +1,6 @@
 # Changes
 
-## [4.12.2] - Unreleased
+## [4.12.2] - 2026-11-16
 
 * io-uring: Shut down sockets with `shutdown(2)` instead of the io-uring
   `Shutdown` op, which always runs on an io-wq thread

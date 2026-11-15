@@ -1,5 +1,10 @@
 # Changes
 
+## [5.7.3] - 2026-11-16
+
+* `Pipeline::call()` skips the readiness future when the pipeline is already
+  ready
+
 ## [5.7.2] - 2026-11-09
 
 * Document how to wrap services: a wrapper implementing only `call` skips its

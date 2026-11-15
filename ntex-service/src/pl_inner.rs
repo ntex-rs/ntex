@@ -336,9 +336,11 @@ struct PipelineInner<S: Service<St, Req>, St, Req> {
 impl<S: Service<St, Req>, St, Req> PipelineInner<S, St, Req> {
     async fn call_impl(&self, idx: u32, req: Req) -> Result<S::Res, S::Error> {
         let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st);
-        self.readiness
-            .ready(|| ctx.ready_generation(&self.s))
-            .await?;
+        if !self.waiters.scope().is_ready() {
+            self.readiness
+                .ready(|| ctx.ready_generation(&self.s))
+                .await?;
+        }
         self.s.call(req, ctx.into_call()).await
     }
 }
