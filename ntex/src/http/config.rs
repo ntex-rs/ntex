@@ -319,9 +319,9 @@ impl HttpServiceConfig {
     #[must_use]
     /// Enables validation of the HTTP/1 `Host` request header.
     ///
-    /// When enabled, requests are rejected with `400 Bad Request` if they
-    /// contain more than one `Host` header or a `Host` value that is not a
-    /// valid host and optional port. An empty `Host` value is accepted.
+    /// When enabled, requests are rejected with `400 Bad Request` if a
+    /// `Host` value is not a valid host and optional port. An empty `Host`
+    /// value is accepted. Requests with more than one `Host` header and
     /// HTTP/1.1 requests without a `Host` header are always rejected,
     /// regardless of this setting, see
     /// [RFC 9112 section 3.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2).

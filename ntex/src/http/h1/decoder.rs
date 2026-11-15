@@ -474,20 +474,23 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                 st.flags.insert(flags);
             }
             // https://www.rfc-editor.org/rfc/rfc9112#section-3.2
-            header::HOST if st.validate_host => {
+            header::HOST if Self::REQUEST => {
                 if st.flags.contains(Flags::SEEN_HOST) {
                     log::trace!("multiple Host headers not allowed");
                     return Err(DecodeError::Header);
                 }
                 // `Host = uri-host [ ":" port ]`, an empty value is allowed
-                let host = value.to_str().map(urly::Authority::new);
-                if !matches!(host, Ok(Ok(host)) if host.userinfo().is_none()) {
+                if st.validate_host
+                    && !matches!(
+                        value.to_str().map(urly::Authority::new),
+                        Ok(Ok(host)) if host.userinfo().is_none()
+                    )
+                {
                     log::trace!("illegal Host: {value:?}");
                     return Err(DecodeError::Header);
                 }
                 st.flags.insert(Flags::SEEN_HOST);
             }
-            header::HOST if Self::REQUEST => st.flags.insert(Flags::SEEN_HOST),
             header::UPGRADE | header::EXPECT if Self::ignore_http11_features(st) => (),
             header::UPGRADE => {
                 st.flags.insert(Flags::HAS_UPGRADE);
@@ -2471,15 +2474,16 @@ mod tests {
         assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
-    /// STATEMENT: HTTP/1.1 requests require a `Host` header; duplicate and
-    /// value checks are opt-in and do not apply to responses.
+    /// STATEMENT: HTTP/1.1 requests require exactly one `Host` header and any
+    /// request rejects duplicates; value checks are opt-in and responses are
+    /// not affected.
     ///
     /// HOW:
     /// - Enable validation and check rejection of missing, duplicate and invalid Host headers.
     /// - Check accepted Host forms with validation enabled.
-    /// - With validation disabled by default or explicitly, check a missing HTTP/1.1 Host is
-    ///   still rejected, an HTTP/1.0 request without Host is accepted, and duplicate and
-    ///   userinfo Host headers are preserved.
+    /// - With validation disabled by default or explicitly, check a missing HTTP/1.1 Host and
+    ///   duplicate Host lines in HTTP/1.1 and HTTP/1.0 are still rejected, an HTTP/1.0
+    ///   request without Host is accepted, and an invalid Host value is preserved.
     /// - Decode duplicate Host headers in a response with validation enabled.
     #[test]
     fn test_host_validation() {
@@ -2538,16 +2542,26 @@ mod tests {
             MessageDecoder::<Request>::default(),
             MessageDecoder::<Request>::new(disabled_cfg.get()),
         ] {
-            let mut buf = BytesMut::from("GET / HTTP/1.1\r\n\r\n");
-            assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::Header));
+            for req in [
+                "GET / HTTP/1.1\r\n\r\n",
+                "GET / HTTP/1.1\r\nhost: a\r\nhost: a\r\n\r\n",
+                "GET / HTTP/1.0\r\nhost: a\r\nhost: b\r\n\r\n",
+            ] {
+                let mut buf = BytesMut::from(req);
+                assert_eq!(
+                    reader.decode(&mut buf).err(),
+                    Some(DecodeError::Header),
+                    "{req:?}"
+                );
+            }
 
             let mut buf = BytesMut::from(
                 "GET / HTTP/1.0\r\n\r\n\
-                 GET / HTTP/1.1\r\nhost: a\r\nhost: user@b\r\n\r\n",
+                 GET / HTTP/1.1\r\nhost: user@b, c\r\n\r\n",
             );
             assert!(reader.decode(&mut buf).unwrap().is_some());
             let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
-            assert_eq!(req.headers().get_all(header::HOST).count(), 2);
+            assert_eq!(req.headers().get(header::HOST).unwrap(), "user@b, c");
         }
 
         // responses are not affected
