@@ -60,6 +60,8 @@ struct ServerSocketInfo {
     addr: SocketAddr,
     token: Token,
     sock: Listener,
+    /// Accepted streams inherit `TCP_NODELAY`.
+    nodelay: bool,
     /// Listener index used for metrics, shared by replicated sockets.
     idx: usize,
     registered: Cell<bool>,
@@ -374,6 +376,7 @@ impl Accept {
             .into_iter()
             .map(|(idx, token, sock)| ServerSocketInfo {
                 addr: sock.local_addr(),
+                nodelay: sock.nodelay(),
                 sock,
                 idx,
                 token,
@@ -632,6 +635,7 @@ impl Accept {
                         let msg = Connection {
                             io,
                             token: info.token,
+                            nodelay: info.nodelay,
                         };
                         if let Err(msg) = self.srv.process_with(msg, Connection::incoming_cpu) {
                             log::trace!("Server is unavailable");

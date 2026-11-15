@@ -1,5 +1,13 @@
 # Changes
 
+## [4.6.1] - Unreleased
+
+* Enable `TCP_NODELAY` on TCP listeners; on Linux and Apple platforms accepted
+  streams inherit it, so workers skip the `setsockopt` call per connection
+
+* Workers keep the server queue receive future across items instead of
+  registering a new listener per connection
+
 ## [4.6.0] - 2026-11-12
 
 * Add `LoadBalancing::Reuseport`: on Linux, each worker accepts TCP connections
