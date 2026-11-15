@@ -76,9 +76,10 @@
 //! * `LowresTimerDriver` invalidates the cached [`system_time()`] value
 //!   every 150 milliseconds.
 //!
-//! The driver tasks sleep with the Tokio timer on the `tokio` runtime, so the
-//! Tokio runtime must have timers enabled, and with `futures-timer` on
-//! `compio`.
+//! A native runtime expires its timers when it polls and needs no driver
+//! task. Otherwise the driver tasks sleep with the Tokio timer on the `tokio`
+//! runtime, so the Tokio runtime must have timers enabled, with the compio
+//! timer on `compio`, and with `futures-timer` without either feature.
 //!
 //! Dropping the timer driver, i.e. when the runtime stops, stops the wheel and
 //! marks all timers as elapsed. Dropping the lowres driver invalidates the
@@ -248,6 +249,14 @@ impl TimerHandle {
     /// Restarts the timer with a new delay in milliseconds.
     pub fn reset(&self, millis: u64) {
         with_slot(self.0, |t, slot| t.update_timer(slot, millis));
+    }
+
+    /// Restarts the timer and returns the instant the wheel expires it.
+    ///
+    /// The wheel rounds the expiry up to its granularity, so the deadline is
+    /// at least `millis` from now. Returns `None` for a stale handle.
+    pub(crate) fn reset_deadline(&self, millis: u64) -> Option<Instant> {
+        with_slot(self.0, |t, slot| t.update_timer(slot, millis))
     }
 
     /// Completes the timer immediately and wakes its registered task.
@@ -726,13 +735,17 @@ impl Timer {
 
     /// Moves the timer to a new bucket, a zero delay elapses it and wakes its
     /// task.
-    fn update_timer(self: &Rc<Self>, hnd: usize, millis: u64) {
+    ///
+    /// Returns the instant the timer expires.
+    fn update_timer(self: &Rc<Self>, hnd: usize, millis: u64) -> Instant {
         if millis == 0 {
             self.remove_timer(hnd);
+            Instant::now()
         } else {
             let (idx, expiry) = self.calc_bucket(millis);
             self.with_wheel(|w| w.relink(hnd, idx));
             self.update_next_expiry(expiry);
+            self.expiry_time(expiry)
         }
     }
 
@@ -2559,5 +2572,31 @@ mod tests {
         let fresh = timer.native_system_time(now + LOWRES_RESOLUTION);
         assert!(fresh > first);
         assert_eq!(timer.native_system_time(now + LOWRES_RESOLUTION), fresh);
+    }
+
+    /// STATEMENT: `reset_deadline` returns the instant the wheel actually expires the timer.
+    ///
+    /// HOW:
+    /// - Reset a timer to 100ms and check the deadline is rounded up by at most one wheel unit.
+    /// - Process the wheel just before the deadline and confirm the timer is pending.
+    /// - Process it at the deadline and confirm the timer elapsed.
+    #[test]
+    fn test_reset_deadline() {
+        let timer = timer_state();
+        let handle = TimerHandle::new(0);
+        let start = Instant::now();
+        let deadline = handle.reset_deadline(100).unwrap();
+        let unit = Duration::from_millis(to_millis(1, timer.units.get().unwrap()));
+        assert!(deadline > start + Duration::from_millis(100));
+        assert!(deadline <= Instant::now() + Duration::from_millis(100) + unit);
+
+        let generation = timer.generation.get();
+        let _ = timer.process(
+            deadline.checked_sub(Duration::from_nanos(1)).unwrap(),
+            generation,
+        );
+        assert!(!handle.is_elapsed());
+        let _ = timer.process(deadline, generation);
+        assert!(handle.is_elapsed());
     }
 }

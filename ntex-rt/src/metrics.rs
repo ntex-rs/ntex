@@ -6,9 +6,9 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::{future::poll_fn, time::Duration, time::Instant};
 
-use futures_timer::Delay;
+use crate::time::TimerHandle;
 
 pub use crate::pool::PoolMetrics;
 pub use crate::system::PingRecord;
@@ -124,9 +124,11 @@ impl AtomicHistogram {
 
 /// Snapshot of an arbiter's scheduling latency.
 ///
-/// The arbiter runs a task that sleeps for `interval` and records how late it
-/// wakes up. Lateness includes the time the runtime spent running other tasks
-/// and handling driver events, and the timer's own wake-up latency.
+/// The arbiter runs a task that sleeps for `interval` on the runtime timer
+/// wheel and records how late it wakes up. Lateness is measured from the
+/// deadline of the wheel, which rounds `interval` up to the wheel granularity.
+/// It includes the time the runtime spent running other tasks and handling
+/// driver events, and the timer's own wake-up latency.
 /// Fields are sampled independently and may be slightly inconsistent during
 /// concurrent updates.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -144,14 +146,13 @@ pub struct LatencyMetrics {
     pub last_sample: Option<Instant>,
     /// Number of stalls detected by the watchdog.
     ///
-    /// An arbiter is stalled when it has not recorded a sample for longer
-    /// than `interval` plus the
-    /// [`ping_threshold`](crate::Builder::ping_threshold).
+    /// An arbiter is stalled when its pending sample is late by more than
+    /// the [`ping_threshold`](crate::Builder::ping_threshold).
     pub stalls: u64,
     /// Total lateness accumulated by recovered stalls.
     ///
-    /// Each recovery contributes the gap between samples minus the sampling
-    /// interval. A stall still in progress is not included.
+    /// Each recovery contributes the lateness of the sample that ended the
+    /// stall. A stall still in progress is not included.
     pub stall_duration: Duration,
     /// Whether the arbiter is currently stalled.
     pub stalled: bool,
@@ -174,12 +175,15 @@ pub(crate) struct LatencyStats {
     last: AtomicU64,
     // nanoseconds since `base`, plus one, zero before the first sample
     last_sample: AtomicU64,
+    // deadline of the pending sample, nanoseconds since `base`
+    next: AtomicU64,
     base: OnceLock<Instant>,
     histogram: AtomicHistogram,
     // written by the watchdog thread only
     stalls: AtomicU64,
     stall_duration: AtomicU64,
     stalled: AtomicBool,
+    // expected sample time of the current stall, nanoseconds since `base`
     stalled_at: AtomicU64,
 }
 
@@ -194,6 +198,13 @@ impl LatencyStats {
         self.last.store(as_nanos(lateness), Ordering::Relaxed);
         self.last_sample
             .store(as_nanos(now - base).saturating_add(1), Ordering::Relaxed);
+    }
+
+    /// Sets the deadline of the pending sample.
+    fn expect(&self, deadline: Instant) {
+        let base = *self.base.get_or_init(|| deadline);
+        self.next
+            .store(as_nanos(deadline - base), Ordering::Relaxed);
     }
 
     pub(crate) fn metrics(&self) -> Option<LatencyMetrics> {
@@ -234,12 +245,11 @@ impl LatencyStats {
         // sampler start time until the first sample
         let last = self.last_sample.load(Ordering::Relaxed).saturating_sub(1);
         if self.stalled.load(Ordering::Relaxed) {
-            let prev = self.stalled_at.load(Ordering::Relaxed);
-            if last == prev {
+            let expected = self.stalled_at.load(Ordering::Relaxed);
+            if last < expected {
                 return Stall::None;
             }
-            let gap = Duration::from_nanos(last.saturating_sub(prev));
-            let stall = gap.saturating_sub(interval);
+            let stall = Duration::from_nanos(last - expected);
             self.stalled.store(false, Ordering::Relaxed);
             self.stall_duration.store(
                 self.stall_duration
@@ -249,11 +259,18 @@ impl LatencyStats {
             );
             Stall::Recovered(stall)
         } else {
-            let age = now.saturating_duration_since(*base + Duration::from_nanos(last));
-            if age <= interval + threshold {
+            // The pending deadline is at least `interval` after the last
+            // sample, a deadline older than the last sample is stale
+            let expected = self
+                .next
+                .load(Ordering::Relaxed)
+                .max(last.saturating_add(as_nanos(interval)));
+            let late = now.saturating_duration_since(*base + Duration::from_nanos(expected));
+            if late <= threshold {
                 return Stall::None;
             }
-            self.stalled_at.store(last, Ordering::Relaxed);
+            let age = now.saturating_duration_since(*base + Duration::from_nanos(last));
+            self.stalled_at.store(expected, Ordering::Relaxed);
             self.stalled.store(true, Ordering::Relaxed);
             self.stalls.store(
                 self.stalls.load(Ordering::Relaxed).wrapping_add(1),
@@ -275,9 +292,11 @@ pub(crate) fn start_latency_sampler(stats: &Arc<LatencyStats>, interval_ms: usiz
 
     let stats = stats.clone();
     crate::spawn_detached(async move {
-        loop {
-            let deadline = Instant::now() + interval;
-            Delay::new(interval).await;
+        let timer = TimerHandle::new(0);
+        // a stale handle means the runtime is gone
+        while let Some(deadline) = timer.reset_deadline(interval_ms as u64) {
+            stats.expect(deadline);
+            poll_fn(|cx| timer.poll_elapsed(cx)).await;
             let now = Instant::now();
             stats.record(now.saturating_duration_since(deadline), now);
         }

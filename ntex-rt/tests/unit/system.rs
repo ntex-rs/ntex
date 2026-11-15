@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use futures_timer::Delay;
+
 use super::*;
 use crate::testing::TestRunner;
 

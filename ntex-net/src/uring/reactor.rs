@@ -1158,8 +1158,10 @@ mod tests {
 
     fn assert_notifier_canceled(reactor: &Reactor) {
         // Run deferred cancellation completions without submitting other SQEs.
+        // Only an enter with `GETEVENTS` runs deferred task work, and the
+        // canceled read posts one completion.
         assert!(reactor.inner.ring.submission().is_empty());
-        reactor.inner.ring.submitter().submit().unwrap();
+        reactor.inner.ring.submitter().submit_and_wait(1).unwrap();
         let err = reactor
             .inner
             .ring
