@@ -20,6 +20,10 @@
 * io-uring: Accept connections with a multishot accept on Linux 6.0+, a
   listener queues up to 32 accepted connections
 
+* io-uring: Set up the ring without `IORING_SETUP_TASKRUN_FLAG`, deferred
+  completions are processed when the loop waits for events or tasks remain
+  ready
+
 ## [4.12.1] - 2026-11-15
 
 * polling: Read sockets with `recv` instead of `read`
