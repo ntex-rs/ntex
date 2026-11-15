@@ -14,6 +14,9 @@
 * http: The HTTP/2 control service is not set by default; without one the default
   action is applied to each control event without a service call
 
+* http: The HTTP/1 decoder rejects request targets with raw non-ASCII bytes with
+  `400 Bad Request` (RFC 9112 §3.2)
+
 ## [4.8.0] - 2026-11-12
 
 * http: Skip UTF-8 validation and the query search of ASCII request targets, and UTF-8

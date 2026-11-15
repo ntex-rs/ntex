@@ -539,20 +539,21 @@ impl MessageType for Request {
             Status::Complete(pos) => {
                 let method = Method::from_bytes(&src[req.method.start..req.method.end])
                     .map_err(|_| DecodeError::Method)?;
+                // RFC 9112 §3.2: request-target is ASCII only, raw UTF-8
+                // must be percent-encoded
+                if !req.path_ascii {
+                    return Err(DecodeError::InvalidInput("Non-ASCII request target"));
+                }
                 // the target is split off `src` directly, the rest of the
                 // request line is skipped
                 src.advance_to(req.path.start);
                 let target = src.split_to(req.path.end - req.path.start);
                 src.advance_to(pos - req.path.end);
-                let mut uri = if req.path_ascii {
-                    // the parser found the first `?` during its scan
-                    let query = req.query.map(|q| q - req.path.start);
-                    // SAFETY: the parser checked that the target is ASCII
-                    let target = unsafe { ByteString::from_bytes_unchecked(target) };
-                    Url::parse_target_str(target, query)?
-                } else {
-                    Url::parse_target(target)?
-                };
+                // the parser found the first `?` during its scan
+                let query = req.query.map(|q| q - req.path.start);
+                // SAFETY: the parser checked that the target is ASCII
+                let target = unsafe { ByteString::from_bytes_unchecked(target) };
+                let mut uri = Url::parse_target_str(target, query)?;
                 let version = if req.version == 1 {
                     Version::HTTP_11
                 } else {
@@ -1476,7 +1477,6 @@ mod tests {
             "/a\"",
             "/a<b>",
             "/a\\b",
-            "/\u{fc}",
             "/a%00b",
             "http://example.com/%00",
         ] {
@@ -2749,21 +2749,25 @@ mod tests {
         );
     }
 
-    /// STATEMENT: Request targets are UTF-8 checked unless the parser reports
-    /// them as ASCII.
+    /// STATEMENT: Request targets must be ASCII; raw non-ASCII bytes are
+    /// rejected even when they form valid UTF-8.
     ///
     /// HOW:
-    /// - Decode an ASCII target, which skips the UTF-8 check, and compare its
-    ///   path and query.
-    /// - Decode targets with invalid UTF-8 in the path and the query and require
-    ///   a parse error.
+    /// - Decode an ASCII target and compare its path and query.
+    /// - Decode targets with valid UTF-8 (`é`) and invalid UTF-8 in the path
+    ///   and the query and require a parse error for each.
     #[test]
     fn test_http_request_parser_target_utf8() {
         let mut buf = BytesMut::from("GET /a/b?c=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
         let req = parse_ready!(&mut buf);
         assert_eq!(req.uri().path_and_query(), "/a/b?c=1");
 
-        for target in [&b"/caf\xC3"[..], b"/a?q=\xFF"] {
+        for target in [
+            &b"/caf\xC3\xA9"[..],
+            b"/a?q=caf\xC3\xA9",
+            b"/caf\xC3",
+            b"/a?q=\xFF",
+        ] {
             let mut buf = BytesMut::copy_from_slice(
                 [b"GET ", target, b" HTTP/1.1\r\nhost: localhost\r\n\r\n"].concat(),
             );
