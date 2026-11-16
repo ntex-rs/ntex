@@ -1,6 +1,6 @@
 # Changes
 
-## [5.7.4] - Unreleased
+## [5.7.4] - 2026-11-17
 
 * Fix use-after-free when cloning or dropping a waker re-enters the readiness
   waiter list

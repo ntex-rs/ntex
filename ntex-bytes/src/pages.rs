@@ -341,6 +341,10 @@ impl BytePages {
         if copy {
             let st = self.current.as_mut().unwrap();
             pages.put_slice(st.as_ref());
+            // a clone of `self` can still share the copied data, so the start
+            // is moved past it, `truncate` reclaims the page only if it is unique
+            // SAFETY: `len` is the length of the current page
+            unsafe { st.set_start(len) };
             st.truncate(0);
         } else if len != 0
             && let Some(st) = self.current.take()
@@ -2249,6 +2253,47 @@ mod tests {
         let chunks: Vec<&[u8]> = dst.iter().collect();
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[1].as_ptr(), src_ptr);
+    }
+
+    /// STATEMENT: When `move_to` copies a current page that a clone still shares, later writes to the source do not overwrite the clone's data.
+    ///
+    /// HOW:
+    /// - Fill an 8 KiB source page with 100 bytes (above the inline size), clone the source, and borrow a slice from the clone.
+    /// - Move the source into a destination with spare capacity and check that the data was copied and that the source keeps its page.
+    /// - Write 100 different bytes into the source and check that the borrowed slice and the clone still read the original bytes, and that the new bytes follow the copied ones in the shared page.
+    /// - Drop the clone, move again, and check that the now-unique page is reclaimed, so the next write starts at the same address as the original data.
+    #[test]
+    fn move_to_copy_keeps_shared_current() {
+        let mut src = BytePages::new(BytePageSize::Size8);
+        src.put_slice(&[1; 100]);
+        let src_ptr = src.iter().next().unwrap().as_ptr();
+        let clone = src.clone();
+        let view = clone.iter().next().unwrap();
+        assert_eq!(view.as_ptr(), src_ptr);
+
+        let mut dst = BytePages::new(BytePageSize::Size8);
+        dst.put_slice(b"head");
+        src.move_to(&mut dst);
+        assert!(src.is_empty());
+        assert_eq!(dst.num_pages(), 1);
+        assert_eq!(dst.len(), 104);
+
+        src.put_slice(&[2; 100]);
+        assert_eq!(view, &[1; 100][..]);
+        assert_eq!(
+            clone.iter().flatten().copied().collect::<Vec<_>>(),
+            [1; 100]
+        );
+        let chunk = src.iter().next().unwrap();
+        assert_eq!(chunk, &[2; 100][..]);
+        assert_eq!(chunk.as_ptr(), src_ptr.wrapping_add(100));
+
+        drop(clone);
+        let mut dst = BytePages::new(BytePageSize::Size8);
+        dst.put_slice(b"head");
+        src.move_to(&mut dst);
+        src.put_slice(&[3; 100]);
+        assert_eq!(src.iter().next().unwrap().as_ptr(), src_ptr);
     }
 
     /// STATEMENT: Advancing a vector-backed page retains the correct suffix.

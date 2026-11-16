@@ -1,5 +1,10 @@
 # Changes
 
+## [1.15.4] - 2026-11-16
+
+* Fix `BytePages::move_to` overwriting data still shared by a clone or `copy_to`
+  when the current page is copied into the destination
+
 ## [1.15.3] - 2026-11-15
 
 * Releasing the last reference of a page skips the atomic decrement
