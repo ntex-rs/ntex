@@ -941,9 +941,9 @@ counts them.
 The direction of backpressure tells you which side cannot keep up. Growing
 `write_backpressure_time` means clients read slower than the application
 writes. A few slow clients are normal, but a persistently high
-`write_backpressure_active` holds memory and connection slots. Use
-`set_write_timeout()` to close clients that stop reading, and watch
-`closed.write_timeout`.
+`write_backpressure_active` holds memory and connection slots. HTTP/1
+connections that stay backpressured for ten seconds are closed by default;
+tune that with `set_write_timeout()` and watch `closed.write_timeout`.
 
 Growing `read_backpressure_time` means the application processes input
 slower than it arrives. Check the service's processing time or worker CPU.

@@ -63,8 +63,9 @@ impl From<Option<usize>> for KeepAlive {
 ///
 /// The default configuration enables persistent HTTP/1 connections with a
 /// five-second idle timeout, allows 96 headers, limits the request or status
-/// line to 16 KiB and the message-head buffer to 64 KiB, and applies a
-/// one-second initial request-header timeout. Request-target validation,
+/// line to 16 KiB and the message-head buffer to 64 KiB, applies a
+/// one-second initial request-header timeout and closes HTTP/1 connections
+/// that stay write-backpressured for ten seconds. Request-target validation,
 /// request-target normalization and HTTP/1 Host-header validation are disabled
 /// by default.
 pub struct HttpServiceConfig {
@@ -131,7 +132,7 @@ impl HttpServiceConfig {
             validate_target: false,
             normalize_target: false,
             payload_read_rate: None,
-            write_timeout: Seconds::ZERO,
+            write_timeout: Seconds(10),
             half_close: false,
             #[cfg(all(feature = "ws", feature = "compress"))]
             ws_deflate: None,
@@ -262,8 +263,10 @@ impl HttpServiceConfig {
     /// during write backpressure and resumes once it is disabled.
     ///
     /// Timers have one-second resolution, the timeout can expire up to one
-    /// second later than configured. A zero duration disables the timeout. It
-    /// is disabled by default.
+    /// second later than configured. A zero duration disables the timeout. The
+    /// default is ten seconds, so a client must accept roughly half of the
+    /// write buffer high watermark within that time. Raise it for clients on
+    /// very slow links.
     pub fn set_write_timeout(mut self, timeout: Seconds) -> Self {
         self.write_timeout = timeout;
         self

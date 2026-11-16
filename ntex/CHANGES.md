@@ -1,6 +1,6 @@
 # Changes
 
-## [4.9.1] - Unreleased
+## [4.9.1] - 2026-11-17
 
 * http: Faster decoding of small HTTP/1 chunks; at most 1024 chunks are merged
   into one payload item
@@ -10,6 +10,10 @@
 
 * http: The HTTP/1 decoder rejects a request with `Connection: upgrade` and
   `Upgrade: websocket` that does not use the `GET` method with `400 Bad Request`
+
+* http: `HttpServiceConfig` enables a ten-second write timeout by default, HTTP/1
+  connections that stay write-backpressured longer are closed; use
+  `set_write_timeout(Seconds::ZERO)` to disable it
 
 ## [4.9.0] - 2026-11-15
 
