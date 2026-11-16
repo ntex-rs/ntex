@@ -61,26 +61,27 @@
 #![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, UnsafeCell};
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, LazyLock, atomic::AtomicUsize, atomic::Ordering};
 use std::{fmt, hash::Hash, hash::Hasher, marker::PhantomData, mem, ops, ptr, rc};
 
 type Key = (usize, TypeId);
 type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
 
+// Process-wide and never dropped: a default `CfgContext` holds a raw pointer to
+// it and can be sent to, and outlive, any thread.
+static DEFAULT_CFG: LazyLock<Arc<Storage>> = LazyLock::new(|| {
+    let mut st = Arc::new(Storage::new("--", "", false, CfgContext(ptr::null())));
+    let p = Arc::as_ptr(&st);
+    Arc::get_mut(&mut st).unwrap().ctx.update(p);
+    st
+});
+
 thread_local! {
-    static DEFAULT_CFG: Arc<Storage> = {
-        let mut st = Arc::new(Storage::new("--", "", false, CfgContext(ptr::null())));
-        let p = Arc::as_ptr(&st);
-        Arc::get_mut(&mut st).unwrap().ctx.update(p);
-        st
-    };
     static MAPPING: RefCell<HashMap<Key, Arc<dyn Any + Send + Sync>>> = {
         RefCell::new(HashMap::default())
     };
 }
 static IDX: AtomicUsize = AtomicUsize::new(0);
-const KIND_ARC: usize = 1;
-const KIND_UNMASK: usize = !KIND_ARC;
 
 /// A value that can be stored in [`SharedCfg`].
 ///
@@ -106,7 +107,7 @@ struct Storage {
     service: &'static str,
     ctx: CfgContext,
     building: bool,
-    data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    data: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
 }
 
 impl Storage {
@@ -180,8 +181,8 @@ impl CfgContext {
     }
 
     fn get_ref(&self) -> &Storage {
-        // SAFETY: `self.0` points to the `Storage` kept alive by the `Cfg` or
-        // thread-local default that owns this context.
+        // SAFETY: `self.0` points to the never-dropped default storage, or to a
+        // built storage kept alive by the `Cfg` that exposes this context.
         unsafe { self.0.as_ref().unwrap() }
     }
 }
@@ -189,39 +190,48 @@ impl CfgContext {
 impl Default for CfgContext {
     #[inline]
     fn default() -> Self {
-        CfgContext(DEFAULT_CFG.with(Arc::as_ptr))
+        CfgContext(Arc::as_ptr(&DEFAULT_CFG))
     }
+}
+
+/// The handles owned by a [`Cfg`].
+///
+/// The storage handle is the one `get` cloned, so releasing it never depends
+/// on the user's [`Configuration::ctx`].
+struct CfgRef<T> {
+    val: Arc<T>,
+    storage: Arc<Storage>,
 }
 
 #[derive(Debug)]
 /// A typed handle to a value in a [`SharedCfg`].
-pub struct Cfg<T: Configuration>(UnsafeCell<*const T>, PhantomData<rc::Rc<T>>);
+pub struct Cfg<T: Configuration>(UnsafeCell<CfgRef<T>>, PhantomData<rc::Rc<T>>);
 
 impl<T: Configuration> Cfg<T> {
-    fn new(ptr: *const T) -> Self {
-        Self(UnsafeCell::new(ptr), PhantomData)
+    fn new(val: Arc<T>, storage: Arc<Storage>) -> Self {
+        Self(UnsafeCell::new(CfgRef { val, storage }), PhantomData)
     }
 
     #[inline]
     /// Returns the unique identifier of the shared configuration.
     pub fn id(&self) -> usize {
-        self.get_ref().ctx().id()
+        self.inner().storage.id
     }
 
     #[inline]
     /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
-        self.get_ref().ctx().tag()
+        self.inner().storage.tag
     }
 
     /// Returns the configured service name.
     pub fn service(&self) -> &'static str {
-        self.get_ref().ctx().service()
+        self.inner().storage.service
     }
 
     /// Returns a handle to the complete shared configuration.
     pub fn shared(&self) -> SharedCfg {
-        self.get_ref().ctx().shared()
+        SharedCfg(self.inner().storage.clone())
     }
 
     /// Returns another typed value from the same shared configuration.
@@ -232,18 +242,13 @@ impl<T: Configuration> Cfg<T> {
     where
         U: Configuration,
     {
-        self.get_ref().ctx().get::<U>()
+        get(&self.inner().storage)
     }
 
-    fn get_ref(&self) -> &T {
-        // SAFETY: The untagged pointer refers to a `T` owned by the storage or by
-        // an `Arc<T>`, both kept alive by the strong counts this `Cfg` holds.
-        unsafe {
-            (*self.0.get())
-                .map_addr(|addr| addr & KIND_UNMASK)
-                .as_ref()
-                .unwrap()
-        }
+    fn inner(&self) -> &CfgRef<T> {
+        // SAFETY: Only `replace` writes the cell, and its caller guarantees that
+        // no references into it exist.
+        unsafe { &*self.0.get() }
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -261,25 +266,11 @@ impl<T: Configuration> Cfg<T> {
     }
 }
 
-impl<T: Configuration> Drop for Cfg<T> {
-    fn drop(&mut self) {
-        // SAFETY: `get` took one storage strong count for this `Cfg`, plus one
-        // `Arc<T>` count when tagged `KIND_ARC`; both are released exactly once.
-        unsafe {
-            let addr = (*self.0.get()).map_addr(|addr| addr & KIND_UNMASK);
-            Arc::decrement_strong_count(addr.as_ref().unwrap().ctx().0);
-
-            if ((*self.0.get()).addr() & KIND_ARC) != 0 {
-                Arc::from_raw(addr);
-            }
-        }
-    }
-}
-
 impl<T: Configuration> Clone for Cfg<T> {
     #[inline]
     fn clone(&self) -> Self {
-        self.ctx().get()
+        let inner = self.inner();
+        Self::new(inner.val.clone(), inner.storage.clone())
     }
 }
 
@@ -300,7 +291,7 @@ impl<T: Configuration> ops::Deref for Cfg<T> {
 
     #[inline]
     fn deref(&self) -> &T {
-        self.get_ref()
+        &self.inner().val
     }
 }
 
@@ -388,7 +379,7 @@ impl SharedCfg {
 impl Default for SharedCfg {
     #[inline]
     fn default() -> Self {
-        Self(DEFAULT_CFG.with(Clone::clone))
+        Self(Arc::clone(&DEFAULT_CFG))
     }
 }
 
@@ -458,7 +449,7 @@ impl SharedCfgBuilder {
         Arc::get_mut(&mut self.storage)
             .unwrap()
             .data
-            .insert(TypeId::of::<T>(), Box::new(val));
+            .insert(TypeId::of::<T>(), Arc::new(val));
         self
     }
 
@@ -487,22 +478,14 @@ where
         st.tag
     );
 
-    // increase arc refs for storage instead of actual item
-    // CfgContext and Cfg::shared() rely on Arc<Storage>.
-    mem::forget(st.clone());
-
     let tp = TypeId::of::<T>();
-    if let Some(arc) = st.data.get(&tp) {
-        Cfg::new(arc.as_ref().downcast_ref::<T>().unwrap())
+    let val = if let Some(val) = st.data.get(&tp) {
+        val.clone()
     } else {
         MAPPING.with(|store| {
             let key = (st.id, tp);
-            if let Some(arc) = store.borrow().get(&key) {
-                Cfg::new(
-                    Arc::into_raw(arc.clone())
-                        .cast::<T>()
-                        .map_addr(|addr| addr ^ KIND_ARC),
-                )
+            if let Some(val) = store.borrow().get(&key) {
+                val.clone()
             } else {
                 log::info!(
                     "{}: Configuration {:?} does not exist, using default",
@@ -511,16 +494,14 @@ where
                 );
                 let mut val = T::default();
                 val.set_ctx(CfgContext(st.ctx.0));
-                let arc = Arc::new(val);
-                store.borrow_mut().insert(key, arc.clone());
-                Cfg::new(
-                    Arc::into_raw(arc)
-                        .cast::<T>()
-                        .map_addr(|addr| addr ^ KIND_ARC),
-                )
+                let val: Arc<dyn Any + Send + Sync> = Arc::new(val);
+                store.borrow_mut().insert(key, val.clone());
+                val
             }
         })
-    }
+    };
+    // values are keyed by their `TypeId`
+    Cfg::new(val.downcast::<T>().unwrap(), st.clone())
 }
 
 #[cfg(test)]
