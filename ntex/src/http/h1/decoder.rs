@@ -617,6 +617,13 @@ impl MessageType for Request {
             log::trace!("empty Host header for a target without authority");
             return Err(DecodeError::Header);
         }
+        // RFC 6455 §4.1: the websocket opening handshake must be a GET request
+        if st.flags.contains(Flags::WS_UPGRADE) && self.method() != Method::GET {
+            log::trace!("websocket upgrade with {} method", self.method());
+            return Err(DecodeError::InvalidInput(
+                "WebSocket upgrade requires GET method",
+            ));
+        }
 
         for ctype in st.connection_types() {
             self.head_mut().set_connection_type(ctype);
@@ -2562,6 +2569,57 @@ mod tests {
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\nhost: a\r\nconnection: keep-alive, Upgrade\r\n\
              upgrade: websocket\r\n\r\n",
+        );
+        let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert!(req.upgrade());
+        assert!(matches!(pl, PayloadType::Stream(_)));
+    }
+
+    /// STATEMENT: A websocket upgrade with a method other than `GET` is rejected,
+    /// other upgrades and incomplete websocket upgrades are unaffected.
+    ///
+    /// HOW:
+    /// - Decode `connection: upgrade` and `upgrade: websocket` with non-`GET`
+    ///   methods, with and without a body length, and require `InvalidInput`.
+    /// - Decode a `POST` with only `upgrade: websocket` and a `POST` `h2c`
+    ///   upgrade and verify they still decode.
+    #[test]
+    fn test_ws_upgrade_requires_get() {
+        let reader = MessageDecoder::<Request>::default();
+        for (method, extra) in [
+            ("POST", ""),
+            ("POST", "content-length: 0\r\n"),
+            ("POST", "content-length: 4\r\n"),
+            ("PUT", ""),
+            ("HEAD", ""),
+            ("OPTIONS", ""),
+        ] {
+            let mut buf = BytesMut::from(
+                format!(
+                    "{method} /test HTTP/1.1\r\nhost: a\r\nconnection: Upgrade\r\n\
+                     upgrade: WebSocket\r\n{extra}\r\ndata"
+                )
+                .as_str(),
+            );
+            assert_eq!(
+                reader.decode(&mut buf).err(),
+                Some(DecodeError::InvalidInput(
+                    "WebSocket upgrade requires GET method"
+                )),
+                "{method} {extra:?}"
+            );
+        }
+
+        // without the connection option it is not an upgrade
+        let mut buf =
+            BytesMut::from("POST /test HTTP/1.1\r\nhost: a\r\nupgrade: websocket\r\n\r\n");
+        let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert!(!req.upgrade());
+        assert_eq!(pl, PayloadType::None);
+
+        // other protocols are not restricted to GET
+        let mut buf = BytesMut::from(
+            "POST /test HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\nupgrade: h2c\r\n\r\n",
         );
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         assert!(req.upgrade());

@@ -2876,6 +2876,35 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A websocket upgrade request with a method other than `GET`
+    /// gets `400 Bad Request` and never reaches the service.
+    ///
+    /// HOW:
+    /// - Send a `POST` with `connection: upgrade` and `upgrade: websocket` and no body length.
+    /// - Verify the `400` response, zero service calls, and connection close.
+    #[crate::rt_test]
+    async fn test_ws_upgrade_non_get_rejected() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let calls = Rc::new(Cell::new(0));
+        let calls2 = calls.clone();
+        spawn_h1(server, move |_: Request| {
+            calls2.set(calls2.get() + 1);
+            async { Ok::<_, io::Error>(Response::Ok().build()) }
+        });
+
+        client.write(
+            "POST /spec HTTP/1.1\r\nhost: a\r\nconnection: Upgrade\r\nupgrade: websocket\r\n\
+             sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\r\n",
+        );
+        sleep(Millis(100)).await;
+
+        let buf = client.read_any();
+        assert!(buf.starts_with(b"HTTP/1.1 400 Bad Request\r\n"), "{buf:?}");
+        assert_eq!(calls.get(), 0);
+        assert!(client.is_server_dropped());
+    }
+
     /// STATEMENT: HTTP/1.0 dispatch ignores expectation/upgrade semantics while preserving ordinary payload and pipeline handling.
     ///
     /// HOW:

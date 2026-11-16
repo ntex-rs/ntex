@@ -2451,8 +2451,8 @@ fn join_waker_replaced() {
 ///
 /// HOW:
 /// - Check an idle runtime without timers reports no timeout.
-/// - Arm a 100 ms timer on a 1 ms wheel and check `Pending` holds a timeout that
-///   ends no earlier than the timer and within the 8 ms bucket of the timer.
+/// - Arm a 10 s timer on a 1 ms wheel and check `Pending` holds a timeout that
+///   ends no earlier than the timer and within the 512 ms bucket of the timer.
 #[test]
 fn poll_reports_next_timer_batch() {
     let rt = RuntimeBuilder::new()
@@ -2461,18 +2461,20 @@ fn poll_reports_next_timer_batch() {
     CURRENT_RUNTIME.set(&rt, || {
         assert_eq!(rt.poll(), PollResult::Pending(None));
 
+        // a long timer cannot become due if the thread stalls before the poll,
+        // Miri runs with the real clock
         let start = Instant::now();
-        let hnd = crate::time::TimerHandle::new(100);
+        let hnd = crate::time::TimerHandle::new(10_000);
         let res = rt.poll();
         let end = Instant::now();
         match res {
-            // level 1 buckets of a 1 ms wheel are 8 ms wide
+            // level 3 buckets of a 1 ms wheel are 512 ms wide
             PollResult::Pending(Some(timeout)) => {
                 assert!(
-                    end + timeout >= start + Duration::from_millis(100),
+                    end + timeout >= start + Duration::from_millis(10_000),
                     "{timeout:?}"
                 );
-                assert!(timeout <= Duration::from_millis(109), "{timeout:?}");
+                assert!(timeout <= Duration::from_millis(10_513), "{timeout:?}");
             }
             res => panic!("unexpected {res:?}"),
         }
