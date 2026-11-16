@@ -1,6 +1,7 @@
-# Security review: ntex-service and ntex-rt
+# Security review: ntex-service, ntex-rt and ntex-bytes
 
-Scope: use-after-free and undefined behavior in `ntex-service` and `ntex-rt`.
+Scope: use-after-free and undefined behavior in `ntex-service`, `ntex-rt` and
+`ntex-bytes`. The `ntex-bytes` review is in its own section below.
 
 Method: manual review of all `unsafe` code, plus Miri
 (`cargo +nightly miri test`) on the `ntex-service` lib tests (170) and the
@@ -48,11 +49,15 @@ drops the previous waker while `slot` borrows the `UnsafeCell` slab mutably. A
 waker whose `Drop` or `Clone` re-enters `bind()` could reallocate the slab under
 the live reference.
 
-Not reproduced: the registered `ReadyObserver` holds its own clone of the
-waker, and dropping a pending future clears the slot first, so the slot never
-holds the last reference in the paths tested.
+Not reproduced with in-tree wakers: the registered `ReadyObserver` holds its
+own clone of the waker, and dropping a pending future clears the slot first, so
+the slot never holds the last reference in the paths tested.
 
 Suggested fix: `mem::replace` the old waker and drop it after the borrow ends.
+
+Status: fixed in `057fd32fb`. A waker whose `Clone` re-enters the waiter list
+reproduces the use-after-free under Miri. The fix clones and drops wakers
+outside the slab borrow.
 
 ## ntex-rt
 
@@ -67,3 +72,67 @@ only, and they are intentional:
 
 Known separately and not re-reviewed here: RT-1 (stall detector unwinds inside
 a signal handler).
+
+## ntex-bytes
+
+Method: manual review of all `unsafe` code, plus Miri on the full `ntex-bytes`
+test suite:
+
+| Configuration | Result |
+|---|---|
+| Stacked Borrows | 189/189 pass |
+| Stacked Borrows, `tracker` feature | 212/212 pass |
+| Tree Borrows, `tracker` feature | 212/212 pass |
+| `i686-unknown-linux-gnu`, `tracker` feature | 209/209 pass |
+| `-Zmiri-many-seeds=0..32` on the 10 multi-threaded tests | No UB or data race |
+| `-Zmiri-strict-provenance` | 208/212 pass, see note below |
+
+The finding was confirmed natively and with a Miri reproduction.
+
+| # | Severity | File | Lines | Vulnerability | Confidence |
+|---|----------|------|-------|---------------|------------|
+| 1 | 🟠 HIGH | ntex-bytes/src/pages.rs | 341-344 | `BytePages::move_to` truncates a current page that is still shared | 10/10 |
+
+### 1. `BytePages::move_to` truncates a current page that is still shared
+
+When the current page is small enough to copy, `move_to` copies it into the
+destination and then calls `truncate(0)` on it. `BytePages::clone` and
+`copy_to` share the current page through `shallow_freeze`. `StorageVec::truncate`
+reclaims the page only when it is unique; otherwise it only sets the length to 0
+and leaves the offset unchanged. The next write into `self` then overwrites the
+bytes that the cloned `BytePages` or `Bytes` still exposes as immutable data.
+
+```rust
+let mut a = BytePages::default();
+a.put_slice(&[1; 100]);
+let b = a.clone();
+let mut c = BytePages::default();
+c.put_slice(&[0; 10]);
+a.move_to(&mut c);
+a.put_slice(&[2; 100]); // `b` now reads [2; 100]
+```
+
+Conditions: the shared current page holds more than `INLINE_CAP` bytes (23 on
+64-bit targets) and less than 4 KiB, the destination has more spare capacity
+than that, and the page is not a `Size4` page.
+
+Impact: safe code mutates memory behind a live `&[u8]`, which is undefined
+behavior. If the clone is sent to another thread, it is also a data race.
+Natively, a slice borrowed from `b` changes from `1` to `2`. Miri reports a
+Stacked Borrows violation on the borrowed slice.
+
+Reach: introduced in `347f9aac6`. No caller in the workspace clones a
+`BytePages` before calling `move_to` (ntex-io, ntex-tls and ntex-net use it on
+unshared buffers), but `clone`, `copy_to` and `move_to` are public safe APIs.
+
+Suggested fix: copy only when the current page is unique (add
+`st.is_unique()` to the `copy` predicate). Alternatively, advance the start
+with `set_start(len)` instead of calling `truncate(0)` when the page is shared.
+
+### Note: exposed provenance for external storage
+
+Under `-Zmiri-strict-provenance`, 4 tests fail at `storage.rs:754`:
+`st_vtable()` rebuilds the external-storage vtable pointer with
+`ptr::with_exposed_provenance`. This is by design, because the pointer is stored
+in the `offset` field, and it is sound under the default permissive provenance
+model. It is not a finding.
