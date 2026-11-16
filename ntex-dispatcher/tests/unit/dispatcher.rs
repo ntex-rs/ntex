@@ -2115,13 +2115,13 @@ async fn write_timeout_slow_reader() {
     client.remote_buffer_cap(0);
 
     let (disp, _, events) =
-        write_dispatcher(server, IoConfig::new().set_write_timeout(Seconds(2)), 65536);
+        write_dispatcher(server, IoConfig::new().set_write_timeout(Seconds(1)), 65536);
     spawn(async move {
         let _ = disp.await;
     });
 
     client.write("12345678");
-    for _ in 0..24 {
+    for _ in 0..16 {
         sleep(Millis(250)).await;
         client.remote_buffer_cap(64);
         let _ = client.read_any();

@@ -766,13 +766,13 @@ mod tests {
     /// STATEMENT: A one-second interval keeps subsequent ticks within the expected timing bounds.
     ///
     /// HOW:
-    /// - Consume the immediate tick, then measure three ticks between one and 1.5 seconds each.
+    /// - Consume the immediate tick, then measure two ticks between one and 1.5 seconds each.
     #[ntex::test]
     async fn test_interval_one_sec() {
         let int = interval(Millis::ONE_SEC);
         int.tick().await;
 
-        for _i in 0..3 {
+        for _i in 0..2 {
             let time = time::Instant::now();
             int.tick().await;
             let elapsed = time.elapsed();

@@ -1,0 +1,8 @@
+[profile.default]
+# Report tests as slow after 30s and kill them after 2 minutes, so a hung
+# test fails the run instead of stalling CI until the job timeout.
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+# Used automatically under `cargo miri nextest`; interpreted tests take minutes.
+[profile.default-miri]
+slow-timeout = { period = "120s", terminate-after = 5 }

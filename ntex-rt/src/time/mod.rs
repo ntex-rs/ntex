@@ -2208,7 +2208,9 @@ mod tests {
     /// HOW:
     /// - Run systems with 2 ms, default and 1 ms resolutions on one thread.
     /// - In each, complete a sleep and check the latched `units` shift and the
-    ///   level of a 500 ms timer, level 1 at 2 ms and level 0 at 16 ms.
+    ///   level of a 200 ms timer, level 1 at 1-2 ms and level 0 at 16 ms. The
+    ///   delay stays well inside level 1 (63..504 ticks) at 1 ms, so it
+    ///   tolerates about 300 ms of wheel lag on a slow host.
     /// - After each run, check `units` is cleared for the next system.
     #[test]
     fn test_timer_resolution_per_system() {
@@ -2220,7 +2222,7 @@ mod tests {
                 }
                 builder.build(TestRunner).block_on(async move {
                     sleep(1).await;
-                    let hnd = TimerHandle::new(500);
+                    let hnd = TimerHandle::new(200);
                     with_timer(|timer| {
                         assert_eq!(timer.units.get(), Some(units));
                         let bucket = timer.with_wheel(|w| w.timers[slot(hnd.0)].bucket).unwrap();
