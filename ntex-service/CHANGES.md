@@ -1,5 +1,16 @@
 # Changes
 
+## [5.7.5] - 2026-11-17
+
+* Fix use-after-free when a configuration value created by `Default` on a
+  thread that has exited reads its context. The default shared configuration
+  is now process-wide, so `SharedCfg::default()` has the same id on every
+  thread
+
+* Fix use-after-free when a `Configuration::set_ctx` implementation ignores
+  its argument: `Cfg` now holds its own reference to the shared configuration
+  instead of releasing the one returned by `Configuration::ctx()`
+
 ## [5.7.4] - 2026-11-17
 
 * Fix use-after-free when cloning or dropping a waker re-enters the readiness

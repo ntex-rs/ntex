@@ -305,3 +305,74 @@ fn owned_and_registered_cfg_keep_values() {
     assert_eq!(again.val, 7);
     assert_eq!(again.tag(), "REGISTERED");
 }
+
+/// STATEMENT: A default context stays valid after the thread that created it exits, and every
+/// thread shares the same default configuration.
+///
+/// HOW:
+/// - Create `TestCfg::default()` on a spawned thread, return it, and join the thread.
+/// - Read `tag()` and `id()` through the returned context and check they match
+///   `SharedCfg::default()` on this thread.
+/// - Look up a `Cfg` and a `SharedCfg` through the context and check they belong to the default
+///   configuration. Miri reports a use-after-free if the default storage died with its thread.
+#[test]
+fn default_ctx_outlives_its_thread() {
+    #[derive(Debug, Default)]
+    struct TestCfg {
+        config: CfgContext,
+    }
+    impl Configuration for TestCfg {
+        const NAME: &str = "TEST";
+        fn ctx(&self) -> &CfgContext {
+            &self.config
+        }
+        fn set_ctx(&mut self, ctx: CfgContext) {
+            self.config = ctx;
+        }
+    }
+
+    let val = std::thread::spawn(TestCfg::default).join().unwrap();
+    assert_eq!(val.ctx().tag(), "--");
+    assert_eq!(val.ctx().id(), SharedCfg::default().id());
+
+    let cfg = val.ctx().get::<TestCfg>();
+    assert_eq!(cfg.tag(), "--");
+    drop(cfg);
+    assert_eq!(val.ctx().shared(), SharedCfg::default());
+}
+
+/// STATEMENT: A `Cfg` releases the configuration it was taken from, even when the value's
+/// `set_ctx` ignores the context it is given.
+///
+/// HOW:
+/// - Define `IgnoringCfg`, whose `set_ctx` keeps its default context instead of the one passed
+///   in, and add it to the `OWNER` configuration.
+/// - Repeatedly get, clone, and drop `Cfg` handles, checking each reports the `OWNER` tag.
+/// - Check `OWNER` is left with only its own handle and the default configuration is still
+///   usable. Miri reports a dangling reference if the drops released the default storage.
+#[test]
+fn cfg_drop_ignores_user_ctx() {
+    #[derive(Debug, Default)]
+    struct IgnoringCfg {
+        config: CfgContext,
+    }
+    impl Configuration for IgnoringCfg {
+        const NAME: &str = "IGNORING";
+        fn ctx(&self) -> &CfgContext {
+            &self.config
+        }
+        fn set_ctx(&mut self, _: CfgContext) {}
+    }
+
+    let shared = SharedCfg::new("OWNER").add(IgnoringCfg::default()).build();
+    for _ in 0..4 {
+        let cfg = shared.get::<IgnoringCfg>();
+        let cloned = cfg.clone();
+        assert_eq!(cfg.tag(), "OWNER");
+        assert_eq!(cloned.tag(), "OWNER");
+        assert!(ptr::eq(ptr::from_ref(&*cfg), ptr::from_ref(&*cloned)));
+    }
+    assert_eq!(Arc::strong_count(&shared.0), 1);
+    assert_eq!(SharedCfg::default().tag(), "--");
+    assert_eq!(Cfg::<IgnoringCfg>::default().tag(), "--");
+}
