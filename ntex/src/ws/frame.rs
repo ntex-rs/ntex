@@ -247,23 +247,25 @@ impl Parser {
         let payload_len = payload.len();
         let two = if mask { 0x80 } else { 0 };
 
-        if payload_len < 126 {
-            dst.extend_from_slice(&[one, two | payload_len as u8]);
+        // the extended length is 2 or 8 big-endian bytes
+        let ext_len = (payload_len as u64).to_be_bytes();
+        let (len, ext): (u8, &[u8]) = if payload_len < 126 {
+            (payload_len as u8, &[])
         } else if payload_len <= 65_535 {
-            dst.extend_from_slice(&[one, two | 0x007e]);
-            dst.put_u16(payload_len as u16);
+            (126, &ext_len[6..])
         } else {
-            dst.extend_from_slice(&[one, two | 127]);
-            dst.put_u64(payload_len as u64);
-        }
+            (127, &ext_len)
+        };
+        let header = [one, two | len];
 
         if mask {
             let mask = fastrand::u32(..);
             let mut buf = BytesMut::from(payload);
             apply_mask(&mut buf, mask);
-            dst.extend_from_slice(&mask.to_ne_bytes());
+            dst.put_slices(&[&header, ext, &mask.to_ne_bytes()]);
             dst.append::<BytesMut>(buf);
         } else {
+            dst.put_slices(&[&header, ext]);
             dst.append::<BytePage>(payload);
         }
         Ok(())

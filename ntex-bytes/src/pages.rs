@@ -174,6 +174,45 @@ impl BytePages {
         self.put_slice(extend);
     }
 
+    /// Appends the given slices in order.
+    ///
+    /// The result is the same as calling [`put_slice`](BufMut::put_slice) for
+    /// each slice. If all slices fit into the current page, the free space is
+    /// checked once and the slices are copied straight into it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::{BytePages, BytePageSize};
+    ///
+    /// let mut pages = BytePages::new(BytePageSize::Size8);
+    /// pages.put_slices(&[b"content-type", b": ", b"text/plain", b"\r\n"]);
+    ///
+    /// assert_eq!(pages.freeze(), b"content-type: text/plain\r\n"[..]);
+    /// ```
+    pub fn put_slices(&mut self, src: &[&[u8]]) {
+        let len = src.iter().map(|s| s.len()).sum::<usize>();
+
+        // a small write that leaves the current page non-full is copied in place
+        if let Some(st) = self.current.as_mut()
+            && st.remaining() > len
+        {
+            let start = st.len();
+            let spare = st.spare_mut();
+            let mut pos = 0;
+            for s in src {
+                spare[pos..pos + s.len()].copy_from_slice(s);
+                pos += s.len();
+            }
+            // SAFETY: the copies above initialized `len` bytes after `start`
+            unsafe { st.set_len(start + len) };
+        } else {
+            for s in src {
+                self.put_slice(s);
+            }
+        }
+    }
+
     #[inline]
     /// Returns the total number of buffered bytes.
     pub fn len(&self) -> usize {
@@ -1775,6 +1814,65 @@ mod tests {
         expected.push(b'y');
         expected.extend_from_slice(&large);
         assert_eq!(pages.freeze(), expected[..]);
+    }
+
+    /// STATEMENT: `put_slices` copies slices that fit into the current page in order, in place.
+    ///
+    /// HOW:
+    /// - Start a `Size4` page with `abc` and record its spare capacity.
+    /// - Put three slices, one of them empty, and check that the spare shrank by their total,
+    ///   no page moved to the page list, and the bytes follow `abc` in order.
+    #[test]
+    fn put_slices_current_page() {
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        pages.put_slice(b"abc");
+        let spare = pages.spare();
+
+        pages.put_slices(&[b"de", b"", b"fgh"]);
+        assert_eq!(pages.spare(), spare - 5);
+        assert_eq!(pages.pages().len(), 0);
+        assert_eq!(pages.len(), 8);
+        assert_eq!(pages.freeze(), b"abcdefgh"[..]);
+    }
+
+    /// STATEMENT: `put_slices` gives the same pages as `put_slice` calls when the slices do not
+    /// fit into the current page.
+    ///
+    /// HOW:
+    /// - Put slices into pages with no current page, slices that fill the current page exactly,
+    ///   and slices that overflow it.
+    /// - Do the same with one `put_slice` call per slice and compare the page count, the
+    ///   current page and the frozen bytes.
+    #[test]
+    fn put_slices_matches_put_slice() {
+        fn check(prefix: &[u8], src: &[&[u8]]) {
+            let mut pages = BytePages::new(BytePageSize::Size4);
+            let mut expected = BytePages::new(BytePageSize::Size4);
+            if !prefix.is_empty() {
+                pages.put_slice(prefix);
+                expected.put_slice(prefix);
+            }
+            pages.put_slices(src);
+            for s in src {
+                expected.put_slice(s);
+            }
+            assert_eq!(pages.num_pages(), expected.num_pages());
+            assert_eq!(pages.current.is_none(), expected.current.is_none());
+            assert_eq!(pages.len(), expected.len());
+            assert_eq!(pages.freeze(), expected.freeze());
+        }
+
+        check(b"", &[b"abc", b"de"]);
+
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        pages.put_slice(b"abc");
+        let spare = pages.spare();
+        let fill = vec![b'x'; spare - 2];
+        let large = vec![b'z'; spare * 2];
+
+        check(b"abc", &[&fill, b"yz"]);
+        check(b"abc", &[&fill, b"yz!"]);
+        check(b"abc", &[b"y", &large, b"z"]);
     }
 
     /// STATEMENT: Cloned pages preserve contents while short storage is copied inline and longer mutable storage is shared.
