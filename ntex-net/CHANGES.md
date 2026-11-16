@@ -1,5 +1,13 @@
 # Changes
 
+## [4.12.3] - Unreleased
+
+* io-uring: Fix use-after-free when a task or an io handler panics, the reactor
+  now cancels in-flight operations before releasing their buffers
+
+* iocp: Fix aliasing of the write operation and a duplicate send when a write is
+  requested while the previous send completes
+
 ## [4.12.2] - 2026-11-16
 
 * io-uring: Shut down sockets with `shutdown(2)` instead of the io-uring

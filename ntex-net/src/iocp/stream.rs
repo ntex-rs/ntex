@@ -599,11 +599,15 @@ impl StreamCtl {
 
     pub(crate) fn write(&self) {
         self.inner.with(|st| {
-            if let Some(item) = st.streams.get_mut(self.id)
+            if let Some(item) = st.streams.get(self.id)
                 && !item.is_closing()
             {
-                let overlapped = item.ops.write_overlapped();
-                item.ops.write_mut().write(overlapped);
+                // SAFETY: the pointer derives from the item's allocation, which
+                // stays live while the storage is borrowed, and no borrow of
+                // the write op is held
+                unsafe {
+                    ops::WriteOperation::write(item.ops.write_ptr(), item.ops.write_overlapped());
+                }
             }
         });
     }
@@ -757,11 +761,15 @@ impl WeakStreamCtl {
 
     pub(crate) fn write(&self) {
         self.inner.with(|st| {
-            if let Some(item) = st.streams.get_mut(self.id)
+            if let Some(item) = st.streams.get(self.id)
                 && !item.is_closing()
             {
-                let overlapped = item.ops.write_overlapped();
-                item.ops.write_mut().write(overlapped);
+                // SAFETY: as in `StreamCtl::write`. This also runs nested in a
+                // write completion, which holds no borrow of the op while it
+                // calls into the io layer.
+                unsafe {
+                    ops::WriteOperation::write(item.ops.write_ptr(), item.ops.write_overlapped());
+                }
             }
         });
     }

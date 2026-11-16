@@ -1,5 +1,7 @@
 use std::cell::{Cell, UnsafeCell};
+use std::ops::{Deref, DerefMut};
 use std::os::fd::{AsRawFd, RawFd};
+use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 use std::{collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc};
 
@@ -169,6 +171,45 @@ impl HandlerItem {
             self.modified = false;
             self.hnd.tick();
         }
+    }
+}
+
+/// Handlers taken out of the reactor, put back when dropped.
+///
+/// Handlers own the memory of their in-flight operations. Put back while
+/// unwinding, they are released by the reactor shutdown once the kernel is
+/// done with it, instead of being dropped with the panic.
+#[allow(clippy::box_collection)]
+struct TakenHandlers<'a> {
+    slot: &'a Cell<Option<Box<Vec<HandlerItem>>>>,
+    handlers: Option<Box<Vec<HandlerItem>>>,
+}
+
+impl<'a> TakenHandlers<'a> {
+    #[allow(clippy::box_collection)]
+    fn new(slot: &'a Cell<Option<Box<Vec<HandlerItem>>>>) -> Self {
+        let handlers = Some(slot.take().unwrap_or_default());
+        Self { slot, handlers }
+    }
+}
+
+impl Deref for TakenHandlers<'_> {
+    type Target = Vec<HandlerItem>;
+
+    fn deref(&self) -> &Self::Target {
+        self.handlers.as_ref().unwrap()
+    }
+}
+
+impl DerefMut for TakenHandlers<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.handlers.as_mut().unwrap()
+    }
+}
+
+impl Drop for TakenHandlers<'_> {
+    fn drop(&mut self) {
+        self.slot.set(self.handlers.take());
     }
 }
 
@@ -346,7 +387,7 @@ impl Reactor {
         F: FnOnce(ReactorApi) -> Box<dyn Handler>,
     {
         let id = self.hid.get();
-        let mut handlers = self.handlers.take().unwrap_or_default();
+        let mut handlers = TakenHandlers::new(&self.handlers);
         handlers.push(HandlerItem {
             hnd: f(ReactorApi {
                 batch: id << Self::BATCH,
@@ -354,7 +395,7 @@ impl Reactor {
             }),
             modified: false,
         });
-        self.handlers.set(Some(handlers));
+        drop(handlers);
         self.hid.set(id + 1);
     }
 
@@ -504,7 +545,7 @@ impl Reactor {
         let mut has_more = false;
 
         if !cqueue::CompletionQueue::<'_, _>::is_empty(cq) {
-            let mut handlers = self.handlers.take().unwrap();
+            let mut handlers = TakenHandlers::new(&self.handlers);
             for entry in (&mut *cq).take(Self::CQES_PER_POLL) {
                 let user_data = entry.user_data();
                 match user_data {
@@ -546,7 +587,6 @@ impl Reactor {
             for h in handlers.iter_mut() {
                 h.tick();
             }
-            self.handlers.set(Some(handlers));
         }
         has_more
     }
@@ -620,93 +660,102 @@ impl ntex_rt::Driver for Reactor {
         // SAFETY: This run loop is the sole completion consumer; callbacks never borrow the CQ.
         let mut cq = unsafe { ring.completion_shared() };
         let submitter = ring.submitter();
-        let result = loop {
-            // tasks woken until the runtime is polled do not need to notify
-            rt.awake();
-            cq.sync();
+        // A panic of a task or a handler must not skip the shutdown, which
+        // releases handlers only after the kernel is done with their memory.
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            loop {
+                // tasks woken until the runtime is polled do not need to notify
+                rt.awake();
+                cq.sync();
 
-            // Run tasks after each chunk of completions, so a task writes
-            // to its socket while the socket is still hot in the cache.
-            // All chunks belong to one runtime turn, and their submissions
-            // share one `io_uring_enter` unless the submission queue fills.
-            let more_cqes = loop {
-                if !self.poll_completions(&mut cq) {
-                    break false;
-                }
-                rt.run_ready();
-
-                if sq.len() >= 96 {
-                    // flush the full queue without ending the turn; consumed
-                    // entries are published first, the enter may post more
-                    cq.sync();
-                    if submitter.submit().is_err() {
-                        // the end of the turn retries and reports the error
-                        break true;
+                // Run tasks after each chunk of completions, so a task writes
+                // to its socket while the socket is still hot in the cache.
+                // All chunks belong to one runtime turn, and their submissions
+                // share one `io_uring_enter` unless the submission queue fills.
+                let more_cqes = loop {
+                    if !self.poll_completions(&mut cq) {
+                        break false;
                     }
-                    self.apply_changes(sq);
-                    // SAFETY: No other borrow of the change queue is live.
-                    if unsafe { !(*self.inner.changes.get()).is_empty() } {
-                        break true;
+                    rt.run_ready();
+
+                    if sq.len() >= 96 {
+                        // flush the full queue without ending the turn; consumed
+                        // entries are published first, the enter may post more
+                        cq.sync();
+                        if submitter.submit().is_err() {
+                            // the end of the turn retries and reports the error
+                            break true;
+                        }
+                        self.apply_changes(sq);
+                        // SAFETY: No other borrow of the change queue is live.
+                        if unsafe { !(*self.inner.changes.get()).is_empty() } {
+                            break true;
+                        }
                     }
-                }
-            };
-
-            let (more_tasks, timeout) = match rt.poll() {
-                PollResult::Pending(timeout) => (false, timeout),
-                PollResult::PollAgain => (true, None),
-                PollResult::Ready => break Ok(()),
-            };
-            let more_changes = self.apply_changes(sq);
-
-            // Publish the consumed entries before entering the kernel, it
-            // would count them as pending completions and return from the
-            // next wait immediately. Without deferred task running,
-            // completions may arrive during the turn, waiting would return
-            // immediately.
-            cq.sync();
-
-            // submit publishes the queue tail, and skips the syscall if
-            // there is nothing to submit and no deferred completions to post.
-            let result = if more_tasks {
-                // Without the taskrun flag a plain submit never runs deferred
-                // task work, so a task that keeps the runtime busy would starve
-                // completions. GETEVENTS with no minimum posts them without waiting.
-                sq.sync();
-                // SAFETY: Valid arguments for an enter without extra arguments.
-                let res = unsafe {
-                    submitter.enter::<libc::sigset_t>(
-                        sq.len() as u32,
-                        0,
-                        EnterFlags::GETEVENTS.bits(),
-                        None,
-                    )
                 };
-                // the kernel consumes entries during the enter, even if it fails
-                sq.sync();
-                res
-            } else if more_changes || more_cqes || !cqueue::CompletionQueue::<'_, _>::is_empty(&cq)
-            {
-                submitter.submit()
-            } else if let Some(timeout) = timeout {
-                // wake up for the next batch of runtime timers
-                let ts = Timespec::from(timeout);
-                submitter.submit_with_args(1, &SubmitArgs::new().timespec(&ts))
-            } else {
-                submitter.submit_and_wait(1)
-            };
 
-            if let Err(e) = result {
-                match e.raw_os_error() {
-                    Some(libc::ETIME | libc::EBUSY | libc::EAGAIN | libc::EINTR) => {
-                        log::debug!("Ring submit interrupted, {e:?}");
+                let (more_tasks, timeout) = match rt.poll() {
+                    PollResult::Pending(timeout) => (false, timeout),
+                    PollResult::PollAgain => (true, None),
+                    PollResult::Ready => break Ok(()),
+                };
+                let more_changes = self.apply_changes(sq);
+
+                // Publish the consumed entries before entering the kernel, it
+                // would count them as pending completions and return from the
+                // next wait immediately. Without deferred task running,
+                // completions may arrive during the turn, waiting would return
+                // immediately.
+                cq.sync();
+
+                // submit publishes the queue tail, and skips the syscall if
+                // there is nothing to submit and no deferred completions to post.
+                let result = if more_tasks {
+                    // Without the taskrun flag a plain submit never runs deferred
+                    // task work, so a task that keeps the runtime busy would starve
+                    // completions. GETEVENTS with no minimum posts them without waiting.
+                    sq.sync();
+                    // SAFETY: Valid arguments for an enter without extra arguments.
+                    let res = unsafe {
+                        submitter.enter::<libc::sigset_t>(
+                            sq.len() as u32,
+                            0,
+                            EnterFlags::GETEVENTS.bits(),
+                            None,
+                        )
+                    };
+                    // the kernel consumes entries during the enter, even if it fails
+                    sq.sync();
+                    res
+                } else if more_changes
+                    || more_cqes
+                    || !cqueue::CompletionQueue::<'_, _>::is_empty(&cq)
+                {
+                    submitter.submit()
+                } else if let Some(timeout) = timeout {
+                    // wake up for the next batch of runtime timers
+                    let ts = Timespec::from(timeout);
+                    submitter.submit_with_args(1, &SubmitArgs::new().timespec(&ts))
+                } else {
+                    submitter.submit_and_wait(1)
+                };
+
+                if let Err(e) = result {
+                    match e.raw_os_error() {
+                        Some(libc::ETIME | libc::EBUSY | libc::EAGAIN | libc::EINTR) => {
+                            log::debug!("Ring submit interrupted, {e:?}");
+                        }
+                        _ => break Err(e),
                     }
-                    _ => break Err(e),
                 }
             }
-        };
+        }));
 
+        // unwinding out of the shutdown would drop handlers with operations in flight
+        let guard = ntex_rt::AbortOnUnwind("io-uring reactor shutdown panicked");
         self.shutdown(sq, &submitter, &mut cq);
-        result
+        guard.disarm();
+        result.unwrap_or_else(|payload| panic::resume_unwind(payload))
     }
 
     /// Get notification handle
@@ -1139,6 +1188,137 @@ mod tests {
         drop(rt);
         drop(reactor);
         assert_eq!(Rc::strong_count(&events), 2);
+    }
+
+    /// Panics on completions.
+    struct PanicOnComplete(Tracked);
+
+    impl Handler for PanicOnComplete {
+        fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {
+            panic!("handler panicked");
+        }
+        fn canceled(&mut self, _: usize) {}
+        fn tick(&mut self) {}
+        fn in_flight(&self) -> usize {
+            self.0.in_flight()
+        }
+        fn abandon(&mut self) {
+            self.0.abandon();
+        }
+        fn cleanup(&mut self) {
+            self.0.cleanup();
+        }
+    }
+
+    /// Registers a handler that reads from an empty pipe into `buf`, after
+    /// a no-op if `nop` is set, and returns the pipe ends.
+    fn register_pipe_read(
+        reactor: &Reactor,
+        buf: &mut [u8; 8],
+        nop: bool,
+        hnd: Box<dyn Handler>,
+    ) -> (OwnedFd, OwnedFd) {
+        let mut fds = [0; 2];
+        syscall!(libc::pipe(fds.as_mut_ptr())).unwrap();
+        // SAFETY: `pipe` returned two fresh descriptors that nothing else owns.
+        let (rd, wr) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        let (fd, buf_ptr) = (rd.as_raw_fd(), buf.as_mut_ptr());
+        reactor.register(|api| {
+            // SAFETY: the caller keeps `buf` and the pipe alive until the read is canceled.
+            unsafe {
+                api.submit(1, |en| {
+                    Read::new(en, Fd(fd), buf_ptr, 8);
+                });
+                if nop {
+                    api.submit(2, |en| {
+                        Nop::new(en);
+                    });
+                }
+            }
+            hnd
+        });
+        (rd, wr)
+    }
+
+    /// Checks a byte written to the pipe is still readable, so no read is pending.
+    fn assert_pipe_unread(rd: &OwnedFd, wr: &OwnedFd) {
+        let fd = rd.as_raw_fd();
+        syscall!(libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK)).unwrap();
+        syscall!(libc::write(wr.as_raw_fd(), b"x".as_ptr().cast(), 1)).unwrap();
+        let mut out = [0u8; 8];
+        let n = syscall!(libc::read(fd, out.as_mut_ptr().cast(), 8)).unwrap();
+        assert_eq!(&out[..n.cast_unsigned()], b"x");
+    }
+
+    /// STATEMENT: A task panic unwinds out of the reactor only after the shutdown
+    /// canceled in-flight operations and released their handler.
+    ///
+    /// HOW:
+    /// - Register a handler that submits a read from an empty pipe into a buffer it owns.
+    /// - Run a future that panics, and check the panic reaches the caller.
+    /// - Check `cleanup` was called, `abandon` was not, and the handler was dropped.
+    /// - Write to the pipe and check the byte is still readable, so the read was gone.
+    #[test]
+    fn task_panic_runs_shutdown() {
+        let Some(reactor) = sync_cancel_reactor() else {
+            return;
+        };
+        let events = Rc::new(Events::default());
+        let mut buf = Box::new([0u8; 8]);
+        let hnd = Box::new(Tracked {
+            events: events.clone(),
+            in_flight: 1,
+        });
+        let (rd, wr) = register_pipe_read(&reactor, &mut buf, false, hnd);
+
+        let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            rt.block_on(async { panic!("task panicked") }, &reactor);
+        }));
+        assert!(res.is_err());
+
+        assert!(events.cleanup.get());
+        assert!(!events.abandon.get());
+        assert_eq!(Rc::strong_count(&events), 1);
+        drop(buf);
+        assert_pipe_unread(&rd, &wr);
+    }
+
+    /// STATEMENT: A handler panic during completion handling keeps the handlers in
+    /// the reactor, so the shutdown cancels their in-flight operations before
+    /// releasing them.
+    ///
+    /// HOW:
+    /// - Register a handler that panics on completion, and submit a no-op and a read
+    ///   from an empty pipe into a buffer it owns.
+    /// - Run a pending future, the no-op completion panics, and check the panic
+    ///   reaches the caller.
+    /// - Check `cleanup` was called, `abandon` was not, and the handler was dropped.
+    /// - Write to the pipe and check the byte is still readable, so the read was gone.
+    #[test]
+    fn handler_panic_runs_shutdown() {
+        let Some(reactor) = sync_cancel_reactor() else {
+            return;
+        };
+        let events = Rc::new(Events::default());
+        let mut buf = Box::new([0u8; 8]);
+        let hnd = Box::new(PanicOnComplete(Tracked {
+            events: events.clone(),
+            in_flight: 1,
+        }));
+        let (rd, wr) = register_pipe_read(&reactor, &mut buf, true, hnd);
+
+        let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            rt.block_on(pending::<()>(), &reactor);
+        }));
+        assert!(res.is_err());
+
+        assert!(events.cleanup.get());
+        assert!(!events.abandon.get());
+        assert_eq!(Rc::strong_count(&events), 1);
+        drop(buf);
+        assert_pipe_unread(&rd, &wr);
     }
 
     fn sync_cancel_reactor() -> Option<Reactor> {
