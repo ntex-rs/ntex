@@ -1,5 +1,13 @@
 # Changes
 
+## [4.9.1] - Unreleased
+
+* http: Faster decoding of small HTTP/1 chunks; at most 1024 chunks are merged
+  into one payload item
+
+* http: The HTTP/1 request payload reader yields to the runtime after decoding
+  8192 merged small chunks in one poll, large chunks are decoded without a yield
+
 ## [4.9.0] - 2026-11-15
 
 * http: Add `Payload::take_trailers()` to take trailer fields without copying them

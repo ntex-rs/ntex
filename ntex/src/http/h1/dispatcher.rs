@@ -19,6 +19,9 @@ use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::payload::{Payload, PayloadSender};
 use super::{Message, ProtocolError, codec::Codec, timer::Timer, timer::Timers};
 
+/// Merged small chunks decoded in one poll before the payload reader yields.
+const PAYLOAD_MERGED_CHUNKS_PER_POLL: usize = 8 * 1024;
+
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
     pub struct Dispatcher<F, B, Err> {
@@ -652,6 +655,7 @@ where
                 // read request payload
                 let mut updated = false;
                 let mut pending = None;
+                let mut merged = 0;
                 self.release_write_timer();
                 while let Some((payload_codec, sender)) = self.payload.as_mut() {
                     let result = if pending.is_some() {
@@ -689,7 +693,20 @@ where
                             match decoded.item {
                                 Some(PayloadItem::Chunk(chunk)) => {
                                     updated = true;
+                                    merged += payload_codec.merged_chunks();
                                     sender.feed_data(chunk);
+
+                                    // decoding of merged small chunks is bounded per
+                                    // poll, other tasks run before the rest of the
+                                    // buffered input is decoded, large chunks are
+                                    // never merged and do not yield
+                                    if merged >= PAYLOAD_MERGED_CHUNKS_PER_POLL
+                                        && decoded.remains != 0
+                                        && pending.is_none()
+                                    {
+                                        cx.waker().wake_by_ref();
+                                        return Poll::Pending;
+                                    }
                                     continue;
                                 }
                                 Some(PayloadItem::Trailers(trailers)) => {
@@ -1722,6 +1739,92 @@ mod tests {
             Bytes::from("te")
         );
         assert!(stream_recv(&mut rx).await.unwrap().is_err());
+    }
+
+    /// STATEMENT: The payload reader yields after `PAYLOAD_MERGED_CHUNKS_PER_POLL` merged small
+    /// chunks while input remains buffered, large chunks are decoded without a yield.
+    ///
+    /// HOW:
+    /// - Buffer twenty 1 KiB chunks and the payload end, poll the payload reader once with a
+    ///   counting waker, and verify the whole payload is decoded without a wake.
+    /// - Buffer 10,000 one-byte chunks and the payload end, and verify the first poll returns
+    ///   `Pending`, wakes itself, and feeds exactly `PAYLOAD_MERGED_CHUNKS_PER_POLL` bytes.
+    /// - Poll until the payload completes and verify all data and the end of the payload.
+    #[crate::rt_test]
+    async fn test_payload_reader_yields_after_merged_chunks() {
+        struct CountWaker(AtomicUsize);
+        impl std::task::Wake for CountWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let cases = [
+            (format!("400\r\n{}\r\n", "x".repeat(1024)), 1024, 20, false),
+            ("1\r\na\r\n".to_string(), 1, 10_000, true),
+        ];
+        for (chunk, size, count, yields) in cases {
+            let (client, server) = IoTest::create();
+            // the whole tiny-chunk payload is buffered before the first poll
+            let config: SharedCfg = SharedCfg::new("SVC")
+                .add(HttpServiceConfig::new())
+                .add(nio::IoConfig::new().set_read_backpressure(256 * 1024))
+                .into();
+            let mut h1 = Dispatcher::new(
+                0,
+                nio::Io::new(server, config),
+                Pipeline::new(
+                    (),
+                    fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+                ),
+                None,
+                DispatcherConfig::default(),
+            );
+            let (tx, rx) = Payload::create();
+            h1.inner.payload = Some((PayloadDecoder::chunked(), tx));
+
+            client.write(format!("{}0\r\n\r\n", chunk.repeat(count)));
+            sleep(Millis(50)).await;
+
+            let received = || {
+                let mut cx = Context::from_waker(std::task::Waker::noop());
+                let mut len = 0;
+                while let Poll::Ready(Some(Ok(data))) = rx.poll_read(&mut cx) {
+                    len += data.len();
+                }
+                len
+            };
+            let waker = Arc::new(CountWaker(AtomicUsize::new(0)));
+            let w = std::task::Waker::from(waker.clone());
+            let mut cx = Context::from_waker(&w);
+
+            let res = h1.inner.poll_request_payload_inner(&mut cx);
+            let mut total = received();
+            if yields {
+                assert!(res.is_pending());
+                assert_eq!(waker.0.load(Ordering::Relaxed), 1);
+                assert_eq!(total, PAYLOAD_MERGED_CHUNKS_PER_POLL);
+                assert!(h1.inner.payload.is_some());
+
+                for _ in 0..10 {
+                    let res = h1.inner.poll_request_payload_inner(&mut cx);
+                    total += received();
+                    if h1.inner.payload.is_none() {
+                        assert!(matches!(res, Poll::Ready(Ok(()))));
+                        break;
+                    }
+                }
+            } else {
+                assert!(matches!(res, Poll::Ready(Ok(()))));
+                assert_eq!(waker.0.load(Ordering::Relaxed), 0);
+            }
+            assert_eq!(total, size * count);
+            assert!(h1.inner.payload.is_none());
+            assert!(matches!(
+                rx.poll_read(&mut Context::from_waker(std::task::Waker::noop())),
+                Poll::Ready(None)
+            ));
+        }
     }
 
     /// STATEMENT: Resuming a paused payload continues its interrupted period without spending a fresh budget.

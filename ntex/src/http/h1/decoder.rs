@@ -291,6 +291,7 @@ pub(crate) enum PayloadLength {
 #[allow(clippy::declare_interior_mutable_const)]
 const ZERO: PayloadLength = PayloadLength::Payload(PayloadType::Payload(PayloadDecoder {
     kind: Cell::new(Kind::Length(0)),
+    merged: Cell::new(0),
 }));
 
 impl PayloadLength {
@@ -817,12 +818,15 @@ pub enum PayloadItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadDecoder {
     kind: Cell<Kind>,
+    /// number of chunks merged into the last decoded item
+    merged: Cell<u32>,
 }
 
 impl PayloadDecoder {
     pub(super) fn length(x: u64) -> PayloadDecoder {
         PayloadDecoder {
             kind: Cell::new(Kind::Length(x)),
+            merged: Cell::new(0),
         }
     }
 
@@ -835,13 +839,21 @@ impl PayloadDecoder {
         };
         PayloadDecoder {
             kind: Cell::new(Kind::Chunked(ChunkedState::Size, 0, limits)),
+            merged: Cell::new(0),
         }
     }
 
     pub(crate) fn eof() -> PayloadDecoder {
         PayloadDecoder {
             kind: Cell::new(Kind::Eof),
+            merged: Cell::new(0),
         }
+    }
+
+    /// Returns the number of chunks merged into the last decoded data item,
+    /// zero if the item holds a single chunk.
+    pub(super) fn merged_chunks(&self) -> usize {
+        self.merged.get() as usize
     }
 
     /// Returns `true` if the payload is delimited by connection close.
@@ -899,6 +911,10 @@ const SMALL_CHUNK: usize = 1024;
 
 /// Maximum size of merged chunks.
 const MAX_MERGED_CHUNKS: usize = 16 * 1024;
+
+/// Maximum number of chunks merged into one item, it bounds the decoding work
+/// of one call for tiny chunks.
+const MAX_MERGED_COUNT: usize = 1024;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 struct ChunkedLimits {
@@ -984,8 +1000,22 @@ impl Decoder for PayloadDecoder {
                 // chunks would be buffered as many items
                 let mut data: Option<Bytes> = None;
                 let mut merged: Option<BytesMut> = None;
+                let mut count = 0;
                 let mut trailers: Option<HeaderMap> = None;
                 let result = loop {
+                    // complete small chunks are read without the state machine
+                    if *state == ChunkedState::Size
+                        && limits.line == 0
+                        && (ChunkedState::read_small_chunks(
+                            src,
+                            &mut data,
+                            &mut merged,
+                            &mut count,
+                        ) || src.is_empty())
+                    {
+                        break Ok(None);
+                    }
+
                     // a large chunk is not copied into merged chunks
                     if *state == ChunkedState::Body && *size >= SMALL_CHUNK as u64 && data.is_some()
                     {
@@ -1014,13 +1044,10 @@ impl Decoder for PayloadDecoder {
                     }
 
                     if let Some(buf) = buf {
+                        count += 1;
                         let len = if let Some(first) = &data {
-                            let m = merged.get_or_insert_with(|| {
-                                let cap = first.len() + buf.len() + src.len();
-                                let mut m = BytesMut::with_capacity(cap.min(MAX_MERGED_CHUNKS));
-                                m.extend_from_slice(first);
-                                m
-                            });
+                            let m = merged
+                                .get_or_insert_with(|| merge_buf(first, buf.len() + src.len()));
                             m.extend_from_slice(&buf);
                             m.len()
                         } else {
@@ -1028,7 +1055,10 @@ impl Decoder for PayloadDecoder {
                             data = Some(buf);
                             len
                         };
-                        if len >= SMALL_CHUNK && (merged.is_none() || len >= MAX_MERGED_CHUNKS) {
+                        if count >= MAX_MERGED_COUNT
+                            || (len >= SMALL_CHUNK
+                                && (merged.is_none() || len >= MAX_MERGED_CHUNKS))
+                        {
                             break Ok(None);
                         }
                     }
@@ -1041,7 +1071,13 @@ impl Decoder for PayloadDecoder {
                 // the end of the payload is reported on the next call
                 match result {
                     Ok(_) if data.is_some() => {
-                        let data = merged.map_or_else(|| data.unwrap(), BytesMut::freeze);
+                        let data = if let Some(merged) = merged {
+                            self.merged.set(count as u32);
+                            merged.freeze()
+                        } else {
+                            self.merged.set(0);
+                            data.unwrap()
+                        };
                         Ok(Some(PayloadItem::Chunk(data)))
                     }
                     result => result,
@@ -1056,6 +1092,56 @@ impl Decoder for PayloadDecoder {
             }
         }
     }
+}
+
+/// Parses a complete chunk smaller than [`SMALL_CHUNK`], without chunk
+/// extensions or whitespace: `HEXDIG{1,16} CRLF data CRLF`.
+///
+/// Returns the data offset and size. Other input, including invalid input,
+/// returns `None` and is left to the chunked state machine.
+#[inline]
+fn small_chunk(buf: &[u8]) -> Option<(usize, usize)> {
+    let mut size = 0;
+    let mut pos = 0;
+    loop {
+        let digit = match *buf.get(pos)? {
+            b @ b'0'..=b'9' => b - b'0',
+            b @ b'a'..=b'f' => b - b'a' + 10,
+            b @ b'A'..=b'F' => b - b'A' + 10,
+            b'\r' => break,
+            _ => return None,
+        };
+        // the chunk size has at most 16 digits
+        if pos == 16 {
+            return None;
+        }
+        size = size * 16 + usize::from(digit);
+        if size >= SMALL_CHUNK {
+            return None;
+        }
+        pos += 1;
+    }
+    let start = pos + 2;
+    let end = start + size;
+    if size == 0
+        || buf.get(pos + 1) != Some(&b'\n')
+        || buf.get(end..end + 2) != Some(b"\r\n".as_slice())
+    {
+        return None;
+    }
+    Some((start, size))
+}
+
+/// Creates the merged data of chunks, starting with `first` and followed by at
+/// most `more` bytes of input.
+fn merge_buf(first: &[u8], more: usize) -> BytesMut {
+    // the following chunks are expected to be of a similar size
+    let cap = (first.len() + more)
+        .min(MAX_MERGED_CHUNKS)
+        .min(first.len() * MAX_MERGED_COUNT);
+    let mut m = BytesMut::with_capacity(cap);
+    m.extend_from_slice(first);
+    m
 }
 
 macro_rules! byte (
@@ -1089,6 +1175,48 @@ impl ChunkedState {
             ChunkedState::Trailers => ChunkedState::read_trailers(body, limits, trailers),
             ChunkedState::End => Poll::Ready(Ok(ChunkedState::End)),
         }
+    }
+
+    /// Reads complete small chunks, a fast path of [`ChunkedState::Size`].
+    ///
+    /// The first chunk is not copied, the following chunks are merged until
+    /// [`MAX_MERGED_CHUNKS`] bytes or [`MAX_MERGED_COUNT`] chunks. Returns
+    /// `true` if the merged data is full.
+    fn read_small_chunks(
+        src: &mut BytesMut,
+        data: &mut Option<Bytes>,
+        merged: &mut Option<BytesMut>,
+        count: &mut usize,
+    ) -> bool {
+        if data.is_none() {
+            let Some((start, size)) = small_chunk(src) else {
+                return false;
+            };
+            src.advance_to(start);
+            *data = Some(src.split_to(size));
+            src.advance_to(2);
+            *count += 1;
+        }
+        let Some(first) = data.as_ref() else {
+            return false;
+        };
+
+        let mut len = merged.as_ref().map_or(first.len(), BytesMut::len);
+        let mut pos = 0;
+        while len < MAX_MERGED_CHUNKS && *count < MAX_MERGED_COUNT {
+            let Some((start, size)) = small_chunk(&src[pos..]) else {
+                break;
+            };
+            let m = merged.get_or_insert_with(|| merge_buf(first, src.len()));
+            m.extend_from_slice(&src[pos + start..pos + start + size]);
+            len = m.len();
+            pos += start + size + 2;
+            *count += 1;
+        }
+        if pos != 0 {
+            src.advance_to(pos);
+        }
+        len >= MAX_MERGED_CHUNKS || *count >= MAX_MERGED_COUNT
     }
 
     /// Reads a chunk-size line.
@@ -3167,30 +3295,50 @@ mod tests {
         items
     }
 
-    /// STATEMENT: Small chunk payloads merge up to a bounded output size and are released before final input arrives.
+    /// STATEMENT: Small chunk payloads merge up to a bounded output size and chunk count, and are released before final input arrives.
     ///
     /// HOW:
-    /// - Decode many one-byte chunks and compare output lengths and contents.
+    /// - Decode many one-byte chunks, with and without extensions, and check that output lengths stop at `MAX_MERGED_COUNT` and contents match.
+    /// - Decode many 64-byte chunks and check that output lengths stop at `MAX_MERGED_CHUNKS`.
     /// - Exercise a completed small body and a partial chunk, checking prompt output and final EOF.
     #[test]
     fn test_small_chunks_are_merged() {
+        // extensions are decoded by the state machine, not the fast path
+        for chunk in [&b"1\r\na\r\n"[..], b"1;e\r\na\r\n"] {
+            let (pl, mut buf) = chunked_payload();
+            for _ in 0..2_500 {
+                buf.extend_from_slice(chunk);
+            }
+            buf.extend_from_slice(b"0\r\n\r\n");
+            let items = decode_all(&pl, &mut buf);
+            let lens: Vec<_> = items.iter().map(Bytes::len).collect();
+            assert_eq!(
+                lens,
+                [
+                    MAX_MERGED_COUNT,
+                    MAX_MERGED_COUNT,
+                    2_500 - 2 * MAX_MERGED_COUNT
+                ],
+                "{chunk:?}"
+            );
+            assert!(items.iter().all(|c| c.iter().all(|b| *b == b'a')));
+            assert!(buf.is_empty());
+        }
+
         let (pl, mut buf) = chunked_payload();
-        for _ in 0..40_000 {
-            buf.extend_from_slice(b"1\r\na\r\n");
+        for _ in 0..600 {
+            buf.extend_from_slice(format!("40\r\n{}\r\n", "b".repeat(64)).as_bytes());
         }
         buf.extend_from_slice(b"0\r\n\r\n");
-        let items = decode_all(&pl, &mut buf);
-        let lens: Vec<_> = items.iter().map(Bytes::len).collect();
+        let lens: Vec<_> = decode_all(&pl, &mut buf).iter().map(Bytes::len).collect();
         assert_eq!(
             lens,
             [
                 MAX_MERGED_CHUNKS,
                 MAX_MERGED_CHUNKS,
-                40_000 - 2 * MAX_MERGED_CHUNKS
+                600 * 64 - 2 * MAX_MERGED_CHUNKS
             ]
         );
-        assert!(items.iter().all(|c| c.iter().all(|b| *b == b'a')));
-        assert!(buf.is_empty());
 
         // merged chunks are returned before the end of the payload
         let (pl, mut buf) = chunked_payload();
@@ -3215,6 +3363,74 @@ mod tests {
             Some(PayloadItem::Chunk("efg".into()))
         );
         assert_eq!(pl.decode(&mut buf).unwrap(), Some(PayloadItem::Eof));
+    }
+
+    /// STATEMENT: Complete small chunks read by the fast path decode exactly as the chunked state machine decodes them.
+    ///
+    /// HOW:
+    /// - Decode valid, incomplete and invalid payloads from one buffer, where complete small chunks
+    ///   take the fast path, and byte by byte, where only the state machine runs.
+    /// - Compare data and the final result of valid and incomplete payloads, and the error of
+    ///   invalid payloads, whose data before the error differs.
+    #[test]
+    fn test_small_chunk_fast_path() {
+        fn decode(input: &[u8], bytewise: bool) -> (Vec<u8>, String) {
+            let (pl, mut buf) = chunked_payload();
+            let steps: Vec<&[u8]> = if bytewise {
+                input.chunks(1).collect()
+            } else {
+                vec![input]
+            };
+            let mut data = Vec::new();
+            for step in steps {
+                buf.extend_from_slice(step);
+                loop {
+                    match pl.decode(&mut buf) {
+                        Ok(Some(PayloadItem::Chunk(chunk))) => {
+                            assert!(chunk.len() < MAX_MERGED_CHUNKS + SMALL_CHUNK);
+                            data.extend_from_slice(&chunk);
+                        }
+                        Ok(None) => break,
+                        res => return (data, format!("{res:?}")),
+                    }
+                }
+            }
+            (data, "incomplete".to_string())
+        }
+
+        let valid = [
+            format!("{}0\r\n\r\n", "1\r\na\r\n".repeat(3_000)),
+            "3\r\nabc\r\nA\r\n0123456789\r\na\r\n0123456789\r\n0\r\n\r\n".to_string(),
+            format!(
+                "3FF\r\n{}\r\n400\r\n{}\r\n2\r\nab\r\n0\r\n\r\n",
+                "x".repeat(0x3ff),
+                "y".repeat(0x400)
+            ),
+            "000000000000000F\r\n0123456789abcde\r\n1\r\nf\r\n0\r\n\r\n".to_string(),
+            "3;a=b\r\nabc\r\n3 ;x\r\ndef\r\n2\r\ngh\r\n0\r\n\r\n".to_string(),
+            "2\r\nab\r\n1\r\nc\r\n0\r\nx-a: b\r\n\r\n".to_string(),
+            "2\r\nab\r\n1\r\nc\r\n5\r\nabc".to_string(),
+            "2\r\nab\r\n1\r\nc\r\n1".to_string(),
+        ];
+        for input in &valid {
+            let whole = decode(input.as_bytes(), false);
+            assert!(!whole.1.contains("Err"), "{input:?} {}", whole.1);
+            assert_eq!(whole, decode(input.as_bytes(), true), "{input:?}");
+        }
+
+        for input in [
+            "2\r\nab\r\n00000000000000001\r\na\r\n",
+            "2\r\nab\r\n1\r\naX\r\n",
+            "2\r\nab\r\n1\r\na\rX",
+            "2\r\nab\r\ng\r\na\r\n",
+            "2\r\nab\r\n1g\r\na\r\n",
+            "2\r\nab\r\n\r\n",
+            "2\r\nab\r\n1\rX",
+        ] {
+            let whole = decode(input.as_bytes(), false);
+            assert!(whole.1.contains("Err"), "{input:?} {}", whole.1);
+            assert_eq!(whole.1, decode(input.as_bytes(), true).1, "{input:?}");
+        }
     }
 
     /// STATEMENT: Large payload chunks remain separate and borrow the original input allocation.
