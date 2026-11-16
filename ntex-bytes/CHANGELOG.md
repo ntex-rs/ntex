@@ -2,6 +2,9 @@
 
 ## [1.15.4] - 2026-11-16
 
+* Add `BytePages::put_slices()`, which appends several slices with a single
+  capacity check when they fit into the current page
+
 * Fix `BytePages::move_to` overwriting data still shared by a clone or `copy_to`
   when the current page is copied into the destination
 

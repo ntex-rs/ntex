@@ -181,8 +181,15 @@ impl MessageType for RequestHead {
     }
 
     fn encode_status(&self, dst: &mut BytePages) {
-        dst.put_slice(self.method.as_str().as_bytes());
-        dst.put_u8(b' ');
+        let method = self.method.as_str().as_bytes();
+        // only HTTP-0.9/1.1
+        let version = match self.version {
+            Version::HTTP_09 => b"HTTP/0.9",
+            Version::HTTP_10 => b"HTTP/1.0",
+            // Version::HTTP_11 => "HTTP/1.1",
+            _ => b"HTTP/1.1",
+        };
+
         if let (&Method::CONNECT, Some(host)) = (&self.method, self.uri.host()) {
             // authority-form, see RFC 9112 section 3.2.3
             let port = self
@@ -192,23 +199,21 @@ impl MessageType for RequestHead {
                     Some("https" | "wss") => 443,
                     _ => 80,
                 });
-            dst.put_slice(host.as_bytes());
-            dst.put_u8(b':');
-            dst.put_slice(port.to_string().as_bytes());
+            let port = port.to_string();
+            dst.put_slices(&[
+                method,
+                b" ",
+                host.as_bytes(),
+                b":",
+                port.as_bytes(),
+                b" ",
+                version,
+            ]);
         } else {
             let target = self.uri.path_and_query().as_str();
-            dst.put_slice(if target.is_empty() { "/" } else { target }.as_bytes());
+            let target = if target.is_empty() { "/" } else { target };
+            dst.put_slices(&[method, b" ", target.as_bytes(), b" ", version]);
         }
-        dst.put_u8(b' ');
-        dst.put_slice(
-            // only HTTP-0.9/1.1
-            match self.version {
-                Version::HTTP_09 => b"HTTP/0.9",
-                Version::HTTP_10 => b"HTTP/1.0",
-                // Version::HTTP_11 => "HTTP/1.1",
-                _ => b"HTTP/1.1",
-            },
-        );
     }
 }
 
@@ -486,26 +491,7 @@ impl TransferEncoding {
 /// Writes a `name: value` header line.
 #[inline]
 fn put_header(dst: &mut BytePages, name: &[u8], value: &[u8]) {
-    let len = name.len() + value.len() + 4;
-    let spare = dst.chunk_mut();
-    if spare.len() >= len {
-        // SAFETY: the spare capacity of the current page holds `len` bytes
-        unsafe {
-            let p = spare.as_mut_ptr();
-            ptr::copy_nonoverlapping(name.as_ptr(), p, name.len());
-            let p = p.add(name.len());
-            ptr::copy_nonoverlapping(b": ".as_ptr(), p, 2);
-            let p = p.add(2);
-            ptr::copy_nonoverlapping(value.as_ptr(), p, value.len());
-            ptr::copy_nonoverlapping(b"\r\n".as_ptr(), p.add(value.len()), 2);
-            dst.advance_mut(len);
-        }
-    } else {
-        dst.put_slice(name);
-        dst.put_slice(b": ");
-        dst.put_slice(value);
-        dst.put_slice(b"\r\n");
-    }
+    dst.put_slices(&[name, b": ", value, b"\r\n"]);
 }
 
 const DEC_DIGITS_LUT: &[u8] = b"0001020304050607080910111213141516171819\
@@ -521,21 +507,7 @@ fn write_status_line(status: StatusCode, reason: &[u8], dst: &mut BytePages) {
     line[9] = b'0' + (n / 100) as u8;
     line[10] = b'0' + (n / 10 % 10) as u8;
     line[11] = b'0' + (n % 10) as u8;
-
-    let len = line.len() + reason.len();
-    let spare = dst.chunk_mut();
-    if spare.len() >= len {
-        // SAFETY: the spare capacity of the current page holds `len` bytes
-        unsafe {
-            let p = spare.as_mut_ptr();
-            ptr::copy_nonoverlapping(line.as_ptr(), p, line.len());
-            ptr::copy_nonoverlapping(reason.as_ptr(), p.add(line.len()), reason.len());
-            dst.advance_mut(len);
-        }
-    } else {
-        dst.put_slice(&line);
-        dst.put_slice(reason);
-    }
+    dst.put_slices(&[&line, reason]);
 }
 
 /// Writes the chunk size line, the size in uppercase hex and CRLF.
