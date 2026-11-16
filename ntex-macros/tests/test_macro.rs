@@ -102,6 +102,21 @@ fn test_main_with_timer_resolution() {
     assert_eq!(main_with_timer_resolution(), 2);
 }
 
+#[ntex::main(thread_pool = 8)]
+async fn main_with_thread_pool() -> usize {
+    System::current().pool_metrics().thread_limit
+}
+
+/// STATEMENT: The `thread_pool` argument of `main` configures the blocking thread pool limit.
+///
+/// HOW:
+/// - Run a `main` function declared with `thread_pool = 8`.
+/// - Return the pool's thread limit from the body and confirm it is 8.
+#[test]
+fn test_main_with_thread_pool() {
+    assert_eq!(main_with_thread_pool(), 8);
+}
+
 /// STATEMENT: The `timer_resolution` argument of `test` configures the test system timer resolution.
 ///
 /// HOW:

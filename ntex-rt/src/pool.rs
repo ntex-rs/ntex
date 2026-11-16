@@ -85,6 +85,12 @@ pub struct PoolMetrics {
     pub active_tasks: usize,
     /// Number of tasks waiting for a worker thread.
     pub queue_depth: usize,
+    /// Highest number of tasks waiting for a worker thread at once.
+    pub max_queue_depth: usize,
+    /// Number of tasks queued while the pool was at its thread limit.
+    ///
+    /// A growing value means the pool has too few worker threads for its load.
+    pub saturated_tasks: u64,
     /// Number of tasks started.
     pub tasks: u64,
     /// Total time started tasks waited for a worker thread.
@@ -96,6 +102,8 @@ pub struct PoolMetrics {
 #[derive(Debug, Default)]
 struct PoolStats {
     active: AtomicUsize,
+    max_queue: AtomicUsize,
+    saturated: AtomicU64,
     tasks: AtomicU64,
     // nanoseconds
     wait: AtomicU64,
@@ -247,6 +255,8 @@ impl ThreadPool {
             threads: self.counter.load(Ordering::Relaxed),
             active_tasks: self.stats.active.load(Ordering::Relaxed),
             queue_depth: self.receiver_high_prio.len(),
+            max_queue_depth: self.stats.max_queue.load(Ordering::Relaxed),
+            saturated_tasks: self.stats.saturated.load(Ordering::Relaxed),
             tasks: self.stats.tasks.load(Ordering::Relaxed),
             wait_duration: Duration::from_nanos(self.stats.wait.load(Ordering::Relaxed)),
             busy_duration: Duration::from_nanos(self.stats.busy.load(Ordering::Relaxed)),
@@ -325,6 +335,9 @@ impl ThreadPool {
         self.sender_high_prio
             .send(f)
             .expect("the channel should not be closed");
+        self.stats
+            .max_queue
+            .fetch_max(self.receiver_high_prio.len(), Ordering::Relaxed);
         // pairs with the fence in `worker`, either an exiting worker sees
         // the queued task or a free slot is visible here
         fence(Ordering::SeqCst);
@@ -349,6 +362,8 @@ impl ThreadPool {
                     }
                 }
             }
+        } else {
+            self.stats.saturated.fetch_add(1, Ordering::Relaxed);
         }
         res
     }

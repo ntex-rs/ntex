@@ -1,5 +1,9 @@
 # Changes
 
+## [4.8.0] - 2026-11-16
+
+* Add `thread_pool` argument to `main` macro
+
 ## [4.7.0] - 2026-11-12
 
 * Add `fatal_signals` argument to `main` macro

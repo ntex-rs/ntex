@@ -147,11 +147,12 @@ fn detach_without_runtime() {
     assert!(!dropped.load(Ordering::Relaxed));
 }
 
-/// STATEMENT: Pool metrics account for queued, active, completed, waiting, and busy work.
+/// STATEMENT: Pool metrics account for queued, active, completed, waiting, busy, and saturated work.
 ///
 /// HOW:
-/// - Hold one job active while another waits and inspect their counts.
-/// - Release both jobs and verify final counts and accumulated durations.
+/// - Hold one job active while two more wait and inspect their counts.
+/// - Verify both waiting jobs count as saturated and the peak queue depth is two.
+/// - Release the jobs and verify final counts, the retained peak, and accumulated durations.
 #[test]
 fn metrics() {
     let pool = ThreadPool::new("test", 1, Duration::from_secs(1));
@@ -166,10 +167,15 @@ fn metrics() {
         release_rx.recv().unwrap();
     });
     start_rx.recv().unwrap();
+    let m = pool.metrics();
+    assert_eq!((m.max_queue_depth, m.saturated_tasks), (1, 0));
+
     let second = pool.execute(|| ());
+    let third = pool.execute(|| ());
 
     let m = pool.metrics();
-    assert_eq!((m.threads, m.active_tasks, m.queue_depth), (1, 1, 1));
+    assert_eq!((m.threads, m.active_tasks, m.queue_depth), (1, 1, 2));
+    assert_eq!((m.max_queue_depth, m.saturated_tasks), (2, 2));
     assert_eq!(m.tasks, 1);
 
     let sleep = Duration::from_millis(20);
@@ -177,9 +183,11 @@ fn metrics() {
     release_tx.send(()).unwrap();
     assert_eq!(wait(first, Duration::from_secs(5)), Some(Ok(())));
     assert_eq!(wait(second, Duration::from_secs(5)), Some(Ok(())));
+    assert_eq!(wait(third, Duration::from_secs(5)), Some(Ok(())));
 
     let m = pool.metrics();
-    assert_eq!((m.active_tasks, m.queue_depth, m.tasks), (0, 0, 2));
+    assert_eq!((m.active_tasks, m.queue_depth, m.tasks), (0, 0, 3));
+    assert_eq!((m.max_queue_depth, m.saturated_tasks), (2, 2));
     assert!(m.wait_duration >= sleep);
     assert!(m.busy_duration >= sleep);
 }
