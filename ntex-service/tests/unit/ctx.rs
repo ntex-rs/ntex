@@ -142,6 +142,122 @@ fn notify_reuses_waiter_buffers() {
     }
 }
 
+thread_local! {
+    static REENTER: Cell<Option<Box<dyn FnOnce()>>> = const { Cell::new(None) };
+}
+
+/// Returns a waker whose next clone runs the closure stored in `REENTER`.
+fn reentrant_waker() -> Waker {
+    use std::task::{RawWaker, RawWakerVTable};
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+
+    unsafe fn clone(_: *const ()) -> RawWaker {
+        if let Some(f) = REENTER.take() {
+            f();
+        }
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    unsafe fn noop(_: *const ()) {}
+
+    // SAFETY: The vtable functions never read the data pointer.
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
+
+/// STATEMENT: Storing a waiter's waker survives a waker clone that re-enters and grows the waiter slab.
+///
+/// HOW:
+/// - Make the waker's clone insert enough waiters to reallocate the `indexes` slab.
+/// - Run a readiness check with that waker and verify its slot holds the new waker.
+#[test]
+fn waker_clone_reenters_run() {
+    let waiters = Rc::new(WaitersRef::new());
+    let idx = waiters.insert();
+    let w = waiters.clone();
+    REENTER.set(Some(Box::new(move || {
+        for _ in 0..16 {
+            w.insert();
+        }
+    })));
+
+    let waker = reentrant_waker();
+    let mut cx = Context::from_waker(&waker);
+    assert!(
+        waiters
+            .run(idx, &mut cx, |_| Poll::<()>::Pending)
+            .is_pending()
+    );
+    assert!(REENTER.take().is_none());
+    assert!(
+        waiters.get()[idx as usize]
+            .as_ref()
+            .is_some_and(|w| w.will_wake(&waker))
+    );
+}
+
+/// STATEMENT: Call-time readiness checks survive waker clones that re-enter and grow the waiter slabs.
+///
+/// HOW:
+/// - Let one binding own the gate with a re-entrant waker and register a pending call-time check.
+/// - Re-poll the check with the re-entrant waker while its clone adds call-time checks, and
+///   verify the check's slot holds the new waker.
+/// - Complete the check while the owner's waker clone inserts waiters, and verify the owner
+///   keeps its waker.
+#[test]
+fn waker_clone_reenters_call_check() {
+    let waiters = Rc::new(WaitersRef::new());
+    let (owner, idx) = (waiters.insert(), waiters.insert());
+    let waker = reentrant_waker();
+    let mut cx = Context::from_waker(&waker);
+    let mut noop = Context::from_waker(Waker::noop());
+
+    assert!(
+        waiters
+            .run(owner, &mut cx, |_| Poll::<()>::Pending)
+            .is_pending()
+    );
+    let mut key = None;
+    assert!(
+        waiters
+            .run_call(idx, &mut key, &mut noop, |_| Poll::<()>::Pending)
+            .is_pending()
+    );
+
+    let w = waiters.clone();
+    REENTER.set(Some(Box::new(move || {
+        let mut noop = Context::from_waker(Waker::noop());
+        for _ in 0..16 {
+            let _ = w.run_call(idx, &mut None, &mut noop, |_| Poll::<()>::Pending);
+        }
+    })));
+    assert!(
+        waiters
+            .run_call(idx, &mut key, &mut cx, |_| Poll::<()>::Pending)
+            .is_pending()
+    );
+    assert!(REENTER.take().is_none());
+    let slot = &waiters.get_calls()[key.unwrap() as usize];
+    assert!(slot.as_ref().is_some_and(|w| w.will_wake(&waker)));
+
+    let w = waiters.clone();
+    REENTER.set(Some(Box::new(move || {
+        for _ in 0..16 {
+            w.insert();
+        }
+    })));
+    assert!(
+        waiters
+            .run_call(idx, &mut key, &mut noop, |_| Poll::Ready(()))
+            .is_ready()
+    );
+    assert!(REENTER.take().is_none());
+    assert!(
+        waiters.get()[owner as usize]
+            .as_ref()
+            .is_some_and(|w| w.will_wake(&waker))
+    );
+}
+
 /// Wakes the dispatcher's task context during the readiness check
 struct WakeSrv;
 

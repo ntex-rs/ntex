@@ -153,11 +153,41 @@ impl WaitersRef {
             return;
         }
         let mut wakers = self.scratch.take();
-        if let Some(Some(waker)) = self.get().get(cur as usize) {
+        // Clone outside the slab borrow, cloning can re-enter and modify it.
+        if let Some(waker) = self.get().get_mut(cur as usize).and_then(Option::take) {
             wakers.push(waker.clone());
+            if let Some(slot @ None) = self.get().get_mut(cur as usize) {
+                *slot = Some(waker);
+            }
         }
         self.take_calls(&mut wakers);
         self.wake_all(wakers);
+    }
+
+    /// Stores `waker` in the slab slot `key` unless the slot already holds an
+    /// equivalent waker. Returns `false` if the slot does not exist.
+    ///
+    /// Cloning and dropping wakers runs user code that can re-enter and modify
+    /// the slab, so no reference into the slab is held across either.
+    fn store_waker(
+        &self,
+        slab: fn(&Self) -> &mut slab::Slab<Option<Waker>>,
+        key: u32,
+        waker: &Waker,
+    ) -> bool {
+        match slab(self).get(key as usize) {
+            None => return false,
+            Some(Some(w)) if w.will_wake(waker) => return true,
+            Some(_) => {}
+        }
+        let waker = waker.clone();
+        let old = match slab(self).get_mut(key as usize) {
+            Some(slot) => slot.replace(waker),
+            // removed by re-entrant code
+            None => Some(waker),
+        };
+        drop(old);
+        true
     }
 
     fn remove_call(&self, key: &mut Option<u32>) {
@@ -182,13 +212,9 @@ impl WaitersRef {
 
         let result = f(cx);
         if result.is_pending() {
-            let calls = self.get_calls();
-            if let Some(slot) = key.and_then(|key| calls.get_mut(key as usize)) {
-                if !slot.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
-                    *slot = Some(cx.waker().clone());
-                }
-            } else {
-                *key = Some(calls.insert(Some(cx.waker().clone())) as u32);
+            if !key.is_some_and(|key| self.store_waker(Self::get_calls, key, cx.waker())) {
+                let waker = cx.waker().clone();
+                *key = Some(self.get_calls().insert(Some(waker)) as u32);
             }
         } else {
             self.remove_call(key);
@@ -203,10 +229,7 @@ impl WaitersRef {
     {
         // store the caller's waker for queued wake-ups,
         // nested readiness checks poll with the same waker
-        let slot = &mut self.get()[idx as usize];
-        if !slot.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
-            *slot = Some(cx.waker().clone());
-        }
+        self.store_waker(Self::get, idx, cx.waker());
 
         let cur = self.cur.get();
         if cur == u32::MAX {

@@ -1,5 +1,10 @@
 # Changes
 
+## [5.7.4] - Unreleased
+
+* Fix use-after-free when cloning or dropping a waker re-enters the readiness
+  waiter list
+
 ## [5.7.3] - 2026-11-16
 
 * `Pipeline::call()` skips the readiness future when the pipeline is already
