@@ -287,6 +287,8 @@ leaves the connection open for you to close.
 The HTTP/1 dispatcher has its own keep-alive, read-rate, and write timeout
 settings. Configure those through [`HttpServiceConfig`], including its own
 `set_write_timeout()`, rather than the corresponding `IoConfig` settings.
+Unlike `IoConfig`, `HttpServiceConfig` enables a ten-second write timeout
+by default.
 
 Finally, the graceful-shutdown timeout covers filter shutdown and the
 transport drain of pending output together. You cannot disable it: a zero

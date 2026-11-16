@@ -3337,6 +3337,25 @@ mod tests {
         );
     }
 
+    /// STATEMENT: The default configuration bounds write backpressure with a write timeout.
+    ///
+    /// HOW:
+    /// - Block peer reads while sending a large response with `HttpServiceConfig::new()`.
+    /// - Verify write backpressure is enabled and the write timer is armed.
+    #[crate::rt_test]
+    async fn test_default_write_timeout_during_response() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let mut h1 = write_timeout_h1(server, HttpServiceConfig::new(), Rc::default());
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_wr_backpressure());
+        assert_eq!(h1.inner.timers.active, Timer::Write);
+        assert!(h1.inner.io.timer_handle().is_set());
+    }
+
     /// STATEMENT: Response write timeout also fails an unfinished request payload.
     ///
     /// HOW:
@@ -3397,7 +3416,11 @@ mod tests {
     async fn test_no_write_timeout_during_response() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
-        let mut h1 = write_timeout_h1(server, HttpServiceConfig::new(), Rc::default());
+        let mut h1 = write_timeout_h1(
+            server,
+            HttpServiceConfig::new().set_write_timeout(Seconds::ZERO),
+            Rc::default(),
+        );
 
         client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
@@ -3461,7 +3484,11 @@ mod tests {
         client.remote_buffer_cap(0);
 
         let config: SharedCfg = SharedCfg::new("SVC")
-            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(10), Seconds(20), 1))
+            .add(
+                HttpServiceConfig::new()
+                    .set_write_timeout(Seconds::ZERO)
+                    .set_payload_read_rate(Seconds(10), Seconds(20), 1),
+            )
             .into();
 
         let mut h1 = Dispatcher::new(
