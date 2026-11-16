@@ -293,6 +293,8 @@ impl StorageVec {
     ///
     /// The view shares the allocation, so `self` is no longer unique while
     /// it exists. There is never more than one `StorageVec` per allocation.
+    /// While the view exists, `self` must not shrink the shared data and
+    /// write over it, it may only append or move its start forward.
     pub(crate) fn shallow_freeze(&self) -> Storage {
         // SAFETY: The initialized view is copied inline or shared after incrementing the atomic
         // reference count.
