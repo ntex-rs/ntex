@@ -99,13 +99,11 @@ pub struct Receiver<T> {
 // the slab and reallocate it, see `Cell`.
 #[allow(clippy::mut_from_ref)]
 fn get_inner<T>(inner: &Cell<Slab<Inner<T>>>, token: usize) -> &mut Inner<T> {
-    // SAFETY: The live channel half keeps `token` occupied; callers exclude overlapping slot borrows.
-    unsafe { inner.get_mut().get_unchecked_mut(token) }
+    &mut inner.get_mut()[token]
 }
 
 fn get_inner_ref<T>(inner: &Cell<Slab<Inner<T>>>, token: usize) -> &Inner<T> {
-    // SAFETY: The live channel half keeps `token` occupied until its drop removes the slot.
-    unsafe { inner.get_ref().get_unchecked(token) }
+    &inner.get_ref()[token]
 }
 
 /// Removes the channel slot, dropping its contents after the borrow ends.

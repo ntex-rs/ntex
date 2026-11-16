@@ -188,8 +188,7 @@ impl<T> Waiter<T> {
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ConditionResult<T>> {
         let new = {
             let parent = self.inner.get_mut();
-            // SAFETY: This waiter owns its occupied slot until drop, and no callback runs during this borrow.
-            let slot = unsafe { parent.data.get_unchecked_mut(self.token) };
+            let slot = &mut parent.data[self.token];
             if slot.is_none() {
                 if parent.state != State::Normal {
                     return self.poll_state();
@@ -217,10 +216,8 @@ impl<T> Waiter<T> {
     }
 
     fn item(&self) -> &Item<T> {
-        // SAFETY: This waiter's slot stays occupied until drop; `poll_ready` initializes its item before access.
-        unsafe { self.inner.get_ref().data.get_unchecked(self.token) }
-            .as_ref()
-            .unwrap()
+        // `poll_ready` initializes this waiter's item before any access
+        self.inner.get_ref().data[self.token].as_ref().unwrap()
     }
 
     fn poll_state(&self) -> Poll<ConditionResult<T>> {

@@ -6,12 +6,13 @@ macro_rules! buf_get_impl {
         // try to convert directly from the bytes
         // this Option<ret> trick is to avoid keeping a borrow on self
         // when advance() is called (mut borrow) and to call chunk() only once
-        #[allow(clippy::ptr_as_ptr)]
-        let ret = $this.chunk().get(..SIZE).map(|src| {
-            // SAFETY: `get(..SIZE)` yields exactly `SIZE` initialized bytes, aligned for a byte
-            // array.
-            unsafe { $typ::$conv(*(std::ptr::from_ref(src) as *const [_; SIZE])) }
-        });
+        // `get(..SIZE)` yields exactly `SIZE` bytes, so the conversion cannot fail
+        // and the compiler removes its length check
+        let ret = $this
+            .chunk()
+            .get(..SIZE)
+            .and_then(|src| <[u8; SIZE]>::try_from(src).ok())
+            .map($typ::$conv);
 
         if let Some(ret) = ret {
             // if the direct conversion was possible, advance and return
