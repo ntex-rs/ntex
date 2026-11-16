@@ -265,7 +265,7 @@ async fn main() {
 The closure and its result must be `Send`. Inside a system, the work runs on a
 blocking pool that grows and shrinks as needed.
 
-By default, the pool allows up to 256 threads. An idle thread exits after 60
+By default, the pool allows up to 64 threads per available CPU. An idle thread exits after 60
 seconds. Set the limit with `thread_pool_limit()` and the idle timeout with
 `thread_pool_recv_timeout()`:
 
@@ -363,6 +363,7 @@ It accepts these options:
 * `fatal_signals = true` or `false`;
 * `panic_handling = true` or `false`;
 * `ping_interval = N` in milliseconds, where zero turns off arbiter pings;
+* `thread_pool = N` sets the blocking thread pool limit;
 * `rt = Type` selects a custom runtime runner.
 
 For example:

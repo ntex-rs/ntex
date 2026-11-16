@@ -1,5 +1,13 @@
 # Changes
 
+## [4.9.2] - 2026-11-16
+
+* The blocking thread pool limit defaults to 64 threads per available CPU
+  instead of 256
+
+* Add `PoolMetrics::max_queue_depth` and `PoolMetrics::saturated_tasks` to
+  detect a blocking pool with too few worker threads
+
 ## [4.9.1] - 2026-11-16
 
 * The latency sampler and arbiter pings sleep on the runtime timer wheel

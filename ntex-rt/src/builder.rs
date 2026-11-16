@@ -48,7 +48,8 @@ impl Builder {
             fatal_signals: false,
             panics: false,
             testing: false,
-            pool_limit: 256,
+            pool_limit: 64
+                * std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
             pool_recv_timeout: time::Duration::from_mins(1),
             timer_resolution: 16,
             task_callbacks: None,
@@ -174,7 +175,8 @@ impl Builder {
     #[must_use]
     /// Sets the maximum number of blocking thread-pool workers.
     ///
-    /// The default is 256. Zero is treated as one; excess work is queued.
+    /// The default is 64 per available CPU. Zero is treated as one; excess
+    /// work is queued.
     pub fn thread_pool_limit(mut self, value: usize) -> Self {
         self.pool_limit = value;
         self

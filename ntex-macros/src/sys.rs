@@ -9,6 +9,7 @@ pub(crate) struct MainArgs {
     fatal_signals: Option<Ident>,
     ping_interval: Option<Literal>,
     timer_resolution: Option<Literal>,
+    thread_pool: Option<Literal>,
     panic_handling: Option<Ident>,
     task_callbacks: Option<TokenStream>,
     rt: Option<TokenStream>,
@@ -29,6 +30,11 @@ impl MainArgs {
         let sys_timer_resolution = self
             .timer_resolution
             .map(|millis| quote!(.timer_resolution(#millis)))
+            .unwrap_or_default();
+
+        let sys_thread_pool = self
+            .thread_pool
+            .map(|limit| quote!(.thread_pool_limit(#limit)))
             .unwrap_or_default();
 
         let sys_signals = self
@@ -52,6 +58,7 @@ impl MainArgs {
             #sys_name
             #sys_ping_interval
             #sys_timer_resolution
+            #sys_thread_pool
             #sys_signals
             #sys_fatal_signals
             #sys_panics
@@ -74,6 +81,7 @@ impl MainArgs {
             panic_handling: None,
             ping_interval: None,
             timer_resolution: None,
+            thread_pool: None,
             task_callbacks: None,
         };
 
@@ -86,12 +94,13 @@ impl MainArgs {
                 "panic_handling" => args.panic_handling.is_some(),
                 "ping_interval" => args.ping_interval.is_some(),
                 "timer_resolution" => args.timer_resolution.is_some(),
+                "thread_pool" => args.thread_pool.is_some(),
                 "task_callbacks" => args.task_callbacks.is_some(),
                 "rt" => args.rt.is_some(),
                 _ => {
                     return Err(Error::new_spanned(
                         &param.name,
-                        "unknown argument, expected `name`, `signals`, `fatal_signals`, `panic_handling`, `ping_interval`, `timer_resolution`, `task_callbacks` or `rt`",
+                        "unknown argument, expected `name`, `signals`, `fatal_signals`, `panic_handling`, `ping_interval`, `timer_resolution`, `thread_pool`, `task_callbacks` or `rt`",
                     ));
                 }
             };
@@ -131,6 +140,11 @@ impl MainArgs {
                 "timer_resolution" => {
                     args.timer_resolution = Some(param.lit_int().ok_or_else(|| {
                         param.value_error("`timer_resolution` value must be an integer literal")
+                    })?);
+                }
+                "thread_pool" => {
+                    args.thread_pool = Some(param.lit_int().ok_or_else(|| {
+                        param.value_error("`thread_pool` value must be an integer literal")
                     })?);
                 }
                 "task_callbacks" => {
@@ -238,7 +252,7 @@ mod tests {
     fn unknown_arg() {
         assert_eq!(
             err("foo = 1"),
-            "unknown argument, expected `name`, `signals`, `fatal_signals`, `panic_handling`, `ping_interval`, `timer_resolution`, `task_callbacks` or `rt`"
+            "unknown argument, expected `name`, `signals`, `fatal_signals`, `panic_handling`, `ping_interval`, `timer_resolution`, `thread_pool`, `task_callbacks` or `rt`"
         );
         assert!(parse("panic_handling = true, signals = true, fatal_signals = true").is_ok());
     }
@@ -247,13 +261,14 @@ mod tests {
     ///
     /// HOW:
     /// - Parse all value arguments and compare the generated runtime and
-    ///   builder calls, including `.timer_resolution(2)` and a
+    ///   builder calls, including `.timer_resolution(2)`,
+    ///   `.thread_pool_limit(512)` and a
     ///   `.task_callbacks(..)` call passing the given path.
     /// - Parse wrongly typed and duplicate arguments and compare their errors.
     #[test]
     fn args() {
         let mut args = parse(
-            r#"name = "srv", signals = true, fatal_signals = true, ping_interval = 250, timer_resolution = 2, task_callbacks = my::cbs, rt = my::Rt,"#,
+            r#"name = "srv", signals = true, fatal_signals = true, ping_interval = 250, timer_resolution = 2, thread_pool = 512, task_callbacks = my::cbs, rt = my::Rt,"#,
         )
         .ok()
         .unwrap();
@@ -261,7 +276,7 @@ mod tests {
         assert_eq!(
             args.gen_sys_config(&Ident::new("main", proc_macro2::Span::call_site()))
                 .to_string(),
-            r#". name ("srv") . ping_interval (250) . timer_resolution (2) . signals (true) . fatal_signals (true) . task_callbacks (my :: cbs)"#
+            r#". name ("srv") . ping_interval (250) . timer_resolution (2) . thread_pool_limit (512) . signals (true) . fatal_signals (true) . task_callbacks (my :: cbs)"#
         );
 
         assert_eq!(err("name = 1"), "`name` value must be an string literal");
@@ -288,6 +303,14 @@ mod tests {
         assert_eq!(
             err("timer_resolution = 2, timer_resolution = 4"),
             "duplicate `timer_resolution` argument"
+        );
+        assert_eq!(
+            err("thread_pool = \"8\""),
+            "`thread_pool` value must be an integer literal"
+        );
+        assert_eq!(
+            err("thread_pool = 8, thread_pool = 16"),
+            "duplicate `thread_pool` argument"
         );
         assert_eq!(
             err("task_callbacks = 1"),
