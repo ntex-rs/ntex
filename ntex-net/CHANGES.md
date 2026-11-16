@@ -1,6 +1,6 @@
 # Changes
 
-## [4.12.3] - Unreleased
+## [4.12.3] - 2026-11-17
 
 * io-uring: Fix use-after-free when a task or an io handler panics, the reactor
   now cancels in-flight operations before releasing their buffers
