@@ -48,6 +48,9 @@ jobs:
         # Run all of your tests inside of Miri interpreter
         run: cargo miri nextest run -p ntex-service -- "cfg::tests::"
 
+      - name: Run Miri (ntex-service::ctx re-entrant wakers)
+        run: cargo miri nextest run -p ntex-service -- "ctx::tests::waker_clone_reenters"
+
       - name: Run Miri (ntex-service::pipeline)
         # Pipelines are self-referential, which Stacked Borrows rejects
         env:
