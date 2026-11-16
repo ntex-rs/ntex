@@ -391,34 +391,69 @@ impl WriteOperation {
         }
     }
 
-    pub(crate) fn write(&mut self, overlapped: *mut OVERLAPPED) {
+    /// Sends the unsent pages and the output in the write buffer.
+    ///
+    /// # Safety
+    ///
+    /// `this` must point to a live write op that is not borrowed for the
+    /// duration of the call, and `overlapped` must be its kernel header.
+    pub(crate) unsafe fn write(this: *mut Self, overlapped: *mut OVERLAPPED) {
+        // SAFETY: the caller guarantees `this` is live and not borrowed, the
+        // shared borrow ends before anything else runs
+        let ctx = unsafe { (*this).ctx.clone() };
+        // SAFETY: guaranteed by the caller
+        unsafe { Self::write_with(this, &ctx, overlapped) };
+    }
+
+    /// Sends output until a send waits for the kernel or nothing is left.
+    ///
+    /// `IoContext` calls run filters, io callbacks and wakers, and these can
+    /// write to the same stream through its `Handle`. So the op is never
+    /// borrowed across them, only inside the write buffer closure, which
+    /// runs after the pending output was processed.
+    ///
+    /// # Safety
+    ///
+    /// Same as for [`write`](Self::write).
+    unsafe fn write_with(this: *mut Self, ctx: &IoContext, overlapped: *mut OVERLAPPED) {
         loop {
-            if self.flags.contains(Flags::WAITING) {
+            // SAFETY: `this` is live, nothing else borrows it while the
+            // temporary shared borrow exists
+            if unsafe { (*this).is_pending() } {
                 return;
             }
-            let Self {
-                io,
-                ctx,
-                flags,
-                pages,
-                ..
-            } = self;
             let st = ctx.with_write_dst(|wrt| {
+                // SAFETY: `this` is live, and the closure calls no code that
+                // could write to the stream, so the borrow is exclusive
+                let wr = unsafe { &mut *this };
+
+                // A nested write, from a filter or callback that processed
+                // pending output, may have started a send already. The op's
+                // overlapped header must not be submitted twice.
+                if wr.flags.contains(Flags::WAITING) {
+                    return None;
+                }
+
                 #[cfg(feature = "trace")]
                 log::trace!(
-                    "{}: Wrt({io}) size:{:?} unsent:{:?}",
+                    "{}: Wrt({}) size:{:?} unsent:{:?}",
                     ctx.tag(),
+                    wr.io,
                     wrt.len(),
-                    pages.len()
+                    wr.pages.len()
                 );
 
                 // newer output is sent after the unsent pages
-                wrt.move_to(pages);
-                send(*io, overlapped, flags, pages)
+                wrt.move_to(&mut wr.pages);
+                Some(send(wr.io, overlapped, &mut wr.flags, &mut wr.pages))
             });
+            let Some(st) = st else {
+                return;
+            };
 
-            let status = self.ctx.update_write_status(st);
-            if !self.resume(status) {
+            let status = ctx.update_write_status(st);
+            // SAFETY: see the check at the top of the loop
+            if !unsafe { (*this).resume(status) } {
                 break;
             }
         }
@@ -435,22 +470,32 @@ impl WriteOperation {
     }
 
     pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) -> Option<usize> {
-        // SAFETY: WR_OP identifies a live write op; only its payload is borrowed
-        let wr = unsafe { &mut *Op::<Self>::data_from_overlapped(optr) };
+        // SAFETY: WR_OP identifies a live write op
+        let this = unsafe { Op::<Self>::data_from_overlapped(optr) };
 
-        #[cfg(feature = "trace")]
-        log::trace!("{}: WrtDone({}) {res:?}", wr.ctx.tag(), wr.io);
+        let (ctx, st) = {
+            // SAFETY: only the payload is borrowed, and the borrow ends before
+            // the `IoContext` calls below, which can write to the stream
+            let wr = unsafe { &mut *this };
 
-        wr.flags.remove(Flags::WAITING);
-        if wr.flags.contains(Flags::CLOSING) {
-            wr.pages.clear();
-            return Some(wr.id);
-        }
+            #[cfg(feature = "trace")]
+            log::trace!("{}: WrtDone({}) {res:?}", wr.ctx.tag(), wr.io);
 
-        let st = sent(&mut wr.pages, res);
-        let status = wr.ctx.update_write_status(st);
-        if wr.resume(status) {
-            wr.write(optr.cast());
+            wr.flags.remove(Flags::WAITING);
+            if wr.flags.contains(Flags::CLOSING) {
+                wr.pages.clear();
+                return Some(wr.id);
+            }
+            (wr.ctx.clone(), sent(&mut wr.pages, res))
+        };
+
+        let status = ctx.update_write_status(st);
+        // SAFETY: the op stays live, its item is freed only once `StreamCtl`
+        // is dropped, and the io task that owns it does not run from here.
+        // No borrow of the op is held.
+        if unsafe { (*this).resume(status) } {
+            // SAFETY: as above, `optr` is the op's kernel header
+            unsafe { Self::write_with(this, &ctx, optr.cast()) };
         }
         None
     }
@@ -558,5 +603,135 @@ fn winsock_result(res: i32) -> Poll<io::Result<()>> {
         winapi_result()
     } else {
         Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, atomic::AtomicPtr, atomic::Ordering};
+    use std::task::{Context, Wake, Waker};
+    use std::{cell::RefCell, rc::Rc};
+
+    use ntex_io::{Handle, Io, IoCallbacks, IoContext, IoRef, IoStream};
+    use ntex_service::cfg::SharedCfg;
+
+    use super::*;
+    use crate::iocp::OpBox;
+
+    struct TestStream(Rc<RefCell<Option<IoContext>>>);
+
+    struct TestHandle;
+
+    impl Handle for TestHandle {}
+
+    impl IoStream for TestStream {
+        fn start(self, ctx: IoContext) -> Box<dyn Handle> {
+            *self.0.borrow_mut() = Some(ctx);
+            Box::new(TestHandle)
+        }
+    }
+
+    /// Returns a connection, its transport context, and a write op for it.
+    fn write_op() -> (Io, IoContext, OpBox<WriteOperation>) {
+        let slot = Rc::new(RefCell::new(None));
+        let io = Io::new(TestStream(Rc::clone(&slot)), SharedCfg::default());
+        let ctx = slot.borrow_mut().take().unwrap();
+        let op = OpBox::new(
+            Overlapped::new(0, WR_OP),
+            WriteOperation::new(0, 0, ctx.clone()),
+        );
+        (io, ctx, op)
+    }
+
+    /// Writes to the op once, as a nested write that submitted a send does:
+    /// it takes pages and waits for the kernel.
+    struct NestedSend(AtomicPtr<WriteOperation>);
+
+    impl NestedSend {
+        fn new(op: &OpBox<WriteOperation>) -> Self {
+            Self(AtomicPtr::new(op.as_ptr()))
+        }
+
+        fn send(&self) {
+            let this = self.0.swap(ptr::null_mut(), Ordering::Relaxed);
+            if !this.is_null() {
+                // SAFETY: the test keeps the op alive, and the code under test
+                // holds no borrow of it while it calls into the io layer
+                let wr = unsafe { &mut *this };
+                wr.pages.extend_from_slice(b"nested");
+                wr.flags.insert(Flags::WAITING);
+            }
+        }
+    }
+
+    impl IoCallbacks for NestedSend {
+        fn before_processing(&self, _: &IoRef) {
+            self.send();
+        }
+
+        fn after_processing(&self, _: &IoRef) {}
+    }
+
+    impl Wake for NestedSend {
+        fn wake(self: Arc<Self>) {
+            self.send();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.send();
+        }
+    }
+
+    /// STATEMENT: A send that a nested write starts while pending output is
+    /// processed is not followed by a second send with the same op.
+    ///
+    /// HOW:
+    /// - Queue output, and register io callbacks that simulate a nested write
+    ///   submitting a send once the output is processed.
+    /// - Call `WriteOperation::write` and check that the op still waits with
+    ///   only the nested send's pages, and the output stays in the buffer.
+    /// - Under Miri this also checks that the nested write does not alias a
+    ///   borrow of the op.
+    #[test]
+    fn miri_nested_send_during_processing_is_not_resubmitted() {
+        let (io, ctx, op) = write_op();
+        ctx.with_write_dst(|buf| buf.extend_from_slice(b"first"));
+        io.register_filter_callbacks(NestedSend::new(&op));
+
+        // SAFETY: the op is live and not borrowed
+        unsafe { WriteOperation::write(op.as_ptr(), op.as_overlapped()) };
+
+        assert!(op.is_pending());
+        assert_eq!(op.unsent(), b"nested".len());
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), b"first".len());
+    }
+
+    /// STATEMENT: A send completion holds no borrow of the op while waking
+    /// tasks, which may write to the stream, and the op does not resubmit
+    /// over the send such a write started.
+    ///
+    /// HOW:
+    /// - Mark a send of the queued output in flight, and wait for a full
+    ///   flush with a waker that simulates a nested write submitting a send.
+    /// - Complete the first send, which drains the output and wakes the
+    ///   flush waiter.
+    /// - Check that the op waits with the nested send's pages. Under Miri
+    ///   this checks that the nested write does not alias a borrow of the op.
+    #[test]
+    fn miri_nested_send_on_completion_does_not_alias() {
+        let (io, ctx, mut op) = write_op();
+        ctx.with_write_dst(|buf| buf.extend_from_slice(b"first"));
+        ctx.with_write_dst(|buf| buf.move_to(&mut op.pages));
+        op.fake_pending();
+
+        let waker = Waker::from(Arc::new(NestedSend::new(&op)));
+        let mut cx = Context::from_waker(&waker);
+        assert!(io.poll_flush(&mut cx, true).is_pending());
+
+        let optr = op.as_overlapped().cast();
+        assert_eq!(WriteOperation::completed(Ok(b"first".len()), optr), None);
+
+        assert!(op.is_pending());
+        assert_eq!(op.unsent(), b"nested".len());
     }
 }
