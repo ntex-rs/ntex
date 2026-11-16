@@ -8,6 +8,9 @@
 * http: The HTTP/1 request payload reader yields to the runtime after decoding
   8192 merged small chunks in one poll, large chunks are decoded without a yield
 
+* http: The HTTP/1 decoder rejects a request with `Connection: upgrade` and
+  `Upgrade: websocket` that does not use the `GET` method with `400 Bad Request`
+
 ## [4.9.0] - 2026-11-15
 
 * http: Add `Payload::take_trailers()` to take trailer fields without copying them
