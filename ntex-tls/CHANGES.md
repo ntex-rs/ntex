@@ -1,5 +1,10 @@
 # Changes
 
+## [4.8.1] - Unreleased
+
+* schannel: reject `DecryptMessage` output that does not lie within the input
+  record instead of reading through the returned pointer
+
 ## [4.8.0] - 2026-11-07
 
 * Do not use deprecated bytes method
