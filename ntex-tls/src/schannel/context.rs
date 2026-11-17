@@ -200,12 +200,9 @@ impl Context {
         }
 
         let mut in_bufs = [EMPTY_BUFFER; 3];
-        if let Some(src) = input.as_ref().filter(|_| len != 0) {
-            in_bufs[0] = sec_buffer(
-                SECBUFFER_TOKEN,
-                buffer_len(len)?,
-                src.as_ptr().cast_mut().cast(),
-            );
+        if let Some(src) = input.as_deref_mut().filter(|_| len != 0) {
+            // SSPI may decrypt handshake records in place
+            in_bufs[0] = sec_buffer(SECBUFFER_TOKEN, buffer_len(len)?, src.as_mut_ptr().cast());
         }
         // ALPN is negotiated by the ClientHello, the client sends it with the
         // first call, the server needs it until the ClientHello is processed,
@@ -363,20 +360,24 @@ impl Context {
     /// Applies a control token and appends the resulting record to `output`.
     ///
     /// `T` must be the Windows-defined token layout matching its discriminator.
-    /// A valid context must already exist.
+    /// Does nothing before SSPI has created a context, there is no session to
+    /// send the record on.
     fn control_token<T>(
         &mut self,
         token: &mut T,
         name: &'static str,
         output: &mut ntex_bytes::BytePages,
     ) -> io::Result<()> {
+        if !self.have_ctxt {
+            return Ok(());
+        }
         let mut in_buf = sec_buffer(
             SECBUFFER_TOKEN,
             u32::try_from(mem::size_of::<T>()).expect("control token size fits u32"),
             ptr::from_mut(token).cast(),
         );
         let in_desc = buffer_desc(slice::from_mut(&mut in_buf));
-        // SAFETY: the caller guarantees a live context and a `T` matching the
+        // SAFETY: the context is live, the caller guarantees a `T` matching the
         // token layout, `in_buf` borrows `token` for the duration of the call.
         let status = unsafe { ApplyControlToken(&raw const self.ctxt, &raw const in_desc) };
         if status != SEC_E_OK {
@@ -505,14 +506,15 @@ impl Context {
 
         // SAFETY: both offsets are within the frame, see the method contract.
         let (data, trailer) = unsafe { (frame.add(header_len), frame.add(header_len + len)) };
+        let sent = [
+            sizes.cbHeader,
+            u32::try_from(len).expect("TLS message length fits u32"),
+            sizes.cbTrailer,
+        ];
         let mut bufs = [
-            sec_buffer(SECBUFFER_STREAM_HEADER, sizes.cbHeader, frame.cast()),
-            sec_buffer(
-                SECBUFFER_DATA,
-                u32::try_from(len).expect("TLS message length fits u32"),
-                data.cast(),
-            ),
-            sec_buffer(SECBUFFER_STREAM_TRAILER, sizes.cbTrailer, trailer.cast()),
+            sec_buffer(SECBUFFER_STREAM_HEADER, sent[0], frame.cast()),
+            sec_buffer(SECBUFFER_DATA, sent[1], data.cast()),
+            sec_buffer(SECBUFFER_STREAM_TRAILER, sent[2], trailer.cast()),
             EMPTY_BUFFER,
         ];
         let desc = buffer_desc(&mut bufs);
@@ -521,8 +523,7 @@ impl Context {
         if status != SEC_E_OK {
             return Err(sspi_error("EncryptMessage", status));
         }
-        // header, data and trailer
-        Ok(bufs[..3].iter().map(|buf| buf.cbBuffer as usize).sum())
+        encrypted_len(&bufs, sent)
     }
 
     /// Decrypts one complete record and appends plaintext to `dst`.
@@ -888,8 +889,8 @@ fn client_hello_servername(src: &[u8]) -> Option<String> {
     if status != SEC_E_OK || name.is_null() || len == 0 {
         return None;
     }
-    // SAFETY: on success `name` points to `len` bytes within `record`, which is still alive.
-    let name = unsafe { slice::from_raw_parts(name, len as usize) };
+    // the name lies within `record`, it is located rather than read through
+    let name = within(&record, name, len as usize)?;
     std::str::from_utf8(name).ok().map(str::to_owned)
 }
 
@@ -1105,10 +1106,7 @@ fn decrypted_parts<'a>(
             buf.BufferType == SECBUFFER_DATA && buf.cbBuffer != 0 && !buf.pvBuffer.is_null()
         })
         .map(|buf| {
-            buf.pvBuffer
-                .addr()
-                .checked_sub(record.as_ptr().addr())
-                .and_then(|start| record.get(start..start.checked_add(buf.cbBuffer as usize)?))
+            within(record, buf.pvBuffer.cast(), buf.cbBuffer as usize)
                 .ok_or_else(|| io::Error::other("DecryptMessage returned data outside the record"))
         })
         .transpose()?;
@@ -1119,6 +1117,36 @@ fn decrypted_parts<'a>(
         ));
     }
     Ok((data, extra))
+}
+
+/// The `len` bytes at `ptr` as a sub-slice of `outer`, `None` unless they lie
+/// entirely within it.
+///
+/// SSPI returns pointers into caller buffers, they are located by address
+/// rather than dereferenced.
+fn within(outer: &[u8], ptr: *const u8, len: usize) -> Option<&[u8]> {
+    let start = ptr.addr().checked_sub(outer.as_ptr().addr())?;
+    outer.get(start..start.checked_add(len)?)
+}
+
+/// Record length written by `EncryptMessage` to the header, data and trailer
+/// buffers that were `sent` with those lengths.
+///
+/// The header and data must keep their lengths, only then is the record
+/// contiguous and fully initialized, the trailer may shrink.
+fn encrypted_len(bufs: &[SecBuffer], sent: [u32; 3]) -> io::Result<usize> {
+    match bufs {
+        [header, data, trailer, ..]
+            if header.cbBuffer == sent[0]
+                && data.cbBuffer == sent[1]
+                && trailer.cbBuffer <= sent[2] =>
+        {
+            Ok(sent[0] as usize + sent[1] as usize + trailer.cbBuffer as usize)
+        }
+        _ => Err(io::Error::other(
+            "EncryptMessage returned buffers that do not match the record",
+        )),
+    }
 }
 
 /// Unprocessed input length reported by a `SECBUFFER_EXTRA` buffer.
@@ -1256,6 +1284,50 @@ mod tests {
             parts(8, 4, 8).unwrap(),
             (Some((record[4..].as_ptr(), 4)), 8)
         );
+    }
+
+    /// STATEMENT: `EncryptMessage` output lengths are accepted only for a contiguous record within the frame.
+    ///
+    /// HOW:
+    /// - Report the lengths passed in, and a shorter trailer, and check the record length.
+    /// - Report a longer trailer, and a changed header or data length, and check each is an error.
+    #[test]
+    fn test_encrypted_len_within_frame() {
+        let len = |header, data, trailer| {
+            let bufs = [
+                sec_buffer(SECBUFFER_STREAM_HEADER, header, ptr::null_mut()),
+                sec_buffer(SECBUFFER_DATA, data, ptr::null_mut()),
+                sec_buffer(SECBUFFER_STREAM_TRAILER, trailer, ptr::null_mut()),
+                EMPTY_BUFFER,
+            ];
+            encrypted_len(&bufs, [5, 100, 17]).ok()
+        };
+        assert_eq!(len(5, 100, 17), Some(122));
+        assert_eq!(len(5, 100, 16), Some(121));
+        assert_eq!(len(5, 100, 18), None, "trailer beyond the frame");
+        assert_eq!(len(6, 100, 17), None, "header beyond the frame");
+        assert_eq!(len(4, 100, 17), None, "header gap");
+        assert_eq!(len(5, 101, 17), None, "data beyond the frame");
+    }
+
+    /// STATEMENT: Alerts are not applied to a context SSPI has not created yet.
+    ///
+    /// HOW:
+    /// - Request `close_notify` and a fatal alert from new client and server contexts.
+    /// - Check both succeed without output, rather than calling `ApplyControlToken` on an empty handle.
+    #[test]
+    fn test_control_token_without_context() {
+        let config = ClientConfig::new().danger_accept_invalid_certs(true);
+        for mut ctx in [
+            Context::client("localhost", &config).unwrap(),
+            server_context(),
+        ] {
+            let mut out = ntex_bytes::BytePages::default();
+            ctx.close_notify(&mut out).unwrap();
+            ctx.fatal_alert(SEC_E_UNTRUSTED_ROOT, &mut out).unwrap();
+            assert!(out.is_empty());
+            assert!(!ctx.have_ctxt);
+        }
     }
 
     fn record(content_type: u8, payload: &[u8]) -> Vec<u8> {

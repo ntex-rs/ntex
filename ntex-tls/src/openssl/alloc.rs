@@ -24,6 +24,12 @@
 /// thread may use OpenSSL or replace its memory hooks while this function
 /// runs, and no other component may replace the hooks afterwards, otherwise
 /// a block may be released by an allocator that did not allocate it.
+///
+/// OpenSSL 3.5 and later on Unix allocate aligned blocks without closing the
+/// window for replacing the hooks. Such a block must not be live unless
+/// OpenSSL has also made a regular allocation, otherwise it would be released
+/// through these hooks. Library initialization makes regular allocations,
+/// calling this before any other OpenSSL use excludes the case.
 pub unsafe fn use_global_allocator() -> bool {
     #[cfg(ntex_openssl_mem)]
     {
@@ -108,7 +114,8 @@ mod shim {
             || current.0.and_then(dll_defaults) == Some(current)
         {
             // SAFETY: OpenSSL's default hooks are installed, so no live block was
-            // allocated by a foreign allocator that these hooks would free.
+            // allocated by a foreign allocator that these hooks would free, and
+            // the caller excludes live aligned blocks from OpenSSL's allocator.
             unsafe { CRYPTO_set_mem_functions(malloc, realloc, free) == 1 }
         } else {
             false

@@ -5,6 +5,19 @@
 * schannel: reject `DecryptMessage` output that does not lie within the input
   record instead of reading through the returned pointer
 
+* schannel: reject a `ClientHello` server name or `EncryptMessage` output
+  outside the buffers passed to SSPI, and pass handshake input as mutable
+  since SSPI may decrypt it in place
+
+* schannel: do not apply `close_notify` or a fatal alert before SSPI has
+  created a security context
+
+* x509: release a non-CNG private key handle with `CryptReleaseContext`
+  instead of `NCryptFreeObject`
+
+* openssl: document that `use_global_allocator()` must run before OpenSSL
+  3.5+ makes aligned allocations
+
 ## [4.8.0] - 2026-11-07
 
 * Do not use deprecated bytes method
