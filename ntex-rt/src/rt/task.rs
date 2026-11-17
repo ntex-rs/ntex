@@ -352,6 +352,20 @@ fn owner_queue<'a>(h: NonNull<Header>) -> &'a RunnableQueue {
     unsafe { header(h).queue.as_ref() }
 }
 
+/// Schedules an unfinished task on its owner, retaining the queue across callbacks.
+#[inline]
+fn schedule_local(h: NonNull<Header>) {
+    let queue = owner_queue(h);
+    if queue.idle.get() && queue.current.load(Ordering::Relaxed).is_null() {
+        // The notifier may drop the runtime and remove its registered endpoint.
+        let queue = wake::retain_owner_queue(core(h).routing.runtime)
+            .expect("unfinished task has no runtime queue");
+        queue.schedule_local(Runnable(h));
+    } else {
+        queue.schedule_local(Runnable(h));
+    }
+}
+
 /// Borrows a live owner endpoint for callback-free inspection or publication.
 fn live_owner_queue<'a>(h: NonNull<Header>) -> Option<&'a RunnableQueue> {
     // SAFETY: The caller retains a live task reference while checking its immutable routing.
@@ -400,7 +414,7 @@ pub(super) fn wake_local<const UNSHARED: bool>(h: NonNull<Header>, owned: bool) 
         if !owned {
             inc_local(h);
         }
-        owner_queue(h).schedule_local(Runnable(h));
+        schedule_local(h);
     } else if owned {
         if UNSHARED {
             release_unshared(h);
@@ -498,7 +512,7 @@ fn last_ref(h: NonNull<Header>) {
     // nothing can wake the task, the runner drops the future
     local.refs.set(1);
     local.state.set(state | SCHEDULED | CLOSE);
-    owner_queue(h).schedule_local(Runnable(h));
+    schedule_local(h);
 }
 
 /// Drops the future on the owner thread, completes the task and releases
@@ -785,7 +799,7 @@ impl Runnable {
 
         if state & SCHEDULED != 0 {
             // the run reference passes to the queue
-            owner_queue(h).schedule_local(Runnable(h));
+            schedule_local(h);
             true
         } else {
             release_local(h);
@@ -1121,7 +1135,7 @@ impl<T> Drop for Task<T> {
         if cancel && state & (SCHEDULED | RUNNING) == 0 {
             local.state.set(state | SCHEDULED);
             // the handle reference passes to the queue
-            owner_queue(h).schedule_local(Runnable(h));
+            schedule_local(h);
         } else {
             local.state.set(state);
             release_unshared(h);

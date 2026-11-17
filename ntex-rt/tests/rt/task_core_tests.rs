@@ -492,6 +492,123 @@ fn raw_queue_release_retains_driver_during_callback() {
     OWNED_RUNTIME.with(|slot| assert!(slot.borrow().is_none()));
 }
 
+/// STATEMENT: Local scheduling retains the queue and notifier across runtime destruction and notification retries.
+///
+/// HOW:
+/// - Save a pending task's local waker, leave its runtime idle, and move the runtime into TLS.
+/// - Wake by reference or value, drop the last waker, or cancel the join with a shutdown notifier armed.
+/// - Drop the runtime inside notification and verify another queue owner survives, with and without an interrupted retry.
+/// - Check the notifier and future are dropped exactly once and all task storage is reclaimed.
+#[test]
+fn raw_queue_scheduling_retains_driver_during_callback() {
+    use std::sync::atomic::AtomicBool;
+
+    thread_local! {
+        static OWNED_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
+        static FALLBACK_QUEUE: RefCell<Option<Arc<RunnableQueue>>> = const { RefCell::new(None) };
+    }
+
+    #[derive(Debug)]
+    struct ShutdownNotify {
+        armed: Arc<AtomicBool>,
+        retained: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+        interrupted: bool,
+    }
+
+    impl Notify for ShutdownNotify {
+        fn notify(&self) -> io::Result<()> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if self.armed.swap(false, Ordering::Relaxed) {
+                let rt = OWNED_RUNTIME.with(|slot| slot.borrow_mut().take().unwrap());
+                let queue = rt.queue.clone();
+                drop(rt);
+                let retained = Arc::strong_count(&queue) > 1;
+                self.retained.store(retained, Ordering::Relaxed);
+                if !retained {
+                    // Keep a failing regression memory-safe until scheduling returns.
+                    FALLBACK_QUEUE.with(|slot| *slot.borrow_mut() = Some(queue));
+                }
+                if self.interrupted {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for ShutdownNotify {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    for action in ["wake_by_ref", "wake", "drop", "cancel"] {
+        for interrupted in [false, true] {
+            let armed = Arc::new(AtomicBool::new(false));
+            let retained = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let drops = Arc::new(AtomicUsize::new(0));
+            let rt = Runtime::new(Box::new(ShutdownNotify {
+                armed: armed.clone(),
+                retained: retained.clone(),
+                calls: calls.clone(),
+                drops: drops.clone(),
+                interrupted,
+            }));
+            let future_drops = Rc::new(Cell::new(0));
+            let guard = DropCheck {
+                owner: thread::current().id(),
+                drops: future_drops.clone(),
+                panics: false,
+            };
+            let saved = Rc::new(RefCell::new(None));
+            let slot = saved.clone();
+            let join = rt.spawn(async move {
+                let _guard = guard;
+                poll_fn(|cx| {
+                    *slot.borrow_mut() = Some(crate::LocalWaker::from_waker(cx.waker()));
+                    Poll::<()>::Pending
+                })
+                .await;
+            });
+            assert_eq!(rt.poll(), PollResult::Pending(None));
+            let local = saved.borrow_mut().take().unwrap();
+            let allocations = rt.queue.task_allocations.clone();
+            OWNED_RUNTIME.with(|slot| *slot.borrow_mut() = Some(rt));
+            calls.store(0, Ordering::Relaxed);
+            armed.store(true, Ordering::Relaxed);
+            if action == "cancel" {
+                drop(local);
+                join.cancel();
+            } else {
+                drop(join);
+                match action {
+                    "wake_by_ref" => {
+                        local.wake_by_ref();
+                        drop(local);
+                    }
+                    "wake" => local.wake(),
+                    "drop" => drop(local),
+                    _ => unreachable!(),
+                }
+            }
+            let fallback = FALLBACK_QUEUE.with(|slot| slot.borrow_mut().take());
+            drop(fallback);
+            assert!(
+                retained.load(Ordering::Relaxed),
+                "{action:?}, interrupted={interrupted}: scheduling released its queue during notification"
+            );
+            assert_eq!(calls.load(Ordering::Relaxed), 1 + usize::from(interrupted));
+            assert_eq!(drops.load(Ordering::Relaxed), 1);
+            assert_eq!(future_drops.get(), 1);
+            assert_eq!(Arc::strong_count(&allocations), 1);
+            OWNED_RUNTIME.with(|slot| assert!(slot.borrow().is_none()));
+        }
+    }
+}
+
 /// STATEMENT: A newly created runtime does not reuse the identity of a destroyed runtime.
 ///
 /// HOW:
