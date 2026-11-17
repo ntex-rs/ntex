@@ -1502,6 +1502,41 @@ async fn first_frame_read_rate_then_keepalive() {
     assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
 }
 
+/// STATEMENT: Skipping the first-frame timeout lets a new peer stay silent, while the frame read rate still bounds its first partial frame.
+///
+/// HOW:
+/// - Skip the timeout on `first_frame_dispatcher` and check the stopped timer and idle read phase.
+/// - Keep the silent peer open past the read deadline, then send half a frame and verify a read-timeout close.
+#[ntex::test]
+async fn skip_first_frame_timeout() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+
+    let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+    let disp = first_frame_dispatcher(server, data.clone());
+    assert_eq!(disp.inner.timers.active, Timer::FrameRead);
+    let disp = disp.skip_first_frame_timeout();
+    assert_eq!(disp.inner.timers.active, Timer::Stopped);
+    assert_eq!(disp.inner.timers.read, timer::ReadPhase::Idle);
+    spawn(async move {
+        let _ = disp.await;
+    });
+
+    // the first frame read timer would close the peer within 2s
+    sleep(Millis(2500)).await;
+    assert!(!client.is_closed());
+    assert!(data.lock().unwrap().borrow().is_empty());
+
+    // the partial frame does not progress after its first period
+    client.write("1234");
+    wait_until(Millis(5000), || {
+        client.is_closed() && data.lock().unwrap().borrow().len() == 1
+    })
+    .await;
+    assert!(client.is_closed());
+    assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
+}
+
 /// Readiness gate installed by the test.
 #[derive(Clone, Default)]
 struct Gate(Rc<(RefCell<Option<oneshot::Receiver<()>>>, ReadyNotifier)>);
@@ -1908,6 +1943,60 @@ async fn keepalive_inactive_during_frame_read() {
     wait_closed(&client, Millis(3000)).await;
     assert!(client.is_closed());
     assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+}
+
+/// STATEMENT: The dispatcher keep-alive timeout defaults to the transport value and can be disabled or enabled per dispatcher.
+///
+/// HOW:
+/// - Poll a dispatcher until it arms the inherited one-second keep-alive, disable it, and verify the timer is stopped and the peer stays open past the transport timeout.
+/// - Override a transport without keep-alive with one second, check the transport value is unchanged, and verify an idle close with a keep-alive stop.
+#[ntex::test]
+async fn keepalive_timeout_override() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+
+    let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+    let io = keepalive_io(server);
+    let ioref = io.get_ref();
+    let mut disp = keepalive_io_dispatcher(io, Millis(0), data.clone());
+    assert_eq!(disp.inner.keepalive, Seconds(1));
+    assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+    assert_eq!(disp.inner.timers.active, Timer::KeepAlive);
+    assert!(ioref.timer_handle().is_set());
+
+    let disp = disp.keepalive_timeout(Seconds::ZERO);
+    assert_eq!(disp.inner.timers.active, Timer::Stopped);
+    assert!(!ioref.timer_handle().is_set());
+    spawn(async move {
+        let _ = disp.await;
+    });
+
+    sleep(Millis(2500)).await;
+    assert!(!client.is_closed());
+    client.write("12345678");
+    let buf = client.read().await.unwrap();
+    assert_eq!(buf, Bytes::from_static(b"12345678"));
+    assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
+
+    // enabled on a transport without keep-alive
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+
+    let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+    let io = Io::new(
+        server,
+        SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
+    );
+    let ioref = io.get_ref();
+    let disp = keepalive_io_dispatcher(io, Millis(0), data.clone()).keepalive_timeout(Seconds(1));
+    assert_eq!(ioref.cfg().keepalive_timeout(), Seconds::ZERO);
+    spawn(async move {
+        let _ = disp.await;
+    });
+
+    wait_closed(&client, Millis(3000)).await;
+    assert!(client.is_closed());
+    assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
 }
 
 /// STATEMENT: Frame handlers can observe an armed keep-alive timer across successive requests.

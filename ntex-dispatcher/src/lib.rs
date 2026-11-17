@@ -103,10 +103,12 @@
 //!
 //! - [`set_keepalive_timeout`](ntex_io::IoConfig::set_keepalive_timeout)
 //!   bounds idle periods, not partial-frame reads or active service calls.
+//!   [`Dispatcher::keepalive_timeout`] overrides it for one dispatcher.
 //! - [`set_frame_read_rate`](ntex_io::IoConfig::set_frame_read_rate) bounds
 //!   progress on an incomplete frame, including the first frame before any
 //!   bytes arrive. Bytes consumed by the codec without producing a frame
-//!   still count as progress.
+//!   still count as progress. [`Dispatcher::skip_first_frame_timeout`] lets
+//!   the peer stay silent until it starts the first frame.
 //! - [`set_write_backpressure`](ntex_io::IoConfig::set_write_backpressure)
 //!   sets the output watermark that pauses normal frame dispatch.
 //!   [`set_write_timeout`](ntex_io::IoConfig::set_write_timeout) limits how
@@ -373,6 +375,7 @@ where
     response: Option<Call<U, Err>>,
     timers: Timers,
     max_inflight: u32,
+    keepalive: Seconds,
 }
 
 pub(crate) struct DispatcherShared<U, Err>
@@ -382,7 +385,6 @@ where
     io: IoBoxed,
     codec: U,
     service: Service<U, Err>,
-    keepalive: bool,
     error: Cell<Option<DispatcherError<Err, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
 }
@@ -438,6 +440,10 @@ where
     /// before this future is first polled. Construct it on the runtime owning
     /// the transport, then poll or await it to drive dispatch.
     ///
+    /// [`Self::keepalive_timeout`] overrides the keep-alive timeout and
+    /// [`Self::skip_first_frame_timeout`] cancels first-frame monitoring for
+    /// this dispatcher only.
+    ///
     /// The default in-flight threshold is [`u32::MAX`]. Use
     /// [`Self::max_inflight`] to restrict normal frame admission.
     pub fn new<Io>(io: Io, codec: U, service: Service<U, Err>) -> Dispatcher<U, Err>
@@ -445,8 +451,8 @@ where
         IoBoxed: From<Io>,
     {
         let io = IoBoxed::from(io);
+        let keepalive = io.cfg().keepalive_timeout();
         let shared = Rc::new(DispatcherShared {
-            keepalive: !io.cfg().keepalive_timeout().is_zero(),
             io,
             codec,
             service,
@@ -462,6 +468,7 @@ where
                 error: None,
                 st: DispatcherState::Processing,
                 max_inflight: u32::MAX,
+                keepalive,
             },
         }
     }
@@ -487,6 +494,47 @@ where
     pub fn max_inflight(mut self, max: u32) -> Self {
         assert!(max > 0, "max_inflight must be greater than zero");
         self.inner.max_inflight = max;
+        self
+    }
+
+    #[must_use]
+    /// Overrides the keep-alive timeout for this dispatcher.
+    ///
+    /// The default is the transport's
+    /// [`keepalive_timeout`](ntex_io::IoConfig::keepalive_timeout).
+    /// [`Seconds::ZERO`] disables keep-alive. The transport configuration
+    /// returned by [`IoRef::cfg`](ntex_io::IoRef::cfg) is not changed.
+    ///
+    /// Call this before the dispatcher is first polled.
+    pub fn keepalive_timeout(mut self, timeout: Seconds) -> Self {
+        self.inner.keepalive = timeout;
+        // keep-alive is armed again on the next poll
+        if matches!(
+            self.inner.timers.active,
+            Timer::KeepAlive | Timer::Suspended
+        ) {
+            self.inner.shared.io.stop_timer();
+            self.inner.timers.active = Timer::Stopped;
+            self.inner.timers.keepalive = None;
+        }
+        self
+    }
+
+    #[must_use]
+    /// Cancels the first-frame read-rate timer.
+    ///
+    /// With a configured
+    /// [`frame_read_rate`](ntex_io::IoConfig::frame_read_rate), a new
+    /// dispatcher requires the peer to start sending its first frame in time.
+    /// This option lets the peer stay silent after connection setup, for
+    /// example on a server-push protocol. The keep-alive timeout still applies
+    /// while the connection is idle, and the frame read rate applies once data
+    /// arrives.
+    ///
+    /// Has no effect when no frame read rate is configured. Call this before
+    /// the dispatcher is first polled.
+    pub fn skip_first_frame_timeout(mut self) -> Self {
+        self.inner.timers.skip_first_frame(&self.inner.shared.io);
         self
     }
 }
@@ -915,7 +963,7 @@ where
         let handling = item || self.shared.inflight.get() != 0;
         let timer = self
             .timers
-            .select(self.shared.io.cfg(), self.shared.keepalive, handling);
+            .select(self.shared.io.cfg(), !self.keepalive.is_zero(), handling);
         self.set_timer(timer);
     }
 
@@ -936,16 +984,13 @@ where
         if self.timers.active == timer {
             return;
         }
+        let keepalive = self.keepalive;
         let io = &self.shared.io;
         self.timers.active = match (self.timers.active, timer) {
             (Timer::KeepAlive | Timer::Suspended, Timer::Stopped) => Timer::Suspended,
             (_, Timer::KeepAlive) => {
-                log::trace!(
-                    "{}: Start keep-alive timer {:?}",
-                    io.tag(),
-                    io.cfg().keepalive_timeout()
-                );
-                let hnd = io.start_timer(io.cfg().keepalive_timeout());
+                log::trace!("{}: Start keep-alive timer {:?}", io.tag(), keepalive);
+                let hnd = io.start_timer(keepalive);
                 self.timers.keepalive = Some(hnd.instant());
                 Timer::KeepAlive
             }
