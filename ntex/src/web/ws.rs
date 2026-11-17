@@ -4,17 +4,11 @@ use std::fmt;
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{ConnectionType, body::BodySize, error::ResponseError, h1, header};
-use crate::io::{DispatchItem, IoConfig, Reason};
+use crate::io::{DispatchItem, Reason};
 use crate::service::{Ctx, IntoService, Pipeline, Service, apply_fn};
 use crate::web::HttpRequest;
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
-use crate::{SharedCfg, rt, time::Seconds};
-
-thread_local! {
-    static CFG: SharedCfg = SharedCfg::new("WS")
-        .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO))
-        .into();
-}
+use crate::{rt, time::Seconds};
 
 /// Returns an iterator over the subprotocols requested by the client
 /// in the `Sec-Websocket-Protocol` header.
@@ -182,17 +176,6 @@ where
     // create sink, it is also the dispatcher's codec
     let sink = WsSink::new(io.get_ref(), ws_codec, io.shared().get());
 
-    // create ws service
-    // SAFETY: the HTTP dispatcher has transferred ownership of `io` to this
-    // upgrade path, and no borrowed reference from `io.cfg()` is retained.
-    unsafe {
-        io.set_config(CFG.with(Clone::clone));
-    }
-
-    // the h1 dispatcher may have started a headers-read timer on this IO;
-    // cancel it so DSP_TIMEOUT doesn't fire on the new WS dispatcher
-    io.stop_timer();
-
     // start websockets service dispatcher
     let timeout_sink = sink.clone();
     let service = apply_fn(f.into_service(), async move |req, svc| {
@@ -202,7 +185,12 @@ where
         }
         result
     });
-    let result = crate::io::Dispatcher::new(io, sink.clone(), Pipeline::new(sink, service)).await;
+    // the connection keeps its transport configuration; it has no keep-alive
+    // and the peer may stay silent until it starts the first frame
+    let result = crate::io::Dispatcher::new(io, sink.clone(), Pipeline::new(sink, service))
+        .keepalive_timeout(Seconds::ZERO)
+        .skip_first_frame_timeout()
+        .await;
     log::trace!("Ws handler is terminated: {result:?}");
 
     result

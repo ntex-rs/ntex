@@ -271,6 +271,14 @@ read-rate limits. A read-rate limit protects a decoder from peers that send
 an incomplete frame too slowly. It also covers the first frame, so a peer
 that connects and stays silent is closed when the limit expires.
 
+An I/O dispatcher can change these two limits for one connection without
+touching its configuration. [`Dispatcher::keepalive_timeout`] replaces the
+keep-alive timeout, and `Seconds::ZERO` disables it.
+[`Dispatcher::skip_first_frame_timeout`] lets the peer stay silent after
+connection setup; the read-rate limit applies once data arrives. Use them for
+protocols where the server speaks first or the peer may stay idle, as
+`web::ws` does for WebSocket connections.
+
 A peer can also stop reading your output. The write timeout bounds how long
 write backpressure can remain enabled before the dispatcher stops with a
 write timeout. Its timer runs from the moment backpressure is enabled until
@@ -323,13 +331,17 @@ replacement for write backpressure.
 ### Reconfiguring a connection
 
 A protocol upgrade may change a connection's timeout or buffer requirements.
-Use [`Io::set_config`] to switch an established connection to another shared
-configuration.
+If only the keep-alive timeout or the first-frame read limit must change,
+set them on the dispatcher instead, as described in [Timeouts](#timeouts).
+Otherwise use [`Io::set_config`] to switch an established connection to
+another shared configuration.
 
 The method is `unsafe`. Replacing the configuration may release the
 allocation behind references returned by [`IoRef::cfg`]. No such reference
 may remain live across the call or be used afterwards.
 
+[`Dispatcher::keepalive_timeout`]: https://docs.ntex.rs/api/ntex/io/struct.Dispatcher.html#method.keepalive_timeout
+[`Dispatcher::skip_first_frame_timeout`]: https://docs.ntex.rs/api/ntex/io/struct.Dispatcher.html#method.skip_first_frame_timeout
 [`Io::set_config`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.set_config
 [`IoRef::cfg`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.cfg
 [`SharedCfg`]: https://docs.ntex.rs/api/ntex/struct.SharedCfg.html

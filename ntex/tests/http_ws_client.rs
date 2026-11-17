@@ -3,7 +3,7 @@ use std::io;
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Response, body::BodySize, h1};
-use ntex::io::{DispatchItem, Dispatcher, IoConfig};
+use ntex::io::{DispatchItem, Dispatcher};
 use ntex::service::{Pipeline, cfg::SharedCfg};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
@@ -154,19 +154,12 @@ async fn test_keepalive_timeout() {
                         .unwrap();
 
                     // start websocket service
-                    // SAFETY: no reference returned by `io.cfg()` is retained
-                    // across the protocol transition.
-                    unsafe {
-                        io.set_config(
-                            SharedCfg::new("WS-SRV")
-                                .add(IoConfig::new().set_keepalive_timeout(Seconds::ONE)),
-                        );
-                    }
                     let _ = Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
                         Pipeline::new((), ws_service),
                     )
+                    .keepalive_timeout(Seconds::ONE)
                     .await;
 
                     ack

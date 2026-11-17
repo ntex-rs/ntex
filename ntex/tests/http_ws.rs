@@ -3,7 +3,7 @@ use std::{cell::Cell, io, sync::Arc, sync::Mutex};
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, HttpServiceConfig, Request, Response, StatusCode, body, h1, test};
-use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
+use ntex::io::{DispatchItem, Dispatcher, Io};
 use ntex::service::{Ctx, Pipeline, Service, cfg::SharedCfg};
 use ntex::time::Seconds;
 use ntex::util::{ByteString, Bytes};
@@ -50,14 +50,8 @@ impl Service<(), (Request, Io, h1::Codec)> for WsService {
         io.encode((res, body::BodySize::None).into(), &codec)
             .unwrap();
 
-        // SAFETY: no reference returned by `io.cfg()` is retained across the
-        // protocol transition.
-        unsafe {
-            io.set_config(
-                SharedCfg::new("WS-SRV").add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
-            );
-        }
         Dispatcher::new(io.seal(), ws::Codec::new(), Pipeline::new((), service))
+            .keepalive_timeout(Seconds::ZERO)
             .await
             .map_err(|_| panic!())
     }
