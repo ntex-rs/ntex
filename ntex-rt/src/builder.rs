@@ -48,8 +48,7 @@ impl Builder {
             fatal_signals: false,
             panics: false,
             testing: false,
-            pool_limit: 64
-                * std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+            pool_limit: 64,
             pool_recv_timeout: time::Duration::from_mins(1),
             timer_resolution: 16,
             task_callbacks: None,
@@ -173,10 +172,11 @@ impl Builder {
     }
 
     #[must_use]
-    /// Sets the maximum number of blocking thread-pool workers.
+    /// Sets the maximum number of blocking thread-pool workers per arbiter.
     ///
-    /// The default is 64 per available CPU. Zero is treated as one; excess
-    /// work is queued.
+    /// Each arbiter, including the primary one, has its own pool, see
+    /// [`System::spawn_blocking`](crate::System::spawn_blocking). The default
+    /// is 64. Zero is treated as one; excess work is queued.
     pub fn thread_pool_limit(mut self, value: usize) -> Self {
         self.pool_limit = value;
         self

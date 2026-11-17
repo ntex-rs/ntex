@@ -1,5 +1,19 @@
 # Changes
 
+## [4.10.0] - 2026-11-17
+
+* Each arbiter has its own blocking thread pool, `spawn_blocking()` on an
+  arbiter thread no longer contends with other arbiters for one shared queue
+
+* The blocking thread pool limit applies per arbiter and defaults to 64
+
+* `System::pool_metrics()` sums the pools of all arbiters, add
+  `Arbiter::pool_metrics()`
+
+* Blocking pool threads on Linux and Android no longer inherit the CPU
+  affinity of a pinned server worker, they use the affinity of the thread that
+  created the pool
+
 ## [4.9.2] - 2026-11-16
 
 * The blocking thread pool limit defaults to 64 threads per available CPU

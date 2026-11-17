@@ -8,7 +8,7 @@ use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::{Mutex, RwLock};
 
 use crate::arbiter::Arbiter;
-use crate::pool::{PoolMetrics, ThreadPool};
+use crate::pool::PoolMetrics;
 use crate::{BlockingResult, Builder, Handle, HashMap, Runner, SystemRunner, TaskCallbacks};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -31,8 +31,8 @@ pub struct Id(pub(crate) usize);
 
 /// Runtime manager for a group of arbiter threads.
 ///
-/// A system stores runtime configuration, manages arbiters, dispatches process
-/// signals, and owns the blocking thread pool.
+/// A system stores runtime configuration, manages arbiters, and dispatches
+/// process signals. Each of its arbiters owns a blocking thread pool.
 ///
 /// Clones share the same system and may be sent to other threads. Merely holding
 /// a handle does not install that system as the current system on another thread.
@@ -47,7 +47,8 @@ pub(crate) struct SystemInner {
     storage: RwLock<HashMap<TypeId, Box<dyn Any + Sync + Send>>>,
     arbiters: Mutex<Arbiters>,
     signals: AtomicBool,
-    pool: ThreadPool,
+    // pool totals of unregistered arbiters
+    retired_pools: Mutex<PoolMetrics>,
 }
 
 /// Configuration shared by a running [`System`].
@@ -93,8 +94,7 @@ impl System {
         let id = SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = unbounded();
 
-        let pool = ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
-        let (arbiter, controller) = Arbiter::new_system(id, config.name.clone());
+        let (arbiter, controller) = Arbiter::new_system(id, &config);
 
         let mut arbiters = Arbiters::default();
         arbiters.all.insert(arbiter.id(), arbiter.clone());
@@ -106,8 +106,8 @@ impl System {
             arbiter,
             sender,
             receiver,
-            pool,
             arbiters: Mutex::new(arbiters),
+            retired_pools: Mutex::new(PoolMetrics::default()),
             storage: RwLock::new(HashMap::default()),
             signals: AtomicBool::new(false),
         }));
@@ -196,6 +196,15 @@ impl System {
                     break;
                 }
             }
+            self.retire_pool(&hnd);
+        }
+    }
+
+    /// Keeps the pool totals of an unregistered arbiter, the primary
+    /// arbiter's pool is always included in [`System::pool_metrics`].
+    fn retire_pool(&self, arb: &Arbiter) {
+        if arb != &self.0.arbiter {
+            self.0.retired_pools.lock().add_totals(&arb.pool_metrics());
         }
     }
 
@@ -210,7 +219,11 @@ impl System {
     pub(super) fn take_arbiters(&self) -> Vec<Arbiter> {
         let mut arbiters = self.0.arbiters.lock();
         arbiters.all.clear();
-        std::mem::take(&mut arbiters.list)
+        let list = std::mem::take(&mut arbiters.list);
+        for arb in &list {
+            self.retire_pool(arb);
+        }
+        list
     }
 
     /// Stops and unregisters all arbiters of the system.
@@ -367,7 +380,11 @@ impl System {
         self.0.config.timer_resolution()
     }
 
-    /// Submits blocking work to this system's thread pool and returns its result future.
+    /// Submits blocking work to a thread pool and returns its result future.
+    ///
+    /// Work submitted from an arbiter thread of this system runs on that
+    /// arbiter's pool, otherwise on the pool of the system's primary arbiter.
+    /// See [`Builder::thread_pool_limit`] for the size of each pool.
     ///
     /// This method does not wait for completion. It may be called from any
     /// thread, regardless of which system is current there.
@@ -381,12 +398,34 @@ impl System {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.0.pool.execute(f)
+        Arbiter::with_current_pool(self.0.id, |pool| {
+            pool.unwrap_or(&self.0.arbiter.0.pool).execute(f)
+        })
     }
 
-    /// Returns a snapshot of the blocking thread pool metrics.
+    /// Returns a snapshot of the blocking thread pool metrics of all arbiters.
+    ///
+    /// Limits, gauges, and totals of the running arbiters' pools are summed,
+    /// totals include the pools of stopped arbiters. Use
+    /// [`Arbiter::pool_metrics`] for a single arbiter's pool.
     pub fn pool_metrics(&self) -> PoolMetrics {
-        self.0.pool.metrics()
+        let mut metrics = self.0.arbiter.pool_metrics();
+        let arbiters = self.0.arbiters.lock();
+        for arb in &arbiters.list {
+            if arb != &self.0.arbiter {
+                metrics.add(&arb.pool_metrics());
+            }
+        }
+        metrics.add_totals(&self.0.retired_pools.lock());
+        metrics
+    }
+
+    /// Runs `f` with the system of the current thread, if any.
+    pub(crate) fn with_current<F, R>(f: F) -> R
+    where
+        F: FnOnce(Option<&System>) -> R,
+    {
+        CURRENT.with(|cell| f(cell.borrow().as_ref()))
     }
 
     /// Returns a clone of the system-wide value of type `T`, inserting one if absent.
@@ -444,7 +483,7 @@ impl fmt::Debug for System {
             .field("id", &self.0.id)
             .field("config", &self.0.config)
             .field("signals", &self.signals())
-            .field("pool", &self.0.pool)
+            .field("pool", &self.0.arbiter.0.pool)
             .finish()
     }
 }

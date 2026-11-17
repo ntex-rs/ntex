@@ -312,7 +312,7 @@ pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `timer_resolution = N` - resolution of the timer wheel in milliseconds,
 ///   a power of two between 1 and 16. Defaults to 16.
 /// - `thread_pool = N` - maximum number of blocking thread-pool workers,
-///   passed to `Builder::thread_pool_limit`. Defaults to 64 per available CPU.
+///   passed to `Builder::thread_pool_limit`. Defaults to 64 per arbiter.
 /// - `task_callbacks = path` - a `fn() -> ntex::rt::TaskCallbacks` factory for
 ///   instrumenting spawned tasks, passed to `Builder::task_callbacks`. It is
 ///   called on every thread of the system. None by default.

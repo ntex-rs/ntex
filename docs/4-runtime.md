@@ -263,9 +263,12 @@ async fn main() {
 ```
 
 The closure and its result must be `Send`. Inside a system, the work runs on a
-blocking pool that grows and shrinks as needed.
+blocking pool that grows and shrinks as needed. Each arbiter has its own pool,
+so work submitted from a server worker runs on that worker's pool. On Linux and
+Android, pool threads are not pinned to the worker's CPU, they use the CPU
+affinity the worker thread had before it was pinned.
 
-By default, the pool allows up to 64 threads per available CPU. An idle thread exits after 60
+By default, each pool allows up to 64 threads. An idle thread exits after 60
 seconds. Set the limit with `thread_pool_limit()` and the idle timeout with
 `thread_pool_recv_timeout()`:
 
