@@ -22,9 +22,10 @@ use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_SHA384_ALGORITHM, BCRYPT_SHA512_ALGORITHM, CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL,
     CERT_CHAIN_DISABLE_AIA, CERT_CHAIN_PARA, CERT_KEY_SPEC, CERT_NCRYPT_KEY_SPEC,
     CERT_SYSTEM_STORE_CURRENT_USER, CERT_SYSTEM_STORE_LOCAL_MACHINE,
-    CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG, CRYPT_ACQUIRE_SILENT_FLAG, HCERTCHAINENGINE,
-    NCRYPT_KEY_HANDLE, NCRYPT_PAD_PKCS1_FLAG, NCRYPT_PAD_PSS_FLAG, NCRYPT_SILENT_FLAG,
-    NCryptSignHash, PKCS12_ALWAYS_CNG_KSP, PKCS12_NO_PERSIST_KEY, X509_ASN_ENCODING,
+    CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG, CRYPT_ACQUIRE_SILENT_FLAG, CryptReleaseContext,
+    HCERTCHAINENGINE, NCRYPT_KEY_HANDLE, NCRYPT_PAD_PKCS1_FLAG, NCRYPT_PAD_PSS_FLAG,
+    NCRYPT_SILENT_FLAG, NCryptSignHash, PKCS12_ALWAYS_CNG_KSP, PKCS12_NO_PERSIST_KEY,
+    X509_ASN_ENCODING,
 };
 
 use crate::win::{Cert, CertContext, CertStore, ChainContext, NcryptHandle};
@@ -468,13 +469,21 @@ fn acquire_key(cert: &Cert) -> Option<KeyHandle> {
     if ok == 0 {
         return None;
     }
-    let key = if free == 0 {
+    if spec != CERT_NCRYPT_KEY_SPEC {
+        // not expected with `CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG`, a CAPI
+        // provider must not be released as a CNG key
+        if free != 0 {
+            // SAFETY: `pfCallerFreeProvOrNCryptKey` set, the caller owns the provider.
+            unsafe { CryptReleaseContext(handle, 0) };
+        }
+        return None;
+    }
+    Some(if free == 0 {
         KeyHandle::Borrowed(handle)
     } else {
         // SAFETY: `pfCallerFreeProvOrNCryptKey` set, the caller owns the handle.
         KeyHandle::Owned(unsafe { NcryptHandle::from_raw(handle) })
-    };
-    (spec == CERT_NCRYPT_KEY_SPEC).then_some(key)
+    })
 }
 
 /// CNG key handle, owned or cached by its certificate context (`pfCallerFreeProvOrNCryptKey`).
