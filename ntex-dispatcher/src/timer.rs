@@ -24,7 +24,8 @@ pub(crate) enum ReadPhase {
     Idle,
     /// A frame has started but is not complete. A new connection starts in
     /// this phase when a frame read rate is configured, so its first frame is
-    /// tracked before any data arrives.
+    /// tracked before any data arrives, unless the first-frame timeout is
+    /// skipped.
     ReadingFrame(ReadProgress),
 }
 
@@ -77,6 +78,18 @@ impl Timers {
                 read: ReadPhase::Idle,
                 keepalive: None,
             }
+        }
+    }
+
+    /// Cancels first-frame read-rate tracking started by [`Timers::new`] while
+    /// no data has been received, the next partial frame starts it again.
+    pub(crate) fn skip_first_frame(&mut self, io: &IoBoxed) {
+        if self.active == Timer::FrameRead
+            && matches!(self.read, ReadPhase::ReadingFrame(p) if p.remains == 0 && p.consumed == 0)
+        {
+            io.stop_timer();
+            self.active = Timer::Stopped;
+            self.read = ReadPhase::Idle;
         }
     }
 

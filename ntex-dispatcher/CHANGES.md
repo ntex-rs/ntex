@@ -1,5 +1,13 @@
 # Changes
 
+## [4.5.0] - 2026-11-17
+
+* Add `Dispatcher::keepalive_timeout()` to override the transport's keep-alive
+  timeout for one dispatcher, `Seconds::ZERO` disables keep-alive
+
+* Add `Dispatcher::skip_first_frame_timeout()` to let the peer stay silent after
+  connection setup, the frame read rate applies once data arrives
+
 ## [4.4.1] - 2026-11-09
 
 * Rely on ntex-io 4.7.1 to report frames truncated by peer EOF
