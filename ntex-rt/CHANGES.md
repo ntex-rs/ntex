@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* Fix use-after-free when a native runtime's notifier drops the runtime during
+  local task scheduling or cancellation
+
 ## [4.10.0] - 2026-11-17
 
 * Each arbiter has its own blocking thread pool, `spawn_blocking()` on an
