@@ -1,9 +1,15 @@
 # Changes
 
-## [4.9.2] - Unreleased
+## [4.9.2] - 2026-11-17
 
 * http: `RequestHead::take_io()` returns `None` when called from filter callbacks of
   the connection, instead of taking the I/O while the dispatcher borrows it
+
+* web: `web::ws::start()` and `web::ws::start_with()` keep the connection's I/O
+  configuration, including its tag, metrics, buffer settings and tracker. Only
+  keep-alive and the first-frame read timer are disabled, so the server's write
+  timeout, shutdown timeout and frame read rate now apply to WebSocket
+  connections instead of `IoConfig` defaults
 
 ## [4.9.1] - 2026-11-17
 

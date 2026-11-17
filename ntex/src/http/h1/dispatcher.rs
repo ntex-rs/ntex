@@ -3202,23 +3202,28 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
 
-        let mut h1 = h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
-        // SAFETY: this test does not retain a reference returned by `io.cfg()`.
-        unsafe {
-            h1.inner.io.set_config(
-                SharedCfg::new("TEST")
-                    .add(
-                        nio::IoConfig::new()
-                            .set_read_size(
-                                crate::util::BytePageSize::Size16,
-                                crate::util::BytePageSize::Size16,
-                            )
-                            .set_read_backpressure(crate::util::BytePageSize::Size16.capacity())
-                            .set_write_backpressure(15 * 1024),
+        let config: SharedCfg = SharedCfg::new("TEST")
+            .add(
+                nio::IoConfig::new()
+                    .set_read_size(
+                        crate::util::BytePageSize::Size16,
+                        crate::util::BytePageSize::Size16,
                     )
-                    .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
-            );
-        }
+                    .set_read_backpressure(crate::util::BytePageSize::Size16.capacity())
+                    .set_write_backpressure(15 * 1024),
+            )
+            .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024))
+            .into();
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            None,
+            DispatcherConfig::default(),
+        );
 
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
 

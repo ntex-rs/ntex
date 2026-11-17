@@ -1,12 +1,14 @@
 use std::io;
 
 use ntex::http::{StatusCode, header};
+use ntex::io::IoConfig;
+use ntex::time::{Millis, Seconds, sleep};
 use ntex::web::{self, App, HttpRequest, HttpResponse, test, ws};
 use ntex::ws::{
     WsClientConfig,
     error::{HandshakeError, WsClientError, WsError},
 };
-use ntex::{service, util::ByteString, util::Bytes};
+use ntex::{SharedCfg, service, util::ByteString, util::Bytes};
 
 async fn ws_service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
@@ -67,7 +69,49 @@ async fn web_ws() {
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
 }
 
-/// STATEMENT: WebSocket clients report ordinary and error HTTP responses as invalid upgrade statuses.
+/// STATEMENT: A WebSocket upgrade keeps the server's I/O configuration but disables keep-alive and the first-frame timeout.
+///
+/// HOW:
+/// - Configure the server with a 1 s keep-alive and a 1 s frame read rate (2 s max, 256 bytes).
+/// - Stay silent for 3.5 s after the upgrade, then verify ping/pong still works and the handler is running.
+/// - Send one byte of a frame and assert the handler ends with `WsError::ReadTimeout`.
+#[ntex::test]
+async fn web_ws_keeps_server_io_config() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test::server_with(
+        test::config().server_cfg(
+            SharedCfg::new("SRV").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds(1))
+                    .set_frame_read_rate(Seconds(1), Seconds(2), 256),
+            ),
+        ),
+        async move |_| {
+            let tx = tx.clone();
+            App::new().service(
+                web::resource("/").route(web::to(async move |req: HttpRequest| {
+                    let res = ws::start(&req, None, ws_service).await;
+                    let _ = tx.send(matches!(res, Err(WsError::ReadTimeout)));
+                })),
+            )
+        },
+    );
+
+    let (io, codec, _) = srv.ws().await.unwrap().into_inner();
+    sleep(Millis(3500)).await;
+    io.send(ws::Message::Ping("text".into()), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
+    assert!(rx.try_recv().is_err());
+
+    // first byte of a text frame, the rest never arrives
+    io.send(Bytes::from_static(&[0x81]), &ntex::codec::BytesCodec)
+        .await
+        .unwrap();
+    assert!(rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap());
+}
 ///
 /// HOW:
 /// - Connect to a normal OK web route and a route returning an I/O error.
