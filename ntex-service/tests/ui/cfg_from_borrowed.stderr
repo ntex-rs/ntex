@@ -36,5 +36,5 @@ help: the trait `Configuration` is implemented for `TestCfg`
 note: required by a bound in `Cfg`
   --> src/cfg.rs
    |
-   | pub struct Cfg<T: Configuration>(UnsafeCell<CfgRef<T>>, PhantomData<rc::Rc<T>>);
+   | pub struct Cfg<T: Configuration> {
    |                   ^^^^^^^^^^^^^ required by this bound in `Cfg`

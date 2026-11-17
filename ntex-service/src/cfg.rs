@@ -17,6 +17,11 @@
 //! separate from the state passed to [`crate::Service`] operations; a state
 //! value can carry whichever configuration handles the service needs.
 //!
+//! A [`CfgContext`] keeps the id, tag, and service name of its collection
+//! readable, but does not keep the collection alive. Lookups through a
+//! context panic while the collection is being built and after it has been
+//! dropped; [`SharedCfg`] and [`Cfg`] handles keep it alive.
+//!
 //! # Example
 //!
 //! ```
@@ -58,22 +63,32 @@
 //! See [Service State](https://docs.ntex.rs/3-state.html) for passing shared
 //! data to services.
 
+#![forbid(unsafe_code)]
 #![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
 use std::any::{Any, TypeId};
-use std::cell::{RefCell, UnsafeCell};
-use std::sync::{Arc, LazyLock, atomic::AtomicUsize, atomic::Ordering};
-use std::{fmt, hash::Hash, hash::Hasher, marker::PhantomData, mem, ops, ptr, rc};
+use std::cell::RefCell;
+use std::collections::hash_map::Entry;
+use std::sync::{Arc, LazyLock, OnceLock, Weak, atomic::AtomicUsize, atomic::Ordering};
+use std::{fmt, hash::Hash, hash::Hasher, marker::PhantomData, ops, rc};
 
 type Key = (usize, TypeId);
 type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
+type ConfigMap = HashMap<TypeId, Arc<dyn Any + Send + Sync>>;
 
-// Process-wide and never dropped: a default `CfgContext` holds a raw pointer to
+const DEFAULT_ID: usize = 0;
+const DEFAULT_TAG: &str = "--";
+const DEFAULT_SERVICE: &str = "";
+
+// Process-wide and never dropped, so a default `CfgContext` needs no handle to
 // it and can be sent to, and outlive, any thread.
 static DEFAULT_CFG: LazyLock<Arc<Storage>> = LazyLock::new(|| {
-    let mut st = Arc::new(Storage::new("--", "", false, CfgContext(ptr::null())));
-    let p = Arc::as_ptr(&st);
-    Arc::get_mut(&mut st).unwrap().ctx.update(p);
-    st
+    Arc::new(Storage {
+        id: DEFAULT_ID,
+        tag: DEFAULT_TAG,
+        service: DEFAULT_SERVICE,
+        ctx: CfgContext(None),
+        data: ConfigMap::default(),
+    })
 });
 
 thread_local! {
@@ -81,7 +96,8 @@ thread_local! {
         RefCell::new(HashMap::default())
     };
 }
-static IDX: AtomicUsize = AtomicUsize::new(0);
+// `DEFAULT_ID` is reserved for the default configuration.
+static IDX: AtomicUsize = AtomicUsize::new(DEFAULT_ID + 1);
 
 /// A value that can be stored in [`SharedCfg`].
 ///
@@ -97,6 +113,10 @@ pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
     fn ctx(&self) -> &CfgContext;
 
     /// Associates this value with a shared configuration context.
+    ///
+    /// [`SharedCfgBuilder::add`] calls this before the configuration is
+    /// built, so [`CfgContext::get`] and [`CfgContext::shared`] panic here;
+    /// store the context and use it later.
     fn set_ctx(&mut self, ctx: CfgContext);
 }
 
@@ -106,132 +126,150 @@ struct Storage {
     tag: &'static str,
     service: &'static str,
     ctx: CfgContext,
-    building: bool,
-    data: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    data: ConfigMap,
 }
 
-impl Storage {
-    fn new(tag: &'static str, service: &'static str, building: bool, ctx: CfgContext) -> Self {
-        let id = IDX.fetch_add(1, Ordering::SeqCst);
-        Storage {
-            id,
-            ctx,
-            tag,
-            service,
-            building,
-            data: HashMap::default(),
+/// The identity of a built or building configuration, shared by its builder,
+/// its storage, and every context handed to its values.
+#[derive(Debug)]
+struct ContextInner {
+    id: usize,
+    tag: &'static str,
+    published: OnceLock<Published>,
+}
+
+/// Set once, when the builder finishes.
+#[derive(Debug)]
+struct Published {
+    storage: Weak<Storage>,
+    service: &'static str,
+}
+
+impl ContextInner {
+    fn storage(&self) -> Arc<Storage> {
+        let Some(published) = self.published.get() else {
+            building(self.tag)
+        };
+        match published.storage.upgrade() {
+            Some(storage) => storage,
+            None => expired(self.tag),
         }
     }
 }
 
+#[cold]
+#[inline(never)]
+fn building(tag: &str) -> ! {
+    panic!("{tag}: Cannot access shared config while building")
+}
+
+#[cold]
+#[inline(never)]
+fn expired(tag: &str) -> ! {
+    panic!("{tag}: Cannot access shared config after it was dropped")
+}
+
 #[derive(Debug)]
 /// Metadata and lookup access for a shared configuration.
-pub struct CfgContext(*const Storage);
-
-// SAFETY: The pointer targets an `Arc<Storage>`, and `Storage` is `Send + Sync`.
-unsafe impl Send for CfgContext {}
-// SAFETY: Only shared access to `Storage` is exposed, and `Storage` is `Sync`.
-unsafe impl Sync for CfgContext {}
+///
+/// The id, tag, and service name stay readable for as long as the context
+/// exists. Lookups need the configuration itself, see [`CfgContext::get`].
+pub struct CfgContext(Option<Arc<ContextInner>>);
 
 impl CfgContext {
-    fn update(&mut self, new_p: *const Storage) {
-        self.0 = new_p;
-    }
-
     /// Returns the unique identifier of the shared configuration.
     pub fn id(&self) -> usize {
-        self.get_ref().id
+        self.0.as_ref().map_or(DEFAULT_ID, |inner| inner.id)
     }
 
     #[inline]
     /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
-        self.get_ref().tag
+        self.0.as_ref().map_or(DEFAULT_TAG, |inner| inner.tag)
     }
 
     /// Returns the configured service name.
+    ///
+    /// Returns the tag while the configuration is being built.
     pub fn service(&self) -> &'static str {
-        self.get_ref().service
+        match &self.0 {
+            Some(inner) => inner.published.get().map_or(inner.tag, |p| p.service),
+            None => DEFAULT_SERVICE,
+        }
     }
 
     /// Returns a typed configuration value from the same shared configuration.
     ///
     /// A missing value falls back to a per-thread default, as described in
     /// [`SharedCfg::get`].
+    ///
+    /// # Panics
+    ///
+    /// Panics while the shared configuration is being built, for example from
+    /// [`Configuration::set_ctx`] during [`SharedCfgBuilder::add`] or after its
+    /// builder was dropped, and after the shared configuration was dropped.
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
     {
-        // SAFETY: `self.0` comes from `Arc::as_ptr` of a live `Arc<Storage>`;
-        // `mem::forget` below keeps the strong count unchanged.
-        let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
-        let cfg = get(&inner);
-        mem::forget(inner);
-        cfg
+        get(self.storage())
     }
 
     /// Returns a handle to the complete shared configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics in the same cases as [`CfgContext::get`].
     pub fn shared(&self) -> SharedCfg {
-        // SAFETY: `self.0` comes from `Arc::as_ptr` of a live `Arc<Storage>`;
-        // `mem::forget` below keeps the strong count unchanged.
-        let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
-        let shared = SharedCfg(inner.clone());
-        mem::forget(inner);
-        shared
+        SharedCfg(self.storage())
     }
 
-    fn get_ref(&self) -> &Storage {
-        // SAFETY: `self.0` points to the never-dropped default storage, or to a
-        // built storage kept alive by the `Cfg` that exposes this context.
-        unsafe { self.0.as_ref().unwrap() }
+    fn storage(&self) -> Arc<Storage> {
+        match &self.0 {
+            Some(inner) => inner.storage(),
+            None => Arc::clone(&DEFAULT_CFG),
+        }
     }
 }
 
 impl Default for CfgContext {
     #[inline]
     fn default() -> Self {
-        CfgContext(Arc::as_ptr(&DEFAULT_CFG))
+        CfgContext(None)
     }
-}
-
-/// The handles owned by a [`Cfg`].
-///
-/// The storage handle is the one `get` cloned, so releasing it never depends
-/// on the user's [`Configuration::ctx`].
-struct CfgRef<T> {
-    val: Arc<T>,
-    storage: Arc<Storage>,
 }
 
 #[derive(Debug)]
 /// A typed handle to a value in a [`SharedCfg`].
-pub struct Cfg<T: Configuration>(UnsafeCell<CfgRef<T>>, PhantomData<rc::Rc<T>>);
+pub struct Cfg<T: Configuration> {
+    value: Arc<T>,
+    // The owner `get` was given, so releasing it never depends on the
+    // user's `Configuration::ctx`.
+    storage: Arc<Storage>,
+    local: PhantomData<rc::Rc<T>>,
+}
 
 impl<T: Configuration> Cfg<T> {
-    fn new(val: Arc<T>, storage: Arc<Storage>) -> Self {
-        Self(UnsafeCell::new(CfgRef { val, storage }), PhantomData)
-    }
-
     #[inline]
     /// Returns the unique identifier of the shared configuration.
     pub fn id(&self) -> usize {
-        self.inner().storage.id
+        self.storage.id
     }
 
     #[inline]
     /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
-        self.inner().storage.tag
+        self.storage.tag
     }
 
     /// Returns the configured service name.
     pub fn service(&self) -> &'static str {
-        self.inner().storage.service
+        self.storage.service
     }
 
     /// Returns a handle to the complete shared configuration.
     pub fn shared(&self) -> SharedCfg {
-        SharedCfg(self.inner().storage.clone())
+        SharedCfg(self.storage.clone())
     }
 
     /// Returns another typed value from the same shared configuration.
@@ -242,35 +280,18 @@ impl<T: Configuration> Cfg<T> {
     where
         U: Configuration,
     {
-        get(&self.inner().storage)
-    }
-
-    fn inner(&self) -> &CfgRef<T> {
-        // SAFETY: Only `replace` writes the cell, and its caller guarantees that
-        // no references into it exist.
-        unsafe { &*self.0.get() }
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
-    /// Replaces the inner value.
-    ///
-    /// # Safety
-    ///
-    /// The caller must guarantee that no references to the inner `T` value
-    /// exist at the time this function is called.
-    pub unsafe fn replace(&self, cfg: Cfg<T>) {
-        // SAFETY: The caller guarantees no references to the inner value exist.
-        unsafe {
-            ptr::swap(self.0.get(), cfg.0.get());
-        }
+        get(self.storage.clone())
     }
 }
 
 impl<T: Configuration> Clone for Cfg<T> {
     #[inline]
     fn clone(&self) -> Self {
-        let inner = self.inner();
-        Self::new(inner.val.clone(), inner.storage.clone())
+        Self {
+            value: self.value.clone(),
+            storage: self.storage.clone(),
+            local: PhantomData,
+        }
     }
 }
 
@@ -291,7 +312,7 @@ impl<T: Configuration> ops::Deref for Cfg<T> {
 
     #[inline]
     fn deref(&self) -> &T {
-        &self.inner().val
+        &self.value
     }
 }
 
@@ -309,15 +330,16 @@ pub struct SharedCfg(Arc<Storage>);
 #[derive(Debug)]
 /// Builder for [`SharedCfg`].
 pub struct SharedCfgBuilder {
-    ctx: CfgContext,
-    storage: Arc<Storage>,
+    ctx: Arc<ContextInner>,
+    service: &'static str,
+    data: ConfigMap,
 }
 
 impl Eq for SharedCfg {}
 
 impl PartialEq for SharedCfg {
     fn eq(&self, other: &Self) -> bool {
-        ptr::from_ref(self.0.as_ref()) == ptr::from_ref(other.0.as_ref())
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -367,12 +389,13 @@ impl SharedCfg {
     ///
     /// # Panics
     ///
-    /// Panics if the shared configuration is still being built.
+    /// A panic in `T::default()` or [`Configuration::set_ctx`] while creating
+    /// the default propagates to the caller, and nothing is cached.
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
     {
-        get(&self.0)
+        get(self.0.clone())
     }
 }
 
@@ -426,17 +449,22 @@ impl<T: Configuration> From<Cfg<T>> for SharedCfg {
 
 impl SharedCfgBuilder {
     fn new(tag: &'static str) -> SharedCfgBuilder {
-        let mut storage = Arc::new(Storage::new(tag, tag, true, CfgContext::default()));
-        let ctx = CfgContext(Arc::as_ptr(&storage));
-        Arc::get_mut(&mut storage).unwrap().ctx.update(ctx.0);
-
-        SharedCfgBuilder { ctx, storage }
+        let ctx = ContextInner {
+            id: IDX.fetch_add(1, Ordering::SeqCst),
+            tag,
+            published: OnceLock::new(),
+        };
+        SharedCfgBuilder {
+            ctx: Arc::new(ctx),
+            service: tag,
+            data: ConfigMap::default(),
+        }
     }
 
     #[must_use]
     /// Sets the service name.
     pub fn service(mut self, name: &'static str) -> Self {
-        Arc::get_mut(&mut self.storage).unwrap().service = name;
+        self.service = name;
         self
     }
 
@@ -445,11 +473,8 @@ impl SharedCfgBuilder {
     ///
     /// Replaces the existing value when the same type was already inserted.
     pub fn add<T: Configuration>(mut self, mut val: T) -> Self {
-        val.set_ctx(CfgContext(self.ctx.0));
-        Arc::get_mut(&mut self.storage)
-            .unwrap()
-            .data
-            .insert(TypeId::of::<T>(), Arc::new(val));
+        val.set_ctx(CfgContext(Some(self.ctx.clone())));
+        self.data.insert(TypeId::of::<T>(), Arc::new(val));
         self
     }
 
@@ -461,47 +486,70 @@ impl SharedCfgBuilder {
 }
 
 impl From<SharedCfgBuilder> for SharedCfg {
-    fn from(mut cfg: SharedCfgBuilder) -> SharedCfg {
-        let st = Arc::get_mut(&mut cfg.storage).unwrap();
-        st.building = false;
-        SharedCfg(cfg.storage)
+    fn from(cfg: SharedCfgBuilder) -> SharedCfg {
+        let SharedCfgBuilder { ctx, service, data } = cfg;
+        let storage = Arc::new(Storage {
+            id: ctx.id,
+            tag: ctx.tag,
+            service,
+            ctx: CfgContext(Some(ctx.clone())),
+            data,
+        });
+        let published = ctx.published.set(Published {
+            storage: Arc::downgrade(&storage),
+            service,
+        });
+        debug_assert!(published.is_ok(), "a builder is built only once");
+        SharedCfg(storage)
     }
 }
 
-fn get<T>(st: &Arc<Storage>) -> Cfg<T>
+/// Looks up `T` and moves `st` into the returned handle as its owner.
+fn get<T>(st: Arc<Storage>) -> Cfg<T>
 where
     T: Configuration,
 {
-    assert!(
-        !st.building,
-        "{}: Cannot access shared config while building",
-        st.tag
-    );
-
-    let tp = TypeId::of::<T>();
-    let val = if let Some(val) = st.data.get(&tp) {
-        val.clone()
-    } else {
-        MAPPING.with(|store| {
-            let key = (st.id, tp);
-            if let Some(val) = store.borrow().get(&key) {
-                val.clone()
-            } else {
-                log::info!(
-                    "{}: Configuration {:?} does not exist, using default",
-                    st.tag,
-                    T::NAME
-                );
-                let mut val = T::default();
-                val.set_ctx(CfgContext(st.ctx.0));
-                let val: Arc<dyn Any + Send + Sync> = Arc::new(val);
-                store.borrow_mut().insert(key, val.clone());
-                val
-            }
-        })
+    let val = match st.data.get(&TypeId::of::<T>()) {
+        Some(val) => val.clone(),
+        None => get_default::<T>(&st),
     };
-    // values are keyed by their `TypeId`
-    Cfg::new(val.downcast::<T>().unwrap(), st.clone())
+    Cfg {
+        // values are keyed by their `TypeId`
+        value: val.downcast::<T>().unwrap(),
+        storage: st,
+        local: PhantomData,
+    }
+}
+
+/// Returns the default `T` cached for `st` on this thread, creating it first.
+///
+/// No cache borrow is held while user code runs or a value is dropped.
+fn get_default<T>(st: &Storage) -> Arc<dyn Any + Send + Sync>
+where
+    T: Configuration,
+{
+    let key = (st.id, TypeId::of::<T>());
+    if let Some(val) = MAPPING.with(|store| store.borrow().get(&key).cloned()) {
+        return val;
+    }
+
+    log::info!(
+        "{}: Configuration {:?} does not exist, using default",
+        st.tag,
+        T::NAME
+    );
+    let mut val = T::default();
+    val.set_ctx(CfgContext(st.ctx.0.clone()));
+    let val: Arc<dyn Any + Send + Sync> = Arc::new(val);
+
+    // `Default` or `set_ctx` may have cached this key already; keep that value
+    // and drop ours after the borrow ends.
+    let (cached, unused) = MAPPING.with(|store| match store.borrow_mut().entry(key) {
+        Entry::Occupied(entry) => (entry.get().clone(), Some(val)),
+        Entry::Vacant(entry) => (entry.insert(val).clone(), None),
+    });
+    drop(unused);
+    cached
 }
 
 #[cfg(test)]

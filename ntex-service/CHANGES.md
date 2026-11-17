@@ -1,5 +1,28 @@
 # Changes
 
+## [5.8.0] - 2026-11-17
+
+* Remove `Cfg::replace()`, assign an owned `Cfg<T>` instead
+
+* `CfgContext::shared()` panics while the shared configuration is being
+  built, as `CfgContext::get()` already did
+
+* Fix use-after-free when a default value created by `CfgContext::get()` panics in
+  `Default` or `Configuration::set_ctx()`: the panic released a reference owned by
+  another handle
+
+* Fix use-after-free when a context outlives its shared configuration, for example
+  in a cached default value: `CfgContext::get()` and `CfgContext::shared()` panic
+  after the shared configuration or an unfinished builder is dropped, while `id()`,
+  `tag()` and `service()` keep working
+
+* `CfgContext::service()` returns the tag while the shared configuration is being
+  built, the service name is published by `SharedCfgBuilder::build()`
+
+* The `cfg` module no longer uses unsafe code
+
+* The default shared configuration always has id 0
+
 ## [5.7.5] - 2026-11-17
 
 * Fix use-after-free when a configuration value created by `Default` on a
