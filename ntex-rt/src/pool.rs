@@ -9,7 +9,8 @@ use crossbeam_channel::{Receiver, Select, Sender, TrySendError, bounded, unbound
 
 /// Submits blocking work and returns a future for its result.
 ///
-/// If a system is running, work is submitted to its blocking thread pool.
+/// If a system is running, work is submitted to the blocking thread pool of
+/// the current arbiter, see [`System::spawn_blocking`](crate::System::spawn_blocking).
 /// Otherwise, the closure runs immediately on the current thread.
 /// Panics from the closure are captured and reported as [`BlockingError`]
 /// through the returned future in either case.
@@ -22,11 +23,10 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    if let Some(sys) = crate::System::try_current() {
-        sys.spawn_blocking(f)
-    } else {
-        ThreadPool::execute_inplace(f)
-    }
+    crate::System::with_current(|sys| match sys {
+        Some(sys) => sys.spawn_blocking(f),
+        None => ThreadPool::execute_inplace(f),
+    })
 }
 
 /// Error returned when blocking work cannot produce a result.
@@ -74,6 +74,10 @@ impl<T> BlockingResult<T> {
 /// and averages over an interval are computed from the deltas of two
 /// snapshots, e.g. the average queue wait is the `wait_duration` delta
 /// divided by the `tasks` delta.
+///
+/// [`System::pool_metrics`](crate::System::pool_metrics) combines the pools
+/// of all arbiters: gauges, limits, and totals are summed and
+/// `max_queue_depth` is the highest of any single pool.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PoolMetrics {
@@ -97,6 +101,26 @@ pub struct PoolMetrics {
     pub wait_duration: Duration,
     /// Total time worker threads spent executing tasks.
     pub busy_duration: Duration,
+}
+
+impl PoolMetrics {
+    /// Adds the totals of another pool, keeping the highest queue depth.
+    pub(crate) fn add_totals(&mut self, other: &PoolMetrics) {
+        self.max_queue_depth = self.max_queue_depth.max(other.max_queue_depth);
+        self.saturated_tasks = self.saturated_tasks.saturating_add(other.saturated_tasks);
+        self.tasks = self.tasks.saturating_add(other.tasks);
+        self.wait_duration = self.wait_duration.saturating_add(other.wait_duration);
+        self.busy_duration = self.busy_duration.saturating_add(other.busy_duration);
+    }
+
+    /// Adds the limits, gauges, and totals of another pool.
+    pub(crate) fn add(&mut self, other: &PoolMetrics) {
+        self.thread_limit = self.thread_limit.saturating_add(other.thread_limit);
+        self.threads += other.threads;
+        self.active_tasks += other.active_tasks;
+        self.queue_depth += other.queue_depth;
+        self.add_totals(other);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -158,14 +182,79 @@ fn run_task(f: BoxedDispatchable) {
     }
 }
 
+/// CPU affinity of the thread that created a pool.
+///
+/// A new thread inherits the affinity of the thread that starts it, usually a
+/// pinned arbiter submitting work. Workers restore the creator's affinity.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Debug, Clone)]
+struct CpuMask(Option<Arc<[libc::c_ulong]>>);
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl CpuMask {
+    /// Words of a `cpu_set_t`.
+    const SET_WORDS: usize = size_of::<libc::cpu_set_t>() / size_of::<libc::c_ulong>();
+
+    /// Returns the CPU mask of the current thread.
+    fn current() -> Self {
+        let mut words = Self::SET_WORDS;
+        loop {
+            let mut mask = vec![0; words];
+            // SAFETY: the kernel writes at most `size_of_val(mask)` bytes,
+            // the mask has the layout of a larger `cpu_set_t`
+            let res = unsafe {
+                libc::sched_getaffinity(0, size_of_val(&mask[..]), mask.as_mut_ptr().cast())
+            };
+            if res == 0 {
+                return Self(Some(mask.into()));
+            }
+            // the kernel mask is larger than `cpu_set_t`
+            let einval = std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL);
+            if !einval || words >= Self::SET_WORDS << 10 {
+                return Self(None);
+            }
+            words *= 2;
+        }
+    }
+
+    /// Sets the CPU mask of the current thread.
+    fn apply(&self) {
+        if let Some(ref mask) = self.0 {
+            // on failure, for example after a cpuset change, the thread keeps
+            // the inherited mask
+            // SAFETY: the kernel reads `size_of_val(mask)` bytes, the mask has
+            // the layout of a larger `cpu_set_t`
+            let _ =
+                unsafe { libc::sched_setaffinity(0, size_of_val(&mask[..]), mask.as_ptr().cast()) };
+        }
+    }
+}
+
+/// Other platforms do not restore the creator's affinity.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[derive(Debug, Clone)]
+struct CpuMask;
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+impl CpuMask {
+    fn current() -> Self {
+        CpuMask
+    }
+
+    #[allow(clippy::unused_self)]
+    fn apply(&self) {}
+}
+
 fn worker(
     receiver_high_prio: Receiver<BoxedDispatchable>,
     receiver_low_prio: Receiver<BoxedDispatchable>,
     guard: CounterGuard,
     thread_limit: usize,
     timeout: Duration,
+    affinity: CpuMask,
 ) -> impl FnOnce() {
     move || {
+        affinity.apply();
         let mut guard = guard;
         let mut sel = Select::new_biased();
         sel.recv(&receiver_high_prio);
@@ -210,9 +299,13 @@ fn worker(
 /// never exceed the `thread_limit` parameter. When all worker threads are
 /// busy, tasks enter an unbounded queue until a worker becomes available.
 /// Clones share the workers, queue, and metrics.
+///
+/// On Linux and Android, workers run with the CPU affinity of the thread that
+/// created the pool, not of the thread whose submission started them.
 #[derive(Debug, Clone)]
 pub struct ThreadPool {
     name: String,
+    affinity: CpuMask,
     sender_low_prio: Sender<BoxedDispatchable>,
     receiver_low_prio: Receiver<BoxedDispatchable>,
     sender_high_prio: Sender<BoxedDispatchable>,
@@ -240,6 +333,7 @@ impl ThreadPool {
             thread_limit: thread_limit.max(1),
             recv_timeout,
             name: format!("{name}:pool-wrk"),
+            affinity: CpuMask::current(),
             counter: Arc::new(AtomicUsize::new(0)),
             stats: Arc::default(),
         }
@@ -351,6 +445,7 @@ impl ThreadPool {
                     guard,
                     self.thread_limit,
                     self.recv_timeout,
+                    self.affinity.clone(),
                 ));
             if let Err(e) = result {
                 log::error!("Cannot start blocking pool thread: {e}");

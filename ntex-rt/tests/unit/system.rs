@@ -212,3 +212,145 @@ fn list_arbiters_callback_joins_worker() {
         });
     });
 }
+
+/// STATEMENT: Blocking work runs on the pool of the submitting arbiter, and
+/// `System::pool_metrics` sums the arbiter pools, keeping totals of stopped ones.
+///
+/// HOW:
+/// - Submit work from the primary arbiter, a spawned arbiter, a plain thread,
+///   and for another system, and check the name prefix of the pool thread
+///   that ran it.
+/// - Compare per-arbiter and system task counts and thread limits, then stop
+///   the spawned arbiter and check its tasks remain in the system totals.
+#[test]
+fn spawn_blocking_uses_arbiter_pool() {
+    fn pool_thread() -> String {
+        std::thread::current().name().unwrap().to_string()
+    }
+
+    let (other_tx, other_rx) = std::sync::mpsc::channel();
+    let other_thread = std::thread::spawn(move || {
+        System::new("other", TestRunner).block_on(async move {
+            let (stop_tx, stop_rx) = oneshot::async_channel::<()>();
+            other_tx.send((System::current(), stop_tx)).unwrap();
+            let _ = stop_rx.await;
+        });
+    });
+    let (other, other_stop) = other_rx.recv().unwrap();
+
+    System::build()
+        .name("pools")
+        .thread_pool_limit(3)
+        .build(TestRunner)
+        .block_on(async move {
+            let sys = System::current();
+            assert!(
+                crate::spawn_blocking(pool_thread)
+                    .await
+                    .unwrap()
+                    .starts_with("pools:pool-wrk:")
+            );
+            // another system's work runs on that system's pool
+            assert!(
+                other
+                    .spawn_blocking(pool_thread)
+                    .await
+                    .unwrap()
+                    .starts_with("other:pool-wrk:")
+            );
+            drop(other_stop);
+
+            let mut arb = Arbiter::with_name("pools-arb".to_string());
+            let names = arb
+                .handle()
+                .spawn(async {
+                    let local = crate::spawn_blocking(pool_thread).await.unwrap();
+                    let sys = System::current().spawn_blocking(pool_thread).await.unwrap();
+                    (local, sys)
+                })
+                .await
+                .unwrap();
+            assert!(names.0.starts_with("pools-arb:pool-wrk:"), "{names:?}");
+            assert!(names.1.starts_with("pools-arb:pool-wrk:"), "{names:?}");
+
+            // a thread without an arbiter uses the primary arbiter's pool
+            let sys2 = sys.clone();
+            let name = std::thread::spawn(move || sys2.spawn_blocking(pool_thread))
+                .join()
+                .unwrap()
+                .await
+                .unwrap();
+            assert!(name.starts_with("pools:pool-wrk:"), "{name}");
+
+            assert_eq!(arb.pool_metrics().tasks, 2);
+            assert_eq!(sys.arbiter().pool_metrics().tasks, 2);
+            let m = sys.pool_metrics();
+            assert_eq!((m.thread_limit, m.tasks), (6, 4));
+
+            arb.stop();
+            arb.join().unwrap();
+            let m = sys.pool_metrics();
+            assert_eq!((m.thread_limit, m.tasks), (3, 4));
+        });
+    other_thread.join().unwrap();
+}
+
+/// STATEMENT: Blocking pool threads do not inherit CPU affinity set by an
+/// arbiter's `init`.
+///
+/// HOW:
+/// - Skip unless the test thread may run on at least two CPUs.
+/// - Start an arbiter whose `init` pins its thread to one CPU, then submit
+///   blocking work from it, so the pinned thread starts the pool thread.
+/// - Confirm the arbiter thread runs on that CPU only and the pool thread on
+///   all CPUs of the test thread.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn blocking_pool_ignores_arbiter_affinity() {
+    fn cpus() -> Vec<usize> {
+        // SAFETY: cpu_set_t is plain data, the size matches the set
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            assert_eq!(
+                libc::sched_getaffinity(0, size_of::<libc::cpu_set_t>(), &raw mut set),
+                0
+            );
+            // `CPU_SETSIZE` is a `c_int` on Linux and a `usize` on Android
+            let size = u32::try_from(libc::CPU_SETSIZE).unwrap() as usize;
+            (0..size).filter(|&n| libc::CPU_ISSET(n, &set)).collect()
+        }
+    }
+
+    let all = cpus();
+    if all.len() < 2 {
+        return;
+    }
+    let pinned = all[0];
+
+    System::build()
+        .name("affinity")
+        .build(TestRunner)
+        .block_on(async move {
+            let mut arb = Arbiter::with_init("affinity-arb".to_string(), move || {
+                // SAFETY: cpu_set_t is plain data, the size matches the set
+                unsafe {
+                    let mut set: libc::cpu_set_t = std::mem::zeroed();
+                    libc::CPU_SET(pinned, &mut set);
+                    assert_eq!(
+                        libc::sched_setaffinity(0, size_of::<libc::cpu_set_t>(), &raw const set),
+                        0
+                    );
+                }
+            });
+            let (arb_cpus, pool_cpus) = arb
+                .handle()
+                .spawn(async { (cpus(), crate::spawn_blocking(cpus).await.unwrap()) })
+                .await
+                .unwrap();
+            assert_eq!(arb_cpus, [pinned]);
+            assert_eq!(pool_cpus, all);
+
+            arb.stop();
+            arb.join().unwrap();
+        });
+}

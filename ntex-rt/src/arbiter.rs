@@ -6,6 +6,8 @@ use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
 
 use crate::metrics::{LatencyMetrics, LatencyStats, start_latency_sampler};
+use crate::pool::{PoolMetrics, ThreadPool};
+use crate::system::SystemConfig;
 use crate::{Handle, HashMap, Id, System};
 
 thread_local!(
@@ -43,6 +45,7 @@ pub(crate) struct ArbiterInner {
     on_stop: OnCloseStorage,
     running: AtomicBool,
     pub(crate) latency: Arc<LatencyStats>,
+    pub(crate) pool: ThreadPool,
     #[cfg(target_os = "linux")]
     tid: i32,
     #[cfg(windows)]
@@ -69,11 +72,12 @@ impl Default for Arbiter {
 
 impl Arbiter {
     #[allow(clippy::borrowed_box)]
-    pub(super) fn new_system(id: usize, name: String) -> (Self, ArbiterController) {
+    pub(super) fn new_system(id: usize, config: &SystemConfig) -> (Self, ArbiterController) {
         let (tx, rx) = unbounded();
 
         let aid = COUNT.fetch_add(1, Ordering::Relaxed);
-        let arb = Arbiter::with_sender(id, aid, Arc::new(name), tx, Arc::default());
+        let pool = ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
+        let arb = Arbiter::with_sender(id, aid, Arc::new(config.name.clone()), tx, pool);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         clear_storage();
 
@@ -139,7 +143,9 @@ impl Arbiter {
     /// for example to set the thread's CPU affinity, so that the runtime's
     /// memory is allocated on the NUMA node of that CPU.
     /// The new thread has no current system or arbiter during `init`, and its
-    /// arbiter storage is cleared after `init` returns.
+    /// arbiter storage is cleared after `init` returns. Affinity set by `init`
+    /// does not apply to the arbiter's blocking pool threads, see
+    /// [`ThreadPool`](crate::ThreadPool).
     ///
     /// # Panics
     ///
@@ -173,6 +179,9 @@ impl Arbiter {
         let name = name2.clone();
         let sys_id = sys.id();
         let (arb_hnd_tx, arb_hnd_rx) = oneshot::channel();
+        // created before `init`, pool threads do not inherit the affinity
+        // that `init` sets for the arbiter thread
+        let pool = ThreadPool::new(&name2, config.pool_limit, config.pool_recv_timeout);
 
         let handle = builder
             .spawn(move || {
@@ -188,7 +197,7 @@ impl Arbiter {
 
                 // `block_on` finalizes the arbiter once its event loop exits
                 let result = crate::driver::block_on(config.runner.as_ref(), async move {
-                    let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx, Arc::default());
+                    let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx, pool);
                     sys.register_arbiter(arb.clone());
                     // `Arbiter::latency()` is available once the arbiter is returned
                     start_latency_sampler(&arb.0.latency, config.latency_interval);
@@ -245,7 +254,7 @@ impl Arbiter {
         id: usize,
         name: Arc<String>,
         sender: Sender<ArbiterCommand>,
-        on_stop: OnCloseStorage,
+        pool: ThreadPool,
     ) -> Self {
         #[cfg(feature = "tokio")]
         let hnd = { Handle::new() };
@@ -261,7 +270,8 @@ impl Arbiter {
             sys_id,
             name,
             sender,
-            on_stop,
+            pool,
+            on_stop: Arc::default(),
             hnd: Some(hnd),
             thread_handle: Mutex::new(None),
             running: AtomicBool::new(true),
@@ -309,6 +319,14 @@ impl Arbiter {
     /// [`Builder::latency_interval`](crate::Builder::latency_interval).
     pub fn latency(&self) -> Option<LatencyMetrics> {
         self.0.latency.metrics()
+    }
+
+    /// Returns a snapshot of the arbiter's blocking thread pool metrics.
+    ///
+    /// Each arbiter has its own pool, used by [`spawn_blocking`](crate::spawn_blocking)
+    /// on the arbiter's thread, see [`System::spawn_blocking`].
+    pub fn pool_metrics(&self) -> PoolMetrics {
+        self.0.pool.metrics()
     }
 
     #[inline]
@@ -390,6 +408,24 @@ impl Arbiter {
     /// Returns the arbiter of the current thread, if any.
     pub(crate) fn try_current() -> Option<Arbiter> {
         ADDR.try_with(|cell| cell.borrow().clone()).ok().flatten()
+    }
+
+    /// Runs `f` with the blocking pool of the current thread's arbiter, if
+    /// that arbiter belongs to the system `sys_id`.
+    pub(crate) fn with_current_pool<F, R>(sys_id: usize, f: F) -> R
+    where
+        F: FnOnce(Option<&ThreadPool>) -> R,
+    {
+        let mut f = Some(f);
+        ADDR.try_with(|cell| {
+            let arb = cell.borrow();
+            let pool = arb
+                .as_ref()
+                .filter(|arb| arb.0.sys_id == sys_id)
+                .map(|arb| &arb.0.pool);
+            (f.take().unwrap())(pool)
+        })
+        .unwrap_or_else(|_| (f.take().unwrap())(None))
     }
 
     /// Marks the arbiter as stopped and runs its `on_stop` callbacks,
