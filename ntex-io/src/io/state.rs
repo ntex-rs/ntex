@@ -4,9 +4,11 @@ use std::{fmt, future::poll_fn, hash, io, ptr};
 #[cfg(feature = "tracker")]
 use ntex_bytes::BytesTracker;
 use ntex_bytes::{BytePageSize, BytesMut};
+use ntex_service::cfg::Cfg;
 
 #[cfg(feature = "tracker")]
-use crate::cfg::{BufTracker, IoConfig};
+use crate::cfg::BufTracker;
+use crate::cfg::IoConfig;
 use crate::filter::Filter;
 use crate::metrics::IoMetrics;
 use crate::ops::Id;
@@ -20,8 +22,18 @@ impl IoState {
         self.id.get()
     }
 
+    /// Returns the connection's I/O configuration.
+    ///
+    /// The reference must not be used after [`Io::set_config`](crate::Io::set_config).
+    #[inline]
+    pub(crate) fn cfg(&self) -> &Cfg<IoConfig> {
+        // SAFETY: replaced only by `Io::set_config()`, which requires that no
+        // reference into the previous configuration is live
+        unsafe { &*self.cfg.get() }
+    }
+
     pub(crate) fn tag(&self) -> &'static str {
-        self.cfg.tag()
+        self.cfg().tag()
     }
 
     /// Checks whether the `Io` that owned the filter chain has been dropped.
@@ -36,7 +48,7 @@ impl IoState {
     pub(crate) fn notify_timeout(&self) {
         if self.flags.check_dispatcher_timeout_unset() {
             self.wake_dispatch_task();
-            log::trace!("{}: Timer, notify dispatcher", self.cfg.tag());
+            log::trace!("{}: Timer, notify dispatcher", self.cfg().tag());
         }
     }
 
@@ -110,7 +122,7 @@ impl IoState {
     fn begin_terminate(&self, err: Option<io::Error>, force: bool) {
         self.set_error(err);
         if self.flags.begin_terminate(force) {
-            log::trace!("{}: Terminate io", self.cfg.tag());
+            log::trace!("{}: Terminate io", self.cfg().tag());
             // buffers held by the transport are gone with it
             self.wr_inflight.set(0);
             self.wake_read_task();
@@ -127,7 +139,7 @@ impl IoState {
 
     pub(crate) fn stop_connection(&self, err: Option<io::Error>) {
         if !self.flags.is_closed() {
-            log::trace!("{}: Stop io with error {:?}", self.cfg.tag(), err);
+            log::trace!("{}: Stop io with error {:?}", self.cfg().tag(), err);
             self.set_error(err);
             self.flags.set_stopped();
             // nothing can deliver buffered output anymore, buffers held by
@@ -161,7 +173,11 @@ impl IoState {
     /// Gracefully shuts down the read and write I/O tasks.
     pub(crate) fn start_shutdown(&self) {
         if self.flags.is_active() {
-            log::trace!("{}: Initiate io shutdown {:?}", self.cfg.tag(), self.flags);
+            log::trace!(
+                "{}: Initiate io shutdown {:?}",
+                self.cfg().tag(),
+                self.flags
+            );
             self.flags.enter_filters_stopping();
             self.wake_read_task();
             self.wake_write_task();
@@ -185,7 +201,7 @@ impl IoState {
     /// [`Io::set_config`](crate::Io::set_config).
     #[cfg(feature = "tracker")]
     pub(crate) fn buf_tracker(&self) -> Option<&BytesTracker> {
-        match self.cfg.buf_tracker() {
+        match self.cfg().buf_tracker() {
             BufTracker::Disabled => None,
             BufTracker::Shared(t) => Some(t),
             BufTracker::PerConnection => {
@@ -218,7 +234,7 @@ impl IoState {
                 self.buffer.set_buf_tracker(t);
             }
             BufTracker::PerConnection => {
-                if !matches!(self.cfg.buf_tracker(), BufTracker::PerConnection) {
+                if !matches!(self.cfg().buf_tracker(), BufTracker::PerConnection) {
                     let t = slot.insert(BytesTracker::new());
                     self.buffer.set_buf_tracker(t);
                 }
@@ -234,7 +250,7 @@ impl IoState {
 
     /// Resets the read page size to the configured min.
     pub(super) fn reset_read_size(&self) {
-        self.rd_size.set(self.cfg.read_size_min());
+        self.rd_size.set(self.cfg().read_size_min());
         self.rd_batch.set(0);
         self.rd_small.set(0);
     }
@@ -264,12 +280,12 @@ impl IoState {
             // nothing was read since the previous batch ended
         } else if batch > size.capacity() {
             self.grow_read_size(batch);
-        } else if size != self.cfg.read_size_min() && batch < size.prev().capacity() / 2 {
+        } else if size != self.cfg().read_size_min() && batch < size.prev().capacity() / 2 {
             let small = self.rd_small.get() + 1;
             if small < RD_SHRINK_BATCHES {
                 self.rd_small.set(small);
             } else {
-                let min = self.cfg.read_size_min();
+                let min = self.cfg().read_size_min();
                 let prev = size.prev();
                 self.rd_size.set(if prev.capacity() < min.capacity() {
                     min
@@ -284,7 +300,7 @@ impl IoState {
     }
 
     fn grow_read_size(&self, batch: usize) {
-        let max = self.cfg.read_size_max();
+        let max = self.cfg().read_size_max();
         let size = BytePageSize::for_capacity(batch);
         let size = if size == BytePageSize::Unset || size.capacity() > max.capacity() {
             max
@@ -298,19 +314,19 @@ impl IoState {
     }
 
     pub(crate) fn is_rd_backpressure_needed(&self, size: usize) -> bool {
-        size >= self.cfg.read_backpressure()
+        size >= self.cfg().read_backpressure()
     }
 
     pub(crate) fn is_wr_backpressure_needed(&self, size: usize) -> bool {
-        size >= self.cfg.write_backpressure()
+        size >= self.cfg().write_backpressure()
     }
 
     pub(crate) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
-        size <= self.cfg.read_half()
+        size <= self.cfg().read_half()
     }
 
     pub(crate) fn should_disable_wr_backpressure(&self, size: usize) -> bool {
-        size <= self.cfg.write_half()
+        size <= self.cfg().write_half()
     }
 
     /// Total output that has not reached the peer yet.
@@ -481,7 +497,7 @@ impl IoState {
         }
 
         let waiter = WriteGuard::new(&self.extensions);
-        let mut deadline = WriteDeadline::new(self.cfg.write_timeout());
+        let mut deadline = WriteDeadline::new(self.cfg().write_timeout());
         poll_fn(|cx| {
             if let Some(res) = self.check_write_ready() {
                 Poll::Ready(res)
@@ -501,7 +517,7 @@ impl IoState {
     where
         F: FnMut(&mut Context<'_>) -> Poll<io::Result<T>>,
     {
-        let mut deadline = WriteDeadline::new(self.cfg.write_timeout());
+        let mut deadline = WriteDeadline::new(self.cfg().write_timeout());
         poll_fn(|cx| match f(cx) {
             Poll::Ready(res) => Poll::Ready(res),
             Poll::Pending if deadline.poll_expired(cx) => Poll::Ready(Err(write_timed_out())),
@@ -562,7 +578,7 @@ impl fmt::Debug for IoState {
             .field("timeout", &self.timeout)
             .field("error", &err)
             .field("buffer", &self.buffer)
-            .field("cfg", &self.cfg)
+            .field("cfg", self.cfg())
             .finish();
         self.error.set(err);
         res

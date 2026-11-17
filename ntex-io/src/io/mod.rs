@@ -89,7 +89,8 @@ pub(crate) struct IoState {
     dispatch_task: LocalWaker,
     filter: FilterPtr,
     pub(super) id: Cell<Id>,
-    pub(super) cfg: Cfg<IoConfig>,
+    /// Replaced only by [`Io::set_config`], read through [`IoState::cfg()`].
+    cfg: UnsafeCell<Cfg<IoConfig>>,
     pub(super) error: Cell<Option<io::Error>>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) shutdown_timeout: Cell<Option<Sleep>>,
@@ -137,7 +138,7 @@ impl Io {
         let metrics = cfg.metrics();
 
         let inner = Rc::new(IoState {
-            cfg,
+            cfg: UnsafeCell::new(cfg),
             flags,
             id: Cell::new(Id::default()),
             filter: FilterPtr::null(),
@@ -190,7 +191,7 @@ impl IoRef {
     fn create_empty() -> IoRef {
         IoRef(Rc::new(IoState {
             id: Cell::new(Id::default()),
-            cfg: SharedCfg::default().get::<IoConfig>(),
+            cfg: UnsafeCell::new(SharedCfg::default().get::<IoConfig>()),
             filter: FilterPtr::null(),
             flags: Flags::new_stopped(),
             error: Cell::new(None),
@@ -325,7 +326,7 @@ impl<F> Io<F> {
         st.update_buf_tracker(&cfg);
         // SAFETY: The caller guarantees no references into the previous configuration remain live.
         unsafe {
-            st.cfg.replace(cfg);
+            *st.cfg.get() = cfg;
         }
         st.reset_read_size();
     }
@@ -384,7 +385,7 @@ impl<F: Filter> Io<F> {
         let state = self.into_io_ref();
 
         // Add the buffers layer
-        state.0.buffer.add_layer(state.0.cfg.write_size());
+        state.0.buffer.add_layer(state.0.cfg().write_size());
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);

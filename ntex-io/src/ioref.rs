@@ -39,14 +39,17 @@ impl IoRef {
 
     #[inline]
     /// Gets the configuration.
+    ///
+    /// The reference must not be used after
+    /// [`Io::set_config`](crate::Io::set_config).
     pub fn cfg(&self) -> &IoConfig {
-        &self.0.cfg
+        self.0.cfg()
     }
 
     #[inline]
     /// Gets the shared configuration.
     pub fn shared(&self) -> SharedCfg {
-        self.0.cfg.shared()
+        self.0.cfg().shared()
     }
 
     /// Returns the tracker charged with the read buffers of the connection.
@@ -605,7 +608,8 @@ impl IoRef {
             // which introduces latency. To prevent this behavior and
             // flatten data delivery to the peer, IoRef can initiate
             // out-of-order writes based on a configured threshold.
-            if st.flags.is_direct_wr_enabled() && (force || size >= st.cfg.write_buf_threshold()) {
+            if st.flags.is_direct_wr_enabled() && (force || size >= st.cfg().write_buf_threshold())
+            {
                 // Send data in-place
                 wrote = true;
                 let partial = self.call_write() == WakeWriteTask::Yes;

@@ -759,7 +759,7 @@ impl IoContext {
         let timeout = st
             .shutdown_timeout
             .take()
-            .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
+            .unwrap_or_else(|| sleep(st.cfg().shutdown_timeout()));
         if timeout.poll_elapsed(cx).is_ready() {
             stop_filters(
                 st,
@@ -798,7 +798,7 @@ impl IoContext {
         let timeout = st
             .shutdown_timeout
             .take()
-            .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
+            .unwrap_or_else(|| sleep(st.cfg().shutdown_timeout()));
         if timeout.poll_elapsed(cx).is_ready() {
             let len = st.write_outstanding();
             if len != 0 {
