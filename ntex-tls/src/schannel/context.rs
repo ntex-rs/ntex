@@ -325,7 +325,9 @@ impl Context {
         // the server context is not created until the ClientHello is complete
         self.have_ctxt |= self.ctxt.dwLower != 0 || self.ctxt.dwUpper != 0;
         let has_token = !out_buf.pvBuffer.is_null() && out_buf.cbBuffer != 0;
-        take_token(&out_buf, output);
+        // SAFETY: `ISC_FLAGS` and `ASC_FLAGS` request `*_ALLOCATE_MEMORY`, so a
+        // non-null `out_buf` token is owned by this call and freed only here.
+        unsafe { take_token(&out_buf, output) };
         (status, has_token)
     }
 
@@ -577,7 +579,7 @@ impl Context {
             _ => return Err(sspi_error("DecryptMessage", status)),
         }
 
-        let (data, extra) = decrypted_parts(&bufs);
+        let (data, extra) = decrypted_parts(&src[..record_len], &bufs)?;
         if let Some(data) = data {
             dst.put_slice(data);
         }
@@ -1067,17 +1069,20 @@ fn message_size([_, a, b, c]: [u8; 4]) -> usize {
 
 /// Copies an SSPI-allocated token to `output` and frees its Windows allocation.
 ///
-/// `buf` must own the token; even a non-null zero-length token is released.
-/// Its pointer must not be used or freed again after this call.
-fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
+/// # Safety
+///
+/// `buf.pvBuffer` must be null or an SSPI allocation owned by the caller that
+/// holds at least `cbBuffer` initialized bytes. Even a zero-length token is
+/// released, so the pointer must not be used or freed again after this call.
+unsafe fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
     if !buf.pvBuffer.is_null() {
         if buf.cbBuffer != 0 {
-            // SAFETY: SSPI allocated `cbBuffer` initialized bytes at `pvBuffer`.
+            // SAFETY: the caller guarantees `cbBuffer` initialized bytes at `pvBuffer`.
             let token =
                 unsafe { slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize) };
             output.put_slice(token);
         }
-        // SAFETY: `buf` owns the SSPI allocation, per this function's contract.
+        // SAFETY: the caller transfers ownership of the SSPI allocation.
         unsafe {
             FreeContextBuffer(buf.pvBuffer);
         }
@@ -1087,19 +1092,33 @@ fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
 /// Locate the decrypted payload and the unprocessed input length by buffer type,
 /// `DecryptMessage` does not guarantee the position of output buffers.
 ///
-/// Data pointers must reference the still-live decrypted input allocation.
-/// The returned payload must not outlive that allocation or its current contents.
-fn decrypted_parts(bufs: &[SecBuffer]) -> (Option<&[u8]>, usize) {
+/// Schannel decrypts `record` in place, so the payload is returned as a
+/// sub-slice of `record`. A payload outside `record`, or an unprocessed length
+/// exceeding it, is rejected rather than trusted.
+fn decrypted_parts<'a>(
+    record: &'a [u8],
+    bufs: &[SecBuffer],
+) -> io::Result<(Option<&'a [u8]>, usize)> {
     let data = bufs
         .iter()
         .find(|buf| {
             buf.BufferType == SECBUFFER_DATA && buf.cbBuffer != 0 && !buf.pvBuffer.is_null()
         })
         .map(|buf| {
-            // SAFETY: the caller guarantees data pointers reference the live input allocation.
-            unsafe { slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize) }
-        });
-    (data, extra_len(bufs))
+            buf.pvBuffer
+                .addr()
+                .checked_sub(record.as_ptr().addr())
+                .and_then(|start| record.get(start..start.checked_add(buf.cbBuffer as usize)?))
+                .ok_or_else(|| io::Error::other("DecryptMessage returned data outside the record"))
+        })
+        .transpose()?;
+    let extra = extra_len(bufs);
+    if extra > record.len() {
+        return Err(io::Error::other(
+            "DecryptMessage returned extra input beyond the record",
+        ));
+    }
+    Ok((data, extra))
 }
 
 /// Unprocessed input length reported by a `SECBUFFER_EXTRA` buffer.
@@ -1183,29 +1202,60 @@ mod tests {
     /// STATEMENT: Decrypted payload and extra-byte counts are selected by buffer type, not position.
     ///
     /// HOW:
-    /// - Supply reordered security buffers and check the extracted `hello` payload and extra-byte count.
+    /// - Supply reordered security buffers whose data buffer points into the record and check the extracted `hello` payload and extra-byte count.
     /// - Supply an empty data buffer without extras and check for no payload and zero extra bytes.
     #[test]
     fn test_decrypted_parts_by_type() {
-        let mut payload = *b"hello";
+        let mut record = *b"hdr..hello..trailer";
+        let payload = record[5..].as_mut_ptr();
         let buf = |ty, len, ptr: *mut u8| sec_buffer(ty, len, ptr.cast());
         let bufs = [
             buf(SECBUFFER_STREAM_HEADER, 13, ptr::null_mut()),
             buf(SECBUFFER_EXTRA, 7, ptr::null_mut()),
             buf(SECBUFFER_STREAM_TRAILER, 16, ptr::null_mut()),
-            buf(SECBUFFER_DATA, 5, payload.as_mut_ptr()),
+            buf(SECBUFFER_DATA, 5, payload),
         ];
-        let (data, extra) = decrypted_parts(&bufs);
+        let (data, extra) = decrypted_parts(&record, &bufs).unwrap();
         assert_eq!(data, Some(&b"hello"[..]));
         assert_eq!(extra, 7);
 
         let bufs = [
             buf(SECBUFFER_STREAM_HEADER, 13, ptr::null_mut()),
-            buf(SECBUFFER_DATA, 0, payload.as_mut_ptr()),
+            buf(SECBUFFER_DATA, 0, payload),
             buf(SECBUFFER_STREAM_TRAILER, 16, ptr::null_mut()),
             buf(SECBUFFER_EMPTY, 0, ptr::null_mut()),
         ];
-        assert_eq!(decrypted_parts(&bufs), (None, 0));
+        assert_eq!(decrypted_parts(&record, &bufs).unwrap(), (None, 0));
+    }
+
+    /// STATEMENT: `DecryptMessage` output that does not lie within the input record is rejected.
+    ///
+    /// HOW:
+    /// - Point the data buffer before the record, past its end, and across its end, and check each is an error.
+    /// - Report more extra bytes than the record holds and check it is an error.
+    /// - Check a data buffer ending at the record end, with extra bytes equal to the record length, is accepted.
+    #[test]
+    fn test_decrypted_parts_rejects_out_of_record() {
+        let mut input = [0u8; 16];
+        let base = input.as_mut_ptr();
+        let record = &input[4..12];
+        let parts = |offset: usize, len: u32, extra: u32| {
+            let bufs = [
+                sec_buffer(SECBUFFER_DATA, len, base.wrapping_add(offset).cast()),
+                sec_buffer(SECBUFFER_EXTRA, extra, ptr::null_mut()),
+            ];
+            decrypted_parts(record, &bufs)
+                .map(|(data, extra)| (data.map(|d| (d.as_ptr(), d.len())), extra))
+        };
+
+        assert!(parts(0, 4, 0).is_err(), "data before the record");
+        assert!(parts(12, 1, 0).is_err(), "data after the record");
+        assert!(parts(8, 5, 0).is_err(), "data across the record end");
+        assert!(parts(8, 4, 9).is_err(), "extra beyond the record");
+        assert_eq!(
+            parts(8, 4, 8).unwrap(),
+            (Some((record[4..].as_ptr(), 4)), 8)
+        );
     }
 
     fn record(content_type: u8, payload: &[u8]) -> Vec<u8> {
