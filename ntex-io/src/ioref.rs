@@ -829,6 +829,12 @@ impl IoRef {
         }
     }
 
+    #[doc(hidden)]
+    /// Returns `true` while filter callbacks of this connection run.
+    pub fn is_in_filter_callbacks(&self) -> bool {
+        self.0.flags.is_in_callbacks()
+    }
+
     /// Call handle write method, returns true if `write-paused` is still set
     fn call_write(&self) -> WakeWriteTask {
         if let Some(hnd) = self.0.handle.take() {
@@ -871,7 +877,33 @@ impl IoRef {
     where
         F: FnOnce(&dyn crate::IoCallbacks),
     {
-        self.0.extensions.with_callbacks(f);
+        self.0.extensions.with_callbacks(|cb| {
+            let _guard = CallbacksGuard::enter(&self.0.flags);
+            f(cb);
+        });
+    }
+}
+
+/// Marks filter callbacks as running until dropped, unwinding included.
+struct CallbacksGuard<'a>(Option<&'a Flags>);
+
+impl<'a> CallbacksGuard<'a> {
+    fn enter(flags: &'a Flags) -> Self {
+        // a nested run leaves the flag to the outer run
+        if flags.is_in_callbacks() {
+            Self(None)
+        } else {
+            flags.set_in_callbacks();
+            Self(Some(flags))
+        }
+    }
+}
+
+impl Drop for CallbacksGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(flags) = self.0 {
+            flags.unset_in_callbacks();
+        }
     }
 }
 

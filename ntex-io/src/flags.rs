@@ -69,6 +69,8 @@ pub struct Flags {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct FlagsKind: u16 {
+        /// filter callbacks are running
+        const IN_CALLBACKS        = 1 << 0;
         /// pause io read
         const RD_PAUSED           = 1 << 1;
         /// read backpressure
@@ -326,6 +328,18 @@ impl Flags {
 
     pub(crate) fn set_filter_failed(&self) {
         self.insert(FlagsKind::FILTER_FAILED);
+    }
+
+    pub(crate) fn is_in_callbacks(&self) -> bool {
+        self.contains(FlagsKind::IN_CALLBACKS)
+    }
+
+    pub(crate) fn set_in_callbacks(&self) {
+        self.insert(FlagsKind::IN_CALLBACKS);
+    }
+
+    pub(crate) fn unset_in_callbacks(&self) {
+        self.remove(FlagsKind::IN_CALLBACKS);
     }
 
     pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {

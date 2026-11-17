@@ -335,6 +335,42 @@ async fn callbacks_dropping_io_release_state() {
     assert!(state.upgrade().is_none());
 }
 
+/// STATEMENT: The connection reports running filter callbacks only while they run, including after a callback panics.
+///
+/// HOW:
+/// - Trigger callbacks that record `is_in_filter_callbacks()`, and check it is `true` inside and `false` before and after.
+/// - Make the callback panic, catch the unwind, and check the flag is cleared.
+#[ntex::test]
+async fn callbacks_flag_is_set_while_running() {
+    struct Cb(Rc<Cell<Option<bool>>>, Rc<Cell<bool>>);
+    impl crate::IoCallbacks for Cb {
+        fn before_processing(&self, io: &IoRef) {
+            self.0.set(Some(io.is_in_filter_callbacks()));
+            assert!(!self.1.get(), "callback panic");
+        }
+        fn after_processing(&self, _: &IoRef) {}
+    }
+
+    let (_client, server) = IoTest::create();
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let seen = Rc::new(Cell::new(None));
+    let panic = Rc::new(Cell::new(false));
+    io.register_filter_callbacks(Cb(seen.clone(), panic.clone()));
+    assert!(!io.is_in_filter_callbacks());
+
+    io.with_buf(|_| ()).unwrap();
+    assert_eq!(seen.take(), Some(true));
+    assert!(!io.is_in_filter_callbacks());
+
+    panic.set(true);
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = io.with_buf(|_| ());
+    }));
+    assert!(res.is_err());
+    assert_eq!(seen.take(), Some(true));
+    assert!(!io.is_in_filter_callbacks());
+}
+
 thread_local! {
     static REENTER: RefCell<Option<(IoRef, usize)>> = const { RefCell::new(None) };
 }

@@ -97,9 +97,9 @@ impl<T> Clone for Condition<T> {
 
 impl<T> fmt::Debug for Condition<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Condition")
-            .field("state", &self.inner.get_ref().state)
-            .finish()
+        // the formatter may reenter the condition, so no borrow of `inner` is held
+        let state = self.inner.get_ref().state;
+        f.debug_struct("Condition").field("state", &state).finish()
     }
 }
 
@@ -590,5 +590,33 @@ mod tests {
             waiter.poll_ready(&mut cx),
             Poll::Ready(ConditionResult::Value(1))
         );
+    }
+
+    /// STATEMENT: Formatting a condition with `Debug` holds no borrow of its state while the formatter's writer reenters the condition.
+    ///
+    /// HOW:
+    /// - Format the condition into a writer that clones the condition and calls `notify_and_lock` on every write.
+    /// - Check the output reports the state read before formatting, and that the condition is locked afterwards.
+    #[test]
+    fn miri_debug_with_reentrant_writer() {
+        struct W<'a>(&'a Condition<()>, String);
+        impl fmt::Write for W<'_> {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                drop(self.0.clone());
+                self.0.notify_and_lock(());
+                self.1.push_str(s);
+                Ok(())
+            }
+        }
+
+        let cond = Condition::<()>::new();
+        let mut w = W(&cond, String::new());
+        fmt::write(&mut w, format_args!("{cond:?}")).unwrap();
+        assert_eq!(w.1, "Condition { state: Normal }");
+        assert!(matches!(
+            cond.wait()
+                .poll_ready(&mut Context::from_waker(std::task::Waker::noop())),
+            Poll::Ready(ConditionResult::Locked)
+        ));
     }
 }

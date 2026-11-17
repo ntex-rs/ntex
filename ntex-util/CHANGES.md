@@ -1,5 +1,9 @@
 # Changes
 
+## [4.11.1] - Unreleased
+
+* Fix undefined behavior when a `Debug` formatter of `Condition` reenters the condition
+
 ## [4.11.0] - 2026-11-13
 
 * Breaking: `Ticket::turn()`, `Ticket::poll_turn()` and `Turn::poll_turn()` return
