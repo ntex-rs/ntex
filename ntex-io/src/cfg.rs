@@ -275,6 +275,8 @@ impl IoConfig {
     /// backpressure by the [write timeout](Self::set_write_timeout).
     ///
     /// A zero duration disables the timeout. It is disabled by default.
+    /// `ntex-dispatcher`'s `Dispatcher::keepalive_timeout()` overrides it for
+    /// one dispatcher.
     #[must_use]
     pub fn set_keepalive_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
         self.keepalive_timeout = timeout.into();
@@ -353,9 +355,10 @@ impl IoConfig {
     /// any positive byte progress permits another period.
     ///
     /// A new connection must therefore deliver its first frame within these
-    /// limits. After a frame has been decoded, idle connections with no
-    /// partial frame are governed separately by
-    /// [`set_keepalive_timeout`](Self::set_keepalive_timeout).
+    /// limits, unless the dispatcher is built with `ntex-dispatcher`'s
+    /// `Dispatcher::skip_first_frame_timeout()`. After a frame has been
+    /// decoded, idle connections with no partial frame are governed separately
+    /// by [`set_keepalive_timeout`](Self::set_keepalive_timeout).
     ///
     /// The timer is stopped while write backpressure is active, when frames
     /// are not decoded, and a new period starts once decoding resumes. While

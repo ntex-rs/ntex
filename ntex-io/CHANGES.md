@@ -1,9 +1,12 @@
 # Changes
 
-## [4.7.4] - Unreleased
+## [4.8.0] - 2026-11-17
 
 * Add hidden `IoRef::is_in_filter_callbacks()`, returns `true` while filter callbacks
   of the connection run
+
+* `Io::set_config()` stores the new configuration itself instead of calling the
+  removed `Cfg::replace()`, its behavior and safety contract are unchanged
 
 ## [4.7.3] - 2026-11-15
 
