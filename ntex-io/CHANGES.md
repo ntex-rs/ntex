@@ -1,5 +1,10 @@
 # Changes
 
+## [4.7.4] - Unreleased
+
+* Add hidden `IoRef::is_in_filter_callbacks()`, returns `true` while filter callbacks
+  of the connection run
+
 ## [4.7.3] - 2026-11-15
 
 * Reduce write path overhead: compute buffered output once per encode and write status

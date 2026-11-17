@@ -263,7 +263,8 @@ impl RequestHead {
     ///
     /// The handle is installed only after an upgrade is acknowledged through
     /// the HTTP/1 control service. This is a one-shot operation: subsequent
-    /// calls return [`None`].
+    /// calls return [`None`]. Calls made from filter callbacks of the
+    /// connection return [`None`] and leave the handle in place.
     pub fn take_io(&self) -> Option<(IoBoxed, Codec)> {
         self.io.take()
     }

@@ -292,11 +292,12 @@ impl<F: Filter> crate::http::message::IoAccess for RequestIoAccess<F> {
     }
 
     fn take(&self) -> Option<(IoBoxed, Codec)> {
-        if self.taken.replace(true) {
+        if self.ioref.is_in_filter_callbacks() || self.taken.replace(true) {
             None
         } else {
-            // SAFETY: `io` is shared with the dispatcher only, which does not
-            // keep borrows of it, `get()` borrows the separate `ioref`
+            // SAFETY: `io` is shared with the dispatcher only, which borrows it
+            // only within its own calls into the io; filter callbacks run inside
+            // such calls and are rejected above, `get()` borrows the separate `ioref`
             let io = unsafe { self.io.take() };
             Some((io.into(), self.codec.clone()))
         }
@@ -664,6 +665,43 @@ mod tests {
         // `get()` result does not borrow the taken io
         assert_eq!(ioref.tag(), "TEST");
         assert!(access.get().is_none());
+        assert!(access.take().is_none());
+    }
+
+    /// STATEMENT: Request transport access cannot be taken from filter callbacks, which run while the dispatcher borrows the transport.
+    ///
+    /// HOW:
+    /// - Register a filter callback that tries to take the transport, then run the callbacks through the shared `Io`.
+    /// - Check the take in the callback returned `None` and left access in place, and that a later take outside callbacks succeeds.
+    #[crate::rt_test]
+    async fn request_io_access_rejects_take_in_filter_callbacks() {
+        struct Cb(Rc<RequestIoAccess<crate::io::Base>>, Rc<Cell<Option<bool>>>);
+        impl crate::io::IoCallbacks for Cb {
+            fn before_processing(&self, _: &IoRef) {
+                self.1.set(Some(self.0.take().is_none()));
+            }
+            fn after_processing(&self, _: &IoRef) {}
+        }
+
+        let (_, server) = IoTest::create();
+        let cfg: SharedCfg = SharedCfg::new("TEST").add(HttpServiceConfig::new()).into();
+        let io = Rc::new(Io::new(server, cfg.clone()));
+        let access = Rc::new(RequestIoAccess {
+            ioref: io.get_ref(),
+            io,
+            codec: Codec::new(1, cfg.get()),
+            taken: Cell::new(false),
+        });
+        let rejected = Rc::new(Cell::new(None));
+        access
+            .io
+            .register_filter_callbacks(Cb(access.clone(), rejected.clone()));
+
+        access.io.with_buf(|_| ()).unwrap();
+        assert_eq!(rejected.get(), Some(true));
+        assert!(access.get().is_some());
+        let (io, _) = access.take().unwrap();
+        drop(io);
         assert!(access.take().is_none());
     }
 

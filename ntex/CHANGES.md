@@ -1,5 +1,10 @@
 # Changes
 
+## [4.9.2] - Unreleased
+
+* http: `RequestHead::take_io()` returns `None` when called from filter callbacks of
+  the connection, instead of taking the I/O while the dispatcher borrows it
+
 ## [4.9.1] - 2026-11-17
 
 * http: Faster decoding of small HTTP/1 chunks; at most 1024 chunks are merged
