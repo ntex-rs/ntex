@@ -28,6 +28,7 @@ mod ctx;
 mod fn_ready;
 mod fn_service;
 mod fn_shutdown;
+mod inline;
 mod macros;
 mod map;
 mod map_err;
@@ -585,6 +586,7 @@ pub mod dev {
     pub use crate::fn_ready::FnReadiness;
     pub use crate::fn_service::{FnFactory, FnService, FnServiceSt, FnServiceStFactory};
     pub use crate::fn_shutdown::FnShutdown;
+    pub use crate::inline::InlineFuture;
     pub use crate::map::{Map, MapFactory};
     pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;

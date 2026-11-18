@@ -1,6 +1,9 @@
 # Changes
 
-## [5.8.1] - 2026-11-18 (Unreleased)
+## [5.9.0] - 2026-11-18 (Unreleased)
+
+* Add `InlineFuture`, a type-erased future that stores futures of up to
+  `WORDS` machine words inline and boxes larger ones
 
 * Reduce the size of `Ctx::call()`, `Pipeline::call()`, `PipelineBinding::call()`,
   `Pipeline::call_static()`, `PipelineState::call()` and `PipelineStateBinding::call()`
