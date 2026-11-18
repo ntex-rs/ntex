@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::readiness::{Generation, ReadyScope, RunCheck, ScopeStore};
-use crate::{BindCtx, Service, ServiceFactory};
+use crate::{BindCtx, Service, ServiceFactory, util::ReadyThenCall};
 
 /// Context provided to [`Service`] lifecycle methods.
 ///
@@ -402,14 +402,17 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     pub(crate) fn ready_generation<S, Req>(
         &self,
         svc: &'a S,
-    ) -> impl Future<Output = Result<Generation, S::Error>>
+    ) -> impl Future<Output = Result<Generation, S::Error>> + use<'a, Svc, St, S, Req>
     where
         S: Service<St, Req>,
     {
         self.ready_call(svc)
     }
 
-    fn ready_call<S, Req, O>(&self, svc: &'a S) -> impl Future<Output = Result<O, S::Error>>
+    fn ready_call<S, Req, O>(
+        &self,
+        svc: &'a S,
+    ) -> impl Future<Output = Result<O, S::Error>> + use<'a, Svc, St, S, Req, O>
     where
         S: Service<St, Req>,
         O: From<Generation>,
@@ -463,17 +466,23 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     ///     }
     /// }
     /// ```
-    pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
+    pub fn call<S, Req>(
+        &self,
+        svc: &'a S,
+        req: Req,
+    ) -> impl Future<Output = Result<S::Res, S::Error>>
     where
         S: Service<St, Req>,
     {
-        let ctx = self.cast();
-        ctx.ready_cached(svc).await?;
-
-        svc.call(req, ctx.into_call()).await
+        let ctx = self.cast::<S>();
+        ReadyThenCall::new(
+            req,
+            move || (!ctx.scope.is_ready()).then(|| ctx.ready_cached(svc)),
+            move |req| svc.call(req, ctx.into_call()),
+        )
     }
 
-    pub(crate) async fn ready_cached<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
+    pub(crate) async fn ready_cached<S, Req>(self, svc: &'a S) -> Result<(), S::Error>
     where
         S: Service<St, Req>,
     {

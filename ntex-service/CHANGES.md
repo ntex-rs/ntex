@@ -1,5 +1,15 @@
 # Changes
 
+## [5.8.1] - Unreleased
+
+* Reduce the size of `Ctx::call()`, `Pipeline::call()`, `PipelineBinding::call()`,
+  `Pipeline::call_static()`, `PipelineState::call()` and `PipelineStateBinding::call()`
+  futures, the request is no longer stored twice
+
+* `Pipeline::call()`, `PipelineBinding::call()`, `PipelineState::call()` and
+  `PipelineStateBinding::call()` bind the pipeline and prepare the call when invoked
+  instead of on the first poll, the service's `call()` still runs on the first poll
+
 ## [5.8.0] - 2026-11-17
 
 * Remove `Cfg::replace()`, assign an owned `Cfg<T>` instead
