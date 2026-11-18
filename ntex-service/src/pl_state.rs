@@ -1,8 +1,7 @@
-use std::{fmt, marker::PhantomPinned, rc::Rc, task::Context, task::Poll};
+use std::{fmt, marker::PhantomPinned, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::{
-    BindCtx, Ctx, IntoService, ReadyCallback, ReadyLink, Service, ctx::WaitersRef, util::BoxFuture,
-};
+use crate::util::{BoxFuture, ReadyThenCall, WithOwner};
+use crate::{BindCtx, Ctx, IntoService, ReadyCallback, ReadyLink, Service, ctx::WaitersRef};
 
 use crate::pipeline::PipelineBinding;
 use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness, detach};
@@ -87,9 +86,8 @@ where
     ///
     /// Reuses valid shared readiness without consuming it. Calls are forwarded
     /// even after shutdown has started; see [`PipelineState`].
-    pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
-        let pl = self.binding();
-        self.api.call(pl.idx, req, st).await
+    pub fn call<'a>(&'a self, req: Req, st: &'a St) -> impl Future<Output = Result<Res, Err>> {
+        StateCall::new(self.api.as_ref(), req, st)
     }
 
     #[inline]
@@ -129,13 +127,6 @@ where
             Poll::Ready(Ok(()))
         } else {
             self.api.poll_ready(cx, st)
-        }
-    }
-
-    fn binding(&self) -> Binding<'_, St, Req, Res, Err> {
-        Binding {
-            idx: self.api.reg(),
-            api: self.api.as_ref(),
         }
     }
 
@@ -215,6 +206,38 @@ impl<St, Req, Res, Err> Drop for Binding<'_, St, Req, Res, Err> {
     }
 }
 
+/// A call that keeps its own binding registered while it runs.
+struct StateCall<'a, St, Req, Res, Err> {
+    fut: BoxFuture<'a, Result<Res, Err>>,
+    // dropped after `fut`
+    _pl: Binding<'a, St, Req, Res, Err>,
+}
+
+impl<'a, St, Req, Res, Err> StateCall<'a, St, Req, Res, Err> {
+    fn new(api: &'a dyn PipelineStateApi<St, Req, Res, Err>, req: Req, st: &'a St) -> Self
+    where
+        Req: 'a,
+    {
+        let pl = Binding {
+            idx: api.reg(),
+            api,
+        };
+        Self {
+            fut: api.call(pl.idx, req, st),
+            _pl: pl,
+        }
+    }
+}
+
+impl<St, Req, Res, Err> Future for StateCall<'_, St, Req, Res, Err> {
+    type Output = Result<Res, Err>;
+
+    #[inline]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.fut.as_mut().poll(cx)
+    }
+}
+
 // ========================== `PipelineStateBinding` ===========================
 
 /// An independently registered handle to a [`PipelineState`].
@@ -252,12 +275,8 @@ where
     ///
     /// Reuses valid shared readiness without consuming it, regardless of `st`.
     /// Calls are forwarded even after shutdown has started; see [`PipelineState`].
-    pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
-        let pl = Binding {
-            idx: self.api.reg(),
-            api: self.api.as_ref(),
-        };
-        pl.api.call(pl.idx, req, st).await
+    pub fn call<'a>(&'a self, req: Req, st: &'a St) -> impl Future<Output = Result<Res, Err>> {
+        StateCall::new(self.api.as_ref(), req, st)
     }
 
     #[inline]
@@ -351,17 +370,24 @@ struct PipelineInner<S, E> {
 }
 
 impl<S, E> PipelineInner<S, E> {
-    async fn call_impl<St, Req>(&self, idx: u32, req: Req, st: &St) -> Result<S::Res, E>
+    fn call_impl<'a, St, Req>(
+        &'a self,
+        idx: u32,
+        req: Req,
+        st: &'a St,
+    ) -> impl Future<Output = Result<S::Res, E>>
     where
         S: Service<St, Req, Error = E>,
     {
         let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, st);
-        if !self.waiters.scope().is_ready() {
-            self.readiness
-                .ready(|| ctx.ready_generation(&self.s))
-                .await?;
-        }
-        self.s.call(req, ctx).await
+        ReadyThenCall::new(
+            req,
+            move || {
+                (!self.waiters.scope().is_ready())
+                    .then(|| self.readiness.ready(move || ctx.ready_generation(&self.s)))
+            },
+            move |req| self.s.call(req, ctx.into_call()),
+        )
     }
 }
 
@@ -461,7 +487,13 @@ where
         req: Req,
         owner: Rc<PipelineInternal<St, Req, S::Res, S::Error>>,
     ) -> BoxFuture<'static, Result<S::Res, S::Error>> {
-        Box::pin(async move { self.call_impl(idx, req, &owner.st).await })
+        // SAFETY: both are `Rc`-allocated and `WithOwner` drops the future before them
+        let (pl, st) = unsafe { (detach(&*self), &detach(&*owner).st) };
+        let fut = pl.call_impl(idx, req, st);
+        Box::pin(WithOwner {
+            fut,
+            owner: (self, owner),
+        })
     }
 
     fn poll_ready(&self, cx: &mut Context<'_>, st: &St) -> Poll<Result<(), S::Error>>

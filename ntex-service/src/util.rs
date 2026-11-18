@@ -1,8 +1,89 @@
-use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
+use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Context, task::Poll};
 
 use crate::{Ctx, Service, readiness::Generation};
 
 pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
+
+pin_project_lite::pin_project! {
+    /// Waits for readiness, then calls the service.
+    ///
+    /// Unlike an `async` block, the call state does not keep storage for the
+    /// request after it is moved into the service call. `ready` runs on the first
+    /// poll and returns `None` if no readiness wait is needed.
+    #[project = ReadyThenCallProj]
+    pub(crate) enum ReadyThenCall<Req, R, RF, C, CF> {
+        Init { req: Option<Req>, ready: Option<R>, call: Option<C> },
+        Ready { #[pin] fut: RF, req: Option<Req>, call: Option<C> },
+        Call { #[pin] fut: CF },
+    }
+}
+
+impl<Req, R, RF, C, CF> ReadyThenCall<Req, R, RF, C, CF> {
+    pub(crate) fn new(req: Req, ready: R, call: C) -> Self {
+        ReadyThenCall::Init {
+            req: Some(req),
+            ready: Some(ready),
+            call: Some(call),
+        }
+    }
+}
+
+impl<Req, R, RF, C, CF, T, E> Future for ReadyThenCall<Req, R, RF, C, CF>
+where
+    R: FnOnce() -> Option<RF>,
+    RF: Future<Output = Result<(), E>>,
+    C: FnOnce(Req) -> CF,
+    CF: Future<Output = Result<T, E>>,
+{
+    type Output = Result<T, E>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            let next = match self.as_mut().project() {
+                ReadyThenCallProj::Init { req, ready, call } => {
+                    let (req, call) = (req.take().unwrap(), call.take().unwrap());
+                    match ready.take().unwrap()() {
+                        Some(fut) => ReadyThenCall::Ready {
+                            fut,
+                            req: Some(req),
+                            call: Some(call),
+                        },
+                        None => ReadyThenCall::Call { fut: call(req) },
+                    }
+                }
+                ReadyThenCallProj::Ready { fut, req, call } => {
+                    if let Err(err) = std::task::ready!(fut.poll(cx)) {
+                        return Poll::Ready(Err(err));
+                    }
+                    ReadyThenCall::Call {
+                        fut: call.take().unwrap()(req.take().unwrap()),
+                    }
+                }
+                ReadyThenCallProj::Call { fut } => return fut.poll(cx),
+            };
+            self.set(next);
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// Keeps `owner` alive until `fut` is dropped.
+    pub(crate) struct WithOwner<F, O> {
+        // Declared first so it is dropped before `owner`.
+        #[pin]
+        pub(crate) fut: F,
+        pub(crate) owner: O,
+    }
+}
+
+impl<F: Future, O> Future for WithOwner<F, O> {
+    type Output = F::Output;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.project().fut.poll(cx)
+    }
+}
 
 pub(crate) async fn shutdown<S, St, A, B, RA, RB>(svc1: &A, svc2: &B, ctx: Ctx<'_, S, St>)
 where

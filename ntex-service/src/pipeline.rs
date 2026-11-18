@@ -49,7 +49,7 @@
 //! - [Service Pipelines](https://docs.ntex.rs/2-pipeline.html)
 //! - [Service State](https://docs.ntex.rs/3-state.html)
 
-use std::{fmt, future, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future, future::Future, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
 use crate::{
@@ -139,9 +139,8 @@ where
     ///
     /// Reuses valid shared readiness without consuming it. Calls are forwarded
     /// even after shutdown has started; see [`Pipeline`].
-    pub async fn call(&self, req: Req) -> Result<Res, Err> {
-        let pl = self.bind();
-        pl.api.call(pl.idx, req).await
+    pub fn call(&self, req: Req) -> impl Future<Output = Result<Res, Err>> {
+        PipelineCallRef::new(&self.api, self.bind(), req)
     }
 
     #[inline]
@@ -237,9 +236,8 @@ where
     Err: 'static,
 {
     #[inline]
-    async fn call_service(&self, req: Req) -> Result<Res, Err> {
-        let pl = self.bind();
-        pl.api.call(pl.idx, req).await
+    fn call_service(&self, req: Req) -> impl Future<Output = Result<Res, Err>> {
+        PipelineCallRef::new(&self.api, self.bind(), req)
     }
 }
 
@@ -299,9 +297,8 @@ where
     ///
     /// Reuses valid shared readiness without consuming it. Calls are forwarded
     /// even after shutdown has started; see [`Pipeline`].
-    pub async fn call(&self, req: Req) -> Result<Res, Err> {
-        let pl = self.clone();
-        pl.api.call(pl.idx, req).await
+    pub fn call(&self, req: Req) -> impl Future<Output = Result<Res, Err>> {
+        PipelineCallRef::new(&self.api, self.clone(), req)
     }
 
     #[inline]
@@ -384,6 +381,35 @@ impl<Req, Res, Err> future::Future for PipelineCall<Req, Res, Err> {
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.as_mut().fut).poll(cx)
+    }
+}
+
+/// A borrowed pipeline call that keeps its binding registered while it runs.
+struct PipelineCallRef<'a, Req, Res, Err> {
+    fut: BoxFuture<'a, Result<Res, Err>>,
+    // dropped after `fut`
+    _pl: PipelineBinding<Req, Res, Err>,
+}
+
+impl<'a, Req, Res, Err> PipelineCallRef<'a, Req, Res, Err> {
+    fn new(
+        api: &'a PipelineApi<Req, Res, Err>,
+        pl: PipelineBinding<Req, Res, Err>,
+        req: Req,
+    ) -> Self {
+        Self {
+            fut: api.call(pl.idx, req),
+            _pl: pl,
+        }
+    }
+}
+
+impl<Req, Res, Err> future::Future for PipelineCallRef<'_, Req, Res, Err> {
+    type Output = Result<Res, Err>;
+
+    #[inline]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.fut.as_mut().poll(cx)
     }
 }
 

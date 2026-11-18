@@ -3,7 +3,8 @@ use std::task::{Context, Poll, Waker};
 use std::{future::Future, future::poll_fn, marker::PhantomPinned, mem, ptr, rc::Rc};
 
 use crate::readiness::{Generation, ReadyObserver, ReadyScope};
-use crate::{BindCtx, Ctx, ReadyCallback, ReadyLink, Service, ctx::WaitersRef, util::BoxFuture};
+use crate::util::{BoxFuture, ReadyThenCall, WithOwner};
+use crate::{BindCtx, Ctx, ReadyCallback, ReadyLink, Service, ctx::WaitersRef};
 
 // Pipeline-owned checks can be driven by any waiting caller. Caller-owned
 // checks stay in their caller's future, so cancelling it releases ownership.
@@ -219,13 +220,15 @@ impl<E> Drop for PipelineCheck<'_, E> {
 }
 
 /// Extends a borrow of a pipeline to an unbounded lifetime, for a future that
-/// is stored inside that pipeline.
+/// never outlives that pipeline.
 ///
 /// # Safety
 ///
 /// `pl` must be `Rc`-allocated, so it never moves. The returned reference must
-/// only be used by a future stored in `pl` that its `Drop` impl releases before
-/// any field is dropped, see `Drop for PipelineInner` here and in `pl_state`.
+/// only be used by a future that is dropped before `pl`: either one stored in
+/// `pl` that its `Drop` impl releases before any field is dropped (see
+/// `Drop for PipelineInner` here and in `pl_state`), or one wrapped in
+/// `WithOwner` together with the `Rc` that owns `pl`.
 pub(crate) unsafe fn detach<'a, T>(pl: &T) -> &'a T {
     // SAFETY: guaranteed by the caller
     unsafe { &*ptr::from_ref(pl) }
@@ -334,14 +337,16 @@ struct PipelineInner<S: Service<St, Req>, St, Req> {
 }
 
 impl<S: Service<St, Req>, St, Req> PipelineInner<S, St, Req> {
-    async fn call_impl(&self, idx: u32, req: Req) -> Result<S::Res, S::Error> {
+    fn call_impl(&self, idx: u32, req: Req) -> impl Future<Output = Result<S::Res, S::Error>> {
         let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st);
-        if !self.waiters.scope().is_ready() {
-            self.readiness
-                .ready(|| ctx.ready_generation(&self.s))
-                .await?;
-        }
-        self.s.call(req, ctx.into_call()).await
+        ReadyThenCall::new(
+            req,
+            move || {
+                (!self.waiters.scope().is_ready())
+                    .then(|| self.readiness.ready(move || ctx.ready_generation(&self.s)))
+            },
+            move |req| self.s.call(req, ctx.into_call()),
+        )
     }
 }
 
@@ -421,7 +426,9 @@ where
         idx: u32,
         req: Req,
     ) -> BoxFuture<'static, Result<S::Res, S::Error>> {
-        Box::pin(async move { self.call_impl(idx, req).await })
+        // SAFETY: `self` is `Rc`-allocated and `WithOwner` drops the future before it
+        let fut = unsafe { detach(&*self) }.call_impl(idx, req);
+        Box::pin(WithOwner { fut, owner: self })
     }
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
