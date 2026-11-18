@@ -51,6 +51,9 @@ jobs:
       - name: Run Miri (ntex-service::ctx re-entrant wakers)
         run: cargo miri nextest run -p ntex-service -- "ctx::tests::waker_clone_reenters"
 
+      - name: Run Miri (ntex-service::ready_call, inline futures)
+        run: cargo miri nextest run -p ntex-service -- "ready_call::tests::" "inline::tests::"
+
       - name: Run Miri (ntex-service::pipeline)
         # Pipelines are self-referential, which Stacked Borrows rejects
         env:

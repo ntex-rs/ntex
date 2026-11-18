@@ -3,7 +3,7 @@ use std::task::{Context, Poll, Waker};
 use std::{future::Future, future::poll_fn, marker::PhantomPinned, mem, ptr, rc::Rc};
 
 use crate::readiness::{Generation, ReadyObserver, ReadyScope};
-use crate::util::{BoxFuture, ReadyThenCall, WithOwner};
+use crate::util::{BoxFuture, WithOwner};
 use crate::{BindCtx, Ctx, ReadyCallback, ReadyLink, Service, ctx::WaitersRef};
 
 // Pipeline-owned checks can be driven by any waiting caller. Caller-owned
@@ -342,16 +342,18 @@ struct PipelineInner<S: Service<St, Req>, St, Req> {
 }
 
 impl<S: Service<St, Req>, St, Req> PipelineInner<S, St, Req> {
+    // Unlike `ReadyThenCall`, the `async` block keeps `self`, `ctx` and the
+    // request for the whole call, but it is faster. Its future is boxed once
+    // per pipeline call, so the extra size is not repeated per layer.
     fn call_impl(&self, idx: u32, req: Req) -> impl Future<Output = Result<S::Res, S::Error>> {
         let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st);
-        ReadyThenCall::new(
-            req,
-            move || {
-                (!self.waiters.scope().is_ready())
-                    .then(|| self.readiness.ready(move || ctx.ready_generation(&self.s)))
-            },
-            move |req| self.s.call(req, ctx.into_call()),
-        )
+        async move {
+            if !self.waiters.scope().is_ready() {
+                // Boxed, it is only needed when the scope is not ready
+                Box::pin(self.readiness.ready(move || ctx.ready_generation(&self.s))).await?;
+            }
+            self.s.call(req, ctx.into_call()).await
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::readiness::{Generation, ReadyScope, RunCheck, ScopeStore};
-use crate::{BindCtx, Service, ServiceFactory, util::ReadyThenCall};
+use crate::{BindCtx, Service, ServiceFactory, ready_call::ReadyThenCall};
 
 /// Context provided to [`Service`] lifecycle methods.
 ///
@@ -477,11 +477,13 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     where
         S: Service<St, Req>,
     {
-        let ctx = self.cast::<S>();
         ReadyThenCall::new(
+            (svc, self.cast::<S>()),
             req,
-            move || (!ctx.scope.is_ready()).then(|| ctx.ready_cached(svc)),
-            move |req| svc.call(req, ctx.into_call()),
+            |&(svc, ctx): &(&'a S, Ctx<'a, S, St>)| {
+                (!ctx.scope.is_ready()).then(|| ctx.ready_cached(svc))
+            },
+            |(svc, ctx): (&'a S, Ctx<'a, S, St>), req| svc.call(req, ctx.into_call()),
         )
     }
 

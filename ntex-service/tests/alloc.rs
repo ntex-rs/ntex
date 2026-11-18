@@ -598,8 +598,9 @@ impl<S: Service<usize, usize>> Service<usize, usize> for Forward<S> {
 ///
 /// HOW:
 /// - Warm nested readiness/state/mapping wrappers and an erased-service wrapper.
-/// - Verify zero readiness allocations, one call box per call (the erased
-///   service stores its small call future inline), and one underlying readiness check.
+/// - Verify zero readiness allocations, one call box per call (two through the erased
+///   service, whose default zero-word slot boxes its call future), and one underlying
+///   readiness check.
 #[test]
 fn cached_context_and_wrapper_forwarding_add_no_allocations() {
     let (svc, gate) = probe();
@@ -625,9 +626,9 @@ fn cached_context_and_wrapper_forwarding_add_no_allocations() {
         expect_allocs("ready around erased service", 0, || complete(pl.ready())),
         Ok(())
     );
-    // Only pipeline dispatch boxes; `BoxService` keeps the call future inline.
+    // Pipeline dispatch and the default zero-word `BoxService` slot each box the call future.
     assert_eq!(
-        expect_allocs("erased Ctx::ready/call", 1, || complete(pl.call(2))),
+        expect_allocs("erased Ctx::ready/call", 2, || complete(pl.call(2))),
         Ok(12)
     );
     assert_eq!(gate.checks.get(), 1);
@@ -636,28 +637,29 @@ fn cached_context_and_wrapper_forwarding_add_no_allocations() {
 /// STATEMENT: A boxed service stores call futures that fit its `WORDS` slot inline and boxes larger ones.
 ///
 /// HOW:
-/// - Wrap probe services with the default slot and with `WORDS = 0` via `BoxService::new_inline`.
+/// - Wrap probe services with an 8-word slot via `BoxService::new_inline` and with the
+///   default zero-word slot via `boxed::service`.
 /// - Call each through a warmed `Pipeline` and verify one allocation per call (pipeline dispatch)
-///   for the default slot and two for the zero-word slot, whose call future exceeds one word.
+///   for the 8-word slot and two for the default slot, whose call future exceeds one word.
 #[test]
 fn boxed_service_slot_size_controls_call_boxing() {
     let (svc, _gate) = probe();
-    let pl = Pipeline::new(10, boxed::service(svc));
+    let svc: boxed::BoxService<usize, usize, usize, (), 8> = boxed::BoxService::new_inline(svc);
+    let pl = Pipeline::new(10, svc);
     assert_eq!(complete(pl.ready()), Ok(()));
     for _ in 0..4 {
         assert_eq!(
-            expect_allocs("default slot", 1, || complete(pl.call(2))),
+            expect_allocs("8-word slot", 1, || complete(pl.call(2))),
             Ok(12)
         );
     }
 
     let (svc, _gate) = probe();
-    let svc: boxed::BoxService<usize, usize, usize, (), 0> = boxed::BoxService::new_inline(svc);
-    let pl = Pipeline::new(10, svc);
+    let pl = Pipeline::new(10, boxed::service(svc));
     assert_eq!(complete(pl.ready()), Ok(()));
     for _ in 0..4 {
         assert_eq!(
-            expect_allocs("zero-word slot", 2, || complete(pl.call(2))),
+            expect_allocs("default zero-word slot", 2, || complete(pl.call(2))),
             Ok(12)
         );
     }

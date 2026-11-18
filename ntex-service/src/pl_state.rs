@@ -1,6 +1,7 @@
 use std::{fmt, marker::PhantomPinned, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::util::{BoxFuture, ReadyThenCall, WithOwner};
+use crate::ready_call::ReadyThenCall;
+use crate::util::{BoxFuture, WithOwner};
 use crate::{BindCtx, Ctx, IntoService, ReadyCallback, ReadyLink, Service, ctx::WaitersRef};
 
 use crate::pipeline::PipelineBinding;
@@ -379,14 +380,14 @@ impl<S, E> PipelineInner<S, E> {
     where
         S: Service<St, Req, Error = E>,
     {
-        let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, st);
         ReadyThenCall::new(
+            (self, Ctx::<'a, S, St>::new(idx, &self.waiters, st)),
             req,
-            move || {
-                (!self.waiters.scope().is_ready())
-                    .then(|| self.readiness.ready(move || ctx.ready_generation(&self.s)))
+            |&(this, ctx): &(&'a Self, Ctx<'a, S, St>)| {
+                (!this.waiters.scope().is_ready())
+                    .then(|| this.readiness.ready(move || ctx.ready_generation(&this.s)))
             },
-            move |req| self.s.call(req, ctx.into_call()),
+            |(this, ctx): (&'a Self, Ctx<'a, S, St>), req| this.s.call(req, ctx.into_call()),
         )
     }
 }
