@@ -3,7 +3,7 @@ use std::{future::Future, mem, pin::Pin, task::Context, task::Poll};
 use crate::future::MaybeDone;
 
 /// Future for the `join` combinator, waiting for two futures to complete.
-pub async fn join<A, B>(fut_a: A, fut_b: B) -> (A::Output, B::Output)
+pub fn join<A, B>(fut_a: A, fut_b: B) -> impl Future<Output = (A::Output, B::Output)>
 where
     A: Future,
     B: Future,
@@ -12,7 +12,6 @@ where
         fut_a: MaybeDone::pending(fut_a),
         fut_b: MaybeDone::pending(fut_b),
     }
-    .await
 }
 
 pin_project_lite::pin_project! {

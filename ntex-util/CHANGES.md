@@ -4,6 +4,9 @@
 
 * Fix undefined behavior when a `Debug` formatter of `Condition` reenters the condition
 
+* `select()` and `join()` return their combinator futures directly instead of
+  wrapping them in an `async fn`, halving the future size
+
 ## [4.11.0] - 2026-11-13
 
 * Breaking: `Ticket::turn()`, `Ticket::poll_turn()` and `Turn::poll_turn()` return

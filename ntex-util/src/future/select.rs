@@ -6,12 +6,12 @@ use crate::future::Either;
 ///
 /// `fut_a` is polled first, so it wins when both futures are ready during the
 /// same poll. The other future is dropped.
-pub async fn select<A, B>(fut_a: A, fut_b: B) -> Either<A::Output, B::Output>
+pub fn select<A, B>(fut_a: A, fut_b: B) -> impl Future<Output = Either<A::Output, B::Output>>
 where
     A: Future,
     B: Future,
 {
-    Select { fut_a, fut_b }.await
+    Select { fut_a, fut_b }
 }
 
 pin_project_lite::pin_project! {
