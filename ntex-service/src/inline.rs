@@ -29,12 +29,12 @@ use std::{fmt, mem::MaybeUninit, pin::Pin, ptr};
 /// boxed. The slot always holds at least one word, so `WORDS = 0` boxes every
 /// future larger than a pointer.
 ///
-/// The output type must be `'static`, the future itself may borrow data for
-/// `'a`. Like `Pin<Box<dyn Future>>`, `InlineFuture` is neither `Send` nor
-/// `Sync`. Unlike a box, it is not `Unpin`; pin it before polling, for example
-/// with [`std::pin::pin!`] or by awaiting it.
-pub struct InlineFuture<'a, T: 'static, const WORDS: usize> {
-    vtable: &'static VTable<T>,
+/// The future and its output may borrow data for `'a`. Like
+/// `Pin<Box<dyn Future>>`, `InlineFuture` is neither `Send` nor `Sync`. Unlike
+/// a box, it is not `Unpin`; pin it before polling, for example with
+/// [`std::pin::pin!`] or by awaiting it.
+pub struct InlineFuture<'a, T, const WORDS: usize> {
+    vtable: &'a VTable<T>,
     slot: MaybeUninit<Slot<WORDS>>,
     _t: PhantomData<Pin<Box<dyn Future<Output = T> + 'a>>>,
     _p: PhantomPinned,
@@ -72,7 +72,7 @@ unsafe fn drop_raw<F>(ptr: *mut ()) {
     unsafe { ptr::drop_in_place(ptr.cast::<F>()) }
 }
 
-impl<'a, T: 'static, const WORDS: usize> InlineFuture<'a, T, WORDS> {
+impl<'a, T, const WORDS: usize> InlineFuture<'a, T, WORDS> {
     /// Erases the type of `fut`, storing it inline if it fits and boxing it
     /// otherwise.
     pub fn new<F>(fut: F) -> Self
@@ -114,7 +114,7 @@ impl<'a, T: 'static, const WORDS: usize> InlineFuture<'a, T, WORDS> {
     }
 }
 
-impl<T: 'static, const WORDS: usize> Future for InlineFuture<'_, T, WORDS> {
+impl<T, const WORDS: usize> Future for InlineFuture<'_, T, WORDS> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
@@ -128,14 +128,14 @@ impl<T: 'static, const WORDS: usize> Future for InlineFuture<'_, T, WORDS> {
     }
 }
 
-impl<T: 'static, const WORDS: usize> Drop for InlineFuture<'_, T, WORDS> {
+impl<T, const WORDS: usize> Drop for InlineFuture<'_, T, WORDS> {
     fn drop(&mut self) {
         // SAFETY: the slot holds the future described by the vtable
         unsafe { (self.vtable.drop)((&raw mut self.slot).cast()) }
     }
 }
 
-impl<T: 'static, const WORDS: usize> fmt::Debug for InlineFuture<'_, T, WORDS> {
+impl<T, const WORDS: usize> fmt::Debug for InlineFuture<'_, T, WORDS> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InlineFuture").finish_non_exhaustive()
     }
@@ -159,7 +159,7 @@ mod tests {
         }
     }
 
-    fn fits_of<F: Future<Output: 'static>, const W: usize>(_: &F) -> bool {
+    fn fits_of<F: Future, const W: usize>(_: &F) -> bool {
         InlineFuture::<'_, F::Output, W>::fits::<F>()
     }
 
@@ -411,5 +411,33 @@ mod tests {
         assert_eq!(complete(small), 2);
         assert_eq!(complete(large), 7);
         assert_eq!(cell.get(), 7);
+    }
+
+    /// STATEMENT: The output may borrow non-`'static` data.
+    ///
+    /// HOW:
+    /// - Erase inline and boxed async blocks whose output is a `&str` borrowed
+    ///   from a stack-local `String`, across a pending poll.
+    /// - Resolve both and check that the outputs point into that `String`.
+    #[test]
+    fn output_borrowing_local_data() {
+        let data = String::from("inline");
+        let small = async {
+            yield_once().await;
+            &data[..2]
+        };
+        let large = async {
+            let buf = [0u8; 1024];
+            yield_once().await;
+            &data[usize::from(buf[1023])..]
+        };
+        assert!(fits_of::<_, WORDS>(&small));
+        assert!(!fits_of::<_, WORDS>(&large));
+
+        assert_eq!(complete::<&str, WORDS>(Fut::new(small)), "in");
+        assert_eq!(
+            complete::<&str, WORDS>(Fut::new(large)).as_ptr(),
+            data.as_ptr()
+        );
     }
 }

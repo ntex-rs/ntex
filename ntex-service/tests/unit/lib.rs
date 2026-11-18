@@ -583,6 +583,34 @@ async fn boxed_and_debug() {
     assert!(s.contains("Map") && s.contains("MapErr"));
 }
 
+/// STATEMENT: A boxed service's response may borrow non-`'static` request data.
+///
+/// HOW:
+/// - Box a service whose `&str` response is a slice of its `&str` request.
+/// - Call it through a `Ctx`, without a `Pipeline`, with a stack-local `String`
+///   and check that the response points into that `String`.
+#[ntex::test]
+async fn boxed_service_borrowed_response() {
+    struct First;
+
+    impl<'a> Service<(), &'a str> for First {
+        type Res = &'a str;
+        type Error = ();
+
+        async fn call(&self, req: &'a str, _: Ctx<'_, Self, ()>) -> Result<&'a str, ()> {
+            Ok(&req[..1])
+        }
+    }
+
+    let data = String::from("boxed");
+    let svc: boxed::BoxService<(), &str, &str, ()> = boxed::service(First);
+    let waiters = crate::ctx::WaitersRef::new();
+    let ctx = Ctx::<(), _>::new(0, &waiters, &());
+    let res = ctx.call(&svc, &data).await.unwrap();
+    assert_eq!(res, "b");
+    assert_eq!(res.as_ptr(), data.as_ptr());
+}
+
 /// STATEMENT: State wrappers and state/request tuples unpack in state-first order.
 ///
 /// HOW:

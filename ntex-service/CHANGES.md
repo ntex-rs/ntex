@@ -5,6 +5,10 @@
 * Add `InlineFuture`, a type-erased future that stores futures of up to
   `WORDS` machine words inline and boxes larger ones
 
+* `BoxService` and `BoxServiceFactory` store `ready()`, `call()` and `shutdown()`
+  futures of up to `WORDS` machine words inline (default 8) instead of boxing them,
+  use `new_inline()` to pick a different size
+
 * Reduce the size of `Ctx::call()`, `Pipeline::call()`, `PipelineBinding::call()`,
   `Pipeline::call_static()`, `PipelineState::call()` and `PipelineStateBinding::call()`
   futures, the request is no longer stored twice
