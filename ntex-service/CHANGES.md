@@ -1,6 +1,6 @@
 # Changes
 
-## [5.8.1] - Unreleased
+## [5.8.1] - 2026-11-18 (Unreleased)
 
 * Reduce the size of `Ctx::call()`, `Pipeline::call()`, `PipelineBinding::call()`,
   `Pipeline::call_static()`, `PipelineState::call()` and `PipelineStateBinding::call()`

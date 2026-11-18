@@ -67,14 +67,14 @@ impl TlsServerFilter {
     /// Returns [`io::ErrorKind::TimedOut`] on expiration, or an error from
     /// session creation, negotiation, or transport I/O. Premature transport EOF
     /// returns [`io::ErrorKind::UnexpectedEof`].
-    pub async fn create<F: Filter>(
+    pub fn create<F: Filter>(
         io: Io<F>,
         cfg: Arc<ServerConfig>,
         timeout: Millis,
-    ) -> Result<Io<Layer<TlsServerFilter, F>>, io::Error> {
-        log::trace!("{}: Initiate server connection", io.tag());
+    ) -> impl Future<Output = Result<Io<Layer<TlsServerFilter, F>>, io::Error>> {
+        crate::utils::with_timeout(timeout, async move {
+            log::trace!("{}: Initiate server connection", io.tag());
 
-        crate::utils::with_timeout(timeout, async {
             let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
             session.set_buffer_limit(Some(io.cfg().write_size().capacity()));
             let io = io.add_filter(TlsServerFilter {
@@ -85,7 +85,6 @@ impl TlsServerFilter {
             log::trace!("{}: TLS Handshake successed", io.tag());
             Ok(io)
         })
-        .await
     }
 
     /// Observes handshake completion outside any mutable session borrow.
