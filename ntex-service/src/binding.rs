@@ -148,7 +148,10 @@ where
 
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let ctx = self.enter::<Self, _>(ctx);
-        ctx.ready_cached(self).await?;
+        if !self.scope.is_ready() {
+            // Boxed so the cold readiness wait is not inlined into the call future.
+            Box::pin(ctx.ready_cached(self)).await?;
+        }
         self.service.call(req, ctx.cast()).await
     }
 

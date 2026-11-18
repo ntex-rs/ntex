@@ -10,10 +10,14 @@ pin_project_lite::pin_project! {
     /// Unlike an `async` block, the call state does not keep storage for the
     /// request after it is moved into the service call. `ready` runs on the first
     /// poll and returns `None` if no readiness wait is needed.
+    ///
+    /// The readiness wait is boxed so that its storage, which grows with each
+    /// nested readiness level, is not inlined into every call future. It is only
+    /// allocated when the scope is not ready.
     #[project = ReadyThenCallProj]
     pub(crate) enum ReadyThenCall<Req, R, RF, C, CF> {
         Init { req: Option<Req>, ready: Option<R>, call: Option<C> },
-        Ready { #[pin] fut: RF, req: Option<Req>, call: Option<C> },
+        Ready { fut: Pin<Box<RF>>, req: Option<Req>, call: Option<C> },
         Call { #[pin] fut: CF },
     }
 }
@@ -44,7 +48,7 @@ where
                     let (req, call) = (req.take().unwrap(), call.take().unwrap());
                     match ready.take().unwrap()() {
                         Some(fut) => ReadyThenCall::Ready {
-                            fut,
+                            fut: Box::pin(fut),
                             req: Some(req),
                             call: Some(call),
                         },
@@ -52,7 +56,7 @@ where
                     }
                 }
                 ReadyThenCallProj::Ready { fut, req, call } => {
-                    if let Err(err) = std::task::ready!(fut.poll(cx)) {
+                    if let Err(err) = std::task::ready!(fut.as_mut().poll(cx)) {
                         return Poll::Ready(Err(err));
                     }
                     ReadyThenCall::Call {
