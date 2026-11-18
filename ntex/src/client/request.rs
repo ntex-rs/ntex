@@ -437,53 +437,70 @@ impl ClientRequest {
 
 impl ClientRequest {
     /// Sends the request with `body`.
-    pub async fn send_body<B>(mut self, body: B) -> Result<ClientResponse, Error<ClientError>>
+    pub fn send_body<B>(
+        mut self,
+        body: B,
+    ) -> impl Future<Output = Result<ClientResponse, Error<ClientError>>>
     where
         B: Into<Body>,
     {
-        self.prep_for_sending()?;
-        *self.request.body() = body.into();
-        self.svc.call(self.request).await.map(Into::into)
+        let res = self
+            .prep_for_sending()
+            .map(|()| *self.request.body() = body.into());
+        self.dispatch(res)
     }
 
     /// Serializes `value` as JSON and sends the request.
-    pub async fn send_json<T: Serialize>(
+    pub fn send_json<T: Serialize>(
         mut self,
         value: &T,
-    ) -> Result<ClientResponse, Error<ClientError>> {
-        self.prep_for_sending()?;
-        self.request.set_json(value)?;
-        self.svc.call(self.request).await.map(Into::into)
+    ) -> impl Future<Output = Result<ClientResponse, Error<ClientError>>> {
+        let res = self
+            .prep_for_sending()
+            .and_then(|()| self.request.set_json(value).map_err(Into::into));
+        self.dispatch(res)
     }
 
     /// Serializes `value` as a URL-encoded form and sends the request.
-    pub async fn send_form<T: Serialize>(
+    pub fn send_form<T: Serialize>(
         mut self,
         value: &T,
-    ) -> Result<ClientResponse, Error<ClientError>> {
-        self.prep_for_sending()?;
-        self.request.set_form(value)?;
-        self.svc.call(self.request).await.map(Into::into)
+    ) -> impl Future<Output = Result<ClientResponse, Error<ClientError>>> {
+        let res = self
+            .prep_for_sending()
+            .and_then(|()| self.request.set_form(value).map_err(Into::into));
+        self.dispatch(res)
     }
 
     /// Sends the request with a streaming body.
-    pub async fn send_stream<T, E>(
+    pub fn send_stream<T, E>(
         mut self,
         stream: T,
-    ) -> Result<ClientResponse, Error<ClientError>>
+    ) -> impl Future<Output = Result<ClientResponse, Error<ClientError>>>
     where
         T: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: StdError + 'static,
     {
-        self.prep_for_sending()?;
-        self.request.set_stream(stream);
-        self.svc.call(self.request).await.map(Into::into)
+        let res = self
+            .prep_for_sending()
+            .map(|()| self.request.set_stream(stream));
+        self.dispatch(res)
     }
 
     /// Sends the request with an empty body.
-    pub async fn send(mut self) -> Result<ClientResponse, Error<ClientError>> {
-        self.prep_for_sending()?;
-        self.svc.call(self.request).await.map(Into::into)
+    pub fn send(mut self) -> impl Future<Output = Result<ClientResponse, Error<ClientError>>> {
+        let res = self.prep_for_sending();
+        self.dispatch(res)
+    }
+
+    // The request is prepared when `send*()` is called, only the service call
+    // is stored in the returned future
+    fn dispatch(
+        self,
+        res: Result<(), Error<ClientError>>,
+    ) -> impl Future<Output = Result<ClientResponse, Error<ClientError>>> {
+        let call = res.map(|()| self.svc.call_static(self.request));
+        async move { call?.await.map(Into::into) }
     }
 
     fn prep_for_sending(&mut self) -> Result<(), Error<ClientError>> {

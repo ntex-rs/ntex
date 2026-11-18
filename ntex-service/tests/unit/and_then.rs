@@ -118,6 +118,29 @@ async fn test_call() {
     assert_eq!(cnt_sht.get(), 2);
 }
 
+/// STATEMENT: An and-then chain returns a first-service error without calling
+/// the second service.
+///
+/// HOW:
+/// - Chain a failing first service with a second service that counts its calls.
+/// - Call the pipeline and check the first error is returned unchanged.
+/// - Verify the second service's call counter stays at zero.
+#[ntex::test]
+async fn test_call_err() {
+    let calls = Rc::new(Cell::new(0));
+    let srv = crate::fn_service(async |_: u32| Err::<u32, _>("svc1"))
+        .and_then(crate::fn_service({
+            let calls = calls.clone();
+            async move |req: u32| {
+                calls.set(calls.get() + 1);
+                Ok(req)
+            }
+        }))
+        .pipeline(());
+    assert_eq!(srv.call(1).await, Err("svc1"));
+    assert_eq!(calls.get(), 0);
+}
+
 /// STATEMENT: Factory-created chains cache readiness independently per pipeline.
 ///
 /// HOW:

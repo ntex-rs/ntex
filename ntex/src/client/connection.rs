@@ -5,7 +5,7 @@ use crate::http::{Payload, ResponseHead, Version};
 use crate::io::IoBoxed;
 #[cfg(test)]
 use crate::io::types::HttpProtocol;
-use crate::{error::Error, time::Millis};
+use crate::{error::Error, time::Millis, util::Either};
 
 use super::{ClientRawRequest, error::ClientError, h1proto, h2proto, pool::Acquired};
 
@@ -65,12 +65,12 @@ impl Connection {
         }
     }
 
-    pub(super) async fn send_request(
+    pub(super) fn send_request(
         mut self,
         mut req: ClientRawRequest,
         body: Body,
         timeout: Millis,
-    ) -> Result<(ResponseHead, Payload), Error<ClientError>> {
+    ) -> impl Future<Output = Result<(ResponseHead, Payload), Error<ClientError>>> {
         match self.io.take().unwrap() {
             ConnectionType::H1(io) => {
                 // HTTP/1.0 is kept as requested, other versions are not
@@ -78,11 +78,19 @@ impl Connection {
                 if req.head.version != Version::HTTP_10 {
                     req.head.version = Version::HTTP_11;
                 }
-                h1proto::send_request(io, req, body, self.created, timeout, self.pool).await
+                Either::Left(h1proto::send_request(
+                    io,
+                    req,
+                    body,
+                    self.created,
+                    timeout,
+                    self.pool,
+                ))
             }
             ConnectionType::H2(io) => {
+                // h2 connections are not pooled, `self.pool` is always `None`
                 req.head.version = Version::HTTP_2;
-                h2proto::send_request(io, req, body, timeout).await
+                Either::Right(h2proto::send_request(io, req, body, timeout))
             }
         }
     }

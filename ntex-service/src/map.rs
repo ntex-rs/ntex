@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{BindCtx, Ctx, Service, ServiceFactory};
+use super::{BindCtx, Ctx, Service, ServiceFactory, util};
 
 /// Transforms successful service responses with a synchronous function.
 ///
@@ -97,18 +97,22 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, S::Error> {
-        self.svc.call(req, ctx.cast()).await.map(|r| (self.f)(r))
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<Res, S::Error>> {
+        util::map_output(self.svc.call(req, ctx.cast()), |res| res.map(&self.f))
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
-        self.svc.ready(ctx.cast()).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), S::Error>> {
+        self.svc.ready(ctx.cast())
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        self.svc.shutdown(ctx.cast()).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        self.svc.shutdown(ctx.cast())
     }
 }
 

@@ -399,18 +399,22 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
-        Service::ready(&**self, ctx.cast()).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), S::Error>> {
+        Service::ready(&**self, ctx.cast())
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
-        Service::call(&**self, req, ctx.cast()).await
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<S::Res, S::Error>> {
+        Service::call(&**self, req, ctx.cast())
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        Service::shutdown(&**self, ctx.cast()).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        Service::shutdown(&**self, ctx.cast())
     }
 }
 
@@ -426,18 +430,22 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
-        Service::ready(&**self, ctx.cast()).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), S::Error>> {
+        Service::ready(&**self, ctx.cast())
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
-        Service::call(&**self, req, ctx.cast()).await
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<S::Res, S::Error>> {
+        Service::call(&**self, req, ctx.cast())
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        Service::shutdown(&**self, ctx.cast()).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        Service::shutdown(&**self, ctx.cast())
     }
 }
 
@@ -453,18 +461,22 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
-        Service::ready(&**self, ctx.cast()).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), S::Error>> {
+        Service::ready(&**self, ctx.cast())
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
-        Service::call(&**self, req, ctx.cast()).await
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<S::Res, S::Error>> {
+        Service::call(&**self, req, ctx.cast())
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        Service::shutdown(&**self, ctx.cast()).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        Service::shutdown(&**self, ctx.cast())
     }
 }
 
@@ -563,7 +575,7 @@ where
 #[doc(hidden)]
 pub mod __private {
     pub use crate::readiness::Generation;
-    pub use crate::util::{join, ready_field, ready_join};
+    pub use crate::util::{join, map_output, ready_field, ready_join};
 }
 
 pub mod dev {

@@ -12,17 +12,16 @@ use crate::util::{ByteString, Bytes, BytesMut, Either, select};
 
 use super::{ClientRawRequest, error::ClientError, error::ConnectError};
 
-pub(super) async fn send_request(
+pub(super) fn send_request(
     client: H2Client,
     req: ClientRawRequest,
     body: Body,
     timeout: Millis,
-) -> Result<(ResponseHead, Payload), Error<ClientError>> {
+) -> impl Future<Output = Result<(ResponseHead, Payload), Error<ClientError>>> {
     with_service(
         client.service(),
         send_request_inner(client, req, body, timeout),
     )
-    .await
 }
 
 async fn send_request_inner(

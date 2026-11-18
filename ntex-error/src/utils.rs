@@ -1,4 +1,5 @@
-use std::{borrow::Cow, cell::RefCell, convert, error::Error as StdError, fmt, io, path};
+use std::task::{Context, Poll};
+use std::{borrow::Cow, cell::RefCell, convert, error::Error as StdError, fmt, io, path, pin::Pin};
 
 use ntex_bytes::ByteString;
 
@@ -105,18 +106,40 @@ impl fmt::Display for Success {
 /// Executes a future and ensures an error service is set.
 ///
 /// If the error does not already have a service, the provided service is assigned.
-pub async fn with_service<F, T, E>(svc: &'static str, fut: F) -> F::Output
+pub fn with_service<F, T, E>(svc: &'static str, fut: F) -> impl Future<Output = F::Output>
 where
     F: Future<Output = Result<T, Error<E>>>,
     E: ErrorDiagnostic + Clone,
 {
-    fut.await.map_err(|err: Error<E>| {
-        if err.service().is_none() {
-            err.with_service(svc)
-        } else {
-            err
-        }
-    })
+    WithService { fut, svc }
+}
+
+pin_project_lite::pin_project! {
+    struct WithService<F> {
+        #[pin]
+        fut: F,
+        svc: &'static str,
+    }
+}
+
+impl<F, T, E> Future for WithService<F>
+where
+    F: Future<Output = Result<T, Error<E>>>,
+    E: ErrorDiagnostic + Clone,
+{
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let svc = *this.svc;
+        this.fut.poll(cx).map_err(|err| {
+            if err.service().is_none() {
+                err.with_service(svc)
+            } else {
+                err
+            }
+        })
+    }
 }
 
 /// Generates a Rust module path from the given source file path.

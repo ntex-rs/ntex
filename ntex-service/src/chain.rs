@@ -309,18 +309,22 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req>
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        self.service.call(req, ctx.cast()).await
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<Self::Res, Self::Error>> {
+        self.service.call(req, ctx.cast())
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        self.service.ready(ctx.cast()).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Self::Error>> {
+        self.service.ready(ctx.cast())
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        self.service.shutdown(ctx.cast()).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        self.service.shutdown(ctx.cast())
     }
 }
 

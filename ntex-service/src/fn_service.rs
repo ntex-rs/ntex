@@ -58,8 +58,8 @@ where
     type Error = Err;
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Res, Err> {
-        (self.f)(req).await
+    fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> impl Future<Output = Result<Res, Err>> {
+        (self.f)(req)
     }
 }
 
@@ -126,8 +126,8 @@ where
     type Error = Err;
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, Err> {
-        (self.f)(ctx.st(), req).await
+    fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<Res, Err>> {
+        (self.f)(ctx.st(), req)
     }
 }
 

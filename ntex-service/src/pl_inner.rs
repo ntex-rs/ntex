@@ -59,43 +59,48 @@ impl<E> PipelineReadiness<E> {
         }
     }
 
-    pub(crate) async fn ready<F, Fut>(&self, mut check: F) -> Result<(), E>
+    // A plain fn returning `async move` stores `self` and `check` once;
+    // an `async fn` would keep a second copy of each argument.
+    #[allow(clippy::manual_async_fn)]
+    pub(crate) fn ready<F, Fut>(&self, mut check: F) -> impl Future<Output = Result<(), E>>
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<Generation, E>>,
     {
-        loop {
-            if self.scope.is_ready() {
-                return Ok(());
-            }
-            let mut owner = None;
-            let observer = self.scope.observer();
-            let result = poll_fn(|cx| {
-                observer.register(cx.waker());
+        async move {
+            loop {
                 if self.scope.is_ready() {
-                    return Poll::Ready(Ok(()));
+                    return Ok(());
                 }
-                match self.poll_check() {
-                    Poll::Ready(None) => {
-                        self.checker.replace(Checker::Caller);
-                        owner = Some(CallerCheck(self));
-                        Poll::Ready(Ok(()))
+                let mut owner = None;
+                let observer = self.scope.observer();
+                let result = poll_fn(|cx| {
+                    observer.register(cx.waker());
+                    if self.scope.is_ready() {
+                        return Poll::Ready(Ok(()));
                     }
-                    Poll::Ready(Some(result)) => Poll::Ready(result),
-                    Poll::Pending => Poll::Pending,
-                }
-            })
-            .await;
-            let result = if owner.is_some() {
-                check().await.map(|generation| {
-                    self.scope.set_ready(generation);
+                    match self.poll_check() {
+                        Poll::Ready(None) => {
+                            self.checker.replace(Checker::Caller);
+                            owner = Some(CallerCheck(self));
+                            Poll::Ready(Ok(()))
+                        }
+                        Poll::Ready(Some(result)) => Poll::Ready(result),
+                        Poll::Pending => Poll::Pending,
+                    }
                 })
-            } else {
-                result
-            };
-            drop(observer);
-            drop(owner);
-            result?;
+                .await;
+                let result = if owner.is_some() {
+                    check().await.map(|generation| {
+                        self.scope.set_ready(generation);
+                    })
+                } else {
+                    result
+                };
+                drop(observer);
+                drop(owner);
+                result?;
+            }
         }
     }
 

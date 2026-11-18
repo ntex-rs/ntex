@@ -79,13 +79,13 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        util::ready(&self.svc1, &self.svc2, ctx).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Self::Error>> {
+        util::ready(&self.svc1, &self.svc2, ctx)
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        util::shutdown(&self.svc1, &self.svc2, ctx).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        util::shutdown(&self.svc1, &self.svc2, ctx)
     }
 }
 
