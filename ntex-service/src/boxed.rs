@@ -14,10 +14,10 @@
 //! readiness cache is needed.
 //!
 //! The wrapped service's `ready`, `call`, and `shutdown` futures are stored in
-//! an [`InlineFuture`] slot of `WORDS` machine words (8 by default). Futures
-//! that fit don't allocate, larger futures are boxed. Use
-//! [`BoxService::new_inline`] or [`BoxServiceFactory::new_inline`] to pick a
-//! different slot size; `WORDS = 0` boxes every future larger than a pointer.
+//! an [`InlineFuture`] slot of `WORDS` machine words. Futures that fit don't
+//! allocate, larger futures are boxed. The default `WORDS = 0` boxes every
+//! future larger than a pointer. Use [`BoxService::new_inline`] or
+//! [`BoxServiceFactory::new_inline`] to pick a larger slot.
 //!
 //! # Example
 //!
@@ -54,7 +54,7 @@ use crate::{Service, ServiceFactory, util::BoxFuture};
 /// The wrapped service's futures are stored inline when they fit into `WORDS`
 /// machine words and boxed otherwise, see [`InlineFuture`]. Boxed services
 /// with different `WORDS` are different types.
-pub struct BoxService<St, Req, Res, Err, const WORDS: usize = 8> {
+pub struct BoxService<St, Req, Res, Err, const WORDS: usize = 0> {
     inner: Rc<dyn ServiceObj<St, Req, WORDS, Res = Res, Error = Err>>,
 }
 
@@ -67,7 +67,7 @@ where
 }
 
 impl<St, Req, Res, Err> BoxService<St, Req, Res, Err> {
-    /// Creates a boxed service with the default inline slot.
+    /// Creates a boxed service with the default slot (`WORDS = 0`).
     pub fn new<S>(service: S) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
@@ -209,7 +209,7 @@ where
 /// Boxed service factory.
 ///
 /// Created services are [`BoxService`]s with the same `WORDS` slot size.
-pub struct BoxServiceFactory<St, Req, Res, Err, InitErr, const WORDS: usize = 8> {
+pub struct BoxServiceFactory<St, Req, Res, Err, InitErr, const WORDS: usize = 0> {
     inner: Rc<dyn ServiceFactoryObj<St, Req, WORDS, Res = Res, Error = Err, InitErr = InitErr>>,
 }
 
@@ -230,7 +230,7 @@ where
     St: 'static,
     Req: 'static,
 {
-    /// Creates a boxed service factory with the default inline slot.
+    /// Creates a boxed service factory with the default slot (`WORDS = 0`).
     pub fn new<Sf>(factory: Sf) -> Self
     where
         Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitError = InitErr> + 'static,
