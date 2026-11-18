@@ -64,13 +64,19 @@ macro_rules! forward {
         }
 
         #[inline]
-        async fn ready(&self, ctx: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
-            ctx.ready(&self.$field).await.map_err($err)
+        fn ready(
+            &self,
+            ctx: $crate::Ctx<'_, Self, $st>,
+        ) -> impl ::core::future::Future<Output = Result<(), Self::Error>> {
+            $crate::__private::map_output(ctx.ready(&self.$field), |res| res.map_err($err))
         }
 
         #[inline]
-        async fn shutdown(&self, ctx: $crate::Ctx<'_, Self, $st>) {
-            ctx.shutdown(&self.$field).await
+        fn shutdown(
+            &self,
+            ctx: $crate::Ctx<'_, Self, $st>,
+        ) -> impl ::core::future::Future<Output = ()> {
+            ctx.shutdown(&self.$field)
         }
     };
     (@go $st:ty; [$($field:tt)+]; map_err = $err:expr $(,)?) => {
@@ -79,14 +85,21 @@ macro_rules! forward {
             $(ctx.bind::<_, $st, _>(&self.$field);)+
         }
 
-        async fn ready(&self, ctx: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
-            $crate::forward!(@ready ctx, self, $err; $($field)+)
-                .await
-                .map(|_| ())
+        fn ready(
+            &self,
+            ctx: $crate::Ctx<'_, Self, $st>,
+        ) -> impl ::core::future::Future<Output = Result<(), Self::Error>> {
+            $crate::__private::map_output(
+                $crate::forward!(@ready ctx, self, $err; $($field)+),
+                |res| res.map(|_| ()),
+            )
         }
 
-        async fn shutdown(&self, ctx: $crate::Ctx<'_, Self, $st>) {
-            $crate::forward!(@shutdown ctx, self; $($field)+).await
+        fn shutdown(
+            &self,
+            ctx: $crate::Ctx<'_, Self, $st>,
+        ) -> impl ::core::future::Future<Output = ()> {
+            $crate::forward!(@shutdown ctx, self; $($field)+)
         }
     };
     (@go $st:ty; []; map_err $($rest:tt)*) => {
@@ -116,8 +129,8 @@ macro_rules! forward {
     (@ready $ctx:ident, $this:tt, $err:expr; $field:tt $($rest:tt)+) => {
         $crate::__private::ready_join(
             $ctx,
-            || $crate::__private::ready_field($ctx, &$this.$field, $err),
-            || $crate::forward!(@ready $ctx, $this, $err; $($rest)+),
+            move |$ctx| $crate::__private::ready_field($ctx, &$this.$field, $err),
+            move |$ctx| $crate::forward!(@ready $ctx, $this, $err; $($rest)+),
         )
     };
     (@shutdown $ctx:ident, $this:tt; $field:tt) => {

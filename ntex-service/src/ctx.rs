@@ -362,7 +362,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Returns the pipeline state.
-    pub fn st(&'a self) -> &'a St {
+    pub fn st(&self) -> &'a St {
         self.st
     }
 
@@ -392,27 +392,30 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     ///
     /// A [`crate::ReadyBinding`] reuses successful readiness until a subscribed
     /// source changes. A raw service is checked on every invocation.
-    pub fn ready<S, Req>(&self, svc: &'a S) -> impl Future<Output = Result<(), S::Error>>
+    pub fn ready<'b, S, Req>(
+        &self,
+        svc: &'b S,
+    ) -> impl Future<Output = Result<(), S::Error>> + use<'a, 'b, Svc, St, S, Req>
     where
         S: Service<St, Req>,
     {
         self.ready_call(svc)
     }
 
-    pub(crate) fn ready_generation<S, Req>(
+    pub(crate) fn ready_generation<'b, S, Req>(
         &self,
-        svc: &'a S,
-    ) -> impl Future<Output = Result<Generation, S::Error>> + use<'a, Svc, St, S, Req>
+        svc: &'b S,
+    ) -> impl Future<Output = Result<Generation, S::Error>> + use<'a, 'b, Svc, St, S, Req>
     where
         S: Service<St, Req>,
     {
         self.ready_call(svc)
     }
 
-    fn ready_call<S, Req, O>(
+    fn ready_call<'b, S, Req, O>(
         &self,
-        svc: &'a S,
-    ) -> impl Future<Output = Result<O, S::Error>> + use<'a, Svc, St, S, Req, O>
+        svc: &'b S,
+    ) -> impl Future<Output = Result<O, S::Error>> + use<'a, 'b, Svc, St, S, Req, O>
     where
         S: Service<St, Req>,
         O: From<Generation>,
@@ -514,11 +517,14 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Shuts down `svc`.
-    pub async fn shutdown<S, Req>(&self, svc: &'a S)
+    pub fn shutdown<'b, S, Req>(
+        &self,
+        svc: &'b S,
+    ) -> impl Future<Output = ()> + use<'a, 'b, Svc, St, S, Req>
     where
         S: Service<St, Req>,
     {
-        svc.shutdown(self.cast()).await;
+        svc.shutdown(self.cast())
     }
 
     #[inline]

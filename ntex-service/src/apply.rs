@@ -1,6 +1,6 @@
 use std::{fmt, marker};
 
-use crate::{BindCtx, Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::{BindCtx, Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory, util};
 use crate::{ServiceCaller, ServiceChain, ServiceChainFactory};
 
 /// Applies an asynchronous middleware function to a service.
@@ -135,8 +135,8 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     /// Returns the inner response and error types without applying the outer
     /// middleware's conversions.
     #[inline]
-    pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
-        self.service.call(req, self.ctx.cast()).await
+    pub fn call(&self, req: Req) -> impl Future<Output = Result<S::Res, S::Error>> {
+        self.service.call(req, self.ctx.cast())
     }
 }
 
@@ -144,8 +144,8 @@ impl<S: Service<St, Req>, St, Req> ServiceCaller<Req, S::Res, S::Error>
     for ApplyCtx<'_, S, St, Req>
 {
     #[inline]
-    async fn call_service(&self, req: Req) -> Result<S::Res, S::Error> {
-        self.call(req).await
+    fn call_service(&self, req: Req) -> impl Future<Output = Result<S::Res, S::Error>> {
+        self.call(req)
     }
 }
 
@@ -216,8 +216,8 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Err> {
-        ctx.ready(&self.svc).await.map_err(From::from)
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Err>> {
+        util::map_output(ctx.ready(&self.svc), |res| res.map_err(From::from))
     }
 
     #[inline]
@@ -236,8 +236,8 @@ where
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        ctx.shutdown(&self.svc).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        ctx.shutdown(&self.svc)
     }
 }
 

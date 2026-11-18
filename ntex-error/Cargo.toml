@@ -24,6 +24,7 @@ ntex-bytes = { workspace = true }
 
 backtrace = { workspace = true }
 foldhash = { workspace = true }
+pin-project-lite = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

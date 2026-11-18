@@ -1,4 +1,40 @@
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
+
 use super::{BindCtx, Ctx, Service, ServiceFactory, util};
+
+pin_project_lite::pin_project! {
+    /// Calls the first service, then passes its response to `next`.
+    ///
+    /// Unlike an `async fn`, the states do not keep storage for the request,
+    /// `self`, or `ctx` after they are moved into the call futures.
+    #[project = AndThenCallProj]
+    enum AndThenCall<F1, N, F2> {
+        First { #[pin] fut: F1, next: Option<N> },
+        Second { #[pin] fut: F2 },
+    }
+}
+
+impl<F1, N, F2, R, T, E> Future for AndThenCall<F1, N, F2>
+where
+    F1: Future<Output = Result<R, E>>,
+    N: FnOnce(R) -> F2,
+    F2: Future<Output = Result<T, E>>,
+{
+    type Output = Result<T, E>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            let fut = match self.as_mut().project() {
+                AndThenCallProj::First { fut, next } => match std::task::ready!(fut.poll(cx)) {
+                    Ok(res) => next.take().expect("`AndThenCall` polled after completion")(res),
+                    Err(err) => return Poll::Ready(Err(err)),
+                },
+                AndThenCallProj::Second { fut } => return fut.poll(cx),
+            };
+            self.set(AndThenCall::Second { fut });
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 /// Calls two services in sequence, passing the first response to the second.
@@ -71,19 +107,25 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
-        let result = self.svc1.call(req, ctx.cast()).await?;
-        self.svc2.call(result, ctx.cast()).await
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<B::Res, A::Error>> {
+        AndThenCall::First {
+            fut: self.svc1.call(req, ctx.cast()),
+            next: Some(move |res: A::Res| self.svc2.call(res, ctx.cast())),
+        }
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        util::ready(&self.svc1, &self.svc2, ctx).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Self::Error>> {
+        util::ready(&self.svc1, &self.svc2, ctx)
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        util::shutdown(&self.svc1, &self.svc2, ctx).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        util::shutdown(&self.svc1, &self.svc2, ctx)
     }
 }
 

@@ -20,19 +20,19 @@ use super::connection::{Connection, ConnectionType};
 use super::error::{ClientError, ConnectError};
 use super::{ClientCodec, ClientPayloadCodec, ClientRawRequest, pool::Acquired};
 
-pub(super) async fn send_request(
+pub(super) fn send_request(
     io: IoBoxed,
     req: ClientRawRequest,
     body: Body,
     created: Instant,
     timeout: Millis,
     pool: Option<Acquired>,
-) -> Result<(ResponseHead, Payload), Error<ClientError>> {
+) -> impl Future<Output = Result<(ResponseHead, Payload), Error<ClientError>>> {
+    let svc = io.cfg().ctx().service();
     with_service(
-        io.cfg().ctx().service(),
+        svc,
         send_request_inner(io, req, body, created, timeout, pool),
     )
-    .await
 }
 
 async fn send_request_inner(

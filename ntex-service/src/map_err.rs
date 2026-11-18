@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{BindCtx, Ctx, Service, ServiceFactory};
+use super::{BindCtx, Ctx, Service, ServiceFactory, util};
 
 /// Transforms call and readiness errors with a synchronous function.
 ///
@@ -103,21 +103,18 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, E> {
-        self.svc
-            .call(req, ctx.cast())
-            .await
-            .map_err(|e| (self.f)(e))
+    fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<S::Res, E>> {
+        util::map_output(self.svc.call(req, ctx.cast()), |res| res.map_err(&self.f))
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), E> {
-        self.svc.ready(ctx.cast()).await.map_err(&self.f)
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), E>> {
+        util::map_output(self.svc.ready(ctx.cast()), |res| res.map_err(&self.f))
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        self.svc.shutdown(ctx.cast()).await;
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        self.svc.shutdown(ctx.cast())
     }
 }
 
