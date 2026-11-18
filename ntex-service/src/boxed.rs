@@ -14,7 +14,7 @@
 //! readiness cache is needed.
 //!
 //! The wrapped service's `ready`, `call`, and `shutdown` futures are stored in
-//! an [`InlineFuture`] slot of `WORDS` machine words (20 by default). Futures
+//! an [`InlineFuture`] slot of `WORDS` machine words (8 by default). Futures
 //! that fit don't allocate, larger futures are boxed. Use
 //! [`BoxService::new_inline`] or [`BoxServiceFactory::new_inline`] to pick a
 //! different slot size; `WORDS = 0` boxes every future larger than a pointer.
@@ -54,7 +54,7 @@ use crate::{Service, ServiceFactory, util::BoxFuture};
 /// The wrapped service's futures are stored inline when they fit into `WORDS`
 /// machine words and boxed otherwise, see [`InlineFuture`]. Boxed services
 /// with different `WORDS` are different types.
-pub struct BoxService<St, Req, Res, Err, const WORDS: usize = 20> {
+pub struct BoxService<St, Req, Res, Err, const WORDS: usize = 8> {
     inner: Rc<dyn ServiceObj<St, Req, WORDS, Res = Res, Error = Err>>,
 }
 
@@ -62,17 +62,11 @@ pub struct BoxService<St, Req, Res, Err, const WORDS: usize = 20> {
 pub fn service<S, St, Req, Res, Err>(service: S) -> BoxService<St, Req, Res, Err>
 where
     S: Service<St, Req, Res = Res, Error = Err> + 'static,
-    Res: 'static,
-    Err: 'static,
 {
     BoxService::new(service)
 }
 
-impl<St, Req, Res, Err> BoxService<St, Req, Res, Err>
-where
-    Res: 'static,
-    Err: 'static,
-{
+impl<St, Req, Res, Err> BoxService<St, Req, Res, Err> {
     /// Creates a boxed service with the default inline slot.
     pub fn new<S>(service: S) -> Self
     where
@@ -82,11 +76,7 @@ where
     }
 }
 
-impl<St, Req, Res, Err, const WORDS: usize> BoxService<St, Req, Res, Err, WORDS>
-where
-    Res: 'static,
-    Err: 'static,
-{
+impl<St, Req, Res, Err, const WORDS: usize> BoxService<St, Req, Res, Err, WORDS> {
     /// Creates a boxed service that stores futures of up to `WORDS` machine
     /// words inline.
     ///
@@ -124,9 +114,6 @@ impl<St, Req, Res, Err, const WORDS: usize> fmt::Debug for BoxService<St, Req, R
 
 impl<St, Req, Res, Err, const WORDS: usize> Service<St, Req>
     for BoxService<St, Req, Res, Err, WORDS>
-where
-    Res: 'static,
-    Err: 'static,
 {
     type Res = Res;
     type Error = Err;
@@ -152,12 +139,15 @@ where
 }
 
 trait ServiceObj<St, Req, const WORDS: usize> {
-    type Res: 'static;
-    type Error: 'static;
+    type Res;
+    type Error;
 
     fn bind(&self, ctx: BindCtx<'_>);
 
-    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> InlineFuture<'a, Result<(), Self::Error>, WORDS>;
+    fn ready<'a>(
+        &'a self,
+        ctx: Ctx<'a, (), St>,
+    ) -> InlineFuture<'a, Result<(), Self::Error>, WORDS>;
 
     fn call<'a>(
         &'a self,
@@ -176,8 +166,6 @@ trait ServiceObj<St, Req, const WORDS: usize> {
 impl<S, St, Req, const WORDS: usize> ServiceObj<St, Req, WORDS> for S
 where
     S: Service<St, Req>,
-    S::Res: 'static,
-    S::Error: 'static,
 {
     type Res = S::Res;
     type Error = S::Error;
@@ -187,7 +175,10 @@ where
     }
 
     #[inline]
-    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> InlineFuture<'a, Result<(), Self::Error>, WORDS> {
+    fn ready<'a>(
+        &'a self,
+        ctx: Ctx<'a, (), St>,
+    ) -> InlineFuture<'a, Result<(), Self::Error>, WORDS> {
         InlineFuture::new(async move { Service::ready(self, ctx.cast()).await })
     }
 
@@ -218,7 +209,7 @@ where
 /// Boxed service factory.
 ///
 /// Created services are [`BoxService`]s with the same `WORDS` slot size.
-pub struct BoxServiceFactory<St, Req, Res, Err, InitErr, const WORDS: usize = 20> {
+pub struct BoxServiceFactory<St, Req, Res, Err, InitErr, const WORDS: usize = 8> {
     inner: Rc<dyn ServiceFactoryObj<St, Req, WORDS, Res = Res, Error = Err, InitErr = InitErr>>,
 }
 
@@ -228,8 +219,6 @@ pub fn factory<Sf, St, Req>(
 ) -> BoxServiceFactory<St, Req, Sf::Res, Sf::Error, Sf::InitError>
 where
     Sf: ServiceFactory<St, Req> + 'static,
-    Sf::Res: 'static,
-    Sf::Error: 'static,
     St: 'static,
     Req: 'static,
 {
@@ -240,8 +229,6 @@ impl<St, Req, Res, Err, InitErr> BoxServiceFactory<St, Req, Res, Err, InitErr>
 where
     St: 'static,
     Req: 'static,
-    Res: 'static,
-    Err: 'static,
 {
     /// Creates a boxed service factory with the default inline slot.
     pub fn new<Sf>(factory: Sf) -> Self
@@ -257,8 +244,6 @@ impl<St, Req, Res, Err, InitErr, const WORDS: usize>
 where
     St: 'static,
     Req: 'static,
-    Res: 'static,
-    Err: 'static,
 {
     /// Creates a boxed service factory whose services store futures of up to
     /// `WORDS` machine words inline, see [`BoxService::new_inline`].
@@ -276,8 +261,6 @@ impl<St, Req, Res, Err, InitErr, const WORDS: usize> ServiceFactory<St, Req>
     for BoxServiceFactory<St, Req, Res, Err, InitErr, WORDS>
 where
     Req: 'static,
-    Res: 'static,
-    Err: 'static,
 {
     type Res = Res;
     type Error = Err;
@@ -327,8 +310,6 @@ where
     St: 'static,
     Req: 'static,
     Sf: ServiceFactory<St, Req> + 'static,
-    Sf::Res: 'static,
-    Sf::Error: 'static,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;

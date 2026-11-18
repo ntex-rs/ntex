@@ -1,5 +1,10 @@
 # Changes
 
+## [4.9.3] - 2026-11-18 (Unreleased)
+
+* web: Handler futures are stored using `ntex_service::dev::InlineFuture`, futures
+  of up to 32 machine words stay inline, larger futures are boxed
+
 ## [4.9.2] - 2026-11-17
 
 * http: `RequestHead::take_io()` returns `None` when called from filter callbacks of
