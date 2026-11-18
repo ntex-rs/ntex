@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "4.8.0"
+version = "4.8.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]
@@ -51,6 +51,7 @@ ntex-service = { workspace = true }
 ntex-net = { workspace = true }
 
 log = { workspace = true }
+pin-project-lite = { workspace = true }
 thiserror = { workspace = true }
 
 # openssl

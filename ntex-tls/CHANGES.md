@@ -18,6 +18,9 @@
 * openssl: document that `use_global_allocator()` must run before OpenSSL
   3.5+ makes aligned allocations
 
+* Reduce handshake future sizes: the handshake timeout and connect wrappers,
+  and rustls `TlsServerFilter::create`, no longer store the inner future twice
+
 ## [4.8.0] - 2026-11-07
 
 * Do not use deprecated bytes method

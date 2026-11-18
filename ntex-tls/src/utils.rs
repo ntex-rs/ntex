@@ -1,49 +1,115 @@
 //! Handshake driving, timeout mapping, and metadata normalization shared by TLS backends.
 #![allow(dead_code)]
-use std::{future::Future, io};
+use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use ntex_error::Error;
 use ntex_io::{Io, types::HttpProtocol};
 use ntex_net::connect::ConnectError;
 use ntex_service::cfg::Cfg;
-use ntex_util::time::{Millis, timeout_checked};
+use ntex_util::time::{Millis, Sleep};
 
 use crate::TlsConfig;
 
 /// Runs a handshake with a deadline, preserving its original result.
 ///
-/// Zero disables the deadline. Expiration drops the handshake future and returns
-/// `TimedOut`; no separate background handshake is left running.
-pub(crate) async fn with_timeout<R>(
-    timeout: Millis,
-    fut: impl Future<Output = io::Result<R>>,
-) -> io::Result<R> {
-    timeout_checked(timeout, fut).await.unwrap_or_else(|()| {
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "TLS Handshake timeout",
-        ))
-    })
+/// Zero disables the deadline. The deadline starts on the first poll.
+/// Expiration returns `TimedOut`; dropping the returned future drops the
+/// handshake, so no separate background handshake is left running.
+pub(crate) fn with_timeout<F, R>(timeout: Millis, fut: F) -> WithTimeout<F>
+where
+    F: Future<Output = io::Result<R>>,
+{
+    WithTimeout {
+        fut,
+        timeout,
+        delay: None,
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// Future returned by [`with_timeout`].
+    pub(crate) struct WithTimeout<F> {
+        #[pin]
+        fut: F,
+        timeout: Millis,
+        delay: Option<Sleep>,
+    }
+}
+
+impl<F, R> Future for WithTimeout<F>
+where
+    F: Future<Output = io::Result<R>>,
+{
+    type Output = io::Result<R>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        if this.delay.is_none() && !this.timeout.is_zero() {
+            *this.delay = Some(Sleep::new(*this.timeout));
+        }
+
+        if let Poll::Ready(res) = this.fut.poll(cx) {
+            return Poll::Ready(res);
+        }
+
+        match this.delay {
+            Some(delay) if delay.poll_elapsed(cx).is_ready() => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "TLS Handshake timeout",
+            ))),
+            _ => Poll::Pending,
+        }
+    }
 }
 
 /// Runs a client handshake with timeout and configuration-scoped diagnostics.
 ///
 /// Maps TLS and timeout errors into `ConnectError` and attaches the TLS service
 /// identity. Transport establishment must already have completed.
-pub(crate) async fn connect<R>(
-    cfg: &Cfg<TlsConfig>,
-    host: &str,
-    fut: impl Future<Output = io::Result<R>>,
-) -> Result<R, Error<ConnectError>> {
+pub(crate) fn connect<'a, F, R>(cfg: &Cfg<TlsConfig>, host: &'a str, fut: F) -> TlsConnect<'a, F>
+where
+    F: Future<Output = io::Result<R>>,
+{
     log::trace!("{}: TLS Handshake start for: {host:?}", cfg.tag());
-    match with_timeout(cfg.handshake_timeout(), fut).await {
-        Ok(io) => {
-            log::trace!("{}: TLS Handshake success: {host:?}", cfg.tag());
-            Ok(io)
-        }
-        Err(e) => {
-            log::trace!("{}: TLS Handshake error: {e:?}", cfg.tag());
-            Err(Error::from(ConnectError::from(e)).with_service(cfg.service()))
+    TlsConnect {
+        fut: with_timeout(cfg.handshake_timeout(), fut),
+        tag: cfg.tag(),
+        service: cfg.service(),
+        host,
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// Future returned by [`connect`].
+    pub(crate) struct TlsConnect<'a, F> {
+        #[pin]
+        fut: WithTimeout<F>,
+        tag: &'static str,
+        service: &'static str,
+        host: &'a str,
+    }
+}
+
+impl<F, R> Future for TlsConnect<'_, F>
+where
+    F: Future<Output = io::Result<R>>,
+{
+    type Output = Result<R, Error<ConnectError>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        match this.fut.poll(cx) {
+            Poll::Ready(Ok(io)) => {
+                log::trace!("{}: TLS Handshake success: {:?}", this.tag, this.host);
+                Poll::Ready(Ok(io))
+            }
+            Poll::Ready(Err(e)) => {
+                log::trace!("{}: TLS Handshake error: {e:?}", this.tag);
+                Poll::Ready(Err(
+                    Error::from(ConnectError::from(e)).with_service(this.service)
+                ))
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -379,6 +445,24 @@ mod tests {
             assert_eq!(err.kind(), io::ErrorKind::InvalidData);
             assert_eq!(err.to_string(), "handshake rejected");
         }
+    }
+
+    /// STATEMENT: The handshake deadline starts on the first poll, not when the future is created.
+    ///
+    /// HOW:
+    /// - Create a 50 ms `with_timeout` future around a pending handshake and sleep 150 ms.
+    /// - Check the first poll is still pending, then check awaiting it returns `TimedOut`.
+    #[ntex::test]
+    async fn with_timeout_starts_on_first_poll() {
+        let mut fut = pin!(with_timeout(
+            Millis(50),
+            std::future::pending::<io::Result<()>>()
+        ));
+        ntex_util::time::sleep(Millis(150)).await;
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+
+        let err = fut.await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 
     /// STATEMENT: Only the `h2` ALPN value selects HTTP/2; other values default to HTTP/1.
