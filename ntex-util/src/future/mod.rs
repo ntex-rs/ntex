@@ -17,6 +17,8 @@ pub use self::lazy::{Lazy, lazy};
 pub use self::on_drop::{OnDropFn, OnDropFuture, OnDropFutureExt};
 pub use self::select::select;
 
+pub use ntex_service::dev::InlineFuture;
+
 /// An owned, dynamically dispatched future.
 ///
 /// This is useful when a concrete future type cannot be named or when type

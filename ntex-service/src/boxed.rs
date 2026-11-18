@@ -13,6 +13,12 @@
 //! one to a raw service; use [`crate::Pipeline`] or [`crate::ready()`] when a
 //! readiness cache is needed.
 //!
+//! The wrapped service's `ready`, `call`, and `shutdown` futures are stored in
+//! an [`InlineFuture`] slot of `WORDS` machine words (20 by default). Futures
+//! that fit don't allocate, larger futures are boxed. Use
+//! [`BoxService::new_inline`] or [`BoxServiceFactory::new_inline`] to pick a
+//! different slot size; `WORDS = 0` boxes every future larger than a pointer.
+//!
 //! # Example
 //!
 //! ```
@@ -34,7 +40,7 @@
 
 use std::{fmt, rc::Rc};
 
-use crate::{BindCtx, Ctx};
+use crate::{BindCtx, Ctx, inline::InlineFuture};
 use crate::{Service, ServiceFactory, util::BoxFuture};
 
 // ============================ Service =============================
@@ -44,21 +50,55 @@ use crate::{Service, ServiceFactory, util::BoxFuture};
 /// Type erasure preserves the wrapped service's readiness identity. Clones
 /// share that service and any bound readiness; boxing a raw service does not
 /// give it a cache.
-pub struct BoxService<St, Req, Res, Err> {
-    inner: Rc<dyn ServiceObj<St, Req, Res = Res, Error = Err>>,
+///
+/// The wrapped service's futures are stored inline when they fit into `WORDS`
+/// machine words and boxed otherwise, see [`InlineFuture`]. Boxed services
+/// with different `WORDS` are different types.
+pub struct BoxService<St, Req, Res, Err, const WORDS: usize = 20> {
+    inner: Rc<dyn ServiceObj<St, Req, WORDS, Res = Res, Error = Err>>,
 }
 
 /// Creates a boxed service.
 pub fn service<S, St, Req, Res, Err>(service: S) -> BoxService<St, Req, Res, Err>
 where
     S: Service<St, Req, Res = Res, Error = Err> + 'static,
+    Res: 'static,
+    Err: 'static,
 {
     BoxService::new(service)
 }
 
-impl<St, Req, Res, Err> BoxService<St, Req, Res, Err> {
-    /// Creates a boxed service.
+impl<St, Req, Res, Err> BoxService<St, Req, Res, Err>
+where
+    Res: 'static,
+    Err: 'static,
+{
+    /// Creates a boxed service with the default inline slot.
     pub fn new<S>(service: S) -> Self
+    where
+        S: Service<St, Req, Res = Res, Error = Err> + 'static,
+    {
+        Self::new_inline(service)
+    }
+}
+
+impl<St, Req, Res, Err, const WORDS: usize> BoxService<St, Req, Res, Err, WORDS>
+where
+    Res: 'static,
+    Err: 'static,
+{
+    /// Creates a boxed service that stores futures of up to `WORDS` machine
+    /// words inline.
+    ///
+    /// `WORDS` is usually inferred from the annotated type:
+    ///
+    /// ```
+    /// use ntex_service::{boxed::BoxService, fn_service};
+    ///
+    /// let svc: BoxService<(), u32, u32, (), 4> =
+    ///     BoxService::new_inline(fn_service(async |req: u32| Ok::<_, ()>(req)));
+    /// ```
+    pub fn new_inline<S>(service: S) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
     {
@@ -68,7 +108,7 @@ impl<St, Req, Res, Err> BoxService<St, Req, Res, Err> {
     }
 }
 
-impl<St, Req, Res, Err> Clone for BoxService<St, Req, Res, Err> {
+impl<St, Req, Res, Err, const WORDS: usize> Clone for BoxService<St, Req, Res, Err, WORDS> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -76,13 +116,18 @@ impl<St, Req, Res, Err> Clone for BoxService<St, Req, Res, Err> {
     }
 }
 
-impl<St, Req, Res, Err> fmt::Debug for BoxService<St, Req, Res, Err> {
+impl<St, Req, Res, Err, const WORDS: usize> fmt::Debug for BoxService<St, Req, Res, Err, WORDS> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BoxService").finish()
     }
 }
 
-impl<St, Req, Res, Err> Service<St, Req> for BoxService<St, Req, Res, Err> {
+impl<St, Req, Res, Err, const WORDS: usize> Service<St, Req>
+    for BoxService<St, Req, Res, Err, WORDS>
+where
+    Res: 'static,
+    Err: 'static,
+{
     type Res = Res;
     type Error = Err;
 
@@ -106,31 +151,33 @@ impl<St, Req, Res, Err> Service<St, Req> for BoxService<St, Req, Res, Err> {
     }
 }
 
-trait ServiceObj<St, Req> {
-    type Res;
-    type Error;
+trait ServiceObj<St, Req, const WORDS: usize> {
+    type Res: 'static;
+    type Error: 'static;
 
     fn bind(&self, ctx: BindCtx<'_>);
 
-    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<(), Self::Error>>;
+    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> InlineFuture<'a, Result<(), Self::Error>, WORDS>;
 
     fn call<'a>(
         &'a self,
         r: Req,
         ctx: Ctx<'a, (), St>,
-    ) -> BoxFuture<'a, Result<Self::Res, Self::Error>>
+    ) -> InlineFuture<'a, Result<Self::Res, Self::Error>, WORDS>
     where
         Req: 'a;
 
-    fn shutdown<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, ()>
+    fn shutdown<'a>(&'a self, ctx: Ctx<'a, (), St>) -> InlineFuture<'a, (), WORDS>
     where
         St: 'a,
         Req: 'a;
 }
 
-impl<S, St, Req> ServiceObj<St, Req> for S
+impl<S, St, Req, const WORDS: usize> ServiceObj<St, Req, WORDS> for S
 where
     S: Service<St, Req>,
+    S::Res: 'static,
+    S::Error: 'static,
 {
     type Res = S::Res;
     type Error = S::Error;
@@ -140,33 +187,39 @@ where
     }
 
     #[inline]
-    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<(), Self::Error>> {
-        Box::pin(async move { Service::ready(self, ctx.cast()).await })
+    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> InlineFuture<'a, Result<(), Self::Error>, WORDS> {
+        InlineFuture::new(async move { Service::ready(self, ctx.cast()).await })
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, Result<S::Res, S::Error>>
+    fn call<'a>(
+        &'a self,
+        req: Req,
+        ctx: Ctx<'a, (), St>,
+    ) -> InlineFuture<'a, Result<S::Res, S::Error>, WORDS>
     where
         Req: 'a,
     {
-        Box::pin(Service::call(self, req, ctx.cast()))
+        InlineFuture::new(Service::call(self, req, ctx.cast()))
     }
 
     #[inline]
-    fn shutdown<'a>(&'a self, ctx: Ctx<'a, (), St>) -> BoxFuture<'a, ()>
+    fn shutdown<'a>(&'a self, ctx: Ctx<'a, (), St>) -> InlineFuture<'a, (), WORDS>
     where
         St: 'a,
         Req: 'a,
     {
-        Box::pin(Service::shutdown(self, ctx.cast()))
+        InlineFuture::new(Service::shutdown(self, ctx.cast()))
     }
 }
 
 // ============================ ServiceFactory =============================
 
 /// Boxed service factory.
-pub struct BoxServiceFactory<St, Req, Res, Err, InitErr> {
-    inner: Rc<dyn ServiceFactoryObj<St, Req, Res = Res, Error = Err, InitErr = InitErr>>,
+///
+/// Created services are [`BoxService`]s with the same `WORDS` slot size.
+pub struct BoxServiceFactory<St, Req, Res, Err, InitErr, const WORDS: usize = 20> {
+    inner: Rc<dyn ServiceFactoryObj<St, Req, WORDS, Res = Res, Error = Err, InitErr = InitErr>>,
 }
 
 /// Creates a boxed service factory.
@@ -175,6 +228,8 @@ pub fn factory<Sf, St, Req>(
 ) -> BoxServiceFactory<St, Req, Sf::Res, Sf::Error, Sf::InitError>
 where
     Sf: ServiceFactory<St, Req> + 'static,
+    Sf::Res: 'static,
+    Sf::Error: 'static,
     St: 'static,
     Req: 'static,
 {
@@ -185,13 +240,31 @@ impl<St, Req, Res, Err, InitErr> BoxServiceFactory<St, Req, Res, Err, InitErr>
 where
     St: 'static,
     Req: 'static,
+    Res: 'static,
+    Err: 'static,
 {
-    /// Creates a boxed service factory.
+    /// Creates a boxed service factory with the default inline slot.
     pub fn new<Sf>(factory: Sf) -> Self
     where
         Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitError = InitErr> + 'static,
-        St: 'static,
-        Req: 'static,
+    {
+        Self::new_inline(factory)
+    }
+}
+
+impl<St, Req, Res, Err, InitErr, const WORDS: usize>
+    BoxServiceFactory<St, Req, Res, Err, InitErr, WORDS>
+where
+    St: 'static,
+    Req: 'static,
+    Res: 'static,
+    Err: 'static,
+{
+    /// Creates a boxed service factory whose services store futures of up to
+    /// `WORDS` machine words inline, see [`BoxService::new_inline`].
+    pub fn new_inline<Sf>(factory: Sf) -> Self
+    where
+        Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitError = InitErr> + 'static,
     {
         Self {
             inner: Rc::new(factory),
@@ -199,15 +272,17 @@ where
     }
 }
 
-impl<St, Req, Res, Err, InitErr> ServiceFactory<St, Req>
-    for BoxServiceFactory<St, Req, Res, Err, InitErr>
+impl<St, Req, Res, Err, InitErr, const WORDS: usize> ServiceFactory<St, Req>
+    for BoxServiceFactory<St, Req, Res, Err, InitErr, WORDS>
 where
     Req: 'static,
+    Res: 'static,
+    Err: 'static,
 {
     type Res = Res;
     type Error = Err;
 
-    type Service = BoxService<St, Req, Res, Err>;
+    type Service = BoxService<St, Req, Res, Err, WORDS>;
     type InitError = InitErr;
 
     #[inline]
@@ -216,7 +291,9 @@ where
     }
 }
 
-impl<St, Req, Res, Err, InitErr> Clone for BoxServiceFactory<St, Req, Res, Err, InitErr> {
+impl<St, Req, Res, Err, InitErr, const WORDS: usize> Clone
+    for BoxServiceFactory<St, Req, Res, Err, InitErr, WORDS>
+{
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -224,13 +301,15 @@ impl<St, Req, Res, Err, InitErr> Clone for BoxServiceFactory<St, Req, Res, Err, 
     }
 }
 
-impl<St, Req, Res, Err, InitErr> fmt::Debug for BoxServiceFactory<St, Req, Res, Err, InitErr> {
+impl<St, Req, Res, Err, InitErr, const WORDS: usize> fmt::Debug
+    for BoxServiceFactory<St, Req, Res, Err, InitErr, WORDS>
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BoxServiceFactory").finish()
     }
 }
 
-trait ServiceFactoryObj<St, Req> {
+trait ServiceFactoryObj<St, Req, const WORDS: usize> {
     type Res;
     type Error;
     type InitErr;
@@ -238,16 +317,18 @@ trait ServiceFactoryObj<St, Req> {
     fn create<'a>(
         &'a self,
         st: &'a St,
-    ) -> BoxFuture<'a, Result<BoxService<St, Req, Self::Res, Self::Error>, Self::InitErr>>
+    ) -> BoxFuture<'a, Result<BoxService<St, Req, Self::Res, Self::Error, WORDS>, Self::InitErr>>
     where
         Req: 'a;
 }
 
-impl<Sf, St, Req> ServiceFactoryObj<St, Req> for Sf
+impl<Sf, St, Req, const WORDS: usize> ServiceFactoryObj<St, Req, WORDS> for Sf
 where
     St: 'static,
     Req: 'static,
     Sf: ServiceFactory<St, Req> + 'static,
+    Sf::Res: 'static,
+    Sf::Error: 'static,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;
@@ -257,11 +338,11 @@ where
     fn create<'a>(
         &'a self,
         st: &'a St,
-    ) -> BoxFuture<'a, Result<BoxService<St, Req, Self::Res, Self::Error>, Self::InitErr>>
+    ) -> BoxFuture<'a, Result<BoxService<St, Req, Self::Res, Self::Error, WORDS>, Self::InitErr>>
     where
         Req: 'a,
     {
         let fut = ServiceFactory::create(self, st);
-        Box::pin(async move { fut.await.map(service) })
+        Box::pin(async move { fut.await.map(BoxService::new_inline) })
     }
 }
