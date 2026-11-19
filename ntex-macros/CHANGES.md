@@ -1,5 +1,9 @@
 # Changes
 
+## Unrelease
+
+* Fix `rt_test2` for isolate from `ntex` crate
+
 ## [4.8.0] - 2026-11-16
 
 * Add `thread_pool` argument to `main` macro
