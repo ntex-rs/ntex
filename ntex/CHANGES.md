@@ -3,7 +3,8 @@
 ## [4.9.3] - 2026-11-18 (Unreleased)
 
 * web: Handler futures are stored using `ntex_service::dev::InlineFuture`, futures
-  of up to 32 machine words stay inline, larger futures are boxed
+  of up to 32 machine words stay inline, larger futures are boxed, both are built
+  in place
 
 * http: The per-request HTTP/2 service future is smaller (1328 to 992 bytes on
   64-bit), so its allocation stays under 1 KB

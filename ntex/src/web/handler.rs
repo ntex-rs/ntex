@@ -125,7 +125,7 @@ where
     St: State,
 {
     fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>) -> HandlerFuture<'a> {
-        HandlerFuture::new(async move {
+        HandlerFuture::new_with(|| async move {
             let (req, mut payload, reqst) = req.into_parts();
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
@@ -174,7 +174,7 @@ where
     St: State,
 {
     fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>) -> HandlerFuture<'a> {
-        HandlerFuture::new(async move {
+        HandlerFuture::new_with(|| async move {
             let (req, mut payload, _) = req.into_parts();
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
