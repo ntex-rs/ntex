@@ -19,8 +19,9 @@
 //! # }
 //! ```
 use std::marker::{PhantomData, PhantomPinned};
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::task::{Context, Poll};
-use std::{fmt, mem::MaybeUninit, pin::Pin, ptr};
+use std::{fmt, pin::Pin, ptr};
 
 /// Type-erased future stored inline when it fits into `WORDS` machine words.
 ///
@@ -79,12 +80,35 @@ impl<'a, T, const WORDS: usize> InlineFuture<'a, T, WORDS> {
     where
         F: Future<Output = T> + 'a,
     {
+        Self::new_with(move || fut)
+    }
+
+    /// Erases the type of the future returned by `f`, storing it inline if it
+    /// fits and boxing it otherwise.
+    ///
+    /// Unlike [`new`](Self::new), the storage is prepared before `f` runs, so
+    /// the future can be built directly in place instead of on the stack and
+    /// then copied. This matters for large futures that are boxed.
+    ///
+    /// ```
+    /// use ntex_service::dev::InlineFuture;
+    ///
+    /// fn double(value: u32) -> InlineFuture<'static, u32, 0> {
+    ///     InlineFuture::new_with(|| async move { value * 2 })
+    /// }
+    /// ```
+    #[inline]
+    pub fn new_with<F>(f: impl FnOnce() -> F) -> Self
+    where
+        F: Future<Output = T> + 'a,
+    {
         if Self::fits::<F>() {
             // SAFETY: `F` fits into the slot
-            unsafe { Self::new_inline(fut) }
+            unsafe { Self::new_inline(f) }
         } else {
+            let fut = Box::<F>::new_uninit();
             // SAFETY: a box is a single pointer, the slot holds at least one
-            unsafe { Self::new_inline(Box::pin(fut)) }
+            unsafe { Self::new_inline(|| Box::into_pin(Box::write(fut, f()))) }
         }
     }
 
@@ -96,21 +120,22 @@ impl<'a, T, const WORDS: usize> InlineFuture<'a, T, WORDS> {
     /// # Safety
     ///
     /// `F` must fit into the slot.
-    unsafe fn new_inline<F>(fut: F) -> Self
+    unsafe fn new_inline<F>(f: impl FnOnce() -> F) -> Self
     where
         F: Future<Output = T> + 'a,
     {
         debug_assert!(Self::fits::<F>());
 
-        let mut this = InlineFuture {
+        // Not dropped if `f` panics, the slot is still uninitialized
+        let mut this = ManuallyDrop::new(InlineFuture {
             vtable: &VTableOf::<F>::VTABLE,
             slot: MaybeUninit::uninit(),
             _t: PhantomData,
             _p: PhantomPinned,
-        };
+        });
         // SAFETY: the slot is large enough and aligned for `F`
-        unsafe { this.slot.as_mut_ptr().cast::<F>().write(fut) };
-        this
+        unsafe { this.slot.as_mut_ptr().cast::<F>().write(f()) };
+        ManuallyDrop::into_inner(this)
     }
 }
 
@@ -364,6 +389,28 @@ mod tests {
         assert_eq!(cnt.get(), 1);
         drop(boxed);
         assert_eq!(cnt.get(), 2);
+    }
+
+    /// STATEMENT: A panic while `new_with` builds the future leaves no destructor
+    /// running on the uninitialized slot.
+    ///
+    /// HOW:
+    /// - Call `new_with` for an inline `Padded<3>` and a boxed `Padded<4>` with a closure
+    ///   that panics, inside `catch_unwind`.
+    /// - Check that the panic propagates; under Miri, a drop of the uninitialized slot
+    ///   is reported as UB.
+    #[test]
+    fn panic_in_new_with_drops_nothing() {
+        for large in [false, true] {
+            let res = std::panic::catch_unwind(|| {
+                if large {
+                    Fut::new_with(|| -> Padded<4> { panic!("build") })
+                } else {
+                    Fut::new_with(|| -> Padded<3> { panic!("build") })
+                }
+            });
+            assert!(res.is_err());
+        }
     }
 
     /// STATEMENT: An inline future that borrows its own state stays valid across polls.

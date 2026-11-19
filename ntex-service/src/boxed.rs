@@ -179,7 +179,7 @@ where
         &'a self,
         ctx: Ctx<'a, (), St>,
     ) -> InlineFuture<'a, Result<(), Self::Error>, WORDS> {
-        InlineFuture::new(async move { Service::ready(self, ctx.cast()).await })
+        InlineFuture::new_with(|| async move { Service::ready(self, ctx.cast()).await })
     }
 
     #[inline]
@@ -191,7 +191,7 @@ where
     where
         Req: 'a,
     {
-        InlineFuture::new(Service::call(self, req, ctx.cast()))
+        InlineFuture::new_with(|| Service::call(self, req, ctx.cast()))
     }
 
     #[inline]
@@ -200,7 +200,7 @@ where
         St: 'a,
         Req: 'a,
     {
-        InlineFuture::new(Service::shutdown(self, ctx.cast()))
+        InlineFuture::new_with(|| Service::shutdown(self, ctx.cast()))
     }
 }
 

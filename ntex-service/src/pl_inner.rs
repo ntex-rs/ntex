@@ -3,7 +3,7 @@ use std::task::{Context, Poll, Waker};
 use std::{future::Future, future::poll_fn, marker::PhantomPinned, mem, ptr, rc::Rc};
 
 use crate::readiness::{Generation, ReadyObserver, ReadyScope};
-use crate::util::{BoxFuture, WithOwner};
+use crate::util::{BoxFuture, WithOwner, box_future};
 use crate::{BindCtx, Ctx, ReadyCallback, ReadyLink, Service, ctx::WaitersRef};
 
 // Pipeline-owned checks can be driven by any waiting caller. Caller-owned
@@ -230,10 +230,11 @@ impl<E> Drop for PipelineCheck<'_, E> {
 /// # Safety
 ///
 /// `pl` must be `Rc`-allocated, so it never moves. The returned reference must
-/// only be used by a future that is dropped before `pl`: either one stored in
-/// `pl` that its `Drop` impl releases before any field is dropped (see
-/// `Drop for PipelineInner` here and in `pl_state`), or one wrapped in
-/// `WithOwner` together with the `Rc` that owns `pl`.
+/// only be used by values that are dropped before `pl`: either a future stored
+/// in `pl` that its `Drop` impl releases before any field is dropped (see
+/// `Drop for PipelineInner` here and in `pl_state`), or a future wrapped in
+/// `WithOwner` whose owner holds the `Rc` that owns `pl`. Owner values that
+/// borrow `pl` must be dropped before that `Rc`.
 pub(crate) unsafe fn detach<'a, T>(pl: &T) -> &'a T {
     // SAFETY: guaranteed by the caller
     unsafe { &*ptr::from_ref(pl) }
@@ -300,13 +301,13 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         }
     }
 
-    pub(crate) fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<Res, Err>> {
-        self.0.call(idx, req)
+    pub(crate) fn call(&self, req: Req) -> BoxFuture<'_, Result<Res, Err>> {
+        self.0.call(req)
     }
 
     /// Calls the service with a future that keeps the pipeline alive.
-    pub(crate) fn call_static(&self, idx: u32, req: Req) -> BoxFuture<'static, Result<Res, Err>> {
-        self.0.clone().call_static(idx, req)
+    pub(crate) fn call_static(&self, req: Req) -> BoxFuture<'static, Result<Res, Err>> {
+        self.0.clone().call_static(req)
     }
 
     pub(crate) fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>> {
@@ -384,9 +385,10 @@ pub(crate) trait PipelineInternalApi<Req, Res, Err> {
 
     fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>>;
 
-    fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<Res, Err>>;
+    /// Calls the service; the returned future owns the call's waiter slot.
+    fn call(&self, req: Req) -> BoxFuture<'_, Result<Res, Err>>;
 
-    fn call_static(self: Rc<Self>, idx: u32, req: Req) -> BoxFuture<'static, Result<Res, Err>>;
+    fn call_static(self: Rc<Self>, req: Req) -> BoxFuture<'static, Result<Res, Err>>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>>;
 
@@ -424,18 +426,28 @@ where
         }))
     }
 
-    fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<S::Res, S::Error>> {
-        Box::pin(self.call_impl(idx, req))
+    fn call(&self, req: Req) -> BoxFuture<'_, Result<S::Res, S::Error>> {
+        box_future(|| {
+            let reg = self.waiters.register();
+            WithOwner {
+                fut: self.call_impl(reg.idx, req),
+                owner: reg,
+            }
+        })
     }
 
-    fn call_static(
-        self: Rc<Self>,
-        idx: u32,
-        req: Req,
-    ) -> BoxFuture<'static, Result<S::Res, S::Error>> {
-        // SAFETY: `self` is `Rc`-allocated and `WithOwner` drops the future before it
-        let fut = unsafe { detach(&*self) }.call_impl(idx, req);
-        Box::pin(WithOwner { fut, owner: self })
+    fn call_static(self: Rc<Self>, req: Req) -> BoxFuture<'static, Result<S::Res, S::Error>> {
+        // SAFETY: `self` is `Rc`-allocated, and `WithOwner` drops the future and
+        // then the registration before it
+        let pl = unsafe { detach(&*self) };
+        box_future(move || {
+            let reg = pl.waiters.register();
+            // Tuple fields are dropped in order, so `reg` is released before `self`
+            WithOwner {
+                fut: pl.call_impl(reg.idx, req),
+                owner: (reg, self),
+            }
+        })
     }
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {

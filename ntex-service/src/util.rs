@@ -4,6 +4,19 @@ use crate::{Ctx, Service, readiness::Generation};
 
 pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
 
+/// Boxes the future built by `f`.
+///
+/// Allocating before `f` runs lets the future be written directly into the
+/// box instead of being built on the stack and copied.
+#[inline]
+pub(crate) fn box_future<'a, F>(f: impl FnOnce() -> F) -> BoxFuture<'a, F::Output>
+where
+    F: Future + 'a,
+{
+    let b = Box::<F>::new_uninit();
+    Box::into_pin(Box::write(b, f()))
+}
+
 pin_project_lite::pin_project! {
     /// Keeps `owner` alive until `fut` is dropped.
     pub(crate) struct WithOwner<F, O> {

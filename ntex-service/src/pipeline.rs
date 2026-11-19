@@ -49,7 +49,7 @@
 //! - [Service Pipelines](https://docs.ntex.rs/2-pipeline.html)
 //! - [Service State](https://docs.ntex.rs/3-state.html)
 
-use std::{fmt, future, future::Future, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
 use crate::{
@@ -140,7 +140,7 @@ where
     /// Reuses valid shared readiness without consuming it. Calls are forwarded
     /// even after shutdown has started; see [`Pipeline`].
     pub fn call(&self, req: Req) -> impl Future<Output = Result<Res, Err>> {
-        PipelineCallRef::new(&self.api, self.bind(), req)
+        self.api.call(req)
     }
 
     #[inline]
@@ -151,7 +151,7 @@ where
     /// consulted when the future is polled and the call is dispatched, not
     /// when the future is constructed.
     pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
-        PipelineCall::new(self.bind(), req)
+        PipelineCall::new(self.api.call_static(req))
     }
 
     #[inline]
@@ -237,7 +237,7 @@ where
 {
     #[inline]
     fn call_service(&self, req: Req) -> impl Future<Output = Result<Res, Err>> {
-        PipelineCallRef::new(&self.api, self.bind(), req)
+        self.api.call(req)
     }
 }
 
@@ -298,7 +298,7 @@ where
     /// Reuses valid shared readiness without consuming it. Calls are forwarded
     /// even after shutdown has started; see [`Pipeline`].
     pub fn call(&self, req: Req) -> impl Future<Output = Result<Res, Err>> {
-        PipelineCallRef::new(&self.api, self.clone(), req)
+        self.api.call(req)
     }
 
     #[inline]
@@ -308,7 +308,7 @@ where
     /// local tasks. Shared readiness is consulted when the future is polled
     /// and the call is dispatched, not when the future is constructed.
     pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
-        PipelineCall::new(self.clone(), req)
+        PipelineCall::new(self.api.call_static(req))
     }
 
     #[inline]
@@ -360,51 +360,21 @@ impl<Req, Res, Err> Clone for PipelineBinding<Req, Res, Err> {
 /// future keeps the pipeline alive. It does not check whether the pipeline is shut
 /// down; the request is passed to the service as usual.
 pub struct PipelineCall<Req, Res, Err> {
+    // owns the pipeline and the call's waiter slot
     fut: BoxFuture<'static, Result<Res, Err>>,
-    // keeps the binding registered while the call runs
-    #[allow(dead_code)]
-    pl: PipelineBinding<Req, Res, Err>,
+    _r: PhantomData<fn(Req)>,
 }
 
 impl<Req, Res, Err> PipelineCall<Req, Res, Err> {
-    fn new(pl: PipelineBinding<Req, Res, Err>, req: Req) -> Self {
+    fn new(fut: BoxFuture<'static, Result<Res, Err>>) -> Self {
         PipelineCall {
-            fut: pl.api.call_static(pl.idx, req),
-            pl,
+            fut,
+            _r: PhantomData,
         }
     }
 }
 
 impl<Req, Res, Err> future::Future for PipelineCall<Req, Res, Err> {
-    type Output = Result<Res, Err>;
-
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.as_mut().fut).poll(cx)
-    }
-}
-
-/// A borrowed pipeline call that keeps its binding registered while it runs.
-struct PipelineCallRef<'a, Req, Res, Err> {
-    fut: BoxFuture<'a, Result<Res, Err>>,
-    // dropped after `fut`
-    _pl: PipelineBinding<Req, Res, Err>,
-}
-
-impl<'a, Req, Res, Err> PipelineCallRef<'a, Req, Res, Err> {
-    fn new(
-        api: &'a PipelineApi<Req, Res, Err>,
-        pl: PipelineBinding<Req, Res, Err>,
-        req: Req,
-    ) -> Self {
-        Self {
-            fut: api.call(pl.idx, req),
-            _pl: pl,
-        }
-    }
-}
-
-impl<Req, Res, Err> future::Future for PipelineCallRef<'_, Req, Res, Err> {
     type Output = Result<Res, Err>;
 
     #[inline]

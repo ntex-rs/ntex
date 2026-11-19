@@ -3,7 +3,8 @@
 ## [5.9.0] - 2026-11-18 (Unreleased)
 
 * Add `InlineFuture`, a type-erased future that stores futures of up to
-  `WORDS` machine words inline and boxes larger ones
+  `WORDS` machine words inline and boxes larger ones, `InlineFuture::new_with()`
+  builds the future directly in its inline slot or box
 
 * `BoxService` and `BoxServiceFactory` can store `ready()`, `call()` and `shutdown()`
   futures of up to `WORDS` machine words inline instead of boxing them, use
@@ -15,6 +16,10 @@
 
 * Reduce the polling overhead of `Ctx::call()`, `Pipeline::call()` and
   `PipelineState::call()` futures
+
+* Reduce the size and creation cost of `Pipeline::call()`, `PipelineBinding::call()`,
+  `Pipeline::call_static()`, `PipelineState::call()` and `PipelineStateBinding::call()`
+  futures, calls register their waiter slot without cloning the binding
 
 * `Pipeline::call()`, `PipelineBinding::call()`, `PipelineState::call()` and
   `PipelineStateBinding::call()` bind the pipeline and prepare the call when invoked
