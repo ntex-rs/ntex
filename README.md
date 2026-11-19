@@ -3,11 +3,11 @@
   <p><strong>Framework for composable network services.</strong></p>
 
 [![Linux](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml)
+[![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/main/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex/tree/main)
 [![crates.io](https://img.shields.io/crates/v/ntex.svg)](https://crates.io/crates/ntex)
 [![Documentation](https://img.shields.io/docsrs/ntex/latest)](https://docs.rs/ntex)
 [![MSRV](https://img.shields.io/badge/rustc-1.97+-lightgray.svg)](https://releases.rs/docs/1.97.0/)
 [![License](https://img.shields.io/crates/l/ntex.svg)](https://github.com/ntex-rs/ntex#license)
-[![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/main/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex/tree/main)
 [![Discord](https://img.shields.io/discord/919288597826387979?label=chat&logo=discord)](https://discord.gg/4GtaeP5Uqu)
 </div>
 
@@ -16,13 +16,11 @@ asynchronous network applications. It includes HTTP/1, HTTP/2, WebSocket,
 TLS, and runtime-independent I/O support. MQTT, AMQP, and gRPC are provided
 by [related projects](#related-projects).
 
-## Build status
+## Documentation
 
-| Platform | Status |
-| --- | --- |
-| Linux | [![Linux](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml) |
-| macOS | [![macOS](https://github.com/ntex-rs/ntex/actions/workflows/osx.yml/badge.svg?branch=main)](https://github.com/ntex-rs/ntex/actions/workflows/osx.yml) |
-| Windows | [![Windows](https://github.com/ntex-rs/ntex/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/ntex-rs/ntex/actions/workflows/windows.yml) |
+- [Framework guide](https://docs.ntex.rs/index.html)
+- [Examples repository](https://github.com/ntex-rs/examples)
+- [API documentation](https://docs.ntex.rs/api/ntex/index.html)
 
 ## Usage
 
@@ -91,6 +89,10 @@ ntex = { version = "4", features = ["tokio"] }
 | [ntex-mqtt](https://github.com/ntex-rs/ntex-mqtt) | Client and server framework for MQTT v5 and v3.1.1 |
 | [ntex-amqp](https://github.com/ntex-rs/ntex-amqp) | Client and server framework for AMQP 1.0 |
 | [ntex-grpc](https://github.com/ntex-rs/ntex-grpc) | Client and server framework for gRPC |
+
+## Benchmarks
+
+ntex ranks among the fastest frameworks on [HTTP Arena](https://http-arena.com/#scope=all).
 
 ## Documentation and community
 

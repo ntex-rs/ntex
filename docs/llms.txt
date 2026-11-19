@@ -488,6 +488,7 @@ async fn main() -> std::io::Result<()> {
 - [Application State](https://docs.ntex.rs/8.2-web-app.html)
 - [Filters and Middleware](https://docs.ntex.rs/8.3-web-app.html)
 - [Extractors and Responders](https://docs.ntex.rs/8.4-web-app.html)
+- [Request and Response Streaming](https://docs.ntex.rs/8.7-web-app.html)
 - [Error Handling](https://docs.ntex.rs/8.5-web-app.html)
 - [WebSocket Support](https://docs.ntex.rs/8.6-web-app.html)
 - [Byte Buffers](https://docs.ntex.rs/9-bytes.html)

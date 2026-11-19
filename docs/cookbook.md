@@ -601,10 +601,11 @@ async fn main() -> std::io::Result<()> {
 }
 ```
 
-The first tick waits one period; `interval` does not immediately run the job.
-For an initial refresh, do it explicitly before entering the loop. Await each
-refresh before the next tick to avoid overlapping runs. Use a single task to
-wait on each interval, and avoid blocking calls in that task.
+The first tick completes immediately, so the job runs once at startup and then
+once per period. To wait a full period first, await one tick before entering
+the loop. Await each refresh before the next tick to avoid overlapping runs.
+Use a single task to wait on each interval, and avoid blocking calls in that
+task.
 
 The state keeps the task handle in an `Rc`, shared by its connection clones.
 `cancel_on_drop()` requests cancellation when the last state handle is
