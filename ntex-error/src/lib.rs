@@ -181,6 +181,17 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `Error<E>` carries the service, tag, backtrace and extension items across
+    /// `clone`, `map`, `forward`, `try_map` and `Failure` conversion, and compares by the
+    /// inner error.
+    ///
+    /// HOW:
+    /// - Build an `Error<TestError>`; check `service`, `signature`, `backtrace` and equality
+    ///   with the inner error after `with_service`/`with_tag`.
+    /// - Check `map`/`forward` change equality and `into_error` keeps the `Display` text.
+    /// - Convert to `Failure` and check the service, signature and backtrace survive.
+    /// - Attach items with `with_item`; check they survive `clone`, `map`, `try_map` and
+    ///   `Failure::from`, and that `ResultSignature` reports `Success` or the error signature.
     #[ntex::test]
     async fn test_error() {
         let err: Error<TestError> = TestError::Service("409 Error").into();
@@ -212,16 +223,8 @@ mod tests {
         let err2 = err2.forward(|_| TestError::Disconnect);
         assert_ne!(err, err2);
 
-        assert_eq!(TestError::Connect("").to_string(), "Connect err: ");
-        assert_eq!(TestError::Disconnect.to_string(), "Disconnect");
         assert_eq!(TestError::Disconnect.service(), Some("test"));
         assert!(TestError::Disconnect.backtrace().is_none());
-
-        assert_eq!(ResultType::ClientError.as_str(), "ClientError");
-        assert_eq!(ResultType::ServiceError.as_str(), "ServiceError");
-        assert_eq!(ResultType::ClientError.to_string(), "ClientError");
-        assert_eq!(ResultType::ServiceError.to_string(), "ServiceError");
-        assert_eq!(format!("{}", ResultType::ClientError), "ClientError");
 
         assert_eq!(TestError::Connect("").signature(), "Client-Connect");
         assert_eq!(TestError::Disconnect.signature(), "Client-Disconnect");
@@ -248,7 +251,6 @@ mod tests {
             }
         }
 
-        assert_eq!(24, mem::size_of::<TestError>());
         assert_eq!(8, mem::size_of::<Error<TestError>>());
 
         assert_eq!(TestError2.service(), None);

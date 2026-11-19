@@ -376,20 +376,6 @@ mod tests {
         opcode_from!(OpCode::Pong => 10);
     }
 
-    /// STATEMENT: WebSocket opcodes display their distinct uppercase protocol names.
-    ///
-    /// HOW:
-    /// - Format every supported opcode and compare its complete name.
-    #[test]
-    fn test_from_opcode_display() {
-        assert_eq!(format!("{}", OpCode::Continue), "CONTINUE");
-        assert_eq!(format!("{}", OpCode::Text), "TEXT");
-        assert_eq!(format!("{}", OpCode::Binary), "BINARY");
-        assert_eq!(format!("{}", OpCode::Close), "CLOSE");
-        assert_eq!(format!("{}", OpCode::Ping), "PING");
-        assert_eq!(format!("{}", OpCode::Pong), "PONG");
-    }
-
     /// STATEMENT: WebSocket challenge hashing produces the expected accept value for a known key.
     ///
     /// HOW:

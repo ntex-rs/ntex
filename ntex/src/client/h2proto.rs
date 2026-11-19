@@ -647,4 +647,133 @@ mod tests {
             assert!(matches!(item, Some(Err(_))), "{item:?}");
         }
     }
+
+    /// Creates a client over a test transport and sends empty peer SETTINGS.
+    fn h2_client() -> (H2Client, IoTest) {
+        let (io, server) = IoTest::create();
+        // lets the client write
+        server.remote_buffer_cap(64 * 1024);
+        let client = H2Client::new(SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            false,
+            ByteString::from_static("localhost"),
+        ));
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        (client, server)
+    }
+
+    /// STATEMENT: An HTTP/2 request whose peer never responds fails with `ClientError::Timeout`.
+    ///
+    /// HOW:
+    /// - Send a request with a 50 ms timeout to a test peer that never writes a response.
+    /// - Check the request fails with `ClientError::Timeout`.
+    #[crate::rt_test]
+    async fn test_response_timeout() {
+        let (client, _server) = h2_client();
+        let req = ClientRawRequest {
+            head: Message::new(),
+            headers: None,
+            size: BodySize::None,
+        };
+        let err = crate::time::timeout(
+            Millis(5_000),
+            send_request_inner(client, req, Body::None, Millis(50)),
+        )
+        .await
+        .expect("request timeout did not fire")
+        .unwrap_err();
+        assert!(matches!(*err, ClientError::Timeout), "{err:?}");
+    }
+
+    /// STATEMENT: A failing HTTP/2 request body resets its stream with `INTERNAL_ERROR`.
+    ///
+    /// HOW:
+    /// - Send a POST whose body stream yields an error on the first poll.
+    /// - Parse the frames written by the client and require `RST_STREAM` with `INTERNAL_ERROR` on
+    ///   stream 1, then check the request itself fails.
+    #[crate::rt_test]
+    async fn test_body_error_resets_stream() {
+        struct FailingBody;
+        impl MessageBody for FailingBody {
+            fn size(&self) -> BodySize {
+                BodySize::Stream
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut std::task::Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Rc<dyn std::error::Error>>>> {
+                Poll::Ready(Some(Err(Rc::new(io::Error::other("body")))))
+            }
+        }
+
+        let (client, server) = h2_client();
+        let mut head = Message::<crate::http::RequestHead>::new();
+        head.method = Method::POST;
+        let req = ClientRawRequest {
+            head,
+            headers: None,
+            size: BodySize::Stream,
+        };
+        let fut = crate::rt::spawn(send_request_inner(
+            client,
+            req,
+            Body::Message(Box::new(FailingBody)),
+            Millis(5_000),
+        ));
+
+        // client preface, then frames: 24-bit length, type, flags, stream id
+        let mut buf = BytesMut::new();
+        let reset = crate::time::timeout(Millis(5_000), async {
+            loop {
+                buf.extend_from_slice(&server.read().await.unwrap());
+                let mut data = &buf[24..];
+                while data.len() >= 9 {
+                    let len = u32::from_be_bytes([0, data[0], data[1], data[2]]) as usize;
+                    let Some(payload) = data.get(9..9 + len) else {
+                        break;
+                    };
+                    let id = u32::from_be_bytes([data[5], data[6], data[7], data[8]]);
+                    if data[3] == 3 {
+                        return (id, payload.to_vec());
+                    }
+                    data = &data[9 + len..];
+                }
+            }
+        })
+        .await
+        .expect("stream is not reset");
+        assert!(buf.starts_with(b"PRI * HTTP/2.0"));
+        // RST_STREAM on stream 1, INTERNAL_ERROR
+        assert_eq!(reset, (1, vec![0, 0, 0, 2]));
+
+        let res = crate::time::timeout(Millis(5_000), fut)
+            .await
+            .expect("request did not complete")
+            .unwrap();
+        assert!(res.is_err());
+    }
+
+    /// STATEMENT: Without a peer stream limit, only a nonzero configured limit caps an HTTP/2
+    /// connection.
+    ///
+    /// HOW:
+    /// - Receive SETTINGS without `MAX_CONCURRENT_STREAMS` and reserve one stream with `begin`.
+    /// - Check `has_capacity(1)` is false while `has_capacity(0)` and `has_capacity(2)` stay true.
+    #[crate::rt_test]
+    async fn test_capacity_without_peer_limit() {
+        let (client, _server) = h2_client();
+        for _ in 0..50 {
+            if client.client.max_streams().is_none() {
+                break;
+            }
+            sleep(Millis(10)).await;
+        }
+        assert_eq!(client.client.max_streams(), None);
+
+        let _req = client.begin().unwrap();
+        assert_eq!(client.streams(), 1);
+        assert!(!client.has_capacity(1));
+        assert!(client.has_capacity(2));
+        assert!(client.has_capacity(0));
+    }
 }

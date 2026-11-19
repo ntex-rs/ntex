@@ -75,15 +75,13 @@ async fn drain_and_verify(io: &ntex_io::Io, len: usize, chunk: usize) {
     assert_eq!(seen, len, "expected {len} bytes, observed {seen}");
 }
 
-/// A consumer that stops reading must not lose data that arrives while it is
-/// paused: the application-facing buffer stays bounded at the watermark, and
-/// everything the peer sent is still delivered once reading resumes.
+/// STATEMENT: Input that arrives while the reader is paused keeps the read buffer bounded
+/// and is all delivered once reading resumes.
 ///
-/// This deliberately does *not* assert that the peer blocks. On Windows
-/// loopback the kernel absorbs many megabytes regardless of what the
-/// application does, so TCP-level throttling is not observable here. What is
-/// observable, and what matters, is that the application buffer stays bounded
-/// while paused and that nothing is dropped.
+/// HOW:
+/// - Connect to a peer that sends 8 MiB, read once and stop consuming for 500 ms.
+/// - Expect read backpressure on and the buffer at most four times the watermark.
+/// - Drain the rest; expect all data in order.
 #[ntex::test]
 async fn paused_reader_stays_bounded_and_loses_nothing() {
     const TOTAL: usize = 8 * 1024 * 1024;
@@ -113,8 +111,12 @@ async fn paused_reader_stays_bounded_and_loses_nothing() {
     drain_and_verify(&io, TOTAL, 4096).await;
 }
 
-/// Draining the buffer releases backpressure and the stream resumes without
-/// losing anything queued while it was suspended.
+/// STATEMENT: Draining the read buffer releases backpressure, and input queued while
+/// reading was paused is not lost.
+///
+/// HOW:
+/// - Connect to a peer that sends 4 MiB, with an 8 KiB read watermark.
+/// - Consume in 1 KiB pieces; expect all data in order.
 #[ntex::test]
 async fn backpressure_release_is_lossless() {
     const TOTAL: usize = 4 * 1024 * 1024;
@@ -127,8 +129,12 @@ async fn backpressure_release_is_lossless() {
     drain_and_verify(&io, TOTAL, 1024).await;
 }
 
-/// Repeated suspend/resume cycles cancel and resubmit the in-flight receive
-/// many times; no byte may be lost across the churn.
+/// STATEMENT: Repeatedly pausing and resuming reads loses no input.
+///
+/// HOW:
+/// - Connect to a peer that sends 4 MiB, with an 8 KiB read watermark.
+/// - Take the whole read buffer on each pass and pause 1 ms every 8 passes.
+/// - Expect all data in order.
 #[ntex::test]
 async fn read_pause_churn_is_lossless() {
     const TOTAL: usize = 4 * 1024 * 1024;
@@ -162,20 +168,59 @@ async fn read_pause_churn_is_lossless() {
     assert_eq!(seen, TOTAL, "expected {TOTAL} bytes, observed {seen}");
 }
 
-/// Bytes left unconsumed in the application buffer must stay ahead of bytes
-/// delivered later: the transport buffer is appended, never prepended.
+/// STATEMENT: Input that arrives while part of the previous read is still unconsumed is
+/// appended after that remainder, so the stream stays in order.
+///
+/// HOW:
+/// - Connect to a peer that sends 2 MiB, with a 256 KiB read size and watermark.
+/// - Consume only one 333-byte piece per `read_more`, leaving the rest buffered.
+/// - Drain the buffer after EOF; expect all data in order and at least one
+///   transport read merged into a non-empty remainder.
 #[ntex::test]
 async fn unconsumed_buffer_merge_preserves_order() {
     const TOTAL: usize = 2 * 1024 * 1024;
+    const CHUNK: usize = 333;
 
     let addr = serve(pattern(TOTAL));
-    // A generous watermark keeps backpressure out of the picture so this
-    // isolates the merge of a partially consumed buffer with fresh data.
+    // The remainder grows past the watermark as the transfer proceeds; each
+    // `read_more` releases backpressure, so reads keep landing behind it.
     let io = ntex_net::tcp_connect(addr, cfg(BytePageSize::Size256))
         .await
         .unwrap();
 
-    // Consuming an odd, small amount per pass guarantees a remainder is always
-    // carried across the next transport read.
-    drain_and_verify(&io, TOTAL, 333).await;
+    let verify = |got: &[u8], seen: usize| {
+        for (i, byte) in got.iter().enumerate() {
+            assert_eq!(
+                *byte,
+                ((seen + i) % 251) as u8,
+                "payload diverged at offset {}",
+                seen + i
+            );
+        }
+    };
+
+    let mut seen = 0usize;
+    let mut left = 0usize;
+    let mut merges = 0usize;
+    // Consuming clears read readiness, so every `Some` after the first reports
+    // a new transport read that landed behind the `left` bytes still buffered.
+    while io.read_more().await.unwrap().is_some() {
+        if left > 0 {
+            merges += 1;
+        }
+        let got = io.with_read_dst(|b| {
+            let got = b.split_to(std::cmp::min(CHUNK, b.len()));
+            left = b.len();
+            got
+        });
+        verify(&got, seen);
+        seen += got.len();
+    }
+
+    let rest = io.with_read_dst(|b| b.take());
+    verify(&rest, seen);
+    seen += rest.len();
+
+    assert_eq!(seen, TOTAL, "expected {TOTAL} bytes, observed {seen}");
+    assert!(merges > 0, "no transport read was merged into a remainder");
 }

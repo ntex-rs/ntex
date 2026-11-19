@@ -16,6 +16,11 @@ impl Address for urly::Url {
 mod tests {
     use super::*;
 
+    /// STATEMENT: A URL without a port uses the default port of its scheme.
+    ///
+    /// HOW:
+    /// - Query the port of URLs for each known scheme; expect its default port.
+    /// - Expect no port for an unknown scheme.
     #[test]
     fn port_tests() {
         for (s, p) in [
@@ -37,6 +42,13 @@ mod tests {
         assert_eq!(Address::port(&url), None);
     }
 
+    /// STATEMENT: A URL's address host and port come from its authority, falling back to the
+    /// scheme's default port.
+    ///
+    /// HOW:
+    /// - Expect the bracketed host and the `mqtts` default port for an IPv6 URL.
+    /// - Expect the host and explicit port for `http://example.com:8080/`.
+    /// - Expect an empty host and no port for a relative URL.
     #[test]
     fn url_address() {
         let url = urly::Url::from_static("mqtts://[::1]/a");

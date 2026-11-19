@@ -547,6 +547,14 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `parse_args` parses `name = value` pairs, and each accessor matches only
+    /// its kind of value.
+    ///
+    /// HOW:
+    /// - Parse string, raw string, bool, int and path values; expect matching accessors.
+    /// - Expect float, expression and string values not to read as int or path.
+    /// - Expect an error for a bare name and no arguments for empty input.
+    /// - Expect `str_value` to keep escapes of a normal string and decode a raw string.
     #[test]
     fn args() {
         let args = parse_args(

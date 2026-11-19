@@ -121,6 +121,11 @@ pub trait ServerConfiguration: Send + Clone + 'static {
 mod tests {
     use super::*;
 
+    /// STATEMENT: `WorkerId::next` returns the current id and advances to the next one.
+    ///
+    /// HOW:
+    /// - Call `next` twice on a default id.
+    /// - Expect ids 0 and 1, leaving the value at 2.
     #[test]
     fn worker_id_next() {
         let mut id = WorkerId::default();

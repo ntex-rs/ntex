@@ -138,6 +138,14 @@ pub(crate) fn normalize_host(s: &str) -> Result<Cow<'_, str>, InvalidUrl> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: `normalize_host` lower-cases, percent-decodes, IDNA-encodes and canonicalizes
+    /// IPv6 hosts, borrows input that is already normal, and rejects invalid hosts.
+    ///
+    /// HOW:
+    /// - Normalize `a.com`; expect a borrowed result.
+    /// - Normalize upper case, `%41`, `[0:0::1]`, `München.de` and its percent-encoded form.
+    /// - Normalize a raw space, an encoded space, a spaced Unicode name and bad IPv4/IPv6.
+    /// - Expect `InvalidChar`, `InvalidHost`, `InvalidIpv4` and `InvalidIpv6`.
     #[test]
     fn normalize() {
         assert!(matches!(
@@ -174,6 +182,12 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `Host::classify` recognizes dotted-quad IPv4 only, and IPv6 hosts display in
+    /// brackets.
+    ///
+    /// HOW:
+    /// - Classify `127.0.0.1` and `1.2.3`; expect `Ipv4` and `Domain`.
+    /// - Format `Host::Ipv6(::1)`; expect `[::1]`.
     #[test]
     fn classify() {
         assert_eq!(Host::classify("127.0.0.1"), Host::Ipv4(Ipv4Addr::LOCALHOST));

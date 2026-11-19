@@ -824,8 +824,11 @@ mod tests {
         }
     }
 
-    /// Items are stored inline in the slab, so their size is paid for every
-    /// slot, vacant ones included.
+    /// STATEMENT: `StreamItem` stays within 72 bytes, since items are stored inline in the slab
+    /// and every slot, vacant ones included, pays for their size.
+    ///
+    /// HOW:
+    /// - Expect `size_of::<StreamItem>()` to be at most 72.
     #[test]
     fn stream_item_is_compact() {
         assert!(
@@ -835,8 +838,13 @@ mod tests {
         );
     }
 
-    /// A failed graceful shutdown must not leave the socket open: the caller
-    /// has already given up ownership of it, so nothing else would close it.
+    /// STATEMENT: A failed graceful shutdown still closes the socket and reports the error,
+    /// since the caller has given up ownership of the socket.
+    ///
+    /// HOW:
+    /// - Close a bound, never connected non-blocking socket, so `shutdown` fails.
+    /// - Expect the close done in place with `WSAENOTCONN`.
+    /// - Expect the socket closed.
     #[test]
     fn close_socket_closes_when_shutdown_fails() {
         // `shutdown` fails with `WSAENOTCONN` on a socket that never connected
@@ -869,13 +877,14 @@ mod tests {
         assert!(!open, "socket leaked after a failed shutdown");
     }
 
-    /// A linger timeout set by the application must not make the close wait
-    /// on the reactor thread, and must not lose the unsent output.
+    /// STATEMENT: A linger timeout set by the application does not make the close wait on the
+    /// reactor thread, and does not lose the unsent output.
     ///
-    /// Winsock documents that `closesocket` of a non-blocking socket with a
-    /// linger timeout fails with `WSAEWOULDBLOCK` and leaves the socket open,
-    /// such a close is finished in blocking mode. Current Windows versions
-    /// can close it right away instead, both outcomes are accepted.
+    /// HOW:
+    /// - Set a 5 s linger timeout and fill the send buffer of a non-blocking socket.
+    /// - Close it; expect the call to return within 1 s, either done in place or handed to a
+    ///   blocking job with the socket still open, since Windows versions differ.
+    /// - Expect the peer to read every byte sent, and the socket closed.
     #[test]
     fn lingering_close_does_not_wait() {
         use std::time::{Duration, Instant};
@@ -1064,6 +1073,14 @@ mod tests {
         release_tx
     }
 
+    /// STATEMENT: A blocking close queued by a shutdown still runs after the shutdown future
+    /// is dropped, and reactor cleanup leaves the socket to it.
+    ///
+    /// HOW:
+    /// - Occupy the only blocking worker, mark the stream blocking, poll a shutdown once and
+    ///   drop it.
+    /// - Run cleanup; expect the socket still open.
+    /// - Release the worker and wait for the pool; expect the socket closed and peer EOF.
     #[test]
     fn blocking_close_survives_cancelled_shutdown() {
         ntex_rt::System::build()
@@ -1096,6 +1113,14 @@ mod tests {
             });
     }
 
+    /// STATEMENT: A blocking close queued before the runtime stops still runs after the
+    /// runtime is gone.
+    ///
+    /// HOW:
+    /// - Occupy the only blocking worker, shut down a blocking stream with a recv in flight
+    ///   and complete the aborted recv, so the close is queued.
+    /// - Run cleanup, drop the handles and stop the runtime; expect the socket still open.
+    /// - Release the worker; expect the queue drained, the socket closed and peer EOF.
     #[test]
     fn blocking_close_survives_runtime_shutdown() {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -1138,6 +1163,12 @@ mod tests {
         assert_closed(raw, &mut peer);
     }
 
+    /// STATEMENT: A close in blocking mode still closes the socket when its shutdown fails,
+    /// and reports the error.
+    ///
+    /// HOW:
+    /// - Close a bound, never connected socket in blocking mode and wait for the result.
+    /// - Expect the socket closed and `WSAENOTCONN` reported.
     #[ntex::test]
     async fn blocking_close_reports_shutdown_error() {
         let sock = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
@@ -1164,8 +1195,13 @@ mod tests {
         );
     }
 
-    /// A socket that is still open when the runtime stops must be closed by
-    /// `cleanup()`, and handles dropped afterwards must not touch it again.
+    /// STATEMENT: Reactor cleanup closes a socket still open when the runtime stops, and
+    /// handles dropped afterwards do not touch it again.
+    ///
+    /// HOW:
+    /// - Register a stream; expect its peer address reported.
+    /// - Run cleanup; expect the socket closed, peer EOF and no peer address.
+    /// - Drop the handles and run cleanup again without a panic.
     #[ntex::test]
     async fn cleanup_closes_idle_socket() {
         let reactor = Reactor::new().unwrap();
@@ -1186,8 +1222,12 @@ mod tests {
         cleanup(&ops);
     }
 
-    /// A socket with a recv in flight must be closed too. The item stays
-    /// allocated, since the kernel still completes the recv into it.
+    /// STATEMENT: Reactor cleanup closes a socket with a recv in flight.
+    ///
+    /// HOW:
+    /// - Start a read with no input; expect a recv pending.
+    /// - Run cleanup; expect the socket closed and peer EOF.
+    /// - Drop the handles without a panic.
     #[ntex::test]
     async fn cleanup_closes_socket_with_pending_recv() {
         let reactor = Reactor::new().unwrap();
@@ -1246,8 +1286,13 @@ mod tests {
         drop(io);
     }
 
-    /// A recv waiting for input on an idle connection must not hold a read
-    /// buffer, the kernel is only asked to report that input is available.
+    /// STATEMENT: A recv waiting for input on an idle connection holds no read buffer, the
+    /// kernel only reports that input is available.
+    ///
+    /// HOW:
+    /// - Allocate and free a read page to note its address.
+    /// - Start a read with no input; expect a recv pending.
+    /// - Allocate a page again; expect the same address, so the recv took no buffer.
     #[ntex::test]
     async fn idle_recv_holds_no_read_buffer() {
         let reactor = Reactor::new().unwrap();
@@ -1273,7 +1318,11 @@ mod tests {
         drop(io);
     }
 
-    /// Available input is read in place, then a recv waits for more.
+    /// STATEMENT: Available input is read in place, then a recv waits for more.
+    ///
+    /// HOW:
+    /// - Send `hello` from the peer and start a read.
+    /// - Expect a recv pending and `hello` in the read buffer.
     #[ntex::test]
     async fn available_input_is_read_in_place() {
         let reactor = Reactor::new().unwrap();
@@ -1324,9 +1373,14 @@ mod tests {
         .completed(udata, Err(err), optr);
     }
 
-    /// A shutdown with both a recv and a send in flight must cancel both. A
-    /// send left running would start the next one once it completes, and a
-    /// stalled one would hold up the close until the shutdown timeout.
+    /// STATEMENT: A shutdown with both a recv and a send in flight cancels both, and closes
+    /// the socket once both complete.
+    ///
+    /// HOW:
+    /// - Fake a pending recv and send, and poll a shutdown once; expect the send cancelled.
+    /// - Complete the aborted send; expect its pages dropped.
+    /// - Complete the aborted recv; expect the shutdown to finish, the socket closed and peer
+    ///   EOF.
     #[ntex::test]
     async fn shutdown_cancels_pending_recv_and_send() {
         let reactor = Reactor::new().unwrap();
@@ -1370,9 +1424,13 @@ mod tests {
         drop(io);
     }
 
-    /// A close waiting for a cancelled recv that never completes must give up
-    /// after the shutdown timeout and close the socket, resetting the
-    /// connection. The item stays allocated until the recv does complete.
+    /// STATEMENT: A shutdown waiting for a cancelled recv that never completes times out and
+    /// resets the connection, and the item stays allocated until the recv completes.
+    ///
+    /// HOW:
+    /// - Fake a pending recv and shut down; expect a `TimedOut` error within 5 s.
+    /// - Expect the socket closed and a `ConnectionReset` read on the peer.
+    /// - Drop the handles; expect the item kept until the aborted recv completes, then freed.
     #[ntex::test]
     async fn shutdown_closes_socket_when_cancel_does_not_complete() {
         let reactor = Reactor::new().unwrap();
@@ -1410,9 +1468,12 @@ mod tests {
         );
     }
 
-    /// Handles dropped without a shutdown while a recv is in flight must
-    /// cancel it and keep the item, the kernel still completes into it. The
-    /// completion frees the item and closes the socket.
+    /// STATEMENT: Handles dropped without a shutdown while a recv is in flight keep the item,
+    /// and the recv completion frees it and closes the socket.
+    ///
+    /// HOW:
+    /// - Fake a pending recv and drop the handles; expect the item kept.
+    /// - Complete the aborted recv; expect the item freed and the socket closed.
     #[ntex::test]
     async fn drop_without_shutdown_waits_for_pending_recv() {
         let reactor = Reactor::new().unwrap();
@@ -1460,8 +1521,14 @@ mod tests {
         cleanup(&ops);
     }
 
-    /// A handle dropped while the storage is in use, e.g. from within a
-    /// completion, is released on the next reactor tick.
+    /// STATEMENT: A handle dropped while the storage is in use, e.g. from within a completion,
+    /// is released on the next reactor tick.
+    ///
+    /// HOW:
+    /// - Take the storage, drop the primary handle and put the storage back; expect a
+    ///   deferred release queued and the item not marked dropped.
+    /// - Run a tick; expect the queue empty and the item marked dropped.
+    /// - Drop the `Io`; expect the item freed and the socket closed.
     #[ntex::test]
     async fn drop_during_completion_is_deferred_to_tick() {
         let reactor = Reactor::new().unwrap();
@@ -1494,8 +1561,13 @@ mod tests {
         assert!(!is_ours(raw, &addr), "socket not closed");
     }
 
-    /// A second shutdown finds the close already done and succeeds, and no
-    /// operation is started on a closed stream.
+    /// STATEMENT: A second shutdown finds the close done and succeeds, and no operation starts
+    /// on a closed stream.
+    ///
+    /// HOW:
+    /// - Shut down with nothing in flight; expect it to finish on the first poll.
+    /// - Shut down again; expect success.
+    /// - Request a read and a write; expect no recv pending, the socket closed and peer EOF.
     #[ntex::test]
     async fn repeated_shutdown_succeeds() {
         let reactor = Reactor::new().unwrap();
@@ -1523,7 +1595,12 @@ mod tests {
         drop(io);
     }
 
-    /// A send that fails right away drops its pages and reports the error.
+    /// STATEMENT: A send that fails right away reports the error and drops its pages.
+    ///
+    /// HOW:
+    /// - Reset the connection from the peer, queue output and start a write.
+    /// - Expect the flush to fail with `ConnectionReset`.
+    /// - Expect no send pending and no unsent bytes.
     #[ntex::test]
     async fn send_to_reset_peer_reports_error() {
         let reactor = Reactor::new().unwrap();
@@ -1580,8 +1657,12 @@ mod tests {
             .with(|st| st.streams[id].ops.read_overlapped().cast::<Overlapped>())
     }
 
-    /// A pause leaves the zero-byte recv in flight, cancelling it would cost a
-    /// syscall and a completion on every pause.
+    /// STATEMENT: A pause leaves the zero-byte recv in flight, since cancelling it would cost
+    /// a syscall and a completion on every pause.
+    ///
+    /// HOW:
+    /// - Start a read and pause; expect the recv still pending and no completion queued.
+    /// - Resume; expect the recv still pending and no completion queued.
     #[ntex::test]
     async fn pause_keeps_recv_in_flight() {
         let reactor = Reactor::new().unwrap();
@@ -1605,8 +1686,13 @@ mod tests {
         drop(io);
     }
 
-    /// A recv that completes during a pause does not read, the input stays in
-    /// the socket until reading resumes.
+    /// STATEMENT: A recv that completes during a pause does not read, the input stays in the
+    /// socket until reading resumes.
+    ///
+    /// HOW:
+    /// - Start a read and pause, then send `hello` and deliver the recv completion.
+    /// - Expect no recv re-armed and nothing read.
+    /// - Resume; expect `hello` read and a recv pending for more input.
     #[ntex::test]
     async fn recv_completed_while_paused_reads_on_resume() {
         let reactor = Reactor::new().unwrap();
@@ -1644,8 +1730,12 @@ mod tests {
         drop(io);
     }
 
-    /// A cancelled recv of a stream that is not paused resumes reading, so
-    /// input that arrived meanwhile is not left unread.
+    /// STATEMENT: A cancelled recv of a stream that is not paused resumes reading, so input
+    /// that arrived meanwhile is not left unread.
+    ///
+    /// HOW:
+    /// - Fake a pending recv, send `hello` and complete the recv as aborted.
+    /// - Expect `hello` read and a recv pending for more input.
     #[ntex::test]
     async fn cancelled_recv_resumes_reading() {
         let reactor = Reactor::new().unwrap();
@@ -1672,8 +1762,13 @@ mod tests {
         drop(io);
     }
 
-    /// A socket left in blocking mode is only read once the kernel reported
-    /// input, so a read never blocks the reactor.
+    /// STATEMENT: A socket left in blocking mode is only read once the kernel reported input,
+    /// so a read never blocks the reactor.
+    ///
+    /// HOW:
+    /// - Mark the stream blocking and set the socket blocking with a 2 s read timeout.
+    /// - Start a read with no input; expect it to return within 1 s with a recv pending.
+    /// - Send `hello` and complete the recv; expect `hello` read and a recv pending again.
     #[ntex::test]
     async fn blocking_socket_is_read_after_readiness() {
         let reactor = Reactor::new().unwrap();
@@ -1759,8 +1854,13 @@ mod tests {
         true
     }
 
-    /// A notified stream waits for input without a recv in flight, so it holds
-    /// no read buffer and leaves nothing for the close to cancel.
+    /// STATEMENT: A stream that uses socket notifications waits for input without a recv in
+    /// flight, so it holds no read buffer and its close has nothing to cancel.
+    ///
+    /// HOW:
+    /// - Skip when notifications are not supported.
+    /// - Start a read; expect no recv pending and the noted page address still free.
+    /// - Shut down; expect it to finish on the first poll, the socket closed and peer EOF.
     #[ntex::test]
     async fn notified_idle_stream_has_no_recv_in_flight() {
         let reactor = Reactor::new().unwrap();
@@ -1794,8 +1894,13 @@ mod tests {
         drop(io);
     }
 
-    /// Available input is read in place, input that arrives later is read
-    /// once its notification is delivered.
+    /// STATEMENT: With socket notifications, available input is read in place, and later
+    /// input is read once its notification is delivered, up to the peer's EOF.
+    ///
+    /// HOW:
+    /// - Send `hello` and start a read; expect `hello` read.
+    /// - Send `world` and deliver its notification; expect `world` read.
+    /// - Send `bye`, shut the peer's write half and deliver; expect `bye` read and read EOF.
     #[ntex::test]
     async fn notification_reads_new_input() {
         let reactor = Reactor::new().unwrap();
@@ -1840,8 +1945,13 @@ mod tests {
         drop(io);
     }
 
-    /// A notification that arrives during a pause does not read, the input
-    /// stays in the socket until reading resumes.
+    /// STATEMENT: A notification that arrives during a pause does not read, the input stays
+    /// in the socket until reading resumes.
+    ///
+    /// HOW:
+    /// - Start a read and pause, then send `hello` and deliver its notification.
+    /// - Expect nothing read.
+    /// - Resume; expect `hello` read.
     #[ntex::test]
     async fn notification_while_paused_reads_on_resume() {
         let reactor = Reactor::new().unwrap();
@@ -1867,8 +1977,13 @@ mod tests {
         drop(io);
     }
 
-    /// Once reading stops at the read back-pressure, notifications do not
-    /// read further until the io layer resumes reading.
+    /// STATEMENT: Once reading stops at the read backpressure, notifications read no more
+    /// until the I/O layer resumes reading.
+    ///
+    /// HOW:
+    /// - Send chunks and deliver their notifications until the read buffer reaches the limit.
+    /// - Send 8 more chunks and deliver notifications; expect the buffer size unchanged.
+    /// - Clear the buffer and resume; expect the queued input read.
     #[ntex::test]
     async fn notification_respects_read_backpressure() {
         let reactor = Reactor::new().unwrap();
@@ -1912,8 +2027,12 @@ mod tests {
         drop(io);
     }
 
-    /// A send that completes without writing anything fails the connection,
+    /// STATEMENT: A send that completes without writing anything fails the connection, since
     /// retrying it would spin.
+    ///
+    /// HOW:
+    /// - Fake a pending send and complete it with 0 bytes.
+    /// - Expect the flush to fail with `WriteZero`.
     #[ntex::test]
     async fn zero_byte_send_completion_is_write_zero() {
         let reactor = Reactor::new().unwrap();
@@ -1956,7 +2075,12 @@ mod tests {
         panic!("output not sent");
     }
 
-    /// The rest of a partly completed send goes out before newer output.
+    /// STATEMENT: The rest of a partly completed send goes out before newer output.
+    ///
+    /// HOW:
+    /// - Fake a pending send of `hello world`, queue `!!` and complete the send with 3 bytes.
+    /// - Expect the peer to read `lo world!!`.
+    /// - Drive the sends; expect no unsent bytes.
     #[ntex::test]
     async fn partial_send_is_resent_before_newer_output() {
         let reactor = Reactor::new().unwrap();
@@ -1991,7 +2115,12 @@ mod tests {
         drop(io);
     }
 
-    /// Output in more pages and bytes than one send takes is sent in order.
+    /// STATEMENT: Output in more pages and bytes than one send takes is sent in order.
+    ///
+    /// HOW:
+    /// - Queue 100 pages of 5000 patterned bytes and start a write.
+    /// - Drive the sends while the peer reads all of them.
+    /// - Expect the received bytes to match and no unsent bytes.
     #[ntex::test]
     async fn large_output_is_sent_in_order() {
         const PAGE: usize = 5000;

@@ -14,8 +14,13 @@ fn reset(sock: net::TcpStream) {
     drop(sock);
 }
 
-/// A reset while the reader waits for input must end the read with an error,
-/// not with a clean eof.
+/// STATEMENT: A reset while the reader waits for input ends the read with an error, not
+/// a clean EOF.
+///
+/// HOW:
+/// - The peer resets the connection 200 ms after accepting it.
+/// - Expect `recv` to fail with `ConnectionReset` within 5 s.
+/// - With compio on Windows, also accept `None`, which compio reports for a reset.
 #[ntex::test]
 async fn reset_while_waiting_for_input() {
     let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -41,9 +46,13 @@ async fn reset_while_waiting_for_input() {
     }
 }
 
-/// A reset that arrives while reading is paused by backpressure must be
-/// reported once reading resumes. Input received before the reset may be
-/// discarded by the reset, but never more than was sent.
+/// STATEMENT: A reset that arrives while reading is paused by backpressure is reported
+/// once reading resumes.
+///
+/// HOW:
+/// - Use a 4 KiB read buffer and watermark; the peer sends 256 KiB, then resets.
+/// - After 400 ms, receive until an error; expect `ConnectionReset`, not EOF.
+/// - Expect no more than 256 KiB received before the error.
 #[ntex::test]
 async fn reset_while_read_paused() {
     const SENT: usize = 256 * 1024;

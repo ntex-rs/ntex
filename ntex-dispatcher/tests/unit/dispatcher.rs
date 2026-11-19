@@ -1056,15 +1056,21 @@ async fn stop_reason_at_eof(input: &'static str) -> Option<io::ErrorKind> {
 /// STATEMENT: Buffered frames are delivered before a transport failure's stop notification.
 ///
 /// HOW:
-/// - Send two eight-byte frames to a readiness-gated echo service and make writes fail with `ConnectionReset`.
+/// - Send two eight-byte frames to an echo service that becomes not ready after the first
+///   frame, and make writes fail with `ConnectionReset`.
+/// - Verify only the first frame is handled while the service is paused.
 /// - Release the gate and verify both frame payloads precede the stop event carrying the reset error.
 #[ntex::test]
 async fn peer_gone_during_pause_dispatches_buffered_frames() {
-    struct Srv(Condition, Rc<RefCell<Vec<String>>>);
+    struct Srv(Condition, Rc<RefCell<Vec<String>>>, ReadyNotifier);
 
     impl Service<(), DispatchItem<BCodec>> for Srv {
         type Res = Option<Bytes>;
         type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(&self.2);
+        }
 
         async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             if self.1.borrow().len() == 1 {
@@ -1083,6 +1089,8 @@ async fn peer_gone_during_pause_dispatches_buffered_frames() {
                     self.1
                         .borrow_mut()
                         .push(String::from_utf8_lossy(&msg).into_owned());
+                    // readiness depends on the handled frames
+                    self.2.notify();
                     return Ok(Some(msg));
                 }
                 DispatchItem::Stop(Reason::Io(err)) => self
@@ -1106,12 +1114,13 @@ async fn peer_gone_during_pause_dispatches_buffered_frames() {
     let (disp, _) = Dispatcher::debug(
         Io::from(server),
         BCodec(8),
-        Srv(gate.clone(), items.clone()),
+        Srv(gate.clone(), items.clone(), ReadyNotifier::default()),
     );
     spawn(async move {
         let _ = disp.await;
     });
     sleep(Millis(25)).await;
+    assert_eq!(*items.borrow(), ["12345678"]);
 
     gate.notify(());
     sleep(Millis(50)).await;
@@ -1201,11 +1210,16 @@ async fn service_is_not_ready_and_backpressure() {
         Cell<Option<oneshot::Receiver<()>>>,
         Rc<Cell<usize>>,
         Cell<bool>,
+        ReadyNotifier,
     );
 
     impl Service<(), DispatchItem<BytesCodec>> for Srv {
         type Res = Option<Bytes>;
         type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(&self.3);
+        }
 
         async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             if self.2.get()
@@ -1223,6 +1237,7 @@ async fn service_is_not_ready_and_backpressure() {
         ) -> Result<Option<Bytes>, Self::Error> {
             if let DispatchItem::Item(msg) = msg {
                 self.2.set(true);
+                self.3.notify();
                 return Ok::<_, ()>(Some(msg));
             } else if let DispatchItem::Control(Control::WBackPressureEnabled) = msg {
                 self.1.set(self.1.get() + 1);
@@ -1242,7 +1257,12 @@ async fn service_is_not_ready_and_backpressure() {
             SharedCfg::new("DBG").add(IoConfig::new().set_write_backpressure(2)),
         ),
         BytesCodec,
-        Srv(Cell::new(Some(rx)), cnt.clone(), Cell::new(false)),
+        Srv(
+            Cell::new(Some(rx)),
+            cnt.clone(),
+            Cell::new(false),
+            ReadyNotifier::default(),
+        ),
     );
     let (tx, rx) = ntex::channel::oneshot::channel();
     ntex_util::spawn(async move {
@@ -1740,11 +1760,15 @@ async fn read_rate_starts_for_consumed_partial_frame() {
 }
 
 /// Service that is not ready while a frame is handled.
-struct BusySrv(Rc<Cell<bool>>, IoRef);
+struct BusySrv(Rc<Cell<bool>>, IoRef, ReadyNotifier);
 
 impl Service<(), DispatchItem<BCodec>> for BusySrv {
     type Res = Option<Bytes>;
     type Error = ();
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.subscribe(&self.2);
+    }
 
     async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
         while self.0.get() {
@@ -1760,6 +1784,7 @@ impl Service<(), DispatchItem<BCodec>> for BusySrv {
     ) -> Result<Option<Bytes>, Self::Error> {
         if let DispatchItem::Item(bytes) = msg {
             self.0.set(true);
+            self.2.notify();
             let ioref = self.1.clone();
             spawn(async move {
                 sleep(Millis(300)).await;
@@ -1787,7 +1812,11 @@ async fn notify_timeout_ignored_during_pause_while_handling() {
         server,
         SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds(5))),
     );
-    let srv = BusySrv(Rc::new(Cell::new(false)), io.get_ref());
+    let srv = BusySrv(
+        Rc::new(Cell::new(false)),
+        io.get_ref(),
+        ReadyNotifier::default(),
+    );
     let disp = Dispatcher::new(io, BCodec(1), Pipeline::new((), srv));
     spawn(async move {
         let _ = disp.await;
@@ -2092,6 +2121,123 @@ async fn notify_timeout_during_frame_read() {
     wait_closed(&client, Millis(1000)).await;
     assert!(client.is_closed());
     assert_eq!(&data.borrow()[..], &[1]);
+}
+
+/// One-byte frames, the byte `x` is rejected.
+#[derive(Copy, Clone)]
+struct XCodec;
+
+impl Encoder for XCodec {
+    type Item = Bytes;
+    type Error = io::Error;
+
+    fn encode(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
+        dst.append(item);
+        Ok(())
+    }
+}
+
+impl Decoder for XCodec {
+    type Item = Bytes;
+    type Error = io::Error;
+
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        match src.first() {
+            None => Ok(None),
+            Some(b'x') => Err(io::Error::other("rejected frame")),
+            Some(_) => Ok(Some(src.split_to(1))),
+        }
+    }
+}
+
+/// Echo dispatcher that flags a dispatcher timeout while it handles the
+/// first frame, before the frames buffered behind it are decoded.
+fn timeout_on_first_frame(server: IoTest) -> Events {
+    let io = Io::new(
+        server,
+        SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds(5))),
+    );
+    let ioref = io.get_ref();
+    let events: Events = Rc::new(RefCell::new(Vec::new()));
+    let ev = events.clone();
+    let first = Cell::new(true);
+    let disp = Dispatcher::new(
+        io,
+        XCodec,
+        Pipeline::new(
+            (),
+            ntex_service::fn_service(move |msg: DispatchItem<XCodec>| {
+                let (name, res) = match msg {
+                    DispatchItem::Item(bytes) => {
+                        if first.replace(false) {
+                            ioref.notify_timeout();
+                        }
+                        ("item", Some(bytes))
+                    }
+                    DispatchItem::Stop(Reason::Decoder(_)) => ("decoder", None),
+                    DispatchItem::Stop(Reason::KeepAlive) => ("keepalive", None),
+                    DispatchItem::Stop(Reason::ReadTimeout) => ("read-timeout", None),
+                    DispatchItem::Stop(_) => ("stop", None),
+                    DispatchItem::Control(_) => ("control", None),
+                };
+                ev.borrow_mut().push(name);
+                async move { Ok::<_, ()>(res) }
+            }),
+        ),
+    );
+    spawn(async move {
+        let _ = disp.await;
+    });
+    events
+}
+
+/// STATEMENT: A complete frame buffered together with a timeout is dispatched and the timeout
+/// is dropped.
+///
+/// HOW:
+/// - Send two one-byte frames at once, the service flags a dispatcher timeout while handling
+///   the first, before the second is decoded.
+/// - Verify both frames are echoed and handled.
+/// - Wait and verify the peer stays open and no stop event is delivered.
+#[ntex::test]
+async fn timeout_with_buffered_frame_dispatches_frame() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let events = timeout_on_first_frame(server);
+
+    client.write("12");
+    let mut buf = BytesMut::new();
+    while buf.len() < 2 {
+        buf.extend_from_slice(&client.read().await.unwrap());
+    }
+    assert_eq!(&buf[..], b"12");
+
+    sleep(Millis(200)).await;
+    assert!(!client.is_closed());
+    assert_eq!(&events.borrow()[..], &["item", "item"]);
+}
+
+/// STATEMENT: A malformed frame buffered together with a timeout stops the dispatcher with the
+/// decoder error, not a timeout.
+///
+/// HOW:
+/// - Send a valid frame followed by a rejected byte at once, the service flags a dispatcher
+///   timeout while handling the first frame.
+/// - Verify the first frame is echoed and the peer closes.
+/// - Check the stop event is the decoder error.
+#[ntex::test]
+async fn timeout_with_buffered_malformed_frame_stops_with_decoder_error() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let events = timeout_on_first_frame(server);
+
+    client.write("1x");
+    let buf = client.read().await.unwrap();
+    assert_eq!(buf, Bytes::from_static(b"1"));
+
+    wait_closed(&client, Millis(1000)).await;
+    assert!(client.is_closed());
+    assert_eq!(&events.borrow()[..], &["item", "decoder"]);
 }
 
 /// Service that answers every frame with `size` bytes and records events.
@@ -2764,6 +2910,7 @@ struct GateState {
     blocked: Cell<bool>,
     hold: Cell<bool>,
     waker: RefCell<Option<std::task::Waker>>,
+    expire: RefCell<Option<IoRef>>,
 }
 
 /// Gate control, a blocked filter chain is not ready and holds output.
@@ -2785,6 +2932,13 @@ impl GateCtl {
 
     fn unblock(&self) {
         self.set(false);
+    }
+
+    /// Blocks the chain and flags a dispatcher timeout in the read task poll
+    /// that pauses it, before the dispatcher observes the pause.
+    fn block_with_timeout(&self, io: IoRef) {
+        *self.0.expire.borrow_mut() = Some(io);
+        self.block();
     }
 
     /// Holds output while the chain stays ready.
@@ -2850,6 +3004,9 @@ impl<F: ntex_io::Filter> ntex_io::Filter for GateFilter<F> {
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         *self.1.0.waker.borrow_mut() = Some(cx.waker().clone());
         if self.1.0.blocked.get() {
+            if let Some(io) = self.1.0.expire.borrow_mut().take() {
+                io.notify_timeout();
+            }
             Poll::Pending
         } else {
             self.0.poll_ready(cx)
@@ -3080,4 +3237,40 @@ async fn write_timeout_restarts_after_filter_pause() {
     wait_closed(&client, Millis(2000)).await;
     assert!(client.is_closed());
     assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
+}
+
+/// STATEMENT: A write timeout that expires as the filter pauses is discarded, since the paused
+/// filter holds the output.
+///
+/// HOW:
+/// - Hold an 8,192-byte response in the filter to enable backpressure with a running write
+///   timer.
+/// - Block the filter and flag a dispatcher timeout in the same read-task poll.
+/// - Verify the transport stays active with no timeout event while the filter is paused.
+/// - Unblock the filter, read the full response, and verify backpressure clears.
+#[ntex::test]
+async fn write_timeout_discarded_when_filter_pauses() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(65536);
+    let (gate, io, events) =
+        gated_write_dispatcher(server, IoConfig::new().set_write_timeout(Seconds(1)), 8192);
+
+    gate.hold();
+    client.write("12345678");
+    sleep(Millis(100)).await;
+    assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+
+    gate.block_with_timeout(io.clone());
+    sleep(Millis(100)).await;
+    assert!(io.is_filter_paused());
+    assert!(io.is_active());
+    assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+
+    gate.unblock();
+    let mut received = 0;
+    while received < 8192 {
+        received += client.read().await.unwrap().len();
+    }
+    wait_until(Millis(1000), || events.borrow().len() == 3).await;
+    assert_eq!(&events.borrow()[..], &["item", "bp-on", "bp-off"]);
 }

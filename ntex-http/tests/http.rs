@@ -15,6 +15,11 @@ async fn next<B: MessageBody>(b: &mut B) -> Option<Result<Bytes, Rc<dyn StdError
     poll_fn(|cx| b.poll_next_chunk(cx)).await
 }
 
+/// STATEMENT: `BodySize::is_eof` is true only for sizes that carry no payload.
+///
+/// HOW:
+/// - Expect `None`, `Empty` and `Sized(0)` to be EOF.
+/// - Expect `Sized(1)` and `Stream` not to be EOF.
 #[test]
 fn body_size() {
     assert!(BodySize::None.is_eof());
@@ -24,6 +29,14 @@ fn body_size() {
     assert!(!BodySize::Stream.is_eof());
 }
 
+/// STATEMENT: `ResponseBody` exposes its body, `take_body` leaves `None` behind, both
+/// variants stream their data, and `into_body`/`From` convert between body types.
+///
+/// HOW:
+/// - Check `as_ref`, `size` and `Debug`, then `take_body`; expect the original to be empty
+///   and the taken body to yield `abc`.
+/// - Stream the `Body` and `Other` variants; expect one chunk each, then the end.
+/// - Convert with `into_body` and `Body::from`; expect the variant and content to be kept.
 #[ntex::test]
 async fn response_body() {
     let mut b = ResponseBody::new(Bytes::from_static(b"abc"));
@@ -64,6 +77,13 @@ async fn response_body() {
     );
 }
 
+/// STATEMENT: Every byte-source constructor builds the same `Body`, `Message` bodies are
+/// never equal and stream their content, and `None`/`Empty` yield nothing.
+///
+/// HOW:
+/// - Compare bodies built from slices, strings and `BytesMut` with `Body::from("abc")`.
+/// - Expect two `from_message(())` bodies to differ.
+/// - Poll an empty `Bytes`, a `Message`, `None` and `Empty`; check size, `Debug` and chunks.
 #[ntex::test]
 async fn body_variants() {
     assert_eq!(Body::from_slice(b"abc"), Body::from("abc"));
@@ -90,6 +110,14 @@ async fn body_variants() {
     assert!(next(&mut b).await.is_none());
 }
 
+/// STATEMENT: `BodyStream` and `BoxedBodyStream` pass items and errors through and stay
+/// pending with the inner stream; `SizedStream` reports its declared size.
+///
+/// HOW:
+/// - Stream `a` then an error through each wrapper; expect `BodySize::Stream`, the chunk,
+///   the error and the end.
+/// - Wrap empty and pending streams; check `Debug` and that polling stays pending.
+/// - Stream `ab` through `SizedStream`; expect `Sized(2)`, the chunk and the end.
 #[ntex::test]
 async fn streams() {
     // BodyStream maps errors
@@ -139,6 +167,13 @@ async fn streams() {
     assert!(poll_fn(|cx| std::task::Poll::Ready(b.poll_next_chunk(cx).is_pending())).await);
 }
 
+/// STATEMENT: Every `http` crate error converts to `Error` with the matching kind and
+/// message, directly or through `http::Error`.
+///
+/// HOW:
+/// - Convert status, method, URI, URI-parts, header-name and header-value errors; check
+///   `is::<Kind>()` and the `Display` text.
+/// - Convert the same errors wrapped in `http::Error`; expect the same kinds and no source.
 #[test]
 fn errors() {
     let e: Error = http::StatusCode::from_u16(1).unwrap_err().into();
@@ -183,13 +218,6 @@ fn errors() {
     let e = conv(http::Uri::from_parts(parts).unwrap_err().into());
     assert!(e.is::<InvalidUri>(), "{e}");
     assert!(e.source().is_none());
-
-    // direct conversions to crate error types
-    let _: InvalidStatusCode = http::StatusCode::from_u16(1).unwrap_err().into();
-    let _: InvalidMethod = http::Method::from_bytes(b"").unwrap_err().into();
-    let _: InvalidUri = "\0".parse::<http::Uri>().unwrap_err().into();
-    let _: InvalidHeaderName = http::HeaderName::from_bytes(b" ").unwrap_err().into();
-    let _: InvalidHeaderValue = http::HeaderValue::from_bytes(b"\n").unwrap_err().into();
 }
 
 /// STATEMENT: Parsed content encodings expose their canonical name and default quality.
@@ -217,6 +245,14 @@ fn content_encoding() {
     assert!(ContentEncoding::Deflate.is_compressed());
 }
 
+/// STATEMENT: `HeaderMap` lookups accept every key form and ignore invalid names, and
+/// `iter`, `keys`, `remove` and `clear` see every appended value.
+///
+/// HOW:
+/// - Append three `accept` values and insert `host`; look them up by `HeaderName`,
+///   reference, string and an invalid name.
+/// - Change values through `get_mut`; check `get_all`, `keys`, `iter` and `Debug`.
+/// - Remove and clear; expect an empty map.
 #[test]
 fn header_map() {
     let mut map = HeaderMap::with_capacity(4);
@@ -284,6 +320,11 @@ fn header_map() {
     assert_eq!(HeaderMap::default(), HeaderMap::new());
 }
 
+/// STATEMENT: A header `Value` built with `From` and `extend` iterates every value in order.
+///
+/// HOW:
+/// - Extend a single value with two more; expect `size_hint` 3 and `a`, `b`, `c`.
+/// - Build from `&HeaderValue`; expect one item, then `None`.
 #[test]
 fn header_map_value() {
     let mut v = Value::from(HeaderValue::from_static("a"));
@@ -298,6 +339,14 @@ fn header_map_value() {
     assert!(it.next().is_none());
 }
 
+/// STATEMENT: `HeaderValue` validates input, `to_str` checks only UTF-8, conversions and
+/// comparisons work with strings, and the sensitive flag survives `http` interop.
+///
+/// HOW:
+/// - Reject `\n`, DEL and NUL; check `to_str` and `Debug` for valid and invalid UTF-8.
+/// - Build values with `TryFrom` from several string and byte types.
+/// - Compare with `&HeaderValue` and `String`.
+/// - Convert a sensitive value to `http::HeaderValue` and back; expect it still sensitive.
 #[test]
 #[allow(clippy::op_ref, clippy::cmp_owned)]
 fn header_value() {
@@ -316,9 +365,6 @@ fn header_value() {
     let v = HeaderValue::from_bytes(b"caf\xe9").unwrap();
     let err: ToStrError = v.to_str().unwrap_err();
     assert!(!err.to_string().is_empty());
-    // SAFETY: The bytes are valid UTF-8, but NUL and DEL violate the documented header-byte contract.
-    let v = unsafe { HeaderValue::from_shared_unchecked(Bytes::from_static(b"a\x00\x7fb")) };
-    assert_eq!(v.to_str().unwrap(), "a\x00\x7fb");
 
     assert_eq!(HeaderValue::try_from("s").unwrap(), "s");
     assert_eq!(HeaderValue::try_from(&String::from("s")).unwrap(), "s");

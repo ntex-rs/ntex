@@ -187,13 +187,34 @@ pub async fn yield_to() {
 mod test {
     use super::*;
 
-    /// STATEMENT: A task can resume after yielding.
+    /// STATEMENT: `yield_to` returns `Pending` once and wakes its own task, then completes on
+    /// the next poll.
     ///
     /// HOW:
-    /// - Await `yield_to` inside an asynchronous test and let the test complete.
-    #[ntex::test]
-    async fn yield_test() {
-        yield_to().await;
+    /// - Poll `yield_to` by hand with a waker that counts wake-ups.
+    /// - Expect `Pending` and one wake-up on the first poll.
+    /// - Expect `Ready` and no further wake-up on the second poll.
+    #[test]
+    fn yield_test() {
+        use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+        use std::{future::Future, pin::pin, task::Context, task::Wake, task::Waker};
+
+        struct Counter(AtomicUsize);
+        impl Wake for Counter {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let counter = Arc::new(Counter(AtomicUsize::new(0)));
+        let waker = Waker::from(counter.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = pin!(yield_to());
+
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(counter.0.load(Ordering::Relaxed), 1);
+        assert!(fut.as_mut().poll(&mut cx).is_ready());
+        assert_eq!(counter.0.load(Ordering::Relaxed), 1);
     }
 
     /// STATEMENT: Local and standard slot wake paths reschedule the current task.

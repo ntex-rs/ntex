@@ -548,6 +548,14 @@ mod tests {
 
     use super::*;
 
+    /// STATEMENT: `Period` counts distinct periods and their total time, ignoring repeated
+    /// state changes.
+    ///
+    /// HOW:
+    /// - Expect no periods at first.
+    /// - Start twice and wait 10 ms; expect one period of at least 10 ms so far.
+    /// - End twice; expect one period whose total no longer grows.
+    /// - Start again; expect 2 periods.
     #[test]
     fn period() {
         let epoch = Instant::now();
@@ -573,6 +581,12 @@ mod tests {
         assert_eq!(p.get(epoch).0, 2);
     }
 
+    /// STATEMENT: Readers of a `Period` see a total that never decreases and never exceeds the
+    /// elapsed time while a writer toggles it.
+    ///
+    /// HOW:
+    /// - Start and end periods of about 20 µs in a loop on a writer thread.
+    /// - Read it for 500 ms; expect a total that never drops and stays within the uptime.
     #[test]
     fn period_is_coherent() {
         let epoch = Instant::now();
@@ -604,6 +618,15 @@ mod tests {
         writer.join().unwrap();
     }
 
+    /// STATEMENT: A metrics snapshot reports worker and listener counters, and keeps the first
+    /// listener registration.
+    ///
+    /// HOW:
+    /// - Record items, connections and a restart on worker 1; expect no worker 2.
+    /// - Record accept events on listener 0, an error on a missing listener, and a backlog;
+    ///   register listeners twice.
+    /// - Expect default worker 0, the worker 1 counts, one listener with its name, address and
+    ///   counts, the backlog and no pauses.
     #[test]
     fn snapshot() {
         let m = Metrics::new(2);
@@ -642,7 +665,14 @@ mod tests {
         assert_eq!(s.accept_pauses, 0);
     }
 
-    /// Runtime totals are kept when a worker's arbiter is replaced.
+    /// STATEMENT: Worker runtime metrics keep their totals when the worker's arbiter is
+    /// replaced.
+    ///
+    /// HOW:
+    /// - Expect default metrics before an arbiter is set.
+    /// - Keep a first arbiter busy for 20 ms; expect busy time and latency samples.
+    /// - Replace it and keep the new one busy; expect busy time, latency samples and polls
+    ///   (when available) to grow from the first totals.
     #[ntex::test]
     async fn runtime_restart() {
         let busy = |a: &Arbiter| {

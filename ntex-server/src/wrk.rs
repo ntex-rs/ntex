@@ -618,7 +618,14 @@ mod tests {
         fut.poll(&mut Context::from_waker(&waker))
     }
 
-    /// Every clone observes every status change.
+    /// STATEMENT: Every clone of `WorkerAvailability` observes status changes, and `Failed` is
+    /// terminal for all of them.
+    ///
+    /// HOW:
+    /// - Wait on two clones; on `set(true)` expect both woken once and `Available`.
+    /// - Expect a reported change not to repeat, and only the latest of several changes.
+    /// - Drop the sender; expect a pending wait to resolve to `Failed`, and every clone to
+    ///   keep reporting `Failed`.
     #[test]
     fn status_cloned_observers() {
         let (mut a, tx) = WorkerAvailability::create();
@@ -674,7 +681,11 @@ mod tests {
         assert_eq!(a.inner.status(), WorkerStatus::Failed);
     }
 
-    /// The status cannot change after the worker has failed.
+    /// STATEMENT: A failed worker status does not change afterwards.
+    ///
+    /// HOW:
+    /// - Mark the worker failed, then set it available.
+    /// - Expect `Failed`.
     #[test]
     fn status_failed_is_terminal() {
         let (a, tx) = WorkerAvailability::create();
@@ -706,7 +717,11 @@ mod tests {
         }
     }
 
-    /// The CPUs of a worker are known only if its placement is applied.
+    /// STATEMENT: A worker reports its CPUs only when its placement is applied.
+    ///
+    /// HOW:
+    /// - Start a worker with an invalid CPU placement; expect no CPUs.
+    /// - Start one with a planned placement; expect CPUs on Windows and Linux, none elsewhere.
     #[ntex::test]
     async fn worker_cpus() {
         let cpu = crate::affinity::plan(crate::Affinity::Cpu).pop();

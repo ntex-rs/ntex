@@ -121,6 +121,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `Token::next` returns the current token and advances to the next one.
+    ///
+    /// HOW:
+    /// - Call `next` twice on `Token(0)`.
+    /// - Expect tokens 0 and 1, leaving the value at 2.
     #[test]
     fn token_next() {
         let mut token = Token(0);

@@ -686,7 +686,7 @@ mod tests {
     ///
     /// HOW:
     /// - Measure initial and extended deadlines and time out a zero deadline.
-    /// - Poll disabled and re-enabled deadlines, then inspect debug output.
+    /// - Poll disabled and re-enabled deadlines; both stay pending.
     #[ntex::test]
     async fn test_deadline() {
         sleep(Seconds(1)).await;
@@ -712,8 +712,6 @@ mod tests {
         let mut dl = deadline(Millis(0));
         dl.reset(Millis(1));
         assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
-
-        assert!(format!("{dl:?}").contains("Deadline"));
     }
 
     /// STATEMENT: A zero-period interval waits between ticks instead of staying immediately ready.

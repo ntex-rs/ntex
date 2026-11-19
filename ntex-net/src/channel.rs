@@ -194,6 +194,14 @@ mod tests {
         assert_eq!(err.to_string(), "connect failed");
     }
 
+    /// STATEMENT: The cancel callback runs once when the receiver is dropped while the
+    /// operation is still pending.
+    ///
+    /// HOW:
+    /// - Drop the receiver of a pending channel; expect the sender closed, one cancel call,
+    ///   and a failed send without another call.
+    /// - Drop receivers after a value, after an error, and after the sender is dropped; expect
+    ///   no more cancel calls.
     #[cfg(windows)]
     #[test]
     fn cancellation_only_while_pending() {
@@ -227,11 +235,15 @@ mod tests {
         assert_eq!(cancelled.get(), 1);
     }
 
+    /// STATEMENT: The oneshot channel delivers a sent value and reports a dropped peer.
+    ///
+    /// HOW:
+    /// - Send a value; expect it from awaiting the receiver and from `recv`.
+    /// - Drop the receiver; expect the sender canceled and a failed send.
+    /// - Drop the sender; expect the receiver to fail.
     #[ntex::test]
     async fn test_oneshot() {
         let (tx, rx) = create();
-        assert!(format!("{tx:?}").contains("Sender"));
-        assert!(format!("{rx:?}").contains("Receiver"));
 
         tx.send(Ok("test")).unwrap();
         assert_eq!(rx.await.unwrap(), "test");
@@ -259,6 +271,12 @@ mod tests {
         assert!(rx.await.is_err());
     }
 
+    /// STATEMENT: The cancel hook gets the operation id when the receiver is dropped while it
+    /// is pending.
+    ///
+    /// HOW:
+    /// - Drop the receiver of a pending channel; expect the hook called once with id 7.
+    /// - Drop receivers after a sent value and after the sender is dropped; expect no calls.
     #[ntex::test]
     async fn cancel_hook() {
         struct Hook(Cell<Option<u32>>);

@@ -693,6 +693,12 @@ mod tests {
         assert_eq!(reactor.hid.get(), id, "rejection changed the handler ID");
     }
 
+    /// STATEMENT: The IOCP reactor rejects a registration from inside a handler factory, and
+    /// accepts the next one.
+    ///
+    /// HOW:
+    /// - Register from inside a factory; expect a panic, no factory call and the same next id.
+    /// - Register another handler; expect id 2 and both handlers stored.
     #[test]
     fn register_rejects_nested_factory() {
         let reactor = Reactor::new().unwrap();
@@ -710,6 +716,14 @@ mod tests {
         reactor.handlers.set(Some(handlers));
     }
 
+    /// STATEMENT: The IOCP reactor rejects registrations from completion, notification and
+    /// tick callbacks, and keeps dispatching afterwards.
+    ///
+    /// HOW:
+    /// - Deliver a completion and a notification to a handler that registers in each callback;
+    ///   expect three rejections.
+    /// - Register a handler with id 2 and deliver a completion; expect it delivered with one
+    ///   tick.
     #[test]
     fn register_rejects_dispatch_callbacks() {
         struct Reentrant {
@@ -775,7 +789,11 @@ mod tests {
         assert_eq!(ticks.get(), 1);
     }
 
-    /// Socket completion errors have the same kind as synchronous socket errors.
+    /// STATEMENT: Socket completion errors have the same kind as synchronous socket errors.
+    ///
+    /// HOW:
+    /// - Convert each socket `NTSTATUS` to a Win32 error.
+    /// - Expect the `io::ErrorKind` from its WSA error and from `map_socket_error` to match.
     #[test]
     fn socket_completion_error_kind() {
         use windows_sys::Win32::Foundation as f;
@@ -823,9 +841,15 @@ mod tests {
         }
     }
 
-    /// Completion statuses are translated into the operation result: pipe
-    /// and eof statuses end the operation without an error, a partial
-    /// transfer keeps its byte count, and notification packets are skipped.
+    /// STATEMENT: Completion statuses become operation results, and notification packets are
+    /// skipped.
+    ///
+    /// HOW:
+    /// - Deliver completions for success, pipe end, end of file, partial transfer, refused and
+    ///   cancelled statuses, plus a notification packet.
+    /// - Expect pipe end and end of file to report 0 bytes, a partial transfer its count, and
+    ///   errors for refused and cancelled.
+    /// - Expect no result for the notification packet and one tick for the batch.
     #[test]
     fn poll_completions_translates_status() {
         use windows_sys::Win32::Foundation as f;
@@ -885,8 +909,12 @@ mod tests {
         assert_eq!(ticks.get(), 1);
     }
 
-    /// Sockets of the base Winsock providers return IFS handles and can be
-    /// attached with `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`.
+    /// STATEMENT: Sockets of the base Winsock providers pass the IFS check and can be attached
+    /// with `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`.
+    ///
+    /// HOW:
+    /// - Create IPv4 stream and datagram sockets.
+    /// - Expect each to pass the IFS check and be attached.
     #[test]
     fn attach_accepts_ifs_socket() {
         let reactor = ReactorInner::new().unwrap();
@@ -897,8 +925,12 @@ mod tests {
         }
     }
 
-    /// The IFS check of stream sockets runs once per domain, failed checks
-    /// are not cached.
+    /// STATEMENT: The IFS check of stream sockets is cached per domain, and failed checks are
+    /// not cached.
+    ///
+    /// HOW:
+    /// - Attach a file handle as an IPv4 stream; expect an error and nothing cached.
+    /// - Attach two IPv4 and two IPv6 stream sockets; expect both domains cached.
     #[test]
     fn attach_stream_caches_ifs_check() {
         let reactor = ReactorInner::new().unwrap();
@@ -921,8 +953,13 @@ mod tests {
         assert_eq!(reactor.ifs.load(Ordering::Relaxed), 3);
     }
 
-    /// Debug output shows the handler ids and the notify header, but not the
+    /// STATEMENT: Reactor `Debug` output shows handler ids and the notify header, but not the
     /// raw `OVERLAPPED` contents.
+    ///
+    /// HOW:
+    /// - Expect the reactor output to show its handler id and the notify header.
+    /// - Expect a registered `ReactorApi` to show its id.
+    /// - Expect an `Overlapped` to show `hnd` and `udata`, with `base` as `OVERLAPPED`.
     #[test]
     fn debug_output() {
         let reactor = Reactor::new().unwrap();
@@ -969,8 +1006,11 @@ mod tests {
         drop(io);
     }
 
-    /// Handles that are not sockets are rejected rather than attached
-    /// without the check.
+    /// STATEMENT: The IFS check rejects handles that are not sockets.
+    ///
+    /// HOW:
+    /// - Open the test executable as a file.
+    /// - Expect the IFS check to fail for its handle.
     #[test]
     fn check_ifs_rejects_non_socket() {
         let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();

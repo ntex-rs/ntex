@@ -85,9 +85,15 @@ async fn produce(io: ntex_io::Io, payload: Rc<Vec<u8>>, progress: Rc<Cell<usize>
     io.shutdown().await.unwrap();
 }
 
-/// A peer that stops reading must throttle the producer: sends stay in flight,
-/// backpressure engages, and the producer stops handing over data. Once the
-/// peer reads again, everything arrives in order.
+/// STATEMENT: A peer that stops reading throttles the producer through write
+/// backpressure, and all output arrives once it reads again.
+///
+/// HOW:
+/// - Produce 16 MiB to a peer with an 8 KiB receive buffer that does not read yet.
+/// - After 500 ms expect the progress below 16 MiB and unchanged for 200 ms, with
+///   write backpressure on.
+/// - Let the peer read; expect the producer to finish and the peer to get all data in
+///   order.
 #[ntex::test]
 async fn stalled_peer_throttles_writer_and_loses_nothing() {
     const TOTAL: usize = 16 * 1024 * 1024;
@@ -119,11 +125,14 @@ async fn stalled_peer_throttles_writer_and_loses_nothing() {
     assert_eq!(seen, TOTAL, "expected {TOTAL} bytes, peer got {seen}");
 }
 
-/// Inline pages keep their data inside the page itself, so a send may only
-/// point into them once they sit where they stay until the send completes.
-/// Without a send buffer every send of inline pages stays in flight, while the
-/// peer is stalled and then while it reads slowly; no byte may be lost or
-/// corrupted.
+/// STATEMENT: Inline pages are not lost or corrupted by sends that stay in flight or
+/// complete partially.
+///
+/// HOW:
+/// - Write 256 KiB as 13-byte inline pages, flushing every 256 pages, with a zero send
+///   buffer on Windows and 4 KiB elsewhere.
+/// - Keep the peer stalled for 300 ms, then let it read with pauses.
+/// - Expect the producer to finish and the peer to get all data in order.
 #[ntex::test]
 async fn inline_pages_survive_pending_and_partial_sends() {
     const TOTAL: usize = 256 * 1024;
@@ -173,8 +182,11 @@ async fn inline_pages_survive_pending_and_partial_sends() {
     assert_eq!(seen, TOTAL, "expected {TOTAL} bytes, peer got {seen}");
 }
 
-/// A peer that reads in small pieces with pauses keeps sends partially
-/// completing; no byte may be lost across them.
+/// STATEMENT: Sends that complete partially to a slow peer lose no output.
+///
+/// HOW:
+/// - Produce 8 MiB to a peer that pauses 1 ms every 16 reads.
+/// - Expect the producer to finish within 30 s and the peer to get all data in order.
 #[ntex::test]
 async fn slow_peer_receives_everything_in_order() {
     const TOTAL: usize = 8 * 1024 * 1024;

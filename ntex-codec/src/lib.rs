@@ -237,6 +237,13 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `BytesCodec` passes bytes through unchanged: decode drains the whole buffer,
+    /// returns `None` when it is empty, and encode appends frames in order.
+    ///
+    /// HOW:
+    /// - Decode an empty buffer with `decode` and `decode_eof`; expect `None`.
+    /// - Decode `hello` and `eof`; expect each whole chunk and an emptied source buffer.
+    /// - Encode `hello `, `world` and an empty frame; expect 11 bytes `hello world`.
     #[test]
     fn bytes_codec() {
         let codec = BytesCodec;
@@ -266,6 +273,12 @@ mod tests {
         assert_eq!(dst.freeze(), "hello world");
     }
 
+    /// STATEMENT: The default `Decoder::decode_eof` delegates to `decode`.
+    ///
+    /// HOW:
+    /// - Call `decode_eof` on a codec that only implements `decode` (returns the consumed
+    ///   length).
+    /// - Expect `Some(3)` for `abc`, then `Some(0)` for the drained buffer.
     #[test]
     fn default_decode_eof() {
         let mut src = BytesMut::from(&b"abc"[..]);
@@ -273,6 +286,13 @@ mod tests {
         assert_eq!(DefaultEof.decode_eof(&mut src).unwrap(), Some(0));
     }
 
+    /// STATEMENT: `Rc<C>` forwards `decode`, `decode_eof` and `encode` to the inner codec,
+    /// including an overridden `decode_eof`.
+    ///
+    /// HOW:
+    /// - Decode `ab` through `Rc<ByteCodec>`; expect `a`, then `b` from `decode_eof`.
+    /// - Check the inner `decode_eof` counter reached 2, so the override was used.
+    /// - Encode through `Rc<BytesCodec>` and expect the bytes in the output pages.
     #[test]
     fn rc_codec() {
         let codec = Rc::new(ByteCodec::default());

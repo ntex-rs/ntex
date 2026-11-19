@@ -507,3 +507,40 @@ async fn test_explicit_insecure_connector() {
     let response = client.get(url).address(srv.addr()).send().await.unwrap();
     assert!(response.status().is_success());
 }
+
+/// STATEMENT: The HTTP/2 client sends `content-length: 0` for an empty body and `/` for a URL
+/// without a path.
+///
+/// HOW:
+/// - Serve HTTP/2 with a handler that echoes the request path and `content-length` header.
+/// - POST `Body::Empty` to the server URL without a path and check HTTP/2 and the echoed `/ 0`.
+#[ntex::test]
+async fn test_h2_empty_body_and_path() {
+    use ntex::http::{Request, Response, body::Body, header};
+
+    let srv = test_server(async |_| {
+        http::openssl(
+            ssl_acceptor(),
+            HttpService::h2(async |req: Request| {
+                let len = req
+                    .headers()
+                    .get(header::CONTENT_LENGTH)
+                    .map_or("-", |v| v.to_str().unwrap())
+                    .to_string();
+                Ok::<_, std::io::Error>(Response::Ok().body(format!("{} {len}", req.path())))
+            }),
+        )
+    });
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
+    let client = Client::builder()
+        .openssl(builder.build())
+        .build(SharedCfg::default());
+
+    let url = format!("https://localhost:{}", srv.addr().port());
+    let response = client.post(url).send_body(Body::Empty).await.unwrap();
+    assert_eq!(response.version(), Version::HTTP_2);
+    assert_eq!(response.body().await.unwrap(), "/ 0");
+}

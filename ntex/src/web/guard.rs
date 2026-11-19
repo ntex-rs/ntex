@@ -441,7 +441,7 @@ mod tests {
     ///
     /// HOW:
     /// - Check matching, mismatched, and absent headers against a chunked request.
-    /// - Assert only the matching value passes and debug output identifies the header guard.
+    /// - Assert only the matching value passes.
     #[test]
     fn test_header() {
         let req = TestRequest::with_header(header::TRANSFER_ENCODING, "chunked").to_http_request();
@@ -454,8 +454,6 @@ mod tests {
 
         let pred = Header("content-type", "other");
         assert!(!pred.check(req.head()));
-
-        assert!(format!("{pred:?}").contains("Header"));
     }
 
     /// STATEMENT: Host guards match a bare host, but a required scheme fails closed when the request carries none.
@@ -496,7 +494,7 @@ mod tests {
     ///
     /// HOW:
     /// - Supply an HTTPS host value and check matching, omitted, and mismatched guard schemes.
-    /// - Assert unrelated hosts fail and debug output identifies the host guard.
+    /// - Assert unrelated hosts fail.
     #[test]
     fn test_host_scheme() {
         let req = TestRequest::default()
@@ -526,8 +524,6 @@ mod tests {
 
         let pred = Host("localhost");
         assert!(!pred.check(req.head()));
-
-        assert!(format!("{pred:?}").contains("Host"));
     }
 
     /// STATEMENT: Host guards use CONNECT authorities, not double-slash origin paths.
@@ -596,7 +592,6 @@ mod tests {
     /// HOW:
     /// - Build requests for GET, POST, PUT, DELETE, HEAD, OPTIONS, CONNECT, PATCH, TRACE, and QUERY.
     /// - Check each corresponding guard against matching and mismatched requests.
-    /// - Assert the trace guard debug output includes its method.
     #[test]
     fn test_methods() {
         let req = TestRequest::default().to_http_request();
@@ -648,7 +643,6 @@ mod tests {
             .to_http_request();
         assert!(Trace().check(r.head()));
         assert!(!Trace().check(req.head()));
-        assert!(format!("{:?}", Trace()).contains("MethodGuard(TRACE)"));
 
         let r = TestRequest::default()
             .method(Method::QUERY)

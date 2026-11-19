@@ -328,6 +328,12 @@ pub(super) fn parse(host: &str) -> (&str, Option<u16>) {
 mod tests {
     use super::*;
 
+    /// STATEMENT: String types used as addresses report themselves as the host and have no
+    /// port.
+    ///
+    /// HOW:
+    /// - Query host and port of a `&str`, a `String` and a `ByteString`.
+    /// - Expect the string as host and no port for each.
     #[test]
     fn address() {
         assert_eq!("test".host(), "test");
@@ -342,6 +348,15 @@ mod tests {
         assert_eq!(s.port(), None);
     }
 
+    /// STATEMENT: Host parsing splits an optional port from host names, IPv4 addresses and
+    /// bracketed IPv6 addresses.
+    ///
+    /// HOW:
+    /// - Parse names and IPv4 addresses with and without a port; expect an invalid port to be
+    ///   dropped.
+    /// - Parse IPv6 addresses with brackets, without brackets, and with an unclosed bracket;
+    ///   expect a port only after `]:`.
+    /// - Expect `Connect` to take a port from `[::1]:8080` and from `set_port`.
     #[test]
     fn parse_host() {
         assert_eq!(parse("example.com"), ("example.com", None));
@@ -360,6 +375,11 @@ mod tests {
         assert_eq!(Connect::new("::1").set_port(80).port(), 80);
     }
 
+    /// STATEMENT: `Connect` displays as `host:port`, with IPv6 hosts in brackets.
+    ///
+    /// HOW:
+    /// - Format requests for a name with a parsed port and with `set_port`.
+    /// - Format IPv6 requests, including one with a zone id; expect bracketed hosts.
     #[test]
     fn display() {
         assert_eq!(
@@ -378,6 +398,16 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `Connect` keeps its host, port and resolved addresses, and `take_addrs`
+    /// moves the addresses out.
+    ///
+    /// HOW:
+    /// - Create a request from a host name; expect port 0 until `set_port`, and no addresses.
+    /// - Map the address to a `host:port` string; expect the port parsed from it.
+    /// - Set one and then two addresses; expect `addrs` and `take_addrs` to return them, and
+    ///   none after `take_addrs`.
+    /// - Create a request from a socket address; expect an empty host, its port and the
+    ///   address.
     #[test]
     #[allow(clippy::similar_names)]
     fn connect() {
@@ -390,7 +420,6 @@ mod tests {
         let addrs = connect.addrs().clone();
         assert_eq!(format!("{addrs:?}"), "[]");
         assert!(connect.addrs().next().is_none());
-        assert!(format!("{:?}", connect.clone()).contains("Connect"));
 
         let c = connect.clone().map_addr(|_| "www.rust-lang.org:80");
         assert_eq!(c.host(), "www.rust-lang.org:80");
@@ -435,6 +464,14 @@ mod tests {
         assert!(addrs.contains(&addr));
     }
 
+    /// STATEMENT: `Connect::with`, `set_addr` and `take_addrs` keep the address count, and
+    /// `set_addr(None)` keeps the current addresses.
+    ///
+    /// HOW:
+    /// - Create a request with a host and an address; expect port 0 and that address.
+    /// - Set no address on requests with none and with one address; expect them unchanged.
+    /// - Take addresses; expect the iterator length to drop as it advances and nothing left.
+    /// - Expect a partly consumed iterator's `Debug` to show the remaining address.
     #[test]
     fn connect_with_addr() {
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();

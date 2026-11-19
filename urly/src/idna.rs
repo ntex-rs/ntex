@@ -186,6 +186,13 @@ pub(crate) fn domain_to_unicode(domain: &str) -> Cow<'_, str> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Punycode encode and decode round-trip RFC 3492 samples, decoding accepts
+    /// upper-case digits, and malformed or overflowing input is rejected.
+    ///
+    /// HOW:
+    /// - Encode and decode each sample pair, including the RFC 3492 7.1 (L) case.
+    /// - Decode `mnchen-3YA`; expect `münchen`.
+    /// - Decode `a!`, a non-ASCII basic part and an overflowing number; expect `None`.
     #[test]
     fn punycode() {
         let cases = [
@@ -210,6 +217,14 @@ mod tests {
         assert_eq!(decode("99999999999"), None);
     }
 
+    /// STATEMENT: `domain_to_ascii` lower-cases and encodes labels split on any IDNA dot, and
+    /// `domain_to_unicode` decodes `xn--` labels and leaves invalid or ASCII labels unchanged.
+    ///
+    /// HOW:
+    /// - Convert `MÜnchen.DE` and a name with an ideographic full stop to ASCII.
+    /// - Convert `xn--` names, including upper case, to Unicode.
+    /// - Convert an invalid `xn--` label and plain ASCII; expect them unchanged, the latter
+    ///   borrowed.
     #[test]
     fn domains() {
         assert_eq!(domain_to_ascii("MÜnchen.DE").unwrap(), "xn--mnchen-3ya.de");

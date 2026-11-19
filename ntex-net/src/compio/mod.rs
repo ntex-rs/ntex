@@ -238,6 +238,11 @@ mod tests {
 
     use crate::DefaultRuntime;
 
+    /// STATEMENT: The compio runtime handle reports the time spent running tasks.
+    ///
+    /// HOW:
+    /// - Run a task that blocks its thread for 20 ms.
+    /// - Expect a busy duration of at least 20 ms.
     #[test]
     fn busy_duration() {
         let sleep = std::time::Duration::from_millis(20);
@@ -250,6 +255,13 @@ mod tests {
         });
     }
 
+    /// STATEMENT: The compio busy duration and current turn include a turn still running, as
+    /// seen from another thread.
+    ///
+    /// HOW:
+    /// - Run a task that blocks for 50 ms.
+    /// - Read busy time and current turn from another thread 25 ms in.
+    /// - Expect both to be at least 12.5 ms.
     #[test]
     fn busy_duration_during_turn() {
         let sleep = std::time::Duration::from_millis(50);
@@ -270,6 +282,12 @@ mod tests {
         });
     }
 
+    /// STATEMENT: The compio poll counters grow with task polls and agree with each other.
+    ///
+    /// HOW:
+    /// - Run a task; expect the poll count to grow.
+    /// - Expect repeated polls not to exceed all polls, and the poll histogram count to equal
+    ///   the poll count.
     #[test]
     fn poll_count() {
         System::new("test", DefaultRuntime).block_on(async {
@@ -285,6 +303,12 @@ mod tests {
         });
     }
 
+    /// STATEMENT: `ntex_rt::now` is the same for tasks of one runtime turn, and current
+    /// outside a runtime.
+    ///
+    /// HOW:
+    /// - Spawn two tasks that read `now`, the first then blocking for 5 ms; expect equal times.
+    /// - Outside the runtime, expect `now` not to be earlier than `Instant::now`.
     #[test]
     fn now() {
         System::new("test", DefaultRuntime).block_on(async {
@@ -309,8 +333,13 @@ mod tests {
         }
     }
 
-    /// The runtime drops the tasks still pending on shutdown, a task that spawns
-    /// from its destructor must not insert into the task queue being cleared.
+    /// STATEMENT: A task that spawns from its destructor during compio shutdown does not break
+    /// spawning for the next runtime on the thread.
+    ///
+    /// HOW:
+    /// - Spawn a pending task holding a guard that spawns when dropped, and stop the runtime.
+    /// - Start another runtime on the same thread and spawn a task.
+    /// - Expect the task to run.
     #[test]
     fn spawn_from_task_destructor_on_shutdown() {
         std::thread::spawn(|| {
@@ -334,9 +363,14 @@ mod tests {
         .unwrap();
     }
 
-    /// compio polls the `block_on` future on every turn of its loop. A future
-    /// that wakes another task whenever it is polled, as the h2 payload does
-    /// for its connection, must not keep the driver from completing I/O.
+    /// STATEMENT: On compio, I/O completes even when the `block_on` future wakes another task
+    /// each time it is polled.
+    ///
+    /// HOW:
+    /// - Spawn a task that stays pending and saves its waker.
+    /// - Read from a TCP connection whose peer writes after 100 ms, waking that task on every
+    ///   poll.
+    /// - Expect `hello` within 5 s.
     #[test]
     fn io_completes_while_main_future_wakes_tasks() {
         use std::{cell::RefCell, future::poll_fn, io::Write, pin::pin, task::Poll, task::Waker};

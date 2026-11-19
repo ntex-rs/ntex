@@ -82,6 +82,12 @@ async fn main_with_ping_interval() {
     System::list_arbiter_pings(|_, recs| assert!(!recs.is_empty()));
 }
 
+/// STATEMENT: `main` accepts `name`, `signals` and `ping_interval` arguments, and
+/// `ping_interval` enables arbiter pings.
+///
+/// HOW:
+/// - Run a `main` function declared with all three arguments that sleeps 100 ms.
+/// - Expect `list_arbiter_pings` to report ping records.
 #[test]
 fn test_main_with_args() {
     main_with_ping_interval();
@@ -127,6 +133,11 @@ async fn test_with_timer_resolution() {
     assert_eq!(System::current().timer_resolution(), 1);
 }
 
+/// STATEMENT: Route macros register handlers on paths with parameters.
+///
+/// HOW:
+/// - Register GET, PUT and DELETE handlers on `/test/{param}`.
+/// - Request `/test/it` with each method; expect 200, 201 and 204.
 #[ntex::test]
 async fn test_params() {
     let srv = test::server(async |_| {
@@ -221,6 +232,12 @@ async fn test_conditional_params_argument_limit() {
     assert_eq!(test::read_body(res).await, "ok");
 }
 
+/// STATEMENT: Each method macro routes its method to its own handler on a shared path.
+///
+/// HOW:
+/// - Register a handler for each method on `/test`.
+/// - Expect GET, HEAD, OPTIONS, TRACE and PATCH to succeed.
+/// - Expect PUT to return 201 and POST to return 204.
 #[ntex::test]
 async fn test_body() {
     let srv = test::server(async |_| {
@@ -270,6 +287,11 @@ async fn test_body() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: Route macros accept a plain function that returns a future.
+///
+/// HOW:
+/// - Register `auto_async`, a non-async function returning `impl Future`.
+/// - Expect GET `/test` to succeed.
 #[ntex::test]
 async fn test_auto_async() {
     let srv = test::server(async |_| App::new().service(auto_async));
@@ -284,11 +306,22 @@ async fn test_auto_async() {
 #[ntex::main]
 async fn main_single_expr() -> Result<u32, ()> { Ok(1) }
 
+/// STATEMENT: `main` with a one-line body compiles without `unused_braces` and returns
+/// the body's value.
+///
+/// HOW:
+/// - Declare `main_single_expr` with the body `{ Ok(1) }` on one line.
+/// - Expect it to return `Ok(1)`.
 #[test]
 fn test_main_single_expr() {
     assert_eq!(main_single_expr(), Ok(1));
 }
 
+/// STATEMENT: `test` with a one-line body compiles without `unused_braces`.
+///
+/// HOW:
+/// - Declare the test with the body `{ Ok(()) }` on one line.
+/// - The test passes when it compiles and returns `Ok`.
 #[rustfmt::skip]
 #[ntex::test]
 async fn test_single_expr() -> Result<(), ()> { Ok(()) }

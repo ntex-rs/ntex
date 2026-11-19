@@ -48,6 +48,13 @@ impl FilterLayer for Reply {
     }
 }
 
+/// STATEMENT: A filter can write while it processes a read that completed immediately.
+///
+/// HOW:
+/// - Queue `hello` before the stream is registered, so the first receive completes at
+///   once.
+/// - The `Reply` filter answers it with more than the write buffer threshold.
+/// - Expect `hello` received and the peer to read the whole reply.
 #[ntex::test]
 async fn filter_writes_while_processing_immediate_read() {
     let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -99,6 +106,14 @@ impl FilterLayer for FailAfterWrite {
     }
 }
 
+/// STATEMENT: Output a filter produced before it failed is delivered before the
+/// connection closes.
+///
+/// HOW:
+/// - For write buffer thresholds 1 and 1 GiB, add a filter that moves output to the
+///   transport and then fails.
+/// - Queue 8 MiB; expect `shutdown` to fail with "filter failed".
+/// - Expect the peer to read all 8 MiB.
 #[ntex::test]
 async fn failed_filter_output_is_delivered() {
     // more than the socket buffers hold, the output is delivered over several

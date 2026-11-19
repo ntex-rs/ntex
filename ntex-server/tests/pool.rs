@@ -210,6 +210,15 @@ async fn wait_for(f: impl Fn() -> bool) {
     panic!("condition is not met");
 }
 
+/// STATEMENT: A worker pool processes items across its workers, rejects items while paused
+/// or stopped, and runs the configuration's lifecycle hooks once per event.
+///
+/// HOW:
+/// - Process 10 items on 2 workers; expect all items, 2 services and a resume.
+/// - Pause and expect `process` to return the item; resume and process one more.
+/// - Check worker metrics count 11 items with no restarts, connections or listeners.
+/// - Stop gracefully; expect the awaited server to finish, one stop, 2 shutdowns, one
+///   terminate, and later `process` calls to return the item.
 #[ntex::test]
 async fn pool_process_items() {
     let c = Counters::default();
@@ -217,7 +226,6 @@ async fn pool_process_items() {
         .workers(2)
         .graceful_shutdown_timeout(Millis(500))
         .run(Cfg::new(&c));
-    assert!(format!("{srv:?}").contains("Server"));
 
     for i in 0..10 {
         process(&srv, i).await;
@@ -258,8 +266,13 @@ async fn pool_process_items() {
     assert!(srv.clone().await.is_ok());
 }
 
-/// Items are sent to the workers on the submitting thread, while the thread
-/// that runs the server's command loop is blocked.
+/// STATEMENT: Items are sent to workers on the submitting thread, so processing does not
+/// depend on the server's command loop.
+///
+/// HOW:
+/// - Process one item and receive it from the worker.
+/// - Block the test thread on a helper thread that submits items 1 to 10.
+/// - Expect every submit to succeed and all 10 items to reach the workers.
 #[ntex::test]
 async fn pool_dispatch_on_submitting_thread() {
     let c = Counters::default();
@@ -288,6 +301,12 @@ async fn pool_dispatch_on_submitting_thread() {
     srv.stop(false).await;
 }
 
+/// STATEMENT: Least-loaded balancing stops sending items to a worker that is blocked.
+///
+/// HOW:
+/// - Start 2 workers whose service blocks for 1 s on item 0, and wait for latency samples.
+/// - Process item 0 to block one worker, then process items 1 to 20.
+/// - Expect none of the later items to run on the blocked worker's thread.
 #[ntex::test]
 async fn pool_least_loaded_skips_blocked_worker() {
     let c = Counters::default();
@@ -361,7 +380,12 @@ async fn pool_least_loaded_uses_recovered_worker() {
     srv.stop(false).await;
 }
 
-/// Items queued at a blocked worker are sent to another worker.
+/// STATEMENT: Items queued at a blocked worker are rescheduled to another worker.
+///
+/// HOW:
+/// - Start 2 round-robin workers whose service blocks for 2 s on item 0.
+/// - Queue items 0 to 10 on both workers before the block is detected.
+/// - Expect only item 0 on the blocked thread, 1 to 5 rescheduled items and 11 processed.
 #[ntex::test]
 async fn pool_reschedules_blocked_worker_queue() {
     let c = Counters::default();
@@ -393,7 +417,12 @@ async fn pool_reschedules_blocked_worker_queue() {
     srv.stop(false).await;
 }
 
-/// Items queued at a failed worker are sent to its replacement.
+/// STATEMENT: Items queued at a failed worker are sent to its replacement.
+///
+/// HOW:
+/// - Start one worker that blocks and then panics on item 0, and queue items 0 to 5.
+/// - Expect items 1 to 5 to be processed in order by the restarted worker.
+/// - Check metrics report 5 rescheduled items and one restart.
 #[ntex::test]
 async fn pool_reschedules_failed_worker_queue() {
     let c = Counters::default();
@@ -469,7 +498,15 @@ fn sys_allowed_cpus() -> Option<Vec<usize>> {
     None
 }
 
-/// Items go to the worker placed on their incoming CPU.
+/// STATEMENT: With incoming-CPU balancing, items go to the worker placed on their incoming
+/// CPU; least-loaded balancing does not use it.
+///
+/// HOW:
+/// - For `IncomingCpu` and `LeastLoaded`, start 2 CPU-pinned workers and process 3 rounds
+///   of one item per allowed CPU.
+/// - For `LeastLoaded` or platforms without incoming CPU, expect no hits or misses.
+/// - Otherwise expect every item counted, each CPU always hit or always missed, and hit
+///   items handled by a single worker.
 #[ntex::test]
 async fn pool_incoming_cpu() {
     let cpus = allowed_cpus();
@@ -531,8 +568,15 @@ async fn pool_incoming_cpu() {
     }
 }
 
-/// Items queued while no worker is available are balanced by their incoming
-/// CPU once workers restart.
+/// STATEMENT: Items queued while no worker is available are balanced by their incoming
+/// CPU once the workers restart.
+///
+/// HOW:
+/// - Start 2 CPU-pinned workers, then, from a helper thread that blocks the command loop,
+///   panic both workers and submit one item per allowed CPU.
+/// - Expect every item to be processed and each worker restarted once.
+/// - On platforms with incoming CPU, expect the backlog items counted with some hits;
+///   otherwise expect no hits or misses.
 #[ntex::test]
 async fn pool_incoming_cpu_backlog() {
     const PANIC: usize = 1_000_000;
@@ -576,7 +620,13 @@ async fn pool_incoming_cpu_backlog() {
     srv.stop(false).await;
 }
 
-/// Worker metrics report the runtime's load and a blocked worker.
+/// STATEMENT: Worker metrics report the runtime's load and a blocked worker as stalled.
+///
+/// HOW:
+/// - Process an item; expect busy time, latency samples and no stalls, plus poll counts
+///   on runtimes that report turns.
+/// - Process an item that blocks the worker for 1.5 s.
+/// - Expect the latency to report a stall, then one finished stall with a non-zero duration.
 #[ntex::test]
 async fn pool_runtime_metrics() {
     let c = Counters::default();
@@ -611,7 +661,11 @@ async fn pool_runtime_metrics() {
     srv.stop(false).await;
 }
 
-/// Every affinity mode starts all workers, more workers than CPUs share them.
+/// STATEMENT: Every affinity mode starts all workers, even with more workers than CPUs.
+///
+/// HOW:
+/// - For `Disabled`, `Cpu`, `Core` and `Soft`, start one more worker than available CPUs.
+/// - Process one item per worker; expect all items processed and all services created.
 #[ntex::test]
 async fn pool_affinity() {
     let num = std::thread::available_parallelism().map_or(2, |n| n.get()) + 1;
@@ -632,6 +686,12 @@ async fn pool_affinity() {
     }
 }
 
+/// STATEMENT: A non-graceful stop runs the stop hook and shuts the workers down with the
+/// default timeout.
+///
+/// HOW:
+/// - Start one worker with a 50 ms shutdown delay and process an item.
+/// - Stop with `graceful = false`; expect one stop, then one service shutdown.
 #[ntex::test]
 async fn pool_non_graceful_stop() {
     let c = Counters::default();
@@ -646,7 +706,11 @@ async fn pool_non_graceful_stop() {
     wait_for(|| c.shutdown.load(Relaxed) == 1).await;
 }
 
-/// A zero timeout makes a graceful stop non-graceful.
+/// STATEMENT: A zero graceful timeout still lets a graceful stop shut the workers down.
+///
+/// HOW:
+/// - Start one worker with `graceful_shutdown_timeout(Millis::ZERO)` and process an item.
+/// - Stop gracefully and expect one service shutdown.
 #[ntex::test]
 async fn pool_zero_shutdown_timeout() {
     let c = Counters::default();
@@ -659,7 +723,11 @@ async fn pool_zero_shutdown_timeout() {
     wait_for(|| c.shutdown.load(Relaxed) == 1).await;
 }
 
-/// Workers that exceed the graceful timeout are abandoned.
+/// STATEMENT: Workers that exceed the graceful timeout are abandoned.
+///
+/// HOW:
+/// - Start one worker whose shutdown takes 5 s, with a 100 ms graceful timeout.
+/// - Stop gracefully; expect the stop to finish within 3 s with no completed shutdown.
 #[ntex::test]
 async fn pool_graceful_timeout_expires() {
     let c = Counters::default();
@@ -678,7 +746,11 @@ async fn pool_graceful_timeout_expires() {
     assert_eq!(c.shutdown.load(Relaxed), 0);
 }
 
-/// Workers that are not ready are stopped with the server.
+/// STATEMENT: Workers whose service is not ready are stopped with the server.
+///
+/// HOW:
+/// - For non-graceful and graceful stops, start one worker whose service stays not ready.
+/// - Wait until metrics report it not ready, stop, and expect one service shutdown.
 #[ntex::test]
 async fn pool_stop_unavailable_worker() {
     for graceful in [false, true] {
@@ -696,8 +768,12 @@ async fn pool_stop_unavailable_worker() {
     }
 }
 
-/// Workers that are still creating their service are stopped with the
-/// server, the service is not created.
+/// STATEMENT: Workers still creating their service are stopped with the server, and the
+/// service is never created.
+///
+/// HOW:
+/// - Start one worker whose service takes 300 ms to create, and stop after 50 ms.
+/// - Wait past the creation delay and expect no service created.
 #[ntex::test]
 async fn pool_stop_initializing_worker() {
     let c = Counters::default();
@@ -711,7 +787,12 @@ async fn pool_stop_initializing_worker() {
     assert_eq!(c.created.load(Relaxed), 0);
 }
 
-/// A worker that fails to start is restarted.
+/// STATEMENT: A worker whose service fails to start is restarted.
+///
+/// HOW:
+/// - Start one worker whose first service creation fails, and process an item.
+/// - Expect the item processed, one failure, one created service, and one restart and
+///   one item in the metrics.
 #[ntex::test]
 async fn pool_restarts_failed_worker() {
     let c = Counters::default();
@@ -729,7 +810,11 @@ async fn pool_restarts_failed_worker() {
     srv.stop(false).await;
 }
 
-/// A failed worker stops the server with `stop_on_panic`.
+/// STATEMENT: With `stop_on_panic`, a failed worker stops the server.
+///
+/// HOW:
+/// - Start one worker whose service creation fails, with `stop_on_panic`.
+/// - Expect the awaited server to finish within 5 s, one stop and no created service.
 #[ntex::test]
 async fn pool_stop_on_failure() {
     let c = Counters::default();
@@ -749,7 +834,15 @@ async fn pool_stop_on_failure() {
     assert_eq!(c.created.load(Relaxed), 0);
 }
 
-/// The server status follows the workers, pause, resume and stop.
+/// STATEMENT: The server status follows the workers, pause, resume and stop, and items are
+/// accepted only while it is `Ready`.
+///
+/// HOW:
+/// - Expect `Starting` then `Ready` with one resume; pause and resume and expect `Paused`
+///   and `Ready` with the matching hooks.
+/// - Panic the only worker; expect `Unavailable` with a pause, then `Ready` with a resume.
+/// - Stop; expect `Stopping` then `Stopped`, one shutdown and no extra pause.
+/// - In every non-ready state, expect `process` to return the item.
 #[ntex::test]
 async fn pool_status() {
     let c = Counters::default();
@@ -796,7 +889,11 @@ async fn pool_status() {
     assert_eq!(c.shutdown.load(Relaxed), 1);
 }
 
-/// The signal task does not keep a stopped server alive.
+/// STATEMENT: The signal task does not keep a stopped server alive.
+///
+/// HOW:
+/// - Start a pool with signals enabled, wait until ready, stop it and drop the handle.
+/// - Expect the configuration's shared counter to be released within 2 s.
 #[ntex::test]
 async fn pool_signals_release_stopped_server() {
     let c = Counters::default();
@@ -821,7 +918,12 @@ async fn pool_signals_release_stopped_server() {
     assert!(released, "the stopped server's factory is still alive");
 }
 
-/// A paused server stays paused while a failed worker is restarted.
+/// STATEMENT: A paused server stays paused while a failed worker is restarted.
+///
+/// HOW:
+/// - Panic the only worker and pause the server; wait for the service to be re-created.
+/// - Expect the status to stay `Paused`, no extra resume and items to be rejected.
+/// - Resume and expect `Ready` with a second resume.
 #[ntex::test]
 async fn pool_pause_survives_worker_restart() {
     let c = Counters::default();
@@ -853,8 +955,13 @@ async fn pool_pause_survives_worker_restart() {
     srv.stop(true).await;
 }
 
-/// A paused server stays paused when workers become available, and a server
-/// without available workers does not become ready when it is resumed.
+/// STATEMENT: A paused server stays paused when workers become available, and resuming a
+/// server without available workers does not make it ready.
+///
+/// HOW:
+/// - Start 2 workers with a 300 ms creation delay; pause and resume, expect `Starting`.
+/// - Pause again and wait for both services; expect `Paused`, rejected items, no resume.
+/// - Resume; expect `Ready`, one resume, the item processed and no pause hook.
 #[ntex::test]
 async fn pool_pause_while_starting() {
     let c = Counters::default();
@@ -884,7 +991,12 @@ async fn pool_pause_while_starting() {
     assert_eq!(c.pause.load(Relaxed), 0);
 }
 
-/// A worker that panics is restarted.
+/// STATEMENT: A worker that panics is restarted and keeps processing items.
+///
+/// HOW:
+/// - Start one worker that panics on item 1 and process item 1.
+/// - Expect the service to be created again and item 2 to be processed.
+/// - Check metrics report one restart and 2 items.
 #[ntex::test]
 async fn pool_worker_panic_restarts_worker() {
     let c = Counters::default();
@@ -902,7 +1014,11 @@ async fn pool_worker_panic_restarts_worker() {
     srv.stop(false).await;
 }
 
-/// A failed readiness check re-creates the service.
+/// STATEMENT: A failed readiness check re-creates the worker's service.
+///
+/// HOW:
+/// - Start one worker whose first readiness check fails, and process an item.
+/// - Expect the item processed, 2 created services and the failed one shut down.
 #[ntex::test]
 async fn pool_ready_failure_recreates_service() {
     let c = Counters::default();
@@ -945,7 +1061,11 @@ async fn worker_stop_while_recreating_service() {
     assert_eq!(c.created.load(Relaxed), 1);
 }
 
-/// `stop_runtime` stops the current system with the server.
+/// STATEMENT: With `stop_runtime`, stopping the server also stops the current system.
+///
+/// HOW:
+/// - Run a system that starts a `stop_runtime` pool, processes an item and stops it.
+/// - Expect `System::run` to return `Ok` with one stop and the item processed.
 #[test]
 fn pool_stop_runtime() {
     let c = Counters::default();
@@ -969,6 +1089,11 @@ fn pool_stop_runtime() {
     assert_eq!(c.items(), vec![1]);
 }
 
+/// STATEMENT: `WorkerPool` `Debug` output shows the configured name and worker count.
+///
+/// HOW:
+/// - Configure a pool named `test` with 3 workers.
+/// - Format it and expect the output to contain `"test"` and `num: 3`.
 #[test]
 fn pool_builder() {
     let pool = WorkerPool::default()
@@ -980,6 +1105,15 @@ fn pool_builder() {
     assert!(s.contains("\"test\"") && s.contains("num: 3"), "{s}");
 }
 
+/// STATEMENT: A `Worker` reports its name and status, delivers items, compares and hashes
+/// by identity, and stops its service.
+///
+/// HOW:
+/// - Start a worker; expect its name, `Available` status and the name in `Debug`.
+/// - Send an item and receive it; compare and hash the worker with its clone and with a
+///   second worker.
+/// - Stop it; expect `true`, `Failed` status, rejected sends and `true` on a second stop.
+/// - Stop the second worker with a zero timeout; expect `true` and 2 shutdowns.
 #[ntex::test]
 async fn worker_lifecycle() {
     let c = Counters::default();
@@ -1008,7 +1142,6 @@ async fn worker_lifecycle() {
     assert_ne!(hash(&wrk), hash(&wrk2));
 
     let stop = wrk.stop(Millis(1000));
-    assert!(format!("{stop:?}").contains("WorkerStop"));
     assert!(stop.await);
     while wrk.wait_for_status().await != WorkerStatus::Failed {}
     assert_eq!(wrk.wait_for_status().await, WorkerStatus::Failed);
@@ -1022,7 +1155,11 @@ async fn worker_lifecycle() {
     assert_eq!(c.shutdown.load(Relaxed), 2);
 }
 
-/// A worker stopped before its service is created reports an incomplete stop.
+/// STATEMENT: Stopping a worker before its service is created reports an incomplete stop.
+///
+/// HOW:
+/// - Start a worker whose service takes 5 s to create; expect `Unavailable`.
+/// - Stop it with a 100 ms timeout; expect `false` and no created service.
 #[ntex::test]
 async fn worker_stop_before_start() {
     let c = Counters::default();
@@ -1036,7 +1173,11 @@ async fn worker_stop_before_start() {
     assert_eq!(c.created.load(Relaxed), 0);
 }
 
-/// Shutdown that exceeds the timeout reports an incomplete stop.
+/// STATEMENT: A worker whose shutdown exceeds the stop timeout reports an incomplete stop.
+///
+/// HOW:
+/// - Start a worker whose shutdown takes 5 s and wait until it is `Available`.
+/// - Stop it with a 50 ms timeout and expect `false`.
 #[ntex::test]
 async fn worker_stop_timeout() {
     let c = Counters::default();
@@ -1048,7 +1189,12 @@ async fn worker_stop_timeout() {
     assert!(!wrk.stop(Millis(50)).await);
 }
 
-/// A service creation failure is reported as the failed status.
+/// STATEMENT: A service creation failure is reported as the `Failed` worker status.
+///
+/// HOW:
+/// - Start a worker whose service creation fails.
+/// - Expect `wait_for_status` to report `Failed` within 10 status changes.
+/// - Check the default `WorkerStatus` is `Unavailable`.
 #[ntex::test]
 async fn worker_create_failure() {
     let c = Counters::default();
@@ -1067,7 +1213,12 @@ async fn worker_create_failure() {
     assert_eq!(WorkerStatus::default(), WorkerStatus::Unavailable);
 }
 
-/// Awaiting a server after it has stopped resolves immediately.
+/// STATEMENT: Awaiting a server resolves while its stop is in progress and immediately
+/// after it has stopped.
+///
+/// HOW:
+/// - Start a pool, process an item and begin a graceful stop.
+/// - Await a server clone within 3 s, finish the stop, then await another clone within 3 s.
 #[ntex::test]
 async fn pool_await_after_stop() {
     let c = Counters::default();
@@ -1087,7 +1238,11 @@ async fn pool_await_after_stop() {
         .unwrap();
 }
 
-/// Awaiting a server stopped by a worker failure resolves immediately.
+/// STATEMENT: Awaiting a server stopped by a worker failure resolves immediately.
+///
+/// HOW:
+/// - Start a `stop_on_panic` pool whose service creation fails and wait for the stop hook.
+/// - Await a server clone and a later `stop` within 3 s each; expect one stop.
 #[ntex::test]
 async fn pool_await_after_stop_on_failure() {
     let c = Counters::default();

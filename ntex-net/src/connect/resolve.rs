@@ -80,6 +80,13 @@ fn ip_literal(host: &str, port: u16) -> Option<net::SocketAddr> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: IP literal parsing accepts IPv4 and IPv6 addresses, and numeric IPv6 zone
+    /// ids only.
+    ///
+    /// HOW:
+    /// - Parse `fe80::1%3`; expect a v6 address with scope id 3.
+    /// - Parse `::1`; expect the loopback address with the port.
+    /// - Expect `None` for a named zone, a zone on IPv4, and a host name.
     #[test]
     fn ip_literals() {
         let addr = ip_literal("fe80::1%3", 80).unwrap();
@@ -94,6 +101,13 @@ mod tests {
         assert_eq!(ip_literal("localhost", 80), None);
     }
 
+    /// STATEMENT: `lookup` resolves host names, fails for unknown names, and keeps addresses
+    /// that are already set.
+    ///
+    /// HOW:
+    /// - Resolve `www.rust-lang.org`; expect success.
+    /// - Resolve `nonexistent.invalid`; expect an error.
+    /// - Resolve a request with an address set; expect only that address.
     #[allow(clippy::clone_on_copy)]
     #[ntex::test]
     async fn resolver() {
@@ -112,6 +126,14 @@ mod tests {
         assert!(addrs.contains(&addr));
     }
 
+    /// STATEMENT: `lookup` turns IP literal hosts into addresses, including IPv6 zones and
+    /// URLs, and resolves `localhost` to loopback.
+    ///
+    /// HOW:
+    /// - Resolve IPv4 and IPv6 literals with ports in the host or from `set_port`; expect one
+    ///   matching address each.
+    /// - Resolve an IPv6 URL; expect its address.
+    /// - Resolve `localhost:8080`; expect only loopback addresses on port 8080.
     #[ntex::test]
     async fn resolver_ip_literals() {
         for (host, port, expected) in [

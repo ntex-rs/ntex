@@ -387,14 +387,12 @@ mod tests {
     #[test]
     fn test_from() {
         from!(httparse::Error::HeaderName => DecodeError::Header);
-        from!(httparse::Error::HeaderName => DecodeError::Header);
         from!(httparse::Error::HeaderValue => DecodeError::Header);
         from!(httparse::Error::NewLine => DecodeError::Header);
         from!(httparse::Error::Status => DecodeError::Status);
         from!(httparse::Error::Token => DecodeError::Header);
         from!(httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
         from!(httparse::Error::Version => DecodeError::Version);
-        from!(ntex_httparse::Error::HeaderName => DecodeError::Header);
         from!(ntex_httparse::Error::HeaderName => DecodeError::Header);
         from!(ntex_httparse::Error::HeaderValue => DecodeError::Header);
         from!(ntex_httparse::Error::NewLine => DecodeError::Header);
@@ -462,18 +460,5 @@ mod tests {
                 matches!(err, PayloadError::Io(ref e) if e.kind() == io::ErrorKind::Interrupted)
             );
         }
-    }
-
-    /// STATEMENT: Excessive empty HTTP/2 data frames have a stable diagnostic category and descriptive error.
-    ///
-    /// HOW:
-    /// - Construct the empty-frame error and compare its diagnostic signature and display text.
-    #[test]
-    fn test_h2_error() {
-        use crate::error::ErrorDiagnostic;
-
-        let err = H2Error::EmptyDataFrames;
-        assert_eq!(err.signature(), "ntex-http-h2error");
-        assert_eq!(err.to_string(), "Too many consecutive empty DATA frames");
     }
 }

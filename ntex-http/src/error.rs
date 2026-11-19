@@ -236,6 +236,12 @@ mod tests {
     use super::*;
     use std::error::Error as StdError;
 
+    /// STATEMENT: Converting an `http::Error` unwraps it to the specific inner error instead of
+    /// storing the `http::Error` itself.
+    ///
+    /// HOW:
+    /// - Wrap an invalid-method error in `http::Error` and convert it to `Error`.
+    /// - Expect the inner error not to be an `http::Error`.
     #[test]
     fn inner_http_error() {
         let e = http::method::Method::from_bytes(b"").unwrap_err();
@@ -244,6 +250,14 @@ mod tests {
         assert!(!ie.is::<http::Error>());
     }
 
+    /// STATEMENT: An `Error` built from `InvalidStatusCode` reports that type through
+    /// `get_ref`, `downcast_ref` and `is`, and has no source.
+    ///
+    /// HOW:
+    /// - Convert the error from `StatusCode::from_u16(6666)`.
+    /// - Expect `is::<InvalidStatusCode>()` true and `is::<InvalidHeaderValue>()` false on
+    ///   the inner error and on `Error`.
+    /// - Expect no `source()` and a `Debug` output starting with `ntex_http::Error`.
     #[test]
     fn inner_error_is_invalid_status_code() {
         let e = http::status::StatusCode::from_u16(6666).unwrap_err();
@@ -261,6 +275,13 @@ mod tests {
         assert!(s.starts_with("ntex_http::Error"));
     }
 
+    /// STATEMENT: An `Error` built from `InvalidMethod` reports that type through `get_ref`,
+    /// `downcast_ref` and `is`, and has no source.
+    ///
+    /// HOW:
+    /// - Convert the error from `Method::from_bytes(b"")`.
+    /// - Expect `is::<InvalidMethod>()` on the inner error and on `Error`.
+    /// - Expect no `source()` and a `Debug` output starting with `ntex_http::Error`.
     #[test]
     fn inner_error_is_invalid_method() {
         let e = http::method::Method::from_bytes(b"").unwrap_err();
@@ -276,6 +297,13 @@ mod tests {
         assert!(s.starts_with("ntex_http::Error"));
     }
 
+    /// STATEMENT: An `http::Error` without a dedicated kind converts to a generic `http error`
+    /// message.
+    ///
+    /// HOW:
+    /// - Convert a `HeaderMap::try_reserve(usize::MAX)` failure via `http::Error`.
+    /// - Expect `Display` `http error`, no source, no `InvalidStatusCode` match and the
+    ///   exact `Debug` output.
     #[test]
     fn other_http_error() {
         // http errors without a dedicated kind convert to a generic error

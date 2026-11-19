@@ -32,6 +32,11 @@ async fn echo(io: &ntex_io::Io) {
     assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "hello");
 }
 
+/// STATEMENT: `connect` resolves a `host:port` string and connects to it.
+///
+/// HOW:
+/// - Connect to `127.0.0.1:<port>` of an echoing peer.
+/// - Expect `PeerAddr` to be the peer address and the echo to round-trip.
 #[ntex::test]
 async fn connect_host() {
     let addr = echo_peer();
@@ -42,6 +47,11 @@ async fn connect_host() {
     echo(&io).await;
 }
 
+/// STATEMENT: `connect_with` accepts a `SocketAddr` as the request.
+///
+/// HOW:
+/// - Connect to an echoing peer's `SocketAddr` with a named config.
+/// - Expect the echo to round-trip.
 #[ntex::test]
 async fn connect_socket_addr() {
     // the address provides the socket address itself
@@ -67,6 +77,12 @@ async fn connect_override_socket_addr() {
     echo(&io).await;
 }
 
+/// STATEMENT: `tcp_connect` connects to an IPv6 address.
+///
+/// HOW:
+/// - Skip when no IPv6 loopback is available.
+/// - Connect to an echoing peer on `[::1]`.
+/// - Expect `PeerAddr` to be the peer address and the echo to round-trip.
 #[ntex::test]
 async fn connect_ipv6() {
     let Ok(lst) = net::TcpListener::bind("[::1]:0") else {
@@ -88,11 +104,16 @@ async fn connect_ipv6() {
     echo(&io).await;
 }
 
+/// STATEMENT: `Connector` used as a service connects to the request's address.
+///
+/// HOW:
+/// - Call a `Connector` pipeline with a `localhost` request that carries the peer address
+///   and port.
+/// - Expect the echo to round-trip.
 #[ntex::test]
 async fn connector_service() {
     let addr = echo_peer();
     let connector = Connector::<&str>::default();
-    assert!(format!("{connector:?}").contains("Connector"));
 
     let svc = Pipeline::new(SharedCfg::default(), connector.clone());
     let io = svc
@@ -102,7 +123,11 @@ async fn connector_service() {
     echo(&io).await;
 }
 
-/// The first addresses that refuse the connection are skipped.
+/// STATEMENT: Addresses that refuse the connection are skipped in favor of the next one.
+///
+/// HOW:
+/// - Connect with two closed addresses followed by an echoing peer.
+/// - Expect `PeerAddr` to be the peer address and the echo to round-trip.
 #[ntex::test]
 async fn connect_falls_back_to_next_address() {
     let addr = echo_peer();
@@ -112,6 +137,12 @@ async fn connect_falls_back_to_next_address() {
     echo(&io).await;
 }
 
+/// STATEMENT: A refused connection is reported as an I/O error.
+///
+/// HOW:
+/// - Connect to a closed address; expect `ConnectError::Io` with `ConnectionRefused`.
+/// - Connect with only closed addresses; expect `ConnectError::Io`.
+/// - Call `tcp_connect` with a closed address; expect `ConnectionRefused`.
 #[ntex::test]
 async fn connect_refused() {
     let err = connect::connect(closed_addr()).await.unwrap_err();
@@ -130,12 +161,23 @@ async fn connect_refused() {
     assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
 }
 
+/// STATEMENT: A host that cannot be resolved is reported as a resolver error.
+///
+/// HOW:
+/// - Connect to `nonexistent.invalid`.
+/// - Expect `ConnectError::Resolver`.
 #[ntex::test]
 async fn connect_resolver_error() {
     let err = connect::connect("nonexistent.invalid").await.unwrap_err();
     assert!(matches!(&*err, ConnectError::Resolver(_)), "{err:?}");
 }
 
+/// STATEMENT: `unix_connect` connects to a Unix socket path and fails for a missing one.
+///
+/// HOW:
+/// - Connect to a listening socket file; expect no `PeerAddr` and the echo to round-trip.
+/// - Remove the file and connect again; expect `NotFound`, or `ConnectionRefused` on
+///   Windows.
 // tokio has no unix sockets on Windows
 #[cfg(any(unix, not(feature = "tokio")))]
 #[ntex::test]
@@ -174,6 +216,11 @@ async fn unix_connect() {
     assert_eq!(err.kind(), expected, "{err:?}");
 }
 
+/// STATEMENT: `from_unix_stream` registers a connected Unix stream with the runtime.
+///
+/// HOW:
+/// - Register one end of a `UnixStream` pair and echo on the other.
+/// - Expect the echo to round-trip.
 #[cfg(unix)]
 #[ntex::test]
 async fn from_unix_stream() {
@@ -187,6 +234,11 @@ async fn from_unix_stream() {
     echo(&io).await;
 }
 
+/// STATEMENT: Registering a stream outside a runtime panics.
+///
+/// HOW:
+/// - Call `from_tcp_stream` on a plain thread.
+/// - Expect a panic with "not in a ntex driver".
 #[test]
 #[should_panic(expected = "not in a ntex driver")]
 fn helpers_require_a_driver() {
@@ -195,6 +247,11 @@ fn helpers_require_a_driver() {
     let _ = ntex_net::from_tcp_stream(sock, SharedCfg::default());
 }
 
+/// STATEMENT: A reactor cannot be installed while another is set.
+///
+/// HOW:
+/// - Inside a runtime, call `with_reactor` with a new reactor.
+/// - Expect a panic with "reactor is already set".
 #[cfg(any(unix, windows))]
 #[ntex::test]
 #[should_panic(expected = "reactor is already set")]

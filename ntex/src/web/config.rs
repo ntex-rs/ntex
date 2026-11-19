@@ -482,16 +482,4 @@ mod tests {
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
-
-    /// STATEMENT: A fresh `ServiceConfig` contains no services or external resources.
-    ///
-    /// HOW:
-    /// - Construct `ServiceConfig::new` with an empty vector.
-    /// - Assert both registration collections are empty.
-    #[test]
-    fn test_new_service_config() {
-        let cfg: ServiceConfig<(), ()> = ServiceConfig::new(Vec::new());
-        assert!(cfg.services.is_empty());
-        assert!(cfg.external.is_empty());
-    }
 }

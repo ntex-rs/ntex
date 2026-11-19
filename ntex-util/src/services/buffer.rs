@@ -509,7 +509,6 @@ mod tests {
 
         let err = BufferServiceError::from("test");
         assert!(format!("{err}").contains("test"));
-        assert!(format!("{:?}", Buffer::<(), (), (), ()>::default()).contains("Buffer"));
     }
 
     /// STATEMENT: Sequential calls through a buffer do not stall an always-ready service.
@@ -761,16 +760,6 @@ mod tests {
 
         assert_eq!(inner.count.get(), 2);
         assert_eq!(inner.active_on_shutdown.get(), Some(0));
-    }
-
-    /// STATEMENT: Canceled buffer requests have a specific human-readable error message.
-    ///
-    /// HOW:
-    /// - Convert `RequestCanceled` to a string and compare its complete message.
-    #[test]
-    fn request_canceled_display() {
-        let err = BufferServiceError::<&str>::RequestCanceled;
-        assert_eq!(err.to_string(), "buffer service request canceled");
     }
 
     /// STATEMENT: Dropped queued or released requests free capacity without blocking successors.

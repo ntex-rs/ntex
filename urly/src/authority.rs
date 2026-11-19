@@ -215,6 +215,13 @@ impl<T: AsRef<str>> fmt::Display for Port<T> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: `split` separates userinfo at the last `@` and the port at the last `:`
+    /// outside IPv6 brackets.
+    ///
+    /// HOW:
+    /// - Split authorities with userinfo, a password, bracketed IPv6 with and without a port,
+    ///   text after `]` and an empty port.
+    /// - Expect the listed `(userinfo, host, port)` tuples.
     #[test]
     fn split_authority() {
         assert_eq!(split("a@b:1"), (Some("a"), "b", Some("1")));
@@ -251,6 +258,13 @@ mod tests {
         assert_eq!(auth.host_port(), "example.com:8080");
     }
 
+    /// STATEMENT: `Authority::new` accepts empty, empty-port and IPv6 authorities and reports
+    /// the kind and position of invalid characters, ports and IP literals.
+    ///
+    /// HOW:
+    /// - Parse valid authorities; expect `Ok`.
+    /// - Parse a space, a bad port, an unclosed IPv6 and an out-of-range IPv4 octet.
+    /// - Expect `InvalidChar`, `InvalidPort` with positions, `InvalidIpv6` and `InvalidIpv4`.
     #[test]
     fn strict() {
         assert!(Authority::new("").is_ok());
@@ -268,6 +282,12 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::InvalidIpv4);
     }
 
+    /// STATEMENT: `Port::parse` keeps the original text, compares by numeric value and rejects
+    /// empty, non-digit and out-of-range input.
+    ///
+    /// HOW:
+    /// - Parse `0080`; expect value 80 and `as_str()` `0080`.
+    /// - Parse `65536`, an empty string and `1a`; expect `None`.
     #[test]
     fn port() {
         let p = Port::parse("0080").unwrap();

@@ -112,10 +112,13 @@ async fn web_ws_keeps_server_io_config() {
         .unwrap();
     assert!(rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap());
 }
+
+/// STATEMENT: Connecting a WebSocket client to a route that does not upgrade fails with
+/// the route's response status.
 ///
 /// HOW:
-/// - Connect to a normal OK web route and a route returning an I/O error.
-/// - Assert invalid-response-status variants for 200 and 500 and their exact display messages.
+/// - Connect to a route returning 200 and to a route failing with an I/O error.
+/// - Expect `InvalidResponseStatus` with 200 and 500 and their display messages.
 #[ntex::test]
 async fn web_no_ws() {
     let srv = test::server(async |_| {

@@ -124,6 +124,11 @@ mod tests {
 
     use crate::DefaultRuntime;
 
+    /// STATEMENT: The tokio runtime handle reports the time spent running tasks.
+    ///
+    /// HOW:
+    /// - Run a task that blocks its thread for 20 ms.
+    /// - Expect a busy duration of at least 20 ms after the system stops.
     #[test]
     fn busy_duration() {
         let sleep = Duration::from_millis(20);

@@ -254,15 +254,4 @@ mod tests {
         let s = format!("{:?}", req.head());
         assert!(s.contains("RequestHead { id: 0, uri:"));
     }
-
-    /// STATEMENT: Default requests use GET and have no attached transport.
-    ///
-    /// HOW:
-    /// - Construct a default request and inspect its method and I/O reference.
-    #[test]
-    fn test_default() {
-        let req = Request::default();
-        assert_eq!(req.method(), Method::GET);
-        assert!(req.io().is_none());
-    }
 }

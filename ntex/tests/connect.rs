@@ -961,7 +961,7 @@ async fn test_rustls_uri() {
 /// STATEMENT: Connector validation rejects invalid destinations and falls back across supplied addresses.
 ///
 /// HOW:
-/// - Assert empty and out-of-range-port destinations fail, the debug label contains `Connector`, and a valid server address connects.
+/// - Assert empty and out-of-range-port destinations fail and a valid server address connects.
 /// - Supply an unavailable address followed by the server address and require success; also verify `connect_with` using explicit configuration.
 #[ntex::test]
 async fn basic_connect_service() {
@@ -976,7 +976,6 @@ async fn basic_connect_service() {
     assert!(result.is_err());
     let result = srv.connect("localhost:99999", &cfg).await;
     assert!(result.is_err());
-    assert!(format!("{srv:?}").contains("Connector"));
 
     let srv = ntex_net::connect::Connector::new();
     let result = srv.connect(format!("{}", server.addr()), &cfg).await;

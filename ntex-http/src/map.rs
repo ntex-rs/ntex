@@ -476,6 +476,13 @@ mod tests {
     use super::*;
     use crate::header::{ACCEPT_ENCODING, CONTENT_TYPE};
 
+    /// STATEMENT: `HeaderMap` capacity, insert, lookup by every key type, `get_mut`, `keys` and
+    /// `remove` work together.
+    ///
+    /// HOW:
+    /// - Check `default` and `with_capacity` maps are empty, and `reserve` grows capacity.
+    /// - Insert `content-type`; look it up by `HeaderName`, `&str`, `String` and `&String`.
+    /// - Check `get_mut`, `Debug` and `keys`, then `remove` and expect an empty map.
     #[test]
     #[allow(clippy::needless_borrow, clippy::needless_borrows_for_generic_args)]
     fn test_basics() {
@@ -507,6 +514,13 @@ mod tests {
         assert!(m.is_empty());
     }
 
+    /// STATEMENT: `append` keeps every value for a name in insertion order, while `get` and
+    /// `get_mut` return the first one.
+    ///
+    /// HOW:
+    /// - Append `gzip`, `br` and `deflate` under `accept-encoding`.
+    /// - Expect `get_all` in that order and `get`/`get_mut` to return `gzip`.
+    /// - Remove the name; expect `get` to return `None`.
     #[test]
     fn test_append() {
         let mut map = HeaderMap::new();
@@ -540,6 +554,11 @@ mod tests {
         assert_eq!(map.get(ACCEPT_ENCODING), None);
     }
 
+    /// STATEMENT: Converting an `http::HeaderMap` keeps its headers.
+    ///
+    /// HOW:
+    /// - Build an `http::HeaderMap` with `accept-encoding: gzip` and convert it.
+    /// - Expect `get` to return `gzip`.
     #[test]
     fn test_from_http() {
         let mut map = http::HeaderMap::new();
@@ -552,6 +571,13 @@ mod tests {
         );
     }
 
+    /// STATEMENT: The owning iterator of a header `Value` yields every value in order with an
+    /// exact `size_hint`, and stays exhausted.
+    ///
+    /// HOW:
+    /// - Iterate a single value; check `size_hint` before and after `next`.
+    /// - Iterate three appended values; expect `a`, `b`, `c` with matching `size_hint`.
+    /// - Call `next` after the end twice; expect `None`.
     #[test]
     fn value_into_iter() {
         let mut it = Value::One(HeaderValue::from_static("a")).into_iter();

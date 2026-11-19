@@ -146,6 +146,13 @@ impl Error for InvalidUrlParts {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Each `ErrorKind` has a fixed message, `InvalidUrl` appends the shifted
+    /// position, and `InvalidUrlParts` wraps the same error.
+    ///
+    /// HOW:
+    /// - Format every kind directly and inside `InvalidUrl`; expect the listed message.
+    /// - Offset a positioned error by 2; expect `at position 5`, and no position without one.
+    /// - Convert to `InvalidUrlParts`; expect the same kind and inner error.
     #[test]
     fn display() {
         let cases = [

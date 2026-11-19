@@ -436,6 +436,13 @@ mod tests {
         fn cleanup(&mut self) {}
     }
 
+    /// STATEMENT: The polling reactor reports its driver type, a valid descriptor and its
+    /// capacity in debug output.
+    ///
+    /// HOW:
+    /// - Create a reactor with capacity 0.
+    /// - Expect `DriverType::Poll`, a non-negative fd, and `Reactor` and `capacity` in
+    ///   `Debug`.
     #[test]
     fn reactor_info() {
         let reactor = Reactor::with_capacity(0).unwrap();
@@ -445,7 +452,13 @@ mod tests {
         assert!(s.contains("Reactor") && s.contains("capacity"), "{s}");
     }
 
-    /// Failed poller operations are reported to the handler that submitted them.
+    /// STATEMENT: Failed poller operations are reported to the handler that submitted them,
+    /// once the changes are applied.
+    ///
+    /// HOW:
+    /// - Modify and detach a socket that is not attached, with ids 1 and 2.
+    /// - Expect no errors before the changes are applied.
+    /// - Apply the changes; expect errors for ids 1 and 2.
     #[test]
     fn api_errors_are_reported() {
         let reactor = Reactor::new().unwrap();
@@ -471,6 +484,14 @@ mod tests {
         assert_eq!(ids, vec![1, 2]);
     }
 
+    /// STATEMENT: A reactor tick reports errors from changes queued by handler ticks, including
+    /// changes queued while handling those errors.
+    ///
+    /// HOW:
+    /// - Register a handler whose tick modifies an unattached socket with id 1, and that
+    ///   queues id 2 when it gets the error for id 1.
+    /// - Run one reactor tick.
+    /// - Expect errors for ids 1 and 2, and no queued changes left.
     #[test]
     fn tick_drains_errors_and_their_deferred_work() {
         struct TickErrors {

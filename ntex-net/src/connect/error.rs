@@ -55,16 +55,50 @@ impl ErrorDiagnostic for ConnectError {
 mod tests {
     use super::*;
 
+    /// STATEMENT: Cloning a `ConnectError` keeps its variant, and for `Resolver` and `Io`
+    /// rebuilds the `io::Error` with the same kind and message.
+    ///
+    /// HOW:
+    /// - Clone each unit variant and check the variant with `matches!`.
+    /// - Clone `Resolver` and `Io` errors with distinct kinds; check the clone's variant,
+    ///   `kind()` and message.
     #[test]
     #[allow(clippy::redundant_clone)]
     fn connect_error_clone() {
-        let _ = ConnectError::Resolver(io::Error::other("test")).clone();
-        let _ = ConnectError::NoRecords.clone();
-        let _ = ConnectError::InvalidInput.clone();
-        let _ = ConnectError::Unresolved.clone();
-        let _ = ConnectError::Io(io::Error::other("test")).clone();
+        assert!(matches!(
+            ConnectError::NoRecords.clone(),
+            ConnectError::NoRecords
+        ));
+        assert!(matches!(
+            ConnectError::InvalidInput.clone(),
+            ConnectError::InvalidInput
+        ));
+        assert!(matches!(
+            ConnectError::Unresolved.clone(),
+            ConnectError::Unresolved
+        ));
+
+        let err = ConnectError::Resolver(io::Error::new(io::ErrorKind::NotFound, "no host"));
+        let ConnectError::Resolver(e) = err.clone() else {
+            panic!("expected Resolver")
+        };
+        assert_eq!(e.kind(), io::ErrorKind::NotFound);
+        assert_eq!(e.to_string(), "no host");
+
+        let err = ConnectError::Io(io::Error::new(io::ErrorKind::ConnectionRefused, "refused"));
+        let ConnectError::Io(e) = err.clone() else {
+            panic!("expected Io")
+        };
+        assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused);
+        assert_eq!(e.to_string(), "refused");
     }
 
+    /// STATEMENT: `ConnectError` signatures name the connect error variant, or the I/O error
+    /// kind for I/O errors.
+    ///
+    /// HOW:
+    /// - Expect `ntex-connect-*` signatures for the input, resolver and record errors.
+    /// - Expect `std-io-*` signatures with the kind for I/O errors.
     #[test]
     fn error_diagnostic() {
         let err = ConnectError::InvalidInput;
