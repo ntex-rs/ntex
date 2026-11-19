@@ -1,6 +1,6 @@
 # Changes
 
-## [4.8.1] - Unreleased
+## [4.9.0] - 2026-11-19
 
 * schannel: reject `DecryptMessage` output that does not lie within the input
   record instead of reading through the returned pointer
