@@ -1,6 +1,6 @@
 use std::{borrow, fmt, io, ops::DerefMut, ptr};
 
-use crate::{Buf, BufMut, BytePageSize, Bytes, buf::UninitSlice, stvec::StorageVec};
+use crate::{Buf, BufMut, BytePageSize, Bytes, SpareWriter, buf::UninitSlice, stvec::StorageVec};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -771,6 +771,37 @@ impl BytesMut {
     #[inline]
     pub fn extend_from_slice(&mut self, extend: &[u8]) {
         self.put_slice(extend);
+    }
+
+    /// Returns a writer that appends bytes to the spare capacity of the
+    /// buffer without initializing it first.
+    ///
+    /// Capacity for at least `additional` bytes is reserved like
+    /// [`reserve`](Self::reserve) does, the writer reserves more when it is
+    /// full. The buffer length is updated once, when the writer is dropped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesMut;
+    ///
+    /// let mut buf = BytesMut::copy_from_slice(b"hello");
+    /// let mut w = buf.spare_writer(6);
+    /// w.push(b' ');
+    /// w.extend_from_slice(b"world");
+    /// assert_eq!(w.len(), 6);
+    /// drop(w);
+    ///
+    /// assert_eq!(&buf[..], b"hello world");
+    /// ```
+    #[inline]
+    pub fn spare_writer(&mut self, additional: usize) -> SpareWriter<'_> {
+        SpareWriter::new(self, additional)
     }
 
     /// Returns an iterator over the bytes contained by the buffer.

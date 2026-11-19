@@ -1,5 +1,10 @@
 # Changes
 
+## [1.16.0] - 2026-11-19
+
+* Add `BytesMut::spare_writer()`, which returns a `SpareWriter` that appends
+  bytes to the spare capacity without initializing it first
+
 ## [1.15.4] - 2026-11-16
 
 * Add `BytePages::put_slices()`, which appends several slices with a single
