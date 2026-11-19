@@ -3,7 +3,7 @@ use std::borrow::{Borrow, Cow};
 use std::ops::{Add, AddAssign, Div};
 use std::str::FromStr;
 
-use ntex_bytes::{BufMut, ByteString, Bytes, BytesMut};
+use ntex_bytes::{ByteString, Bytes, BytesMut};
 use simdutf8::compat::{Utf8Error, from_utf8};
 
 use crate::authority::{self, Authority, Port, UserInfo};
@@ -253,15 +253,12 @@ fn concat(pieces: &[&str], len: usize) -> ByteString {
         Bytes::copy_from_slice(&buf[..len])
     } else {
         let mut buf = BytesMut::with_capacity(len);
-        let dst = &mut buf.chunk_mut()[..len];
-        let mut pos = 0;
+        let mut dst = buf.spare_writer(len);
         for p in pieces {
-            dst[pos..pos + p.len()].copy_from_slice(p.as_bytes());
-            pos += p.len();
+            dst.extend_from_slice(p.as_bytes());
         }
-        assert_eq!(pos, len);
-        // SAFETY: the first `len` bytes of the spare capacity were written above
-        unsafe { buf.advance_mut(len) };
+        drop(dst);
+        debug_assert_eq!(buf.len(), len);
         buf.freeze()
     };
     // SAFETY: a concatenation of strings is valid UTF-8

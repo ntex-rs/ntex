@@ -86,6 +86,7 @@ mod string;
 mod stvec;
 #[cfg(feature = "tracker")]
 mod tracker;
+mod write;
 
 mod stext;
 mod stext_arc;
@@ -99,6 +100,7 @@ pub use crate::stext::{StorageExt, StorageExtStr, StorageVTable};
 pub use crate::string::ByteString;
 #[cfg(feature = "tracker")]
 pub use crate::tracker::{BytesTracker, BytesTrackerSnapshot};
+pub use crate::write::SpareWriter;
 
 #[doc(hidden)]
 pub use crate::stvec::METADATA_SIZE;
