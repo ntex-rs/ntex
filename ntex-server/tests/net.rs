@@ -14,6 +14,7 @@ use ntex_server::net::{
     test_server,
 };
 use ntex_service::{Ctx, Service, cfg::SharedCfg, fn_service};
+use ntex_util::channel::condition::Condition;
 
 async fn echo(io: Io) -> Result<(), ()> {
     while let Ok(Some(msg)) = io.recv(&BytesCodec).await {
@@ -760,6 +761,97 @@ async fn test_ready_failure() {
 
     srv.server().stop(true).await;
     assert_eq!(shutdown.load(Relaxed), 2);
+}
+
+struct GatedSrv(Condition);
+
+impl Service<(), Io> for GatedSrv {
+    type Res = ();
+    type Error = ();
+
+    async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+        self.0.wait().await;
+        Ok(())
+    }
+
+    async fn call(&self, io: Io, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+        echo(io).await
+    }
+}
+
+/// STATEMENT: Pending readiness on one listener does not block another listener
+/// on the same worker.
+///
+/// HOW:
+/// - Connect to a gated listener and check that it does not echo.
+/// - Connect to a ready listener on the same worker and wait for an echo.
+/// - Open the gate and verify both connections echo, with the ready listener
+///   replying before the gate opens.
+#[ntex::test]
+async fn test_listener_readiness_is_independent() {
+    let (release, gate) = async_channel::bounded::<()>(1);
+    let (gated, gated_addr) = local_listener();
+    let (ready, ready_addr) = local_listener();
+    let srv = build()
+        .workers(1)
+        .max_connections(2)
+        .disable_signals()
+        .listen("gated", gated, SharedCfg::default(), async move |_: &()| {
+            let gate = gate.clone();
+            let condition = Condition::new();
+            let worker_gate = condition.clone();
+            // Only wake the service readiness check from its own worker.
+            ntex::rt::spawn_detached(async move {
+                let _ = gate.recv().await;
+                worker_gate.notify_and_lock(());
+            });
+            GatedSrv(condition)
+        })
+        .unwrap()
+        .listen("ready", ready, SharedCfg::default(), async |_: &()| {
+            fn_service(echo)
+        })
+        .unwrap()
+        .run();
+
+    let gated = ntex_net::tcp_connect(gated_addr, SharedCfg::default())
+        .await
+        .unwrap();
+    gated
+        .send(Bytes::from_static(b"gated"), &BytesCodec)
+        .await
+        .unwrap();
+    let gated_before = ntex::time::timeout(Millis(100), gated.recv(&BytesCodec)).await;
+
+    let ready = ntex_net::tcp_connect(ready_addr, SharedCfg::default())
+        .await
+        .unwrap();
+    ready
+        .send(Bytes::from_static(b"ready"), &BytesCodec)
+        .await
+        .unwrap();
+    let ready_before = ntex::time::timeout(Millis(3000), ready.recv(&BytesCodec)).await;
+    let served_while_pending = ready_before.is_ok();
+    release.close();
+    let ready_reply = match ready_before {
+        Ok(reply) => reply,
+        Err(_) => ntex::time::timeout(Millis(3000), ready.recv(&BytesCodec))
+            .await
+            .unwrap(),
+    };
+    let gated_reply = ntex::time::timeout(Millis(3000), gated.recv(&BytesCodec)).await;
+    srv.stop(true).await;
+
+    assert!(
+        gated_before.is_err(),
+        "gated listener replied before its gate opened"
+    );
+    assert_eq!(ready_reply.unwrap().unwrap(), "ready");
+    assert_eq!(gated_reply.unwrap().unwrap().unwrap(), "gated");
+    assert!(
+        served_while_pending,
+        "ready listener did not reply until the pending listener's gate opened"
+    );
 }
 
 /// STATEMENT: A graceful stop with a timeout completes and closes the listener.
