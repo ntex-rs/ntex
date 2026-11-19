@@ -21,4 +21,6 @@ unsynn = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true }
+ntex-rt = { workspace = true }
+ntex-net = { workspace = true }
 futures = { workspace = true }

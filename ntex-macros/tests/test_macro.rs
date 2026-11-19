@@ -301,6 +301,20 @@ async fn test_auto_async() {
     assert!(response.status().is_success());
 }
 
+/// STATEMENT: Route macros accept a plain function that returns a future.
+///
+/// HOW:
+/// - Register `auto_async`, a non-async function returning `impl Future`.
+/// - Expect GET `/test` to succeed.
+#[ntex_macros::rt_test2]
+async fn test_auto_async_with_ntex_rt() {
+    let srv = test::server(async |_| App::new().service(auto_async));
+
+    let request = srv.request(Method::GET, srv.url("/test"));
+    let response = request.send().await.unwrap();
+    assert!(response.status().is_success());
+}
+
 // A one-line body must not trigger `unused_braces`, rustfmt would split it
 #[rustfmt::skip]
 #[ntex::main]
