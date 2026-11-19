@@ -1,6 +1,6 @@
 # Changes
 
-## [4.9.3] - 2026-11-18 (Unreleased)
+## [4.9.3] - 2026-11-19
 
 * web: Handler futures are stored using `ntex_service::dev::InlineFuture`, futures
   of up to 32 machine words stay inline, larger futures are boxed, both are built
