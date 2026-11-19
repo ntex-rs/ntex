@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "4.8.1"
+version = "4.9.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]

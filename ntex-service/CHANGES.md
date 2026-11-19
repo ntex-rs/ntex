@@ -1,6 +1,6 @@
 # Changes
 
-## [5.9.0] - 2026-11-18 (Unreleased)
+## [5.9.0] - 2026-11-18
 
 * Add `InlineFuture`, a type-erased future that stores futures of up to
   `WORDS` machine words inline and boxes larger ones, `InlineFuture::new_with()`
