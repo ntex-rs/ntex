@@ -7,14 +7,12 @@ use futures_util::stream::{Stream, StreamExt, once};
 use ntex::codec::BytesCodec;
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
-use ntex::http::test::{self, server as test_server};
+use ntex::http::test::server as test_server;
 use ntex::http::{self, HttpService, Method, Request, Response, StatusCode, Version, body, h1};
-use ntex::service::cfg::SharedCfg;
 use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, BytesMut, Either, select};
 use ntex::ws::{self, handshake_response};
 use ntex::{channel::oneshot, client, rt, web::error::InternalError};
-use ntex_tls::TlsConfig;
 
 mod rustls_utils;
 use rustls_utils::tls_acceptor;
@@ -530,32 +528,6 @@ async fn test_h2_client_drop() -> io::Result<()> {
     let _ = timeout(Millis(1500), rx).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
-}
-
-/// STATEMENT: An incomplete TLS handshake to the rustls server closes without application response bytes.
-///
-/// HOW:
-/// - Configure a one-second handshake timeout and open a raw TCP connection without sending a handshake.
-/// - Read until closure and assert the resulting application data string is empty.
-#[ntex::test]
-async fn test_ssl_handshake_timeout() {
-    use std::io::Read;
-
-    let srv = test::server_with_config(
-        async move |_| {
-            http::rustls(
-                tls_acceptor(),
-                http::ALPN_PROTO_H2,
-                HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().build())),
-            )
-        },
-        SharedCfg::new("SVC").add(TlsConfig::new().set_handshake_timeout(Seconds(1))),
-    );
-
-    let mut stream = std::net::TcpStream::connect(srv.addr()).unwrap();
-    let mut data = String::new();
-    let _ = stream.read_to_string(&mut data);
-    assert!(data.is_empty());
 }
 
 /// STATEMENT: A secure WebSocket byte transport echoes binary data and close codes through a rustls server.

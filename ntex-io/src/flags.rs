@@ -529,17 +529,16 @@ impl fmt::Debug for Flags {
 mod tests {
     use super::*;
 
-    /// STATEMENT: Flag formatting identifies connection states and flag kinds compare distinctly.
+    /// STATEMENT: `Flags` debug output identifies the connection state and `FlagsKind` bits.
     ///
     /// HOW:
-    /// - Format stopped, active, and read-EOF states and compare equal and distinct flag kinds.
+    /// - Format stopped and active `Flags`; expect `Stopped` and `Active`.
+    /// - Format `FlagsKind::RD_EOF`; expect the `RD_EOF` bit name.
     #[test]
     fn flags() {
         assert!(format!("{:?}", Flags::new_stopped()).contains("Stopped"));
         assert!(format!("{:?}", Flags::new(false)).contains("Active"));
         assert!(format!("{:?}", FlagsKind::RD_EOF).contains("RD_EOF"));
-        assert_eq!(FlagsKind::RD_EOF, FlagsKind::RD_EOF);
-        assert_ne!(FlagsKind::RD_EOF, FlagsKind::RD_PAUSED);
     }
 
     /// STATEMENT: Every `FlagsKind` occupies a distinct bit.

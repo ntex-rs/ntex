@@ -322,6 +322,15 @@ fn module_path_from_file_with_root(
 mod tests {
     use super::*;
 
+    /// STATEMENT: `module_path` maps a source file path to a Rust module path, and
+    /// `module_path_fs` to a crate-relative file path, on Unix and Windows separators.
+    ///
+    /// HOW:
+    /// - Convert `lib.rs`, `main.rs`, `mod.rs`, nested and degenerate paths; expect the
+    ///   documented module names, including the `crate` fallback.
+    /// - Convert a Windows path with backslashes; expect the same module path.
+    /// - Check `module_path_prefix` prepends the prefix and `module_path_fs` keeps the crate
+    ///   directory name.
     #[test]
     fn module_paths() {
         assert_eq!(module_path("/p/my-crate/src/lib.rs"), "my_crate::lib.rs");
@@ -368,6 +377,11 @@ mod tests {
         assert_eq!(module_path_fs("/p/my-crate/src/.rs"), "my-crate/src.rs");
     }
 
+    /// STATEMENT: The module-path cache keeps separate entries per output format.
+    ///
+    /// HOW:
+    /// - Resolve one path with `module_path`, then `module_path_fs`, then `module_path` again.
+    /// - Expect each call to return its own format, not the cached result of the other.
     #[test]
     fn module_path_cache_per_format() {
         // the same file path must not share cache entries between formats
@@ -377,6 +391,13 @@ mod tests {
         assert_eq!(module_path(p), "other_crate::x::y");
     }
 
+    /// STATEMENT: `module_path_from_file` strips the `src` prefix, drops `mod.rs` and the
+    /// `.rs` extension, and joins segments with the given separator.
+    ///
+    /// HOW:
+    /// - Convert `lib.rs`, `main.rs`, `net/mod.rs`, `net/io.rs` and `.rs` with `::`.
+    /// - Convert a path without `src` using `/`.
+    /// - Expect the listed module paths, with `crate` for an empty name.
     #[test]
     fn module_path_from_file_variants() {
         assert_eq!(module_path_from_file("::", "/x/src/lib.rs"), "lib.rs");

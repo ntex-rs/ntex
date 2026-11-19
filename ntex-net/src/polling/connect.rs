@@ -246,7 +246,14 @@ impl Handler for ConnectOpsBatcher {
 mod tests {
     use super::*;
 
-    /// Dropping the receiver of a pending connect releases the socket
+    /// STATEMENT: Dropping the receiver of a pending connect releases its slot, and a late
+    /// cancel for a reused slot is ignored.
+    ///
+    /// HOW:
+    /// - Start two connects; skip the test if the first completes at once.
+    /// - Drop the first receiver and tick; expect one pending connect.
+    /// - Queue a cancel for the remaining slot and tick; expect it still pending.
+    /// - Drop the second receiver and tick; expect no pending connects.
     #[ntex::test]
     async fn dropped_receiver_cancels_connect() {
         let reactor = Reactor::new().unwrap();

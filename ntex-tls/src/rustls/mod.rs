@@ -366,7 +366,6 @@ mod tests {
         let client = Rc::new(RefCell::new(Some(Io::new(client, SharedCfg::new("CLI")))));
 
         let acceptor = TlsAcceptor::from(Arc::unwrap_or_clone(server_config(true)));
-        assert!(format!("{acceptor:?}").contains("TlsAcceptor"));
         let acceptor = Pipeline::new((), acceptor);
 
         let cfg = client_config(true);

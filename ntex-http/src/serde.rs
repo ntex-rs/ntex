@@ -244,6 +244,14 @@ impl Visitor<'_> for HeaderValueVisitor {
 mod tests {
     use crate::header::*;
 
+    /// STATEMENT: A `HeaderMap` round-trips through JSON, with multiple values as arrays, names
+    /// lower-cased and empty value arrays rejected.
+    ///
+    /// HOW:
+    /// - Serialize two `user-agent` values; expect a JSON array.
+    /// - Round-trip a map with several headers; expect an equal map.
+    /// - Deserialize `X-Foo`; expect lookup by `x-foo` and lower-case output.
+    /// - Deserialize an empty array; expect the `non-empty value` error.
     #[test]
     fn test_serde_json() {
         let mut map = HeaderMap::new();
@@ -280,6 +288,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A `HeaderMap` with multiple values per name round-trips through bincode.
+    ///
+    /// HOW:
+    /// - Build a map with two `user-agent` values and `x-foo`.
+    /// - Serialize and deserialize with bincode; expect an equal map.
     #[test]
     fn test_serde_bincode() {
         let mut map = HeaderMap::new();
@@ -291,6 +304,13 @@ mod tests {
         assert_eq!(map, map2);
     }
 
+    /// STATEMENT: `HeaderMap` deserializes owned and escaped keys, merges duplicate names and
+    /// rejects invalid names and non-map input.
+    ///
+    /// HOW:
+    /// - Deserialize from `json!`, a reader and a string with an escaped key; expect `x-foo`.
+    /// - Deserialize `x-foo` and `X-Foo`; expect one name with values `a`, `b`, `c`.
+    /// - Deserialize `x foo` and an array; expect the name and header-map errors.
     #[test]
     fn test_serde_owned_keys() {
         // non-borrowed keys
@@ -318,6 +338,16 @@ mod tests {
         assert!(err.to_string().contains("expected a header map"), "{err}");
     }
 
+    /// STATEMENT: The serde visitors accept valid names and values from every input form,
+    /// reject invalid ones with descriptive errors, and non-UTF-8 values serialize only to
+    /// binary formats.
+    ///
+    /// HOW:
+    /// - Call the name and value visitors with bytes, byte buffers and strings; expect valid
+    ///   input accepted and `\n` rejected.
+    /// - Deserialize wrong JSON types; expect each `expecting` message.
+    /// - Serialize a non-UTF-8 value; expect JSON to fail and bincode to round-trip.
+    /// - Round-trip a UTF-8 non-ASCII value through JSON.
     #[test]
     fn test_serde_visitors() {
         use serde::de::{Visitor, value::Error as DeError};

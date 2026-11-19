@@ -130,6 +130,13 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Cloned factory services own separate factories, so they can create services
+    /// on different threads at once.
+    ///
+    /// HOW:
+    /// - Create a factory whose closure holds a `CloneCounter` that mutates on clone.
+    /// - Clone it and create services from both copies on two threads at once.
+    /// - Under Miri, a shared factory is reported as a data race.
     // Under miri, a factory shared between instances is a data race
     #[test]
     fn factory_not_shared_between_threads() {

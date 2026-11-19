@@ -225,6 +225,13 @@ mod tests {
         (0..=255).filter(|b| set.contains(*b)).collect()
     }
 
+    /// STATEMENT: The `Set` constructors build the expected byte sets, and `UNRESERVED` and
+    /// `QUERY` contain exactly the RFC 3986 bytes and no non-ASCII bytes.
+    ///
+    /// HOW:
+    /// - Build a set at runtime with `new`, `union` and `without`; expect `acxy`.
+    /// - Check `alnum()` has 62 members and `NONE` is empty.
+    /// - Compare `UNRESERVED` and `QUERY` with sets built from the RFC character lists.
     #[test]
     fn sets() {
         // build at runtime to check the const constructors
@@ -243,6 +250,13 @@ mod tests {
         assert!((0x80..=0xff).all(|b| !QUERY.contains(b)));
     }
 
+    /// STATEMENT: `check` accepts valid percent-encoding and reports the kind and position of
+    /// truncated or invalid escapes and disallowed characters.
+    ///
+    /// HOW:
+    /// - Check `a%2Fb` (ok), `ab%2` and `a%zz` (`InvalidPercentEncoding`) and `aé`
+    ///   (`InvalidChar` at 1).
+    /// - Check the `pct_at` and `char_at` helpers on valid, truncated and out-of-range input.
     #[test]
     fn checks() {
         assert!(check("a%2Fb", &PATH).is_ok());

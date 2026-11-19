@@ -349,6 +349,12 @@ mod tests {
         unsafe { buf.advance_to(data.len()) };
     }
 
+    /// STATEMENT: A compio read appends after the input still in the read buffer.
+    ///
+    /// HOW:
+    /// - Fill a buffer with 108 bytes of unread input.
+    /// - Receive 1 byte, then 160 bytes.
+    /// - Expect the old input followed by both reads.
     #[test]
     fn read_appends_to_unconsumed_input() {
         let mut bytes = BytesMut::with_capacity(1024);

@@ -26,11 +26,13 @@ fn read_to_end(sock: &mut net::TcpStream) -> (usize, Outcome) {
     }
 }
 
-/// A force close must reset the connection.
+/// STATEMENT: A force close resets the connection, so the peer cannot mistake the
+/// truncated output for a complete response.
 ///
-/// The application discarded whatever was still buffered, so the peer must not
-/// see the truncated stream end with a clean `FIN`: that is indistinguishable
-/// from a complete response.
+/// HOW:
+/// - The service encodes `PAYLOAD` bytes in reply to a request, then calls `terminate`.
+/// - Read on the client after 400 ms.
+/// - Expect `ConnectionReset` after fewer than `PAYLOAD` bytes.
 #[ntex::test]
 async fn force_close_resets_connection() {
     let srv = test_server(async |_| {
@@ -61,7 +63,11 @@ async fn force_close_resets_connection() {
     assert!(total < PAYLOAD);
 }
 
-/// A graceful shutdown must still deliver everything and close cleanly.
+/// STATEMENT: A graceful shutdown delivers all output and closes cleanly.
+///
+/// HOW:
+/// - The service encodes `PAYLOAD` bytes in reply to a request, then calls `shutdown`.
+/// - Expect the client to read all `PAYLOAD` bytes, then EOF.
 #[ntex::test]
 async fn graceful_shutdown_closes_cleanly() {
     let srv = test_server(async |_| {
@@ -83,10 +89,12 @@ async fn graceful_shutdown_closes_cleanly() {
     assert_eq!(total, PAYLOAD);
 }
 
-/// Dropping the `Io` must reset the connection.
+/// STATEMENT: Dropping the `Io` without a shutdown resets the connection, so the peer
+/// does not see a complete response.
 ///
-/// A service that returns without shutting down discards whatever it had
-/// encoded, so the peer must not see that as a complete, empty response.
+/// HOW:
+/// - The service encodes `pong` in reply to a request and returns without a shutdown.
+/// - Expect the client read to end with `ConnectionReset`.
 #[ntex::test]
 async fn drop_resets_connection() {
     let srv = test_server(async |_| {
@@ -111,8 +119,13 @@ async fn drop_resets_connection() {
     );
 }
 
-/// A graceful shutdown must be bounded by the shutdown timeout when the peer
-/// stops reading, even while a transport write is in flight.
+/// STATEMENT: A graceful shutdown is bounded by the shutdown timeout when the peer stops
+/// reading, even while a write is in flight.
+///
+/// HOW:
+/// - The service queues four times `PAYLOAD` bytes, then calls `shutdown`.
+/// - The client never reads.
+/// - Expect `shutdown` to fail with `TimedOut` within 10 s.
 #[ntex::test]
 async fn shutdown_times_out_on_stalled_peer() {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -145,10 +158,13 @@ async fn shutdown_times_out_on_stalled_peer() {
     drop(sock);
 }
 
-/// A graceful shutdown after the peer has closed the connection must succeed.
+/// STATEMENT: A graceful shutdown after the peer has closed succeeds, even on platforms
+/// that fail `shutdown()` with `ENOTCONN`.
 ///
-/// Some platforms, e.g. macOS, fail `shutdown()` with `ENOTCONN` once the peer
-/// has closed, the connection is closed either way.
+/// HOW:
+/// - The client sends `ping` and closes.
+/// - The service reads until EOF, waits 100 ms and calls `shutdown`.
+/// - Expect `shutdown` to return `Ok`.
 #[ntex::test]
 async fn shutdown_after_peer_close_succeeds() {
     let (tx, rx) = std::sync::mpsc::channel();

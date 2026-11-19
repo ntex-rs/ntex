@@ -437,6 +437,13 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Worker utilization is an exponential average of busy time that ignores
+    /// samples without busy time or elapsed time.
+    ///
+    /// HOW:
+    /// - Start at 0 and sample 250 ms fully busy; expect 0.5 after one time constant.
+    /// - Sample 250 ms idle; expect 0.25.
+    /// - Sample without busy time, then twice at one instant; expect 0.25 to stay.
     #[test]
     fn utilization_average() {
         let t = Instant::now();
@@ -503,6 +510,14 @@ mod tests {
         );
     }
 
+    /// STATEMENT: The balancer samples workers at most every `REFRESH`, unless the worker list
+    /// changes.
+    ///
+    /// HOW:
+    /// - Refresh with idle workers; expect both ready.
+    /// - Refresh with blocked samples before `REFRESH`; expect no change, then at `REFRESH`
+    ///   expect blocked worker 0 dropped from ready.
+    /// - Insert a worker and refresh at the same time; expect all 3 ready.
     #[test]
     fn refresh_interval() {
         let t = Instant::now();
@@ -522,6 +537,12 @@ mod tests {
         assert_eq!(b.ready, [0, 1, 2]);
     }
 
+    /// STATEMENT: Least-loaded selection avoids blocked workers, and uses all workers when
+    /// every one is blocked.
+    ///
+    /// HOW:
+    /// - Block workers 0 and 1; expect worker 2 in 100 picks.
+    /// - Block all workers; expect each one picked in 100 picks.
     #[test]
     fn skips_blocked_workers() {
         let t = Instant::now();
@@ -540,6 +561,12 @@ mod tests {
         assert_eq!(seen, [true; 3]);
     }
 
+    /// STATEMENT: Round robin skips blocked workers, and still picks a worker when all are
+    /// blocked.
+    ///
+    /// HOW:
+    /// - Block worker 1 and send 4 items; expect workers `[0, 2, 0, 2]`.
+    /// - Block all workers; expect the next turn, worker 0.
     #[test]
     fn round_robin_skips_blocked_workers() {
         let t = Instant::now();
@@ -558,6 +585,12 @@ mod tests {
         assert_eq!(b.round_robin(3), 0);
     }
 
+    /// STATEMENT: Least-loaded selection prefers a less utilized worker even with a higher
+    /// load.
+    ///
+    /// HOW:
+    /// - Make worker 0 more utilized than worker 1 by more than `UTIL_SLACK`.
+    /// - Give worker 1 a load of 100 and worker 0 none; expect worker 1 in 100 picks.
     #[test]
     fn prefers_less_utilized_workers() {
         let t = Instant::now();
@@ -573,6 +606,13 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Among workers with similar utilization, least-loaded selection favors lower
+    /// load.
+    ///
+    /// HOW:
+    /// - Give 4 workers utilization within the slack and loads `[5, 1, 2, 3]`.
+    /// - Pick 1000 times; expect worker 0 never picked, and the others picked more often the
+    ///   lower their load.
     #[test]
     fn compares_load_of_similar_workers() {
         let t = Instant::now();
@@ -591,6 +631,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: With a single worker, least-loaded selection returns it even when blocked.
+    ///
+    /// HOW:
+    /// - Refresh one blocked worker.
+    /// - Expect worker 0.
     #[test]
     fn single_worker() {
         let mut b = balancer(1);
@@ -645,6 +690,14 @@ mod tests {
         assert_eq!(b.round_robin(2), 0);
     }
 
+    /// STATEMENT: A worker parked and unparked on the same arbiter keeps its load state; on a
+    /// new arbiter it starts over.
+    ///
+    /// HOW:
+    /// - Make worker 0 busier than worker 1 by more than `UTIL_SLACK`.
+    /// - Park and unpark it on the same arbiter; expect the same utilization and worker 1
+    ///   still picked.
+    /// - Park it and unpark on another arbiter; expect zero utilization and no parked state.
     #[ntex::test]
     async fn keeps_state_of_unavailable_workers() {
         let (a1, a2) = (ntex_rt::Arbiter::new(), ntex_rt::Arbiter::new());
@@ -674,6 +727,14 @@ mod tests {
         a2.stop();
     }
 
+    /// STATEMENT: CPU mapping assigns each CPU to the workers placed on it, and sibling CPUs
+    /// only when no worker is placed on them.
+    ///
+    /// HOW:
+    /// - Map 5 workers: two on one core, two on other cores, one not placed.
+    /// - Expect each placement CPU mapped to its worker and free siblings to their core's
+    ///   worker.
+    /// - Remap 2 workers on CPU 0; expect both on CPU 0 and the old entries gone.
     #[test]
     fn map_cpus() {
         let mut b = balancer(5);
@@ -700,6 +761,17 @@ mod tests {
         assert_eq!(b.local.len(), 1);
     }
 
+    /// STATEMENT: The worker on the incoming CPU is used unless it is blocked or much busier
+    /// than the least-loaded choice.
+    ///
+    /// HOW:
+    /// - Expect the worker on the CPU, the less utilized of two on a CPU, and none for an
+    ///   unmapped CPU.
+    /// - Expect none when utilization exceeds the other choice by more than
+    ///   `LOCAL_UTIL_SLACK`, unless the local worker is that choice.
+    /// - Expect none when its load exceeds the other choice's by more than half plus a slack,
+    ///   and the local worker otherwise.
+    /// - Expect none when the local worker is blocked.
     #[test]
     fn local_worker() {
         let t = Instant::now();
@@ -733,6 +805,11 @@ mod tests {
         assert_eq!(b.local_worker(0, 1, |_| 0), None);
     }
 
+    /// STATEMENT: The balancer's random generator covers the whole range below `n`.
+    ///
+    /// HOW:
+    /// - Draw 1000 numbers below 5 as array indexes.
+    /// - Expect every value from 0 to 4 seen.
     #[test]
     fn random_range() {
         let mut b = balancer(0);

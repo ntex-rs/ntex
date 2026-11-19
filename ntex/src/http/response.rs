@@ -1040,14 +1040,16 @@ mod tests {
         assert_eq!((v.name(), v.value()), ("cookie3", "val300"));
     }
 
-    /// STATEMENT: Adding a custom response header preserves the selected OK status.
+    /// STATEMENT: A response builder keeps the selected status and the custom header it was given.
     ///
     /// HOW:
-    /// - Build an OK response with a custom header and inspect its status.
+    /// - Build an OK response with an `X-TEST` header.
+    /// - Check the status is `OK` and the header value is `value`.
     #[test]
     fn test_basic_builder() {
         let resp = Response::Ok().header("X-TEST", "value").build();
         assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("X-TEST").unwrap(), "value");
     }
 
     /// STATEMENT: Response upgrade configuration records both upgrade state and protocol header.

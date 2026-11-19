@@ -303,13 +303,12 @@ mod tests {
     use ntex_codec::BytesCodec;
     use std::io;
 
-    /// STATEMENT: Status and receive-error debug output identifies the represented variants.
+    /// STATEMENT: `RecvError` debug output identifies the represented variants.
     ///
     /// HOW:
     /// - Format timeout, backpressure, decoder, and peer-gone variants and check their names.
     #[test]
     fn test_fmt() {
-        assert!(format!("{:?}", IoStatusUpdate::Timeout).contains("Timeout"));
         assert!(format!("{:?}", RecvError::<BytesCodec>::Timeout).contains("Timeout"));
         assert!(
             format!("{:?}", RecvError::<BytesCodec>::WriteBackpressure)

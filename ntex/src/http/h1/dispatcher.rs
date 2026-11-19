@@ -1542,6 +1542,55 @@ mod tests {
         assert_eq!(service.calls.get(), 0);
     }
 
+    /// STATEMENT: Write backpressure remains bounded while an HTTP/1 service call is pending.
+    ///
+    /// HOW:
+    /// - Start a slow service call for a body-less request while the peer drains no output.
+    /// - Queue output during the call and verify the write timer starts.
+    /// - Trigger its expiry and require completion with a write-timeout close.
+    #[crate::rt_test]
+    async fn test_pending_call_preserves_write_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let calls = Rc::new(Cell::new(0));
+        let calls2 = calls.clone();
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(
+                server,
+                SharedCfg::new("SVC").add(HttpServiceConfig::new().set_write_timeout(Seconds(1))),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(move |_: Request| {
+                    calls2.set(calls2.get() + 1);
+                    async {
+                        sleep(Seconds(10)).await;
+                        Ok::<_, io::Error>(Response::Ok().build())
+                    }
+                }),
+            ),
+            None,
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(matches!(h1.st, State::CallPublish { .. }));
+        assert_eq!(calls.get(), 1);
+
+        h1.inner.io.encode_slice(&vec![b'x'; 128 * 1024]).unwrap();
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Write);
+        h1.inner.io.notify_timeout();
+        timeout(Seconds(5), poll_fn(|cx| Pin::new(&mut h1).poll(cx)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(h1.inner.io.close_reason(), Some(CloseReason::WriteTimeout));
+    }
+
     /// STATEMENT: Resuming payload timing preserves an exhausted cumulative budget and its final shortened period.
     ///
     /// HOW:
@@ -5040,6 +5089,52 @@ mod tests {
         }
     }
 
+    /// STATEMENT: An accepted expectation on an upgrade request sends `100 Continue` and then
+    /// hands the request to upgrade control.
+    ///
+    /// HOW:
+    /// - Send an upgrade request with `Expect: 100-continue`, acknowledge the expectation, and
+    ///   reject the upgrade with `403`.
+    /// - Verify `100 Continue` precedes `403`, no application calls, and the event order.
+    #[crate::rt_test]
+    async fn test_expect_continue_then_upgrade() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let ev = Events::default();
+        let calls = Rc::new(Cell::new(0));
+        let calls2 = calls.clone();
+        let mut h1 = ctl_h1(
+            server,
+            &ev,
+            async move |_| {
+                calls2.set(calls2.get() + 1);
+                Ok(Response::Ok().build())
+            },
+            |msg| match msg {
+                Control::Upgrade(upg) => Ok(upg.fail_with(Response::Forbidden().build())),
+                msg => Ok(msg.ack()),
+            },
+        );
+
+        client.write(
+            "GET /ws HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\nupgrade: websocket\r\n\
+             expect: 100-continue\r\n\r\n",
+        );
+        let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(matches!(res, Ok(Ok(()))));
+
+        let buf = client.read_any();
+        assert!(
+            buf.starts_with(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 403 Forbidden\r\n"),
+            "{buf:?}"
+        );
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            events(&ev),
+            ["request", "expect", "upgrade", "service:UpgradeFailed"]
+        );
+    }
+
     /// STATEMENT: Response-body failure reports a protocol error without terminating chunk framing or serving the next request.
     ///
     /// HOW:
@@ -5113,6 +5208,49 @@ mod tests {
         assert!(matches!(res, Ok(Ok(()))));
         assert!(taken.get());
         assert_eq!(events(&ev), ["peer-gone:true"]);
+    }
+
+    /// STATEMENT: A transport error during a pending body-less service call stops the
+    /// dispatcher while the call completes detached.
+    ///
+    /// HOW:
+    /// - Start a slow service call for a request without a body, then reset the connection.
+    /// - Verify the dispatcher completes with one peer-loss event before the call finishes.
+    /// - Verify the detached call still runs to completion and no response is written.
+    #[crate::rt_test]
+    async fn test_peer_gone_while_service_pending() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let ev = Events::default();
+        let started = Rc::new(Cell::new(false));
+        let done = Rc::new(Cell::new(false));
+        let (started2, done2) = (started.clone(), done.clone());
+        let mut h1 = ctl_h1(
+            server,
+            &ev,
+            async move |_| {
+                started2.set(true);
+                sleep(Millis(200)).await;
+                done2.set(true);
+                Ok(Response::Ok().build())
+            },
+            |msg| Ok(msg.ack()),
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: a\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(started.get());
+
+        client.read_error(io::Error::from(io::ErrorKind::ConnectionReset));
+        let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(matches!(res, Ok(Ok(()))));
+        assert!(!done.get());
+        assert_eq!(events(&ev), ["request", "peer-gone:true"]);
+
+        wait_until(Millis(1000), || done.get()).await;
+        assert!(done.get());
+        assert!(client.read_any().is_empty());
     }
 
     #[derive(Default)]

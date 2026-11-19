@@ -984,6 +984,12 @@ mod tests {
         order(cpus).into_iter().map(|(cpu, ..)| cpu.num).collect()
     }
 
+    /// STATEMENT: CPU ordering puts one CPU of each core before SMT siblings, for either
+    /// sibling numbering.
+    ///
+    /// HOW:
+    /// - Order 8 CPUs with siblings numbered next to each other (Windows) and apart (Linux).
+    /// - Expect each core's first CPU before the siblings, and both siblings in a core list.
     #[test]
     fn order_smt() {
         // siblings numbered next to each other (Windows)
@@ -997,6 +1003,12 @@ mod tests {
         assert_eq!(order(&cpus)[5].1, [cpu(1), cpu(5)]);
     }
 
+    /// STATEMENT: CPU ordering spreads consecutive CPUs across L3 caches and NUMA nodes.
+    ///
+    /// HOW:
+    /// - Order CPUs with two L3 caches, then two nodes with two caches each.
+    /// - Expect CPUs to alternate between caches, and between nodes first.
+    /// - With uneven caches, expect the extra CPUs of the larger cache last.
     #[test]
     fn order_cache_and_nodes() {
         // two L3 caches
@@ -1018,6 +1030,12 @@ mod tests {
         assert_eq!(nums(&cpus), [0, 4, 1, 5, 2, 3]);
     }
 
+    /// STATEMENT: CPU ordering puts performance cores first, then efficiency cores, then SMT
+    /// siblings.
+    ///
+    /// HOW:
+    /// - Mark 2 SMT cores as performance class and add 2 efficiency cores without SMT.
+    /// - Expect the order `[0, 2, 4, 5, 1, 3]`.
     #[test]
     fn order_hybrid() {
         // performance cores with SMT, efficiency cores without
@@ -1029,6 +1047,14 @@ mod tests {
         assert_eq!(nums(&cpus), [0, 2, 4, 5, 1, 3]);
     }
 
+    /// STATEMENT: CPU ordering uses only allowed CPUs and keeps disallowed siblings for
+    /// locality.
+    ///
+    /// HOW:
+    /// - Order a sparse CPU set; expect one CPU per core first, matching core lists, and an
+    ///   empty order for no CPUs.
+    /// - Allow only CPUs 4 and 6 of 8; expect only them ordered, a core list for CPU 4 with
+    ///   only CPU 4, and sibling lists that include disallowed siblings.
     #[test]
     fn order_restricted() {
         // the process may only use some CPUs
@@ -1055,6 +1081,14 @@ mod tests {
         assert_eq!(order[1].2, [cpu(2), cpu(6)]);
     }
 
+    /// STATEMENT: The placement plan for this machine gives each worker a distinct CPU within
+    /// its core and siblings.
+    ///
+    /// HOW:
+    /// - Expect an empty plan for `Affinity::Disabled`.
+    /// - For `Affinity::Core`, expect each CPU in its core, the core in its siblings, and no
+    ///   repeated CPU.
+    /// - Expect one placement per usable CPU on Windows and Linux, and none elsewhere.
     #[test]
     fn plan_system() {
         assert_eq!(plan(Affinity::Disabled), []);
@@ -1084,6 +1118,13 @@ mod tests {
         assert_eq!(plan, []);
     }
 
+    /// STATEMENT: Applying a placement binds the thread to its CPU, its core, or a preferred
+    /// CPU, depending on the mode.
+    ///
+    /// HOW:
+    /// - Apply a planned placement in `Cpu`, `Core` and `Soft` modes on new threads.
+    /// - Expect the thread mask to be the CPU for `Cpu` and the core for `Core`.
+    /// - For `Soft`, expect the ideal CPU on Windows and the core mask elsewhere.
     #[cfg(any(windows, target_os = "linux", target_os = "android"))]
     #[test]
     fn apply_placement() {
@@ -1112,6 +1153,13 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `Placement::cpu` maps a CPU index to that CPU, and an unknown index fails
+    /// to apply.
+    ///
+    /// HOW:
+    /// - Build a placement from the highest planned group-0 CPU; expect the same CPU.
+    /// - Apply it on a new thread; expect the thread mask to hold only that CPU.
+    /// - Expect applying a huge index to fail.
     #[cfg(any(windows, target_os = "linux", target_os = "android"))]
     #[test]
     fn apply_cpu_index() {
@@ -1136,6 +1184,12 @@ mod tests {
         assert!(!Placement::cpu(usize::MAX >> 1).apply());
     }
 
+    /// STATEMENT: `Placement::cpus` lists the sibling CPU indexes, starting with the
+    /// placement CPU.
+    ///
+    /// HOW:
+    /// - Map the indexes of each `Affinity::Core` placement back to CPUs.
+    /// - Expect the placement CPU first, one index per sibling, and only sibling CPUs.
     #[test]
     fn cpu_indexes() {
         for p in plan(Affinity::Core) {
@@ -1148,6 +1202,13 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `incoming_cpu` returns a valid CPU index for a TCP stream when known, and it
+    /// is always known on Linux.
+    ///
+    /// HOW:
+    /// - Connect a loopback client and accept it.
+    /// - For both streams, expect a returned index to round-trip through `sys::cpu` and
+    ///   `sys::index`, and an index on Linux.
     #[test]
     fn incoming_cpu_loopback() {
         let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1165,6 +1226,14 @@ mod tests {
         }
     }
 
+    /// STATEMENT: The Linux topology reader parses CPU lists and reads core, L3 and node ids
+    /// from sysfs, keeping disallowed siblings.
+    ///
+    /// HOW:
+    /// - Parse ranges, a single CPU, an empty list and an invalid list.
+    /// - Read a fake sysfs tree with 3 CPUs on node 1 sharing an L3 cache and one CPU without
+    ///   topology files; expect their ids and order.
+    /// - Disallow CPU 2; expect it left out of the order but kept as a sibling of CPU 0.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn linux_sysfs() {
@@ -1207,6 +1276,15 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Linux CPU masks hold CPU numbers beyond `cpu_set_t`, and the mask query
+    /// grows its buffer until the kernel accepts it.
+    ///
+    /// HOW:
+    /// - Build a mask for CPUs 1 and 3000; expect the right words and bits, and a one-CPU
+    ///   mask the size of `cpu_set_t`.
+    /// - Query a fake kernel that rejects small buffers; expect CPUs 1 and 3000 after 3 tries.
+    /// - Expect `None` for `EPERM` or a buffer that is never large enough, and a failed apply
+    ///   for a huge CPU index.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn linux_large_mask() {
@@ -1238,6 +1316,13 @@ mod tests {
         assert!(!Placement::cpu(usize::MAX >> 1).apply());
     }
 
+    /// STATEMENT: On Windows the plan uses all processor groups without restrictions, and only
+    /// the process mask CPUs with one.
+    ///
+    /// HOW:
+    /// - Without a mask or restriction, expect one placement per active processor.
+    /// - In a child process, restrict the mask to the two highest CPUs of the group.
+    /// - Expect the mask read back, a plan with exactly those CPUs, and a CPU count of 2.
     #[cfg(windows)]
     #[test]
     fn windows_process_mask() {

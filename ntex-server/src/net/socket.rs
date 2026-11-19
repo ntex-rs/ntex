@@ -223,6 +223,11 @@ mod listener_impl {
 mod tests {
     use super::*;
 
+    /// STATEMENT: TCP `SocketAddr` and `Listener` debug and display output show the address.
+    ///
+    /// HOW:
+    /// - Format a TCP socket address; expect the address in `Debug` and as `Display`.
+    /// - Format a bound TCP listener; expect `TcpListener` in `Debug` and the IP in `Display`.
     #[test]
     fn socket_addr() {
         use socket2::{Domain, SockAddr, Socket, Type};
@@ -274,6 +279,12 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Unix `SocketAddr` and `Listener` debug and display output show the socket
+    /// path.
+    ///
+    /// HOW:
+    /// - Bind a Unix listener at a fixed path, skipping the test if binding fails.
+    /// - Format its address and the listener; expect the path in `Debug` and `Display`.
     #[test]
     #[cfg(unix)]
     fn uds() {

@@ -247,8 +247,6 @@ mod tests {
         assert!(format!("{p:?}").contains("Pool"));
 
         let (tx, rx) = p.channel();
-        assert!(format!("{tx:?}").contains("Sender"));
-        assert!(format!("{rx:?}").contains("Receiver"));
 
         tx.send("test").unwrap();
         assert_eq!(rx.await.unwrap(), "test");

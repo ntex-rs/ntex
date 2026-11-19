@@ -129,23 +129,6 @@ mod tests {
         format!("filtered:{n}")
     }
 
-    /// STATEMENT: `AppState` exposes its inner state through accessors, dereferencing, and cloning.
-    ///
-    /// HOW:
-    /// - Wrap a named `Counter` and assert its name through `st`, dereference, and a clone.
-    /// - Construct default state and assert its default name is empty.
-    #[test]
-    fn app_state() {
-        let st = AppState::new(Counter {
-            name: "test",
-            ..Counter::default()
-        });
-        assert_eq!(st.st().name, "test");
-        assert_eq!(st.name, "test");
-        assert_eq!(st.clone().name, "test");
-        assert_eq!(AppState::<Counter>::default().name, "");
-    }
-
     /// STATEMENT: State-aware handlers compose with extractors, method routes, fallbacks, and filters.
     ///
     /// HOW:

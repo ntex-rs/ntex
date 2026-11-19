@@ -372,10 +372,11 @@ fn signals_queued_from_many_threads() {
 }
 
 #[cfg(target_family = "unix")]
-/// STATEMENT: An operating-system hangup signal reaches the owning system.
+/// STATEMENT: Operating-system signals reach the owning system as their matching `Signal`.
 ///
 /// HOW:
-/// - Enable signals, send SIGHUP to the process, and await a hangup notification.
+/// - Enable signals, then send `SIGHUP`, `SIGINT`, `SIGTERM` and `SIGQUIT` to the process.
+/// - Await `Signal::Hup`, `Signal::Int`, `Signal::Term` and `Signal::Quit` respectively.
 /// - Finish the system and confirm signal ownership is released.
 #[test]
 fn os_signal_delivered() {
@@ -388,17 +389,24 @@ fn os_signal_delivered() {
         sys.enable_signals();
         assert!(sys.signals());
 
-        deliver(
-            || {
-                // SAFETY: The current process has installed its SIGHUP handler before this
-                // delivery.
-                unsafe {
-                    libc::kill(libc::getpid(), libc::SIGHUP);
-                }
-            },
-            |sig| matches!(sig, Signal::Hup),
-        )
-        .await;
+        for (num, expected) in [
+            (libc::SIGHUP, Signal::Hup),
+            (libc::SIGINT, Signal::Int),
+            (libc::SIGTERM, Signal::Term),
+            (libc::SIGQUIT, Signal::Quit),
+        ] {
+            deliver(
+                || {
+                    // SAFETY: The current process has installed its handler for the signal
+                    // before this delivery.
+                    unsafe {
+                        libc::kill(libc::getpid(), num);
+                    }
+                },
+                |sig| std::mem::discriminant(sig) == std::mem::discriminant(&expected),
+            )
+            .await;
+        }
     });
     assert!(!is_enabled());
 }

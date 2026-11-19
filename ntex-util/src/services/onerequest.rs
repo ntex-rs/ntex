@@ -197,40 +197,6 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 
-    /// STATEMENT: A `OneRequest` middleware pipeline becomes ready again after completion.
-    ///
-    /// HOW:
-    /// - Build the middleware through a factory and start a channel-blocked request.
-    /// - Check readiness becomes pending, then send completion and check readiness recovers.
-    #[ntex::test]
-    async fn test_middleware2() {
-        assert_eq!(format!("{OneRequest:?}"), "OneRequest");
-
-        let (tx, rx) = oneshot::channel();
-        let rx = RefCell::new(Some(rx));
-        let sf = apply(
-            OneRequest,
-            fn_factory(move |(): &()| {
-                let rx = rx.borrow_mut().take().unwrap();
-                async move { Ok::<_, ()>(SleepService(rx)) }
-            }),
-        );
-
-        let srv = sf.pipeline(()).await.unwrap();
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-
-        let srv1 = srv.bind();
-        ntex::rt::spawn(async move {
-            let _ = srv1.call(()).await;
-        });
-        crate::time::sleep(Duration::from_millis(25)).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
-
-        let _ = tx.send(());
-        crate::time::sleep(Duration::from_millis(25)).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-    }
-
     /// STATEMENT: Canceling a request releases the single-request readiness gate.
     ///
     /// HOW:

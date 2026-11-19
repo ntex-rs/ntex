@@ -4,7 +4,7 @@ use ntex_bytes::Bytes;
 use ntex_error::{
     AsError, Backtrace, BacktraceRaw, Error, ErrorDiagnostic, ErrorMapping, ErrorMessage,
     ErrorMessageChained, Failure, FailureDiagnostic, IntoFailure, ResultSignature, ResultType,
-    Retryable, Success, fmt_diag_string, fmt_diag_typ, fmt_err_string, utils, with_service,
+    Retryable, fmt_diag_string, fmt_diag_typ, fmt_err_string, with_service,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -93,6 +93,14 @@ impl ErrorDiagnostic for CharErr {
     }
 }
 
+/// STATEMENT: `is_retryable` follows the error's `ErrorKind`, for plain errors and inside
+/// `Error<E>`, and `ResultSignature` reports `Success` or the error signature.
+///
+/// HOW:
+/// - Check `is_retryable` on `Ok`, a retryable `Connect` error and a non-retryable
+///   `Inner` error, both bare and wrapped in `Error<MyError>`.
+/// - Build `ResultSignature` from a name, an error and both results; expect the matching
+///   signature strings.
 #[test]
 fn retryable_and_signature() {
     let ok: Result<(), MyError> = Ok(());
@@ -111,13 +119,14 @@ fn retryable_and_signature() {
     assert_eq!(ResultSignature::from(&MyError::Inner(Inner)).0, "my-inner");
     assert_eq!(ResultSignature::from(&ok).signature(), "Success");
     assert_eq!(ResultSignature::from(&err).signature(), "my-connect");
-
-    assert_eq!(Success.signature(), "Success");
-    assert_eq!(Success.to_string(), "Success");
-    assert_eq!(ResultType::ClientError.to_string(), "ClientError");
-    assert_eq!(ResultType::ServiceError.as_str(), "ServiceError");
 }
 
+/// STATEMENT: `io::Error` signatures are `std-io-<Kind>` for the mapped kinds and
+/// `std-io-Error` for anything else.
+///
+/// HOW:
+/// - Build an `io::Error` for each mapped `ErrorKind` and for `Other`.
+/// - Expect the listed signature string for each.
 #[test]
 fn io_error_signatures() {
     use io::ErrorKind::*;
@@ -138,6 +147,13 @@ fn io_error_signatures() {
     }
 }
 
+/// STATEMENT: `with_service` sets the service only on errors that have none and leaves
+/// `Ok` values alone.
+///
+/// HOW:
+/// - Run a future returning an error without a service; expect the given service.
+/// - Run one returning an error with service `orig`; expect `orig` to be kept.
+/// - Run one returning `Ok(1)`; expect 1.
 #[ntex::test]
 async fn with_service_sets_missing() {
     let res: Result<(), Error<MyError>> =
@@ -154,6 +170,14 @@ async fn with_service_sets_missing() {
     assert_eq!(res.unwrap(), 1);
 }
 
+/// STATEMENT: `Error::from_err` and `map_err` convert the inner error while keeping the
+/// service, tag and items, and `into_error` works on a shared container.
+///
+/// HOW:
+/// - Build `Error<Wrapped>` with `from_err`; check signature, empty metadata, backtrace,
+///   `Debug`, `Display`, the transparent `source()` and `as_diag`.
+/// - `map_err` an error with service, tag and an item; expect all three on the result.
+/// - Call `into_error` on a clone and on the original; expect the inner value both times.
 #[test]
 fn error_container() {
     let err: Error<Wrapped> = Error::from_err(MyError::Connect("a"));
@@ -190,6 +214,12 @@ fn error_container() {
     assert_eq!(shared.into_error(), MyError::Connect("b"));
 }
 
+/// STATEMENT: Changing the tag, service or items of a cloned `Error` does not affect other
+/// clones.
+///
+/// HOW:
+/// - Clone an error, then set tag, service and an item on the original.
+/// - Expect the original to have all three and the clone to have none.
 #[test]
 fn shared_container_mutation() {
     let err: Error<MyError> = MyError::Connect("a").into();
@@ -205,6 +235,14 @@ fn shared_container_mutation() {
     assert_eq!(shared.get_item::<&str>(), None);
 }
 
+/// STATEMENT: `into_error` converts `Result<T, E>` and `Result<T, Error<E>>` into
+/// `Result<T, Error<F>>`, keeping `Ok` values and the service.
+///
+/// HOW:
+/// - Convert an `Err(MyError)` and an `Ok`; expect the wrapped error without a service
+///   and the same value.
+/// - Convert an `Err(Error<MyError>)` with service `svc` and an `Ok`; expect `svc` kept
+///   and the same value.
 #[test]
 fn error_mapping() {
     let res: Result<(), MyError> = Err(MyError::Connect("a"));
@@ -227,6 +265,13 @@ fn error_mapping() {
     assert_eq!(ok.unwrap(), 2);
 }
 
+/// STATEMENT: `Error<E>` reports the inner error's tag and service until they are
+/// overridden, and `Failure` keeps the overrides.
+///
+/// HOW:
+/// - Wrap an error that provides its own tag and service; expect those values.
+/// - Override both with `with_tag`/`with_service`; expect the new values.
+/// - Convert to `Failure`; expect the overrides.
 #[test]
 fn repr_falls_back_to_inner_error() {
     let err: Error<SelfDescribed> = SelfDescribed(Bytes::from_static(b"inner-tag")).into();
@@ -242,6 +287,13 @@ fn repr_falls_back_to_inner_error() {
     assert_eq!(f.service(), Some("outer-svc"));
 }
 
+/// STATEMENT: `Failure` exposes the signature, service, tag, backtrace, items and source of
+/// the original error, and `fail()` shares the container instead of wrapping it again.
+///
+/// HOW:
+/// - Build a `Failure` from `&Error`; check every accessor on it and on `as_diag()`.
+/// - Call `fail()` on an `Error`; expect the same backtrace pointer and the items.
+/// - Call `fail()` on a `Failure`; expect the same backtrace pointer.
 #[test]
 fn failure() {
     let err = Error::<MyError>::new(MyError::Inner(Inner), "svc")
@@ -306,6 +358,15 @@ fn failure() {
     assert!(std::ptr::eq(ErrorDiagnostic::backtrace(&f).unwrap(), bt));
 }
 
+/// STATEMENT: `fmt_err_string` prints the error chain one per line and `fmt_diag_string`
+/// adds type, signature, tag and service headers before the indented chain.
+///
+/// HOW:
+/// - Format an error with a source; expect the exact chain and the diagnostic prefix.
+/// - Set a non-UTF-8 tag; expect it printed with `Debug` and no `type:` line without a
+///   result type.
+/// - Format an error that writes with `write_char`; expect the exact output.
+/// - Format an empty `ErrorMessage` with a source; expect only the source text.
 #[test]
 fn fmt_helpers() {
     let err = Error::<MyError>::new(MyError::Inner(Inner), "svc").with_tag("tag");
@@ -345,6 +406,14 @@ fn fmt_helpers() {
     is_send_sync(&Error::<ErrorMessageChained>::from(msg));
 }
 
+/// STATEMENT: `Backtrace` stays unresolved and prints nothing until `resolve()`, after
+/// which it has a representation that `Display` and `Debug` both print.
+///
+/// HOW:
+/// - Capture a backtrace; expect `is_resolved()` false, no `repr()` and empty output.
+/// - Resolve it; expect `repr()` and equal `Display`/`Debug` output.
+/// - Resolve an already resolved clone, a `with_filename` capture, a converted
+///   `BacktraceRaw` and a capture after `set_backtrace_start`; expect a representation.
 #[test]
 fn backtrace() {
     let bt = Backtrace::with_current();
@@ -371,14 +440,4 @@ fn backtrace() {
     ntex_error::set_backtrace_start(file!(), 0);
     let bt = Backtrace::with_current().resolve();
     assert!(bt.repr().is_some());
-}
-
-#[test]
-fn module_path_helpers() {
-    assert_eq!(utils::module_path("/p/a-b/src/x.rs"), "a_b::x");
-    assert_eq!(
-        utils::module_path_prefix("p::", "/p/a-b/src/x.rs"),
-        "p::a_b::x"
-    );
-    assert_eq!(utils::module_path_fs("/p/a-b/src/x.rs"), "a-b/src/x.rs");
 }

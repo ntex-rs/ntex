@@ -1380,6 +1380,11 @@ mod tests {
         assert_eq!(unsafe { *buf.get() }, 1);
     }
 
+    /// STATEMENT: A reactor whose notifier read was never submitted is freed when dropped.
+    ///
+    /// HOW:
+    /// - Create a reactor; expect the notifier read queued and the submission queue empty.
+    /// - Drop the reactor; expect its inner state freed.
     #[test]
     fn notifier_unrun() {
         let Ok(reactor) = Reactor::new(8) else {
@@ -1438,6 +1443,14 @@ mod tests {
         assert!(format!("{reactor:?}").contains("hid: Cell { value: 2 }"));
     }
 
+    /// STATEMENT: A notifier read held back by a full submission queue stops without a cancel,
+    /// and the queued changes still run.
+    ///
+    /// HOW:
+    /// - Queue 8 changes on a ring of 4 entries; expect the read still queued and 4 changes
+    ///   left over.
+    /// - Stop the notifier with a cancel that panics; expect it stopped.
+    /// - Flush and submit; expect all 8 changes completed and nothing left to submit.
     #[test]
     fn notifier_stops_with_full_queue() {
         let Ok(reactor) = Reactor::new(4) else {
@@ -1474,6 +1487,13 @@ mod tests {
         assert!(reactor.inner.ring.submission().is_empty());
     }
 
+    /// STATEMENT: Stopping a submitted notifier read cancels it, and its canceled completion
+    /// does not re-arm it.
+    ///
+    /// HOW:
+    /// - Submit the notifier read and stop it; expect it stopped and no read in the kernel.
+    /// - Poll the canceled completion and stop again with a cancel that panics.
+    /// - Expect no new submissions.
     #[test]
     fn notifier_cancellation_does_not_rearm() {
         let Some(reactor) = sync_cancel_reactor() else {
@@ -1501,6 +1521,12 @@ mod tests {
         assert!(reactor.inner.ring.submission().is_empty());
     }
 
+    /// STATEMENT: Stopping a notifier whose read already completed leaves no read in the
+    /// kernel.
+    ///
+    /// HOW:
+    /// - Submit the notifier read and complete it with a notification.
+    /// - Stop the notifier; expect it stopped and no read in the kernel.
     #[test]
     fn notifier_completed_before_cleanup() {
         let Some(reactor) = sync_cancel_reactor() else {
@@ -1518,6 +1544,13 @@ mod tests {
         assert_notifier_canceled(&reactor);
     }
 
+    /// STATEMENT: Stopping a notifier whose read is in the submission queue retains its buffer
+    /// until the read completes.
+    ///
+    /// HOW:
+    /// - Queue the notifier read without submitting it, then stop the notifier.
+    /// - Expect the read still queued and the notifier retained.
+    /// - Drop the reactor, notify, and expect the read to complete into the retained buffer.
     #[test]
     fn notifier_queued_read_is_retained() {
         let Some(reactor) = sync_cancel_reactor() else {
@@ -1530,6 +1563,13 @@ mod tests {
         complete_retained_notifier(reactor);
     }
 
+    /// STATEMENT: When cancelling the notifier read fails, its buffer is retained until the
+    /// read completes.
+    ///
+    /// HOW:
+    /// - For `EINVAL`, `ETIME` and `EIO`, submit the read and stop it with a failing cancel.
+    /// - Stop again with a cancel that panics; expect no new submissions.
+    /// - Drop the reactor, notify, and expect the read to complete into the retained buffer.
     #[test]
     fn notifier_cancel_failure_is_retained() {
         for errno in [libc::EINVAL, libc::ETIME, libc::EIO] {
@@ -1599,6 +1639,14 @@ mod tests {
         complete_retained_notifier(reactor);
     }
 
+    /// STATEMENT: When a handler panics during dispatch, the notifier read is cancelled before
+    /// the panic leaves the driver.
+    ///
+    /// HOW:
+    /// - Register a handler that submits a `Nop` and panics on its second completion.
+    /// - Run the driver; expect a panic and the notifier stopped with no read in the kernel.
+    /// - Expect the notifier completion to be `ECANCELED`, and no read in the ring's `fdinfo`
+    ///   after the reactor is dropped.
     #[test]
     fn notifier_handler_panic() {
         struct Panicking {
@@ -1666,6 +1714,12 @@ mod tests {
         drop(duplicate);
     }
 
+    /// STATEMENT: The notifier read re-arms after each wake, so repeated wakes from another
+    /// thread all reach the runtime.
+    ///
+    /// HOW:
+    /// - Wake the runtime three times from another thread, 50 ms apart.
+    /// - Expect the blocked future to see all three wakes and finish.
     #[test]
     fn notifier_rearms() {
         use std::sync::{Mutex, atomic::AtomicUsize, atomic::Ordering};

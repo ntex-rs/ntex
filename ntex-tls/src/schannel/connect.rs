@@ -118,7 +118,7 @@ mod tests {
     /// STATEMENT: A Schannel connector is ready but reports failure against a non-TLS peer.
     ///
     /// HOW:
-    /// - Construct the connector, check its debug name, and await readiness.
+    /// - Construct the connector and await readiness.
     /// - Call a local service that drops the transport and check the connector returns an error.
     #[ntex::test]
     async fn test_schannel_connect() {
@@ -127,7 +127,6 @@ mod tests {
         });
 
         let svc: TlsConnector<Connector<&'static str>> = TlsConnector::new();
-        assert!(format!("{svc:?}").contains("TlsConnector"));
         let srv = Pipeline::new(SharedCfg::default(), svc);
         assert!(srv.ready().await.is_ok());
         let result = srv

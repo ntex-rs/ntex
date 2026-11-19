@@ -468,7 +468,6 @@ mod tests {
 
         let mut rmap = ResourceMap::new(ResourceDef::new(""));
         rmap.add(&mut rdef, None);
-        // assert!(rmap.has_resource("https://youtube.com/watch/unknown"));
 
         let req = TestRequest::default().rmap(rmap).to_http_request();
         let url = req.url_for("youtube", ["oHg5SJYRHA0"]);

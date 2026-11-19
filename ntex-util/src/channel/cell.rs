@@ -58,10 +58,12 @@ pub(super) fn wake(waker: Option<ntex_rt::LocalWaker>) {
 mod tests {
     use super::*;
 
-    /// STATEMENT: `Cell` `Debug` delegates to the shared `Rc<UnsafeCell<_>>`,
-    /// so it never borrows the shared state.
-    /// HOW: Format a `Cell` and its clone and check both print the opaque
-    /// `UnsafeCell` form without the inner value.
+    /// STATEMENT: `Cell` `Debug` delegates to the shared `Rc<UnsafeCell<_>>`, so it never
+    /// borrows the shared state.
+    ///
+    /// HOW:
+    /// - Format a `Cell` and its clone and check both print the opaque `UnsafeCell` form
+    ///   without the inner value.
     #[test]
     fn debug_is_opaque() {
         let cell = Cell::new(42u32);

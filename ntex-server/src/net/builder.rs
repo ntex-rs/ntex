@@ -528,12 +528,22 @@ pub fn create_tcp_listener(addr: net::SocketAddr, backlog: i32) -> io::Result<ne
 mod tests {
     use super::*;
 
+    /// STATEMENT: `bind_addr` fails when there are no addresses.
+    ///
+    /// HOW:
+    /// - Call it with an empty address list.
+    /// - Expect an error.
     #[test]
     fn test_bind_addr() {
         let addrs: Vec<net::SocketAddr> = Vec::new();
         assert!(bind_addr(&addrs[..], 10).is_err());
     }
 
+    /// STATEMENT: `ServerBuilder` debug output names the type.
+    ///
+    /// HOW:
+    /// - Format a default builder.
+    /// - Expect `ServerBuilder` in the output.
     #[ntex::test]
     async fn test_debug() {
         let builder = ServerBuilder::default();

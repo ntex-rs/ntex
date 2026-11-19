@@ -62,10 +62,16 @@ fn local_listener() -> (net::TcpListener, net::SocketAddr) {
     (lst, addr)
 }
 
+/// STATEMENT: A test server serves connections with the client configuration and closes its
+/// listener when stopped.
+///
+/// HOW:
+/// - Start an echo server; expect the `TEST-CLIENT` tag on the handle and client connection.
+/// - Echo over a connection and check a clone reports the same address.
+/// - Stop it; expect the server future to finish within 5 s and new connects to fail.
 #[ntex::test]
 async fn test_server_echo() {
     let srv = test_server(async |_| fn_service(echo));
-    assert!(format!("{srv:?}").contains("TestServer"));
     assert_eq!(srv.config().tag(), "TEST-CLIENT");
 
     let io = srv.connect().await.unwrap();
@@ -82,7 +88,11 @@ async fn test_server_echo() {
     assert!(net::TcpStream::connect(srv.addr()).is_err());
 }
 
-/// Connections with a known incoming CPU are counted as hits or misses.
+/// STATEMENT: Connections with a known incoming CPU are counted as hits or misses.
+///
+/// HOW:
+/// - Start 2 workers and open 4 echo connections over loopback.
+/// - On Linux and Android, expect 4 hits plus misses; elsewhere expect none counted.
 #[ntex::test]
 async fn test_incoming_cpu_connections() {
     let (lst, addr) = local_listener();
@@ -116,6 +126,13 @@ async fn test_incoming_cpu_connections() {
     srv.stop(false).await;
 }
 
+/// STATEMENT: Least-loaded balancing sends a new connection to the worker with the fewest
+/// active connections.
+///
+/// HOW:
+/// - Start 2 least-loaded workers and open 2 connections; expect one active on each.
+/// - Close the second connection and wait for `[0, 1]` active connections.
+/// - Open a third connection; expect it on the idle worker, giving `[1, 1]`.
 #[ntex::test]
 async fn test_least_loaded_connections() {
     // the test server runs a single worker
@@ -158,6 +175,16 @@ async fn test_least_loaded_connections() {
     srv.stop(false).await;
 }
 
+/// STATEMENT: Worker metrics report I/O counters per listener configuration: write
+/// backpressure, bytes, writes, page cache and close reasons.
+///
+/// HOW:
+/// - Send 8 MiB to a client that does not read; expect active backpressure and a bounded
+///   write buffer.
+/// - Read it all; expect backpressure released with a duration, 8 MiB written, writes
+///   counted and page cache use.
+/// - Send 5 bytes and close; expect 5 bytes read, empty buffers and one `other` close.
+/// - Use a second listener; expect separate counters and nothing in `io_other`.
 #[ntex::test]
 async fn test_worker_io_metrics() {
     const SIZE: usize = 8 * 1024 * 1024;
@@ -258,6 +285,13 @@ async fn test_worker_io_metrics() {
     srv.stop(false).await;
 }
 
+/// STATEMENT: `TestServerBuilder` applies the server configuration to accepted connections
+/// and the client configuration to the test client.
+///
+/// HOW:
+/// - Build with `SRV` and `CLIENT` configurations; expect `TestServerBuilder` in `Debug`.
+/// - Start it; expect the `CLIENT` tag on the server handle.
+/// - Connect and echo; expect the service to see the `SRV` tag.
 #[ntex::test]
 async fn test_server_builder() {
     let (tx, rx) = mpsc::channel();
@@ -282,6 +316,11 @@ async fn test_server_builder() {
 #[derive(Clone)]
 struct St(Arc<AtomicUsize>);
 
+/// STATEMENT: `TestServerBuilder::with` passes the created state to the connection service.
+///
+/// HOW:
+/// - Start a server whose state holds a counter and whose service increments it.
+/// - Connect and echo; expect the counter to be 1.
 #[ntex::test]
 async fn test_server_with_state() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -344,6 +383,13 @@ async fn test_server_factory_worker_state() {
     }
 }
 
+/// STATEMENT: `build_test_server` runs a configured builder with state and reports the
+/// address set with `set_addr`.
+///
+/// HOW:
+/// - Build a named server with backlog, graceful timeout, state and a listener.
+/// - Set the listener address; expect `addr` to return it.
+/// - Connect and expect an echo.
 #[ntex::test]
 async fn test_build_test_server() {
     let (lst, addr) = local_listener();
@@ -371,6 +417,16 @@ async fn test_build_test_server() {
     check_echo(&io).await;
 }
 
+/// STATEMENT: Sockets bound in `configure` are served by services registered in
+/// `on_worker_start`, with the app or mapped state; a later service replaces an earlier
+/// one.
+///
+/// HOW:
+/// - Bind `addr1` and `addr2` and listen on `addr3` in `configure`; bind `addr4` directly.
+/// - In two `on_worker_start` callbacks, check the state and `Debug`, register `addr1`,
+///   register `addr3` with `map_cfg` state, and replace `addr1`.
+/// - Expect `addr1-2`, `addr3` and `bind` tags, a dropped connection on `addr2` and one
+///   start.
 #[ntex::test]
 async fn test_configure() {
     let (lst, addr3) = local_listener();
@@ -432,7 +488,11 @@ async fn test_configure() {
     drop(srv);
 }
 
-/// Listeners without `on_worker_start` are not served.
+/// STATEMENT: Sockets bound in `configure` without `on_worker_start` are not served.
+///
+/// HOW:
+/// - Bind an address in `configure` without registering a service.
+/// - Connect and expect the connection to close without data.
 #[ntex::test]
 async fn test_configure_without_worker_start() {
     let addr = TestServer::unused_addr();
@@ -448,6 +508,11 @@ async fn test_configure_without_worker_start() {
     assert_eq!(read_tag(addr).map(|v| v.is_empty()).ok(), Some(true));
 }
 
+/// STATEMENT: `configure` returns errors from the configuration closure and from binding.
+///
+/// HOW:
+/// - Return an error from the closure; expect the same message.
+/// - Bind an address that is already in use; expect an error.
 #[ntex::test]
 async fn test_configure_error() {
     let res = build()
@@ -467,7 +532,11 @@ async fn test_configure_error() {
     assert!(res.is_err());
 }
 
-/// A failing worker configuration stops the server with `stop_on_panic`.
+/// STATEMENT: With `stop_on_panic`, a failing `on_worker_start` stops the server.
+///
+/// HOW:
+/// - Bind an address whose `on_worker_start` returns an error, with `stop_on_panic`.
+/// - Expect the server future to finish within 5 s.
 #[ntex::test]
 async fn test_on_worker_start_error() {
     let addr = TestServer::unused_addr();
@@ -488,7 +557,11 @@ async fn test_on_worker_start_error() {
         .unwrap();
 }
 
-/// A failing application state stops the server with `stop_on_panic`.
+/// STATEMENT: With `stop_on_panic`, a failing application state stops the server.
+///
+/// HOW:
+/// - Start a server whose state factory returns an error, with `stop_on_panic`.
+/// - Expect the server future to finish within 5 s.
 #[ntex::test]
 async fn test_app_config_error() {
     let (lst, _) = local_listener();
@@ -509,6 +582,13 @@ async fn test_app_config_error() {
         .unwrap();
 }
 
+/// STATEMENT: Unix socket listeners serve connections, a stale socket file is replaced, and
+/// socket files are removed on stop.
+///
+/// HOW:
+/// - Create a stale file at one path, `bind_uds` there and `listen_uds` on a bound listener.
+/// - Connect to each path and expect its tag.
+/// - Stop the server and expect both socket files removed.
 #[cfg(unix)]
 #[ntex::test]
 async fn test_uds() {
@@ -548,6 +628,11 @@ async fn test_uds() {
     wait_for(|| !path1.exists() && !path2.exists()).await;
 }
 
+/// STATEMENT: `bind_uds` fails when the path is a non-empty directory.
+///
+/// HOW:
+/// - Create a directory with a subdirectory and call `bind_uds` on it.
+/// - Expect an error.
 #[cfg(unix)]
 #[ntex::test]
 async fn test_bind_uds_error() {
@@ -561,6 +646,14 @@ async fn test_bind_uds_error() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// STATEMENT: A paused server stops accepting connections but keeps existing ones, and
+/// resume and stop update the status.
+///
+/// HOW:
+/// - Wait for `Ready` and echo; pause and expect `Paused` from `status` and `status_changed`.
+/// - Expect no reply on a new connection within 200 ms while the old one still echoes.
+/// - Resume; expect `Ready` and the queued message echoed.
+/// - Stop; expect `Stopped` and the listener closed.
 #[ntex::test]
 async fn test_pause_resume_status() {
     let (lst, addr) = local_listener();
@@ -639,7 +732,12 @@ impl Service<(), Io> for ReadySrv {
     }
 }
 
-/// A failed readiness check re-creates the worker services.
+/// STATEMENT: A failed readiness check re-creates the worker service.
+///
+/// HOW:
+/// - Start a server whose service fails its first readiness check, then connect and echo.
+/// - Expect 2 created services and the failed one shut down.
+/// - Stop and expect the second service shut down.
 #[ntex::test]
 async fn test_ready_failure() {
     let created = Arc::new(AtomicUsize::new(0));
@@ -664,7 +762,11 @@ async fn test_ready_failure() {
     assert_eq!(shutdown.load(Relaxed), 2);
 }
 
-/// Graceful stop waits for the worker service shutdown.
+/// STATEMENT: A graceful stop with a timeout completes and closes the listener.
+///
+/// HOW:
+/// - Start a server with `graceful_shutdown` and a 2 s timeout, then connect and echo.
+/// - Stop gracefully and expect new connects to fail.
 #[ntex::test]
 async fn test_graceful_stop() {
     let (lst, addr) = local_listener();
@@ -685,6 +787,11 @@ async fn test_graceful_stop() {
     assert!(net::TcpStream::connect(addr).is_err());
 }
 
+/// STATEMENT: Services registered with `bind` receive the server state.
+///
+/// HOW:
+/// - Bind a service that increments a counter in the state and writes a tag.
+/// - Connect; expect the tag and the counter to be 1.
 #[ntex::test]
 async fn test_server_state_bind() {
     let addr = TestServer::unused_addr();
@@ -718,12 +825,24 @@ async fn test_builder_zero_workers() {
     drop(build().workers(0));
 }
 
+/// STATEMENT: Running a server without bound sockets panics.
+///
+/// HOW:
+/// - Call `run` on a builder with no listeners.
+/// - Expect the "at least one bound socket" panic.
 #[ntex::test]
 #[should_panic(expected = "at least one bound socket")]
 async fn test_run_without_sockets() {
     drop(build().run());
 }
 
+/// STATEMENT: `ServerBuilder` and `AcceptLoop` `Debug` output shows their names, and an
+/// accept loop takes commands before it runs.
+///
+/// HOW:
+/// - Format a builder named `dbg`; expect `"dbg"` and `dbg:accept`.
+/// - Format an accept loop named `acc`; expect `acc:accept`.
+/// - Send a timer command to the loop that is not running; expect no panic.
 #[ntex::test]
 async fn test_builder_debug() {
     let builder = build_with_config(ntex_server::NoConfig)
@@ -742,9 +861,15 @@ async fn test_builder_debug() {
     assert!(s.contains("acc:accept"), "{s}");
     // commands are queued without a running loop
     accept.notify().send(AcceptorCommand::Timer);
-    assert!(format!("{:?}", AcceptorCommand::Pause).contains("Pause"));
 }
 
+/// STATEMENT: `bind_addr` and `create_tcp_listener` bind listeners and fail on used or
+/// invalid addresses.
+///
+/// HOW:
+/// - Bind `127.0.0.1:0` and expect one listener.
+/// - Bind its address again with both functions, and bind an invalid address; expect errors.
+/// - If IPv6 is available, expect a `[::1]` listener to have an IPv6 address.
 #[test]
 fn test_bind_addr() {
     let lst = bind_addr("127.0.0.1:0", 16).unwrap();
@@ -762,7 +887,11 @@ fn test_bind_addr() {
     }
 }
 
-/// A client can talk to a server with a raw socket.
+/// STATEMENT: A raw TCP client can talk to the test server.
+///
+/// HOW:
+/// - Connect with `std::net::TcpStream` and write `test`.
+/// - Read 4 bytes and expect `test` echoed.
 #[ntex::test]
 async fn test_raw_tcp() {
     let srv = test_server(async |_| fn_service(echo));

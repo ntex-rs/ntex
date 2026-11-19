@@ -306,6 +306,13 @@ mod tests {
         op.value += 1;
     }
 
+    /// STATEMENT: An `OpBox` payload recovered from its `OVERLAPPED` header can be used and
+    /// resubmitted while the kernel writes the header.
+    ///
+    /// HOW:
+    /// - Issue the operation through its header; expect the payload updated.
+    /// - Recover the payload from the header and issue it again.
+    /// - Expect both the payload and the header write to be visible.
     #[test]
     fn miri_opbox_inline_completion() {
         let mut op = OpBox::new(Overlapped::new(1, 2), TestOp { value: 0 });
@@ -323,6 +330,13 @@ mod tests {
         }
     }
 
+    /// STATEMENT: The `OVERLAPPED` pointer of an `OpBox` stays valid when its owner moves, and
+    /// its payload can be reached through either.
+    ///
+    /// HOW:
+    /// - Move the box into a `Vec` and update the payload through the owner.
+    /// - Write the header and update the payload through the recovered pointer.
+    /// - Expect the owner, its `Debug` output and `into_inner` to see every update.
     #[test]
     fn miri_opbox_kernel_pointer() {
         #[inline(never)]
@@ -354,6 +368,13 @@ mod tests {
         assert_eq!(op.value, 3);
     }
 
+    /// STATEMENT: A released `OpBox` keeps its header writable after the payload is moved
+    /// out.
+    ///
+    /// HOW:
+    /// - Release the box with `into_raw` and read its payload out.
+    /// - Write the header; expect the payload value and the header `udata`.
+    /// - Restore the payload and free the allocation.
     #[test]
     fn miri_opbox_released_allocation() {
         let op = OpBox::new(Overlapped::new(1, 3), TestOp { value: 5 });
@@ -372,6 +393,15 @@ mod tests {
         }
     }
 
+    /// STATEMENT: An `OpPairBox` keeps both headers and payloads valid when its owner moves,
+    /// and completing one side does not disturb the other.
+    ///
+    /// HOW:
+    /// - Hold a read payload borrow while the owner `Vec` grows and a write is issued; expect
+    ///   both payloads updated.
+    /// - Recover each payload from its header while writing the other header; expect each
+    ///   update and both `udata` values.
+    /// - Update the read side through the owner; expect it, and `OpPairBox` in `Debug`.
     #[test]
     fn miri_op_pair_reentrant_access() {
         #[inline(never)]
@@ -423,6 +453,15 @@ mod tests {
         assert!(format!("{:?}", owners[0]).contains("OpPairBox"));
     }
 
+    /// STATEMENT: An `OpPairBox` without a read header uses no space for one, and still keeps
+    /// both payloads valid.
+    ///
+    /// HOW:
+    /// - Expect the pair to be one `Overlapped` smaller than one with a read header.
+    /// - Expect no read header and a null read pointer.
+    /// - Hold a read borrow while the owner grows and a write is issued; recover the write
+    ///   payload from its header; expect every update.
+    /// - Drop the pair; expect the read payload dropped once.
     #[test]
     fn miri_op_pair_without_read_header() {
         struct CountDrop(std::rc::Rc<std::cell::Cell<usize>>, usize);
@@ -480,6 +519,11 @@ mod tests {
         assert_eq!(drops.get(), 1);
     }
 
+    /// STATEMENT: Dropping an `OpPairBox` drops both payloads.
+    ///
+    /// HOW:
+    /// - Create a pair with drop-counting payloads and write its read header.
+    /// - Drop the pair; expect each payload dropped once.
     #[test]
     fn miri_op_pair_drops_both_payloads() {
         struct CountDrop(std::rc::Rc<std::cell::Cell<usize>>);

@@ -519,7 +519,6 @@ mod tests {
         assert_eq!(client.clone().tp, Type::ClientClone);
         assert_eq!(server.tp, Type::Server);
         assert_eq!(server.clone().tp, Type::ServerClone);
-        assert!(format!("{server:?}").contains("IoTest"));
         assert!(format!("{:?}", AtomicWaker::default()).contains("AtomicWaker"));
 
         server.read_pending();

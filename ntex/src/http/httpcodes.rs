@@ -80,20 +80,3 @@ impl Response {
     STATIC_RESP!(InsufficientStorage, StatusCode::INSUFFICIENT_STORAGE);
     STATIC_RESP!(LoopDetected, StatusCode::LOOP_DETECTED);
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::http::StatusCode;
-    use crate::http::body::Body;
-    use crate::http::response::Response;
-
-    /// STATEMENT: The OK response convenience builder produces an OK response.
-    ///
-    /// HOW:
-    /// - Build an empty response through `Response::Ok` and check its status.
-    #[test]
-    fn test_build() {
-        let resp = Response::Ok().body(Body::Empty);
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-}

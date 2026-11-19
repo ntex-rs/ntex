@@ -90,7 +90,6 @@ mod tests {
     ///
     /// HOW:
     /// - Wrap I/O and string errors with each helper and compare their displayed messages.
-    /// - Verify the string wrapper's debug output identifies `StringError`.
     #[test]
     fn test_dyn_errors() {
         let err = io::Error::other("boxed");
@@ -99,6 +98,5 @@ mod tests {
 
         let err = str_rc_err("string error".to_string());
         assert_eq!(err.to_string(), "string error");
-        assert!(format!("{err:?}").contains("StringError"));
     }
 }

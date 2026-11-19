@@ -741,6 +741,14 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Reactor cleanup closes a socket whose primary handle was dropped while the
+    /// release of the secondary handle is still deferred.
+    ///
+    /// HOW:
+    /// - Drop the primary handle of a registered stream; expect it marked dropped, a deferred
+    ///   release queued, and the peer still open.
+    /// - Run the handler cleanup; expect EOF on the peer and no deferred releases.
+    /// - Run cleanup again and drop the `Io` without a panic.
     #[ntex::test]
     async fn cleanup_closes_socket_with_deferred_secondary_drop() {
         let reactor = Reactor::new().unwrap();
@@ -806,7 +814,12 @@ mod tests {
         assert!(ops.0.with(|streams| streams.is_empty()));
     }
 
-    /// A dropped stream is closed inline, not in the blocking pool.
+    /// STATEMENT: A dropped stream without a linger timeout is closed inline, not in the
+    /// blocking pool.
+    ///
+    /// HOW:
+    /// - Register a socket, drop it and run one handler tick.
+    /// - Expect a non-blocking read on the peer to return EOF at once.
     #[ntex::test]
     async fn dropped_stream_closes_inline() {
         let (socket, mut peer) = UnixStream::pair().unwrap();
@@ -816,7 +829,12 @@ mod tests {
         assert_eq!(io::Read::read(&mut peer, &mut [0u8; 1]).unwrap(), 0);
     }
 
-    /// An aborted stream has a zero linger timeout, its close does not wait.
+    /// STATEMENT: Neither a default socket nor an aborted socket with a zero linger timeout
+    /// waits on close.
+    ///
+    /// HOW:
+    /// - Expect a new TCP socket not to linger.
+    /// - Abort the socket; expect it still not to linger.
     #[test]
     fn zero_linger_does_not_wait() {
         let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -826,8 +844,13 @@ mod tests {
         assert!(!lingers(sock.as_raw_fd()));
     }
 
-    /// A close that waits for an application-set linger timeout runs in the
+    /// STATEMENT: The close of a socket with an application-set linger timeout runs in the
     /// blocking pool, and still delivers the unsent output.
+    ///
+    /// HOW:
+    /// - Set a 5 s linger timeout and fill the socket's send buffer.
+    /// - Drop the registered socket; expect it to return within 1 s.
+    /// - Expect the peer to read every byte that was sent.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[allow(clippy::large_stack_arrays)]
     #[ntex::test]
@@ -862,6 +885,14 @@ mod tests {
         assert_eq!(received.len(), sent);
     }
 
+    /// STATEMENT: A runtime tick closes a dropped socket even when the reactor gets no new
+    /// events.
+    ///
+    /// HOW:
+    /// - Drop the primary handle inside the runtime after the first notification; expect a
+    ///   deferred release queued.
+    /// - Wait for a blocking peer read; expect EOF without any shutdown.
+    /// - Expect no deferred releases or streams left.
     #[test]
     fn runtime_tick_closes_socket_without_new_events() {
         let reactor = Reactor::new().unwrap();
@@ -990,8 +1021,12 @@ mod tests {
 
         use super::*;
 
-        /// A peer half-close is reported as readable. It must surface as eof,
-        /// not as a hard stop: buffered output still has to drain.
+        /// STATEMENT: A peer half-close is reported as read EOF, not as a stop, so buffered
+        /// output can still drain.
+        ///
+        /// HOW:
+        /// - Shut the peer's write half and fire a readable event.
+        /// - Expect read EOF and the `Io` still active.
         #[ntex::test]
         async fn half_close_with_read_armed_delivers_eof() {
             let mut fixture = Fixture::new();
@@ -1007,7 +1042,11 @@ mod tests {
             assert!(!closed, "half-close terminated the connection");
         }
 
-        /// A plain `EPOLLHUP` is a clean close.
+        /// STATEMENT: A plain `EPOLLHUP` stops the stream as a clean close.
+        ///
+        /// HOW:
+        /// - Fire a hang-up event.
+        /// - Expect the `Io` stopped and peer-gone status without an error.
         #[cfg(any(target_os = "linux", target_os = "android"))]
         #[ntex::test]
         async fn hup_stops_the_stream_cleanly() {
@@ -1023,8 +1062,13 @@ mod tests {
             assert!(err.is_none(), "EPOLLHUP reported an error: {err:?}");
         }
 
-        /// A terminal event detaches the stream, later events and interest
-        /// changes are ignored instead of spinning or failing in the poller.
+        /// STATEMENT: A terminal event detaches the stream, so later events and interest
+        /// changes are ignored.
+        ///
+        /// HOW:
+        /// - Fire a hang-up event; expect the stream detached.
+        /// - Clear read interest and fire a readable event; expect read interest not re-armed.
+        /// - Request interest again; expect no error or panic.
         #[cfg(any(target_os = "linux", target_os = "android"))]
         #[ntex::test]
         async fn hup_detaches_the_stream() {
@@ -1047,9 +1091,13 @@ mod tests {
             assert!(!flags.contains(Flags::RD), "event after detach was handled");
         }
 
-        /// `EPOLLERR` is terminal and is reported whether or not it was
-        /// requested. A reset reported by it while read interest is not armed
-        /// stops the stream with the socket error.
+        /// STATEMENT: An `EPOLLERR` reset stops the stream with the socket error, even while
+        /// read interest is not armed.
+        ///
+        /// HOW:
+        /// - Clear read interest and reset the connection from the peer.
+        /// - Expect a separate poller to report an error event for the socket.
+        /// - Deliver that event; expect peer-gone status with `ECONNRESET`.
         #[cfg(any(target_os = "linux", target_os = "android"))]
         #[ntex::test]
         async fn err_without_read_armed_reports_socket_error() {
@@ -1119,8 +1167,12 @@ mod tests {
         }
     }
 
-    /// Pollers that support it use level-triggered interest, so unchanged
-    /// interest needs no re-arm after every event.
+    /// STATEMENT: Pollers that support it use level-triggered interest, so unchanged interest
+    /// needs no re-arm after every event.
+    ///
+    /// HOW:
+    /// - Create a stream fixture.
+    /// - On Linux and Android, expect `PollMode::Level`.
     #[ntex::test]
     async fn level_mode_where_supported() {
         let fixture = Fixture::new();
@@ -1133,7 +1185,12 @@ mod tests {
         let _ = mode;
     }
 
-    /// A failed reactor operation stops the stream with its error.
+    /// STATEMENT: A failed reactor operation stops its stream, and errors for unknown streams
+    /// are ignored.
+    ///
+    /// HOW:
+    /// - Report an error for the stream and for an unknown key.
+    /// - Expect the `Io` stopped.
     #[ntex::test]
     async fn reactor_error_stops_the_stream() {
         let mut fixture = Fixture::new();
@@ -1197,8 +1254,12 @@ mod tests {
         assert!(stopped, "event for the new stream was ignored");
     }
 
-    /// A new stream is registered with read interest armed, the first read
-    /// request of the io task needs no interest update.
+    /// STATEMENT: A new stream is registered with read interest armed, so the first read of
+    /// the I/O task needs no interest update.
+    ///
+    /// HOW:
+    /// - Create a stream fixture.
+    /// - Expect read interest armed and write interest not armed.
     #[ntex::test]
     async fn registration_arms_read_interest() {
         let fixture = Fixture::new();
@@ -1208,7 +1269,11 @@ mod tests {
         assert!(!flags.contains(Flags::WR), "write interest was armed");
     }
 
-    /// A read that would block keeps read interest armed.
+    /// STATEMENT: A read that would block keeps read interest armed.
+    ///
+    /// HOW:
+    /// - Fire a readable event with no data on the socket.
+    /// - Expect read interest still armed.
     #[ntex::test]
     async fn readable_without_data_renews_read_interest() {
         let mut fixture = Fixture::new();
@@ -1219,7 +1284,11 @@ mod tests {
         assert!(flags.contains(Flags::RD), "read interest was not armed");
     }
 
-    /// An event for the other direction keeps armed write interest.
+    /// STATEMENT: A readable event keeps armed write interest.
+    ///
+    /// HOW:
+    /// - Arm write interest and fire a readable event.
+    /// - Expect write interest still armed.
     #[ntex::test]
     async fn readable_event_keeps_write_interest() {
         let mut fixture = Fixture::new();
@@ -1234,7 +1303,13 @@ mod tests {
         assert!(flags.contains(Flags::WR), "write interest was lost");
     }
 
-    /// Asking for write interest with leftover output arms it.
+    /// STATEMENT: Asking for write interest with output left over arms it, and dropping the
+    /// request disarms it.
+    ///
+    /// HOW:
+    /// - Queue twice `WRITE_BUDGET` of output and ask for write interest twice; expect it
+    ///   armed both times.
+    /// - Ask for no write interest; expect it disarmed.
     #[ntex::test]
     async fn write_interest_with_pending_output() {
         let fixture = Fixture::new();
@@ -1259,8 +1334,13 @@ mod tests {
         assert!(dropped, "write interest was not dropped");
     }
 
-    /// Pausing reads leaves read interest armed. Resuming before a readable
+    /// STATEMENT: Pausing reads leaves read interest armed, and resuming before a readable
     /// event needs neither an interest update nor a speculative read.
+    ///
+    /// HOW:
+    /// - Pause reads; expect read interest armed and marked paused.
+    /// - Send data from the peer and resume reads; expect interest armed, not paused.
+    /// - Expect nothing read on resume.
     #[ntex::test]
     async fn read_pause_keeps_interest_armed() {
         use std::io::Write;
@@ -1318,7 +1398,12 @@ mod tests {
             fixture.io.with_read_dst(|b| b.len())
         }
 
-        /// Reads continue past one filled chunk, but stop at `READ_BUDGET`.
+        /// STATEMENT: Reads continue past one filled chunk, but stop at `READ_BUDGET`.
+        ///
+        /// HOW:
+        /// - Fill the socket with more than `READ_BUDGET` plus one chunk and fire a readable
+        ///   event.
+        /// - Expect more than one chunk read, and less than `READ_BUDGET` plus two chunks.
         #[ntex::test]
         async fn read_continues_until_budget() {
             let max = BytePageSize::Size64;
@@ -1347,7 +1432,12 @@ mod tests {
             );
         }
 
-        /// Read backpressure ends the reads of an event.
+        /// STATEMENT: Read backpressure ends the reads of an event and disarms read interest.
+        ///
+        /// HOW:
+        /// - Fill the socket and fire a readable event with 16 KiB of read backpressure.
+        /// - Expect at least the backpressure size read, and less than one more page.
+        /// - Expect read interest disarmed.
         #[ntex::test]
         async fn read_stops_on_backpressure() {
             let backpressure = BytePageSize::Size16.capacity();
@@ -1373,8 +1463,13 @@ mod tests {
             assert!(!armed, "read interest kept under backpressure");
         }
 
-        /// Backpressure that drains the socket keeps read interest armed,
-        /// the next readable event disarms it without reading.
+        /// STATEMENT: Backpressure reached by a read that drains the socket keeps read interest
+        /// armed, and the next readable event disarms it without reading.
+        ///
+        /// HOW:
+        /// - Send 2 KiB with 1 KiB of backpressure and fire a readable event; expect all
+        ///   of it read and read interest armed and paused.
+        /// - Send 2 KiB more and fire again; expect interest disarmed and nothing more read.
         #[ntex::test]
         async fn drained_backpressure_keeps_interest_armed() {
             let mut fixture = Fixture::with_cfg(
@@ -1414,10 +1509,13 @@ mod tests {
         /// left over whatever the socket accepts.
         const LARGE: usize = 8 * 1024 * 1024;
 
-        /// Output left over after a direct write must arm write interest here.
-        /// Leaving it to the write task costs an extra write syscall, and
-        /// setting `Flags::WR` without telling the reactor would stall the
-        /// connection: `interest()` would believe it was already armed.
+        /// STATEMENT: Output left over after a direct write arms write interest at once, in the
+        /// reactor as well as in the stream flags.
+        ///
+        /// HOW:
+        /// - Queue more output than the socket accepts; expect no write interest.
+        /// - Write the stream directly.
+        /// - Expect write interest armed.
         #[ntex::test]
         async fn direct_write_arms_write_interest() {
             let fixture = Fixture::new();
@@ -1432,7 +1530,11 @@ mod tests {
             assert!(armed, "leftover output did not arm write interest");
         }
 
-        /// Output that drained completely needs no interest.
+        /// STATEMENT: A direct write that drains all output does not arm write interest.
+        ///
+        /// HOW:
+        /// - Queue a small output and write the stream directly.
+        /// - Expect no write interest.
         #[ntex::test]
         async fn drained_write_does_not_arm_write_interest() {
             let fixture = Fixture::new();
@@ -1446,7 +1548,11 @@ mod tests {
             assert!(!armed, "drained output armed write interest");
         }
 
-        /// Arming is additive, so a second write must not disturb it.
+        /// STATEMENT: A second direct write keeps write interest armed by the first.
+        ///
+        /// HOW:
+        /// - Queue more output than the socket accepts and write the stream directly twice.
+        /// - Expect write interest armed.
         #[ntex::test]
         async fn repeated_direct_writes_keep_interest_armed() {
             let fixture = Fixture::new();
@@ -1460,8 +1566,14 @@ mod tests {
             assert!(armed, "write interest was lost on a repeat write");
         }
 
-        /// A write continues past one `writev` while the socket accepts
-        /// everything, but stops at `WRITE_BUDGET`.
+        /// STATEMENT: A write continues past one `writev` while the socket accepts the data,
+        /// and stops at `WRITE_BUDGET`.
+        ///
+        /// HOW:
+        /// - Queue `LARGE` output in 4 KiB pages on a socket with buffers of twice the budget.
+        /// - Write the stream directly.
+        /// - Expect more than one `writev` of pages written, and less than `WRITE_BUDGET`
+        ///   plus one `writev`.
         #[ntex::test]
         async fn write_continues_until_budget() {
             use ntex_bytes::BytePageSize;
@@ -1500,9 +1612,13 @@ mod tests {
             );
         }
 
-        /// A failed write must hand the pages it took back to the write
-        /// buffer. Dropping them loses the output and leaves it counted as in
-        /// flight, which nothing will ever report as written.
+        /// STATEMENT: A failed write stops the stream and returns the pages it took to the
+        /// write buffer.
+        ///
+        /// HOW:
+        /// - Queue 5 bytes and close the peer, so the next write fails.
+        /// - Write the stream directly.
+        /// - Expect the `Io` stopped and the 5 bytes still in the write buffer.
         #[ntex::test]
         async fn failed_write_returns_pages_to_the_buffer() {
             let mut fixture = Fixture::new();

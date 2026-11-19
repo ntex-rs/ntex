@@ -187,6 +187,67 @@ mod tests {
         assert_eq!(io.read(&mut buf).await.unwrap(), 0);
     }
 
+    /// STATEMENT: A transport read error is returned from `AsyncRead`.
+    ///
+    /// HOW:
+    /// - Fail the transport read with `ConnectionReset` before any input arrives.
+    /// - Check `AsyncReadExt::read` returns an error of that kind.
+    #[ntex::test]
+    async fn read_reports_transport_error() {
+        let (client, server) = IoTest::create();
+        let mut io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.read_error(io::Error::from(io::ErrorKind::ConnectionReset));
+        let mut buf = [0; 16];
+        let err = io.read(&mut buf).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+    }
+
+    /// STATEMENT: Zero-length reads and writes complete at once.
+    ///
+    /// HOW:
+    /// - Activate write backpressure, as in `write_respects_backpressure`, with no peer input.
+    /// - Check a read into an empty buffer is ready with no data on the first poll.
+    /// - Check an empty write is ready with `0` on the first poll.
+    #[ntex::test]
+    async fn empty_read_and_write_do_not_wait() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let cfg = SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(64));
+        let mut io = Io::new(server, cfg);
+        io.write_all(&[b'a'; 128]).await.unwrap();
+
+        let read = poll_fn(|cx| {
+            let mut buf = ReadBuf::new(&mut []);
+            Poll::Ready(Pin::new(&mut io).poll_read(cx, &mut buf))
+        })
+        .await;
+        assert!(matches!(read, Poll::Ready(Ok(()))));
+
+        let write = poll_fn(|cx| Poll::Ready(Pin::new(&mut io).poll_write(cx, b""))).await;
+        assert!(matches!(write, Poll::Ready(Ok(0))));
+    }
+
+    /// STATEMENT: `IoBoxed` writes, flushes and shuts down through the tokio traits.
+    ///
+    /// HOW:
+    /// - Write with `AsyncWriteExt::write_all`, flush, and check the peer receives the bytes.
+    /// - Call `AsyncWriteExt::shutdown` and check both sides observe the close.
+    #[ntex::test]
+    async fn boxed_writes_and_shuts_down() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut io = IoBoxed::from(Io::new(server, SharedCfg::new("SRV")));
+
+        io.write_all(b"response").await.unwrap();
+        AsyncWriteExt::flush(&mut io).await.unwrap();
+        assert_eq!(client.read_any(), b"response".as_ref());
+
+        AsyncWriteExt::shutdown(&mut io).await.unwrap();
+        assert!(client.is_closed());
+        assert!(io.is_closed());
+    }
+
     /// STATEMENT: A write waits while write backpressure is active.
     ///
     /// HOW:

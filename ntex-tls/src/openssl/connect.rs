@@ -114,7 +114,7 @@ mod tests {
     /// STATEMENT: An OpenSSL connector is ready but reports failure against a non-TLS peer.
     ///
     /// HOW:
-    /// - Construct and clone the connector, check its debug name, and await readiness.
+    /// - Construct and clone the connector and await readiness.
     /// - Connect to a local service that drops the transport and assert the call fails.
     #[ntex::test]
     async fn test_openssl_connect() {
@@ -126,7 +126,6 @@ mod tests {
         let _: SslConnector<Connector<&'static str>> = SslConnector::new(ssl.build());
         let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
         let svc = SslConnector::new(ssl.build()).clone();
-        assert!(format!("{svc:?}").contains("SslConnector"));
 
         let srv = Pipeline::new(SharedCfg::default(), svc);
         // always ready

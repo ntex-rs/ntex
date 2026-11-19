@@ -330,6 +330,13 @@ mod tests {
 
     use super::*;
 
+    /// STATEMENT: Every `ErrorMessage` constructor yields the same text through `as_str`,
+    /// `as_bstr` and `Display`, and `empty` is empty.
+    ///
+    /// HOW:
+    /// - Build messages with `empty`, `From<&str>`, `From<String>`, `from_bstr`,
+    ///   `From<ByteString>` and `from_static`.
+    /// - Check `is_empty`, `as_str`, `as_bstr` and the `ByteString` conversions for each.
     #[test]
     fn error_message() {
         let msg = ErrorMessage::empty();
@@ -370,6 +377,13 @@ mod tests {
         assert_eq!(ByteString::from(msg), "test");
     }
 
+    /// STATEMENT: `ErrorMessageChained` keeps its message while `with_source` replaces the
+    /// source, and formatting prints the message followed by the source chain.
+    ///
+    /// HOW:
+    /// - Build chained messages without a source; expect `source()` to be `None`.
+    /// - Attach an `io::Error`; expect `fmt_err_string` to print `test\nio-test\n`.
+    /// - Call `with_source` twice; expect the second source and the original message.
     #[test]
     fn error_message_chained() {
         let chained = ErrorMessageChained::from(ByteString::from("test"));
@@ -445,6 +459,13 @@ mod tests {
         }
     }
 
+    /// STATEMENT: Diagnostic formatting includes the source error and the attached tag.
+    ///
+    /// HOW:
+    /// - Format a plain error with `fmt_err_string`; expect only its message.
+    /// - Wrap an error with an `io::Error` source; expect `fmt_diag_string` and `source()` to
+    ///   contain the io error text.
+    /// - Add a tag with `with_tag`; expect the tag in the diagnostic output.
     #[test]
     fn fmt_diag() {
         let err = TestError::Service("409 Error");

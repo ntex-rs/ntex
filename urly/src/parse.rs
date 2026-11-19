@@ -455,6 +455,14 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `remove_dot_segments` follows RFC 3986 5.2.4, and `has_dot_segments` detects
+    /// only whole `.` and `..` segments.
+    ///
+    /// HOW:
+    /// - Remove dot segments from absolute, relative, double-slash and dot-prefixed paths;
+    ///   expect the listed results.
+    /// - Expect `has_dot_segments` false for names that merely contain dots and true for
+    ///   real dot segments.
     #[test]
     fn dot_segments() {
         let cases = [
@@ -484,6 +492,14 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `normalize_authority` borrows normal input, lower-cases the host, drops empty
+    /// ports and leading zeros, percent-encodes userinfo, and rejects bad ports and hosts.
+    ///
+    /// HOW:
+    /// - Normalize a normal authority; expect a borrowed result.
+    /// - Normalize upper case, an empty port, a spaced userinfo with `080`, and a second `@`.
+    /// - Normalize `h:8a`, `h:65536` and `u@:80`; expect `InvalidPort` at 3, `PortOutOfRange`
+    ///   and `InvalidHost`.
     #[test]
     fn authority() {
         assert!(matches!(
@@ -504,6 +520,14 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::InvalidHost);
     }
 
+    /// STATEMENT: `parse_authority` trims and normalizes an authority-form target into `//...`
+    /// and rejects input containing path, query or fragment delimiters or an invalid host or port.
+    ///
+    /// HOW:
+    /// - Parse plain, padded upper-case, userinfo, IPv6 and empty-port forms; expect the
+    ///   listed `//` URLs.
+    /// - Parse empty, `/`, `?`, `#`, missing-host and bad-port input; expect each kind and
+    ///   position.
     #[test]
     fn authority_form() {
         for (src, expected) in [
@@ -530,6 +554,14 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `validate` accepts every URL form without changing it and reports the kind
+    /// and position of the first invalid part.
+    ///
+    /// HOW:
+    /// - Validate absolute, network-path, relative, query-only, fragment-only and opaque URLs;
+    ///   expect `Ok`.
+    /// - Validate bad characters, schemes, percent-encoding, a second `#`, ports and IPv6.
+    /// - Expect the listed kind and position for each.
     #[test]
     fn strict() {
         for valid in [

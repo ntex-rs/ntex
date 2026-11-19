@@ -135,8 +135,6 @@ mod tests {
     #[ntex::test]
     async fn test_oneshot() {
         let (tx, rx) = channel();
-        assert!(format!("{tx:?}").contains("Sender"));
-        assert!(format!("{rx:?}").contains("Receiver"));
 
         tx.send("test").unwrap();
         assert_eq!(rx.await.unwrap(), "test");

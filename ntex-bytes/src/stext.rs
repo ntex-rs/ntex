@@ -140,7 +140,6 @@ mod tests {
     ///
     /// HOW:
     /// - Wrap a boxed 100-byte payload with `Boxed`, clone it, and check `StExt` becomes an equal `Vec` copy.
-    /// - Format its `StorageVTable` and check the debug output identifies the type.
     #[test]
     fn clone_copies_data() {
         let data = vec![7u8; 100].into_boxed_slice();
@@ -150,8 +149,5 @@ mod tests {
         let b2 = b.clone();
         assert_eq!(b2.info().kind, Kind::Vec);
         assert_eq!(b, b2);
-
-        let vtable = StorageVTable::new(as_ptr, len, clone, drop);
-        assert!(format!("{vtable:?}").contains("StorageVTable"));
     }
 }

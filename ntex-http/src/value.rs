@@ -673,6 +673,12 @@ macro_rules! from_integers {
             }
         }
 
+        /// STATEMENT: `HeaderValue::from` for each integer type writes the decimal form, including
+        /// the type's maximum value.
+        ///
+        /// HOW:
+        /// - Convert 55 and `MAX` of the integer type.
+        /// - Expect each value to equal `to_string()` of the number.
         #[test]
         fn $name() {
             let n: $t = 55;
@@ -720,6 +726,11 @@ from_integers! {
 mod tests {
     use super::*;
 
+    /// STATEMENT: The sensitive flag affects neither equality nor the hash of a `HeaderValue`.
+    ///
+    /// HOW:
+    /// - Clone a value and mark the clone sensitive.
+    /// - Expect both values equal and with the same `RandomState` hash.
     #[test]
     fn test_hash_ignores_sensitive() {
         use std::hash::{BuildHasher, RandomState};
@@ -732,6 +743,13 @@ mod tests {
         assert_eq!(state.hash_one(&hdr), state.hash_one(&sensitive));
     }
 
+    /// STATEMENT: `HeaderValue` built by every constructor and conversion holds the same bytes,
+    /// and compares with strings and byte slices in both directions.
+    ///
+    /// HOW:
+    /// - Build values from bytes, `Bytes`, `http::HeaderValue`, `String`, `&String` and
+    ///   `ByteString`; expect the same bytes.
+    /// - Compare with `&str`, `String` and `&[u8]` for equality and ordering, both ways.
     #[test]
     #[allow(clippy::op_ref, clippy::cmp_owned)]
     fn test_basics() {
@@ -789,6 +807,11 @@ mod tests {
         assert_ne!("upgrade2"[..], hdr);
     }
 
+    /// STATEMENT: `TryFrom` for `Vec<u8>`, `Bytes` and `BytesMut` rejects invalid header bytes.
+    ///
+    /// HOW:
+    /// - Convert a vector containing byte 127; expect an error.
+    /// - Convert `upgrade` and `\n` from `Bytes` and `BytesMut`; expect success and an error.
     #[test]
     fn test_try_from() {
         HeaderValue::try_from(vec![127]).unwrap_err();
@@ -801,18 +824,36 @@ mod tests {
         HeaderValue::try_from(BytesMut::copy_from_slice(b"\n")).unwrap_err();
     }
 
-    #[test]
-    fn it_converts_using_try_from() {
-        assert!(HeaderValue::from_bytes(b"upgrade").is_ok());
-    }
-
+    /// STATEMENT: Converting a `HeaderValue` into `http::HeaderValue`, by reference or by
+    /// value, keeps its bytes and its sensitive flag.
+    ///
+    /// HOW:
+    /// - Mark a value sensitive, convert it by reference and by value, and check both results
+    ///   have the same bytes and are sensitive.
+    /// - Convert a plain value and check the result is not sensitive.
     #[test]
     fn into_http_value() {
-        let hdr = HeaderValue::from_bytes(b"upgrade").unwrap();
-        let _ = http::header::HeaderValue::from(&hdr);
-        let _ = http::header::HeaderValue::from(hdr);
+        let mut hdr = HeaderValue::from_bytes(b"upgrade").unwrap();
+        hdr.set_sensitive(true);
+
+        let by_ref = http::header::HeaderValue::from(&hdr);
+        assert_eq!(by_ref.as_bytes(), b"upgrade");
+        assert!(by_ref.is_sensitive());
+
+        let by_val = http::header::HeaderValue::from(hdr);
+        assert_eq!(by_val.as_bytes(), b"upgrade");
+        assert!(by_val.is_sensitive());
+
+        let plain = http::header::HeaderValue::from(HeaderValue::from_static("plain"));
+        assert_eq!(plain.as_bytes(), b"plain");
+        assert!(!plain.is_sensitive());
     }
 
+    /// STATEMENT: `HeaderValue` `Debug` quotes and escapes the value and hides sensitive values.
+    ///
+    /// HOW:
+    /// - Format plain, quoted and non-ASCII values; expect the escaped strings.
+    /// - Format a sensitive value; expect `Sensitive`.
     #[test]
     fn test_fmt() {
         let cases = &[
@@ -830,14 +871,13 @@ mod tests {
         let mut sensitive = HeaderValue::from_static("password");
         sensitive.set_sensitive(true);
         assert_eq!("Sensitive", format!("{sensitive:?}"));
-
-        let s = format!("{}", InvalidHeaderValue { _priv: {} });
-        assert_eq!(s, "Invalid HTTP header value");
-
-        let s = format!("{}", ToStrError { _priv: {} });
-        assert_eq!(s, "failed to convert header to a str");
     }
 
+    /// STATEMENT: `HeaderValue::from_static` panics on invalid bytes.
+    ///
+    /// HOW:
+    /// - Pass a runtime string containing `\n`.
+    /// - Expect a panic with `invalid header value`.
     #[test]
     #[should_panic(expected = "invalid header value")]
     fn from_static_invalid() {

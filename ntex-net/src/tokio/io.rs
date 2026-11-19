@@ -483,6 +483,13 @@ mod tests {
 
     use super::*;
 
+    /// STATEMENT: A graceful `Io::close` on the tokio runtime shuts the socket write half while
+    /// the `Io` is still alive.
+    ///
+    /// HOW:
+    /// - Wrap the server side of a TCP pair in an `Io` and close it.
+    /// - Read on the client; expect EOF within 1 s.
+    /// - Drop the `Io` only after EOF, so dropping it does not cause the shutdown.
     #[ntex::test]
     async fn graceful_shutdown_closes_transport_write_half() {
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -532,8 +539,14 @@ mod tests {
         }
     }
 
-    /// A write continues past one `writev` while the socket accepts
-    /// everything, but stops at `WRITE_BUDGET`.
+    /// STATEMENT: A tokio write continues past one `writev` while the socket accepts the data,
+    /// and stops at `WRITE_BUDGET`.
+    ///
+    /// HOW:
+    /// - Queue 8 MiB in 4 KiB pages on a socket with buffers of twice the budget.
+    /// - Run one write pass.
+    /// - Expect more than one `writev` of pages written, and less than `WRITE_BUDGET` plus one
+    ///   `writev`.
     #[ntex::test]
     async fn write_continues_until_budget() {
         use ntex_bytes::BytePageSize;
@@ -584,9 +597,12 @@ mod tests {
         drop(peer);
     }
 
-    /// A failed write must hand the pages it took back to the write buffer.
-    /// Dropping them loses the output and leaves it counted as in flight,
-    /// which nothing will ever report as written.
+    /// STATEMENT: A failed tokio write returns the pages it took to the write buffer.
+    ///
+    /// HOW:
+    /// - Shut the socket's own write half, so the next write fails.
+    /// - Queue 5 bytes and run one write pass.
+    /// - Expect `WrtStatus::Terminate` and the 5 bytes still in the write buffer.
     #[ntex::test]
     async fn failed_write_returns_pages_to_the_buffer() {
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -612,5 +628,89 @@ mod tests {
             5,
             "failed write dropped its pages"
         );
+    }
+
+    /// STATEMENT: A tokio Unix stream sends multi-page output intact and is aborted when
+    /// terminated.
+    ///
+    /// HOW:
+    /// - Wrap one end of a Unix socket pair in an `Io` with 4 KiB write pages, queue 16 KiB.
+    /// - Check the peer reads the 16 KiB unchanged.
+    /// - Terminate the `Io` and wait for `on_disconnect`.
+    /// - Check a duplicate of the socket reports the zero `SO_LINGER` set by the abort.
+    #[cfg(unix)]
+    #[ntex::test]
+    async fn unix_stream_writes_pages_and_aborts_on_terminate() {
+        use ntex_bytes::BytePageSize;
+        use ntex_io::IoConfig;
+        use tok_io::io::AsyncReadExt;
+
+        let (sock, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let dup = sock.try_clone().unwrap();
+        sock.set_nonblocking(true).unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let mut peer = tok_io::net::UnixStream::from_std(peer).unwrap();
+        let io = Io::new(
+            super::super::UnixStream(tok_io::net::UnixStream::from_std(sock).unwrap()),
+            SharedCfg::new("UNIX").add(IoConfig::default().set_write_size(BytePageSize::Size4)),
+        );
+
+        let data: Vec<u8> = (0..=u8::MAX).cycle().take(16 * 1024).collect();
+        io.encode_slice(&data).unwrap();
+        let mut received = vec![0; data.len()];
+        timeout(Millis(1000), peer.read_exact(&mut received))
+            .await
+            .expect("peer did not receive the output")
+            .unwrap();
+        assert_eq!(received, data);
+
+        io.terminate();
+        timeout(Millis(1000), io.on_disconnect())
+            .await
+            .expect("transport did not stop");
+        assert_eq!(
+            socket2::SockRef::from(&dup).linger().unwrap(),
+            Some(std::time::Duration::ZERO)
+        );
+    }
+
+    /// STATEMENT: The deprecated `TokioIoBoxed` reads, writes and shuts down through the
+    /// wrapped `IoBoxed`.
+    ///
+    /// HOW:
+    /// - Build one wrapper from an `Io` and one from an `IoBoxed`.
+    /// - Check each reads the peer's input and its `Deref` reaches the wrapped stream.
+    /// - Write, flush and check the peer receives the bytes.
+    /// - Shut down and check both sides observe the close.
+    #[allow(deprecated)]
+    #[ntex::test]
+    async fn tokio_io_boxed_round_trip() {
+        use ntex_io::testing::IoTest;
+        use tok_io::io::{AsyncReadExt, AsyncWriteExt};
+
+        for boxed in [false, true] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(1024);
+            let io = Io::new(server, SharedCfg::new("SRV"));
+            let mut io = if boxed {
+                TokioIoBoxed::from(IoBoxed::from(io))
+            } else {
+                TokioIoBoxed::from(io)
+            };
+
+            client.write(b"request");
+            let mut buf = [0; 16];
+            let n = io.read(&mut buf).await.unwrap();
+            assert_eq!(&buf[..n], b"request");
+            assert!(!io.is_closed());
+
+            io.write_all(b"response").await.unwrap();
+            io.flush().await.unwrap();
+            assert_eq!(client.read_any(), b"response".as_ref());
+
+            io.shutdown().await.unwrap();
+            assert!(client.is_closed());
+            assert!(io.is_closed());
+        }
     }
 }

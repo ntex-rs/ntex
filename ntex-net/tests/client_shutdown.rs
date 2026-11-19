@@ -74,7 +74,11 @@ fn peer() -> (net::SocketAddr, oneshot::Receiver<(usize, Outcome)>) {
     (addr, rx)
 }
 
-/// A graceful close must deliver everything and end with a `FIN`.
+/// STATEMENT: A graceful client close delivers all output and ends with a `FIN`.
+///
+/// HOW:
+/// - Queue `PAYLOAD` bytes and call `close`.
+/// - Expect the peer to read all `PAYLOAD` bytes, then EOF.
 #[ntex::test]
 async fn client_graceful_close_delivers_and_closes() {
     let (addr, rx) = peer();
@@ -88,8 +92,12 @@ async fn client_graceful_close_delivers_and_closes() {
     assert_eq!(total, PAYLOAD);
 }
 
-/// A force close must reset the connection, so the peer cannot mistake the
-/// truncated stream for a complete one.
+/// STATEMENT: A client force close resets the connection, so the peer cannot mistake the
+/// truncated output for a complete one.
+///
+/// HOW:
+/// - Queue `PAYLOAD` bytes, wait 100 ms and call `terminate`.
+/// - Expect the peer to read fewer than `PAYLOAD` bytes, then `ConnectionReset`.
 #[ntex::test]
 async fn client_force_close_resets_connection() {
     let (addr, rx) = peer();
@@ -108,8 +116,11 @@ async fn client_force_close_resets_connection() {
     assert!(total < PAYLOAD);
 }
 
-/// Force-closing an idle connection must reset it too, not just one with
-/// output still queued.
+/// STATEMENT: A force close resets an idle connection too.
+///
+/// HOW:
+/// - Call `terminate` 50 ms after connecting, with nothing queued.
+/// - Expect the peer to read no data, then `ConnectionReset`.
 #[ntex::test]
 async fn client_force_close_idle_resets_connection() {
     let (addr, rx) = peer();
@@ -123,8 +134,11 @@ async fn client_force_close_idle_resets_connection() {
     assert_eq!(total, 0);
 }
 
-/// Dropping `Io` with output it accepted but never delivered must reset the
-/// connection.
+/// STATEMENT: Dropping the `Io` with undelivered output resets the connection.
+///
+/// HOW:
+/// - Queue `PAYLOAD` bytes, wait 100 ms and drop the `Io`.
+/// - Expect the peer read to end with `ConnectionReset`.
 #[ntex::test]
 async fn client_drop_with_queued_output_resets_connection() {
     let (addr, rx) = peer();

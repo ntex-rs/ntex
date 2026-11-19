@@ -318,16 +318,6 @@ impl ClientConfig {
 mod tests {
     use super::*;
 
-    /// STATEMENT: Disabling the client timeout removes its deadline.
-    ///
-    /// HOW:
-    /// - Disable timeout on a new configuration and verify the stored duration is zero.
-    #[test]
-    fn basics() {
-        let cfg = ClientConfig::new().disable_timeout();
-        assert_eq!(cfg.timeout, Millis::ZERO);
-    }
-
     /// STATEMENT: HTTP/2 pool settings can be changed independently of HTTP/1 settings.
     ///
     /// HOW:

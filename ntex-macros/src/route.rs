@@ -238,6 +238,14 @@ mod tests {
         assert_eq!(format!("{route:?}"), format!("Route({:?})", route.name));
     }
 
+    /// STATEMENT: Route arguments parse a path, guards and state, and report malformed
+    /// input.
+    ///
+    /// HOW:
+    /// - Parse a path with two guards and a state; expect all of them.
+    /// - Parse only a path; expect no guards and `DefaultState`.
+    /// - Expect errors for a bad path, missing comma, bad guard, bad state and unknown
+    ///   argument, and the missing-path message.
     #[test]
     fn args() {
         let args = parse(r#""/a", guard = "g1", guard = "g2", state = St"#)

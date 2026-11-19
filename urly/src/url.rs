@@ -1430,6 +1430,13 @@ mod serde_impls {
 mod tests {
     use super::*;
 
+    /// STATEMENT: `Url::new` is usable in `const`, equals `Url::default`, and has the same
+    /// layout as a parsed `/`.
+    ///
+    /// HOW:
+    /// - Compare a `const` `Url::new()` with `Url::default()`.
+    /// - Compare every offset field with `Url::from_static("/")`.
+    /// - Expect path `/`, no query and a relative URL.
     #[test]
     fn default() {
         const URL: Url = Url::new();
@@ -1447,6 +1454,13 @@ mod tests {
         assert!(!url.is_absolute());
     }
 
+    /// STATEMENT: The cached host offsets give the same userinfo, host and port as parsing the
+    /// authority, and survive `set_path`.
+    ///
+    /// HOW:
+    /// - For URLs with and without userinfo, IPv6 host, port and authority, compare
+    ///   `userinfo`, `host` and `port_u16` with the listed values and the `Authority` getters.
+    /// - Change the path of a clone; expect the same host and port.
     #[test]
     fn cached_host() {
         let cases = [
@@ -1480,6 +1494,15 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A path starting with `//` without an authority is kept unambiguous with a
+    /// `/.` prefix, and the prefix is added or removed as the authority changes.
+    ///
+    /// HOW:
+    /// - Parse `/.//a/../b`; expect `/.//b` serialized and `//b` as the path, through
+    ///   `from_parts` and `join`.
+    /// - Set `//p` on an empty URL; expect `/.//p`.
+    /// - Remove and restore the authority of `http://h//p`; expect the prefix to appear and go.
+    /// - Build from `Parts` with path `//p`; expect path `//p`.
     #[test]
     fn double_slash_path() {
         let url = Url::from_static("/.//a/../b?q#f");

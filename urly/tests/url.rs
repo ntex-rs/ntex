@@ -181,6 +181,13 @@ fn request_target_buffer_and_limits() {
     assert_eq!(value.as_str(), expanding);
 }
 
+/// STATEMENT: Parsing normalizes scheme and host case, whitespace, empty ports, dot
+/// segments, percent-encoding, IPv6 and IDNA hosts, and the result is canonical.
+///
+/// HOW:
+/// - Parse each listed input; expect the listed normalized URL.
+/// - Expect relative paths without a leading `/` and opaque URLs to keep their text.
+/// - Validate each result and parse it again; expect it unchanged.
 #[test]
 fn normalization() {
     let cases = [
@@ -223,6 +230,12 @@ fn normalization() {
     }
 }
 
+/// STATEMENT: `Url::parse_ref` rejects empty input, bad characters, IPv6 literals and ports
+/// with the matching error kind.
+///
+/// HOW:
+/// - Parse empty and blank input, a space in the host, malformed IPv6 hosts and bad ports.
+/// - Expect `Empty`, `InvalidChar`, `InvalidIpv6`, `PortOutOfRange` and `InvalidPort`.
 #[test]
 fn invalid() {
     for (src, kind) in [
@@ -239,6 +252,15 @@ fn invalid() {
     }
 }
 
+/// STATEMENT: `Url::validate` accepts valid string and byte input without normalizing it,
+/// and reports the kind and position of invalid UTF-8 and invalid URL parts.
+///
+/// HOW:
+/// - Validate `&str`, `&[u8]` and `Bytes` input; expect `Ok`.
+/// - Validate bytes with invalid UTF-8; expect `InvalidChar` with the decoded character
+///   and byte position.
+/// - Validate spaces, bad escapes, a second `#`, non-ASCII, bad ports and schemes, and
+///   empty input; expect each kind and position.
 #[test]
 fn validate() {
     assert!(Url::validate("http://example.com/a?b#c").is_ok());
@@ -291,6 +313,12 @@ fn validate() {
     }
 }
 
+/// STATEMENT: A URL that needs no normalization shares the input buffer, and setters that
+/// leave it unchanged keep sharing it.
+///
+/// HOW:
+/// - Build from a static string and a `ByteString`; expect the same data pointer.
+/// - Set the same path on a clone; expect the pointer unchanged.
 #[test]
 fn zero_copy() {
     let src = "http://example.com/a?b#c";
@@ -307,6 +335,15 @@ fn zero_copy() {
     assert_eq!(u2.as_str().as_ptr(), data.as_ptr());
 }
 
+/// STATEMENT: URL accessors return every component, decoded where documented, and port
+/// defaults are known for special and AMQP/MQTT schemes.
+///
+/// HOW:
+/// - Check scheme, authority, userinfo, decoded password, host, port, path helpers, query
+///   lookups and fragment of a full HTTPS URL.
+/// - Check parsed IPv4/IPv6 hosts and default ports, including AMQP and MQTT URLs whose
+///   empty path is kept.
+/// - Check `to_unicode` of an IDNA host and the accessors of a relative `/a?`.
 #[test]
 fn accessors() {
     let u = url("https://user:pa%20ss@example.com:8443/a/b.tar.gz?x=1&y=2&x=3#frag");
@@ -374,6 +411,13 @@ fn accessors() {
     assert_eq!(u.fragment(), None);
 }
 
+/// STATEMENT: `origin`, `relative`, `parent`, the `/` operator and `push_segments` build
+/// URLs from an existing one, encoding new segments.
+///
+/// HOW:
+/// - Check `origin` and `relative`, and `parent` up to the root and with a trailing `/`.
+/// - Append segments with `/`; expect spaces encoded, `/` kept and `..` not resolved.
+/// - Append several segments with `push_segments`.
 #[test]
 fn derived() {
     let u = url("https://user@example.com:8443/a/b/c?q#f");
@@ -397,6 +441,12 @@ fn derived() {
     );
 }
 
+/// STATEMENT: Joining follows the RFC 3986 5.4 normal and abnormal examples.
+///
+/// HOW:
+/// - Join each RFC reference with `join`; expect the listed result.
+/// - Join parsed references with `join_url` and both `+` operators; expect the same.
+/// - Join an empty reference; expect the fragment dropped.
 #[test]
 fn join_rfc3986() {
     let base = url("http://a/b/c/d;p?q");
@@ -464,6 +514,14 @@ fn join_rfc3986() {
     assert_eq!(url("http://a/b#f").join("").unwrap(), "http://a/b");
 }
 
+/// STATEMENT: URL setters normalize and encode new components, reject invalid ones, and
+/// keep the result unambiguous when the path looks like an authority or a scheme.
+///
+/// HOW:
+/// - Change scheme, port, userinfo, host, file name, extension, path, query, fragment and
+///   authority in turn; check the full URL after each step and the rejected inputs.
+/// - Set a port on a relative URL; expect `AuthorityMissing`, then set a host.
+/// - Set `//x` and `c:d` paths; expect `/.` and `./` prefixes.
 #[test]
 fn setters() {
     let mut u = url("http://example.com/a/b.txt?q=1#f");
@@ -522,6 +580,13 @@ fn setters() {
     assert_eq!(u, "./c:d");
 }
 
+/// STATEMENT: The query-pair setters form-encode keys and values, and `pairs` decodes them
+/// back.
+///
+/// HOW:
+/// - Set pairs with spaces, `&`, `=` and non-ASCII; check the encoded query and decoded
+///   pairs.
+/// - Extend, update, remove keys and set an empty list; expect each resulting URL.
 #[test]
 fn query_pairs() {
     let mut u = url("http://h/p");
@@ -544,6 +609,13 @@ fn query_pairs() {
     assert_eq!(u, "http://h/p");
 }
 
+/// STATEMENT: `quote` encodes the bytes each component forbids, and `unquote` reverses it,
+/// leaving invalid escapes intact.
+///
+/// HOW:
+/// - Quote and unquote sample strings for path, query, query-part and userinfo; expect the
+///   listed output.
+/// - Round-trip several strings through `quote` and `unquote` for each component.
 #[test]
 fn quoting() {
     assert_eq!(quote("a b/ü?", Component::Path), "a%20b/%C3%BC%3F");
@@ -560,14 +632,20 @@ fn quoting() {
             Component::Fragment,
             Component::UserInfo,
         ] {
-            if c == Component::Path && s.contains("%2F") {
-                continue;
-            }
             assert_eq!(unquote(&quote(s, c), c), s, "{s:?} {c:?}");
         }
     }
 }
 
+/// STATEMENT: `Url::builder` assembles and validates URLs, and `into_parts`/`from_parts`
+/// round-trip every URL form while rejecting inconsistent parts.
+///
+/// HOW:
+/// - Build an IPv6 URL with port, query and pairs; expect empty and host-less builders to
+///   fail.
+/// - Round-trip absolute, opaque, relative, fragment-only and prefixed URLs through parts.
+/// - Build from parts with a relative path, an ambiguous path and invalid components;
+///   expect the listed result or error.
 #[test]
 fn builder_and_parts() {
     let u = Url::builder()
@@ -622,6 +700,14 @@ fn builder_and_parts() {
     assert_eq!(parts(None, None, "").unwrap_err().kind(), ErrorKind::Empty);
 }
 
+/// STATEMENT: `Url` converts from strings and bytes, into strings, and orders and hashes by
+/// its normalized form.
+///
+/// HOW:
+/// - Parse with `FromStr` and `TryFrom` from `&str`, `String` and bytes; reject invalid
+///   UTF-8.
+/// - Check `Display`, `Debug`, `String` and `ByteString` conversions and ordering.
+/// - Insert an upper-case URL into a `HashSet`; expect its normalized form to be found.
 #[test]
 fn conversions() {
     let u: Url = "http://h/a".parse().unwrap();
@@ -640,6 +726,14 @@ fn conversions() {
     assert!(set.contains(&url("http://h/a")));
 }
 
+/// STATEMENT: URLs are limited to 65 535 bytes after normalization, and failed operations
+/// leave a URL unchanged.
+///
+/// HOW:
+/// - Parse and validate a URL of exactly the limit; expect success.
+/// - Add one byte, or a space that grows on encoding; expect `TooLong`.
+/// - Set an extension on the maximal URL; expect `TooLong` and the length unchanged.
+/// - Append a segment with `/`; expect a panic.
 #[test]
 fn long_urls() {
     let max = format!("http://h/{}", "a".repeat(65_535 - 9));
@@ -706,6 +800,12 @@ fn builder_too_long() {
     assert!(std::panic::catch_unwind(|| url("http://h/").set_query(Some(&query))).is_err());
 }
 
+/// STATEMENT: `Url` serializes as its string and deserializes through normal parsing.
+///
+/// HOW:
+/// - Serialize a URL with an encoded space and deserialize it back.
+/// - Deserialize upper-case and unencoded input; expect it normalized.
+/// - Deserialize an empty string and a number; expect errors naming `a url`.
 #[cfg(feature = "serde")]
 #[test]
 fn serde() {
@@ -723,6 +823,15 @@ fn serde() {
     assert!(err.contains("a url"), "{err}");
 }
 
+/// STATEMENT: `Url` and `http::Uri` convert both ways, dropping the fragment and handling
+/// `*`, `//` paths and authority-form targets.
+///
+/// HOW:
+/// - Convert an absolute and a relative URL to `Uri` and back.
+/// - Convert `*` and a `//a` path; expect no authority.
+/// - Convert authority-form targets; expect `//` URLs with the same host and port, and a
+///   normalized port.
+/// - Convert network-path URLs with a path or query to `Uri`; expect errors.
 #[cfg(feature = "http")]
 #[test]
 fn http() {
@@ -839,6 +948,14 @@ fn parse_invariants() {
     }
 }
 
+/// STATEMENT: Each standalone component type validates its input, decodes as documented,
+/// and compares, hashes and formats like its string.
+///
+/// HOW:
+/// - Check `Path`, `PathAndQuery`, `Query`, `Fragment`, `Authority` and `UserInfo`
+///   constructors, accessors and decoding.
+/// - Compare and hash `Path` values with strings.
+/// - Expect each `from_static` to panic on invalid input.
 #[test]
 fn components() {
     let path = Path::from_static("/a%20b/c%2Fd");
@@ -901,6 +1018,14 @@ fn components() {
     assert!(std::panic::catch_unwind(|| Url::from_static("http://h:x/")).is_err());
 }
 
+/// STATEMENT: Decoding borrows when nothing needs decoding, and query lookup matches keys
+/// by their decoded form.
+///
+/// HOW:
+/// - Decode path, username, password and query values; expect `Cow::Borrowed` unless
+///   escapes are present.
+/// - Expect missing users, passwords and keys to give `None`.
+/// - Look up escaped keys; expect the decoded key to match and the encoded one not to.
 #[test]
 fn cow_decoding() {
     let u = url("http://user:pw@h/a/b?k=v&k=w%20x&e=");
@@ -926,6 +1051,11 @@ fn cow_decoding() {
     assert!(q.contains_key("a b") && !q.contains_key("a%20b"));
 }
 
+/// STATEMENT: Decoding keeps escapes that do not form valid UTF-8 and decodes the rest.
+///
+/// HOW:
+/// - Unquote mixes of invalid escapes, valid UTF-8 and truncated sequences.
+/// - Decode `Path::decode_safe`, `Query::decode` and a query key with invalid escapes.
 #[test]
 fn invalid_utf8_decoding() {
     // escapes that don't form valid UTF-8 are kept encoded, the rest is decoded
@@ -937,6 +1067,13 @@ fn invalid_utf8_decoding() {
     assert_eq!(url("/?%FF=a+b").query().unwrap().get("%FF").unwrap(), "a b");
 }
 
+/// STATEMENT: URL errors report position and message, and `from_parts` errors wrap the
+/// component error as their source.
+///
+/// HOW:
+/// - Parse a URL with a space; expect position 10 in the message.
+/// - Parse an empty string; expect no position.
+/// - Build from parts with a bad authority; check kind, message and `source`.
 #[test]
 fn errors() {
     let err = Url::parse_ref("http://exa mple.com/").unwrap_err();
@@ -967,6 +1104,13 @@ fn errors() {
     assert_eq!(source.to_string(), err.into_inner().to_string());
 }
 
+/// STATEMENT: `Scheme` compares and hashes case-insensitively, knows default ports, and
+/// rejects invalid names.
+///
+/// HOW:
+/// - Compare and hash `HTTP`, `http` and mixed-case strings; expect equal, and `https`
+///   different.
+/// - Expect default port 80, and errors for `1a` and an empty name.
 #[test]
 fn scheme() {
     let s = Scheme::new("HTTP").unwrap();
@@ -981,6 +1125,12 @@ fn scheme() {
     assert!(Scheme::new("").is_err());
 }
 
+/// STATEMENT: `Host::parse` classifies IPv4, IPv6 and domain hosts, and `to_unicode`
+/// decodes only IDNA domains.
+///
+/// HOW:
+/// - Parse IPv4, IPv6 and an `xn--` domain; check `Display` and `to_unicode`.
+/// - Parse a spaced name and an unclosed IPv6; expect errors.
 #[test]
 fn host_kinds() {
     let v4 = Host::parse("127.0.0.1").unwrap();
@@ -1001,6 +1151,15 @@ fn host_kinds() {
     assert!(Host::parse("[::1").is_err());
 }
 
+/// STATEMENT: `Builder` setters encode components, a later setter overrides the authority
+/// parts, and userinfo without a host is rejected.
+///
+/// HOW:
+/// - Build with authority, userinfo, port, query pair and fragment; expect the encoded URL.
+/// - Rebuild with a password-only userinfo and an empty fragment, then replace the
+///   authority.
+/// - Build with an invalid authority, scheme or host, or userinfo without a host; expect
+///   errors.
 #[test]
 fn builder_setters() {
     let u = Builder::new()
@@ -1037,6 +1196,15 @@ fn builder_setters() {
     );
 }
 
+/// STATEMENT: Host-less, relative and empty-path URLs handle origin, parent, join and
+/// setters without producing an invalid URL.
+///
+/// HOW:
+/// - Check `origin` of `file:` and HTTP URLs, `parent` of relative paths, and joins on an
+///   empty path.
+/// - Add and remove an authority on a relative path.
+/// - On a host-less `file:` URL, expect port, userinfo, empty host and bad extensions to
+///   fail, then set a host and userinfo.
 #[test]
 fn edge_cases() {
     // authority without host has no origin
@@ -1090,6 +1258,14 @@ fn edge_cases() {
     assert_eq!(u, "//h/a");
 }
 
+/// STATEMENT: `from_maybe_shared` accepts every owned and borrowed input type, reuses a
+/// `Bytes` buffer, and rejects empty or invalid input.
+///
+/// HOW:
+/// - Build from an empty slice of `Bytes`; expect an error.
+/// - Build from `Bytes`; expect the same pointer.
+/// - Build from `String`, `Vec`, `&str` and `&[u8]`; reject invalid UTF-8.
+/// - Check `as_bytes`, `into_byte_string` and `as_byte_string`.
 #[test]
 fn shared_input() {
     let src = "http://h/a";

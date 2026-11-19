@@ -686,7 +686,9 @@ mod tests {
     }
 
     /// STATEMENT: Tickets are issued in sequence and the oldest one holds the turn.
-    /// HOW: Issue two tickets, check sequence, turn, `Debug` and equality.
+    ///
+    /// HOW:
+    /// - Issue two tickets, check sequence, turn, `Debug` and equality.
     #[test]
     fn issue_in_sequence() {
         let tickets = Tickets::new();
@@ -708,8 +710,10 @@ mod tests {
     }
 
     /// STATEMENT: `Tickets` `Debug` reports the next sequence and the current turn.
-    /// HOW: Issue two tickets, check `next: 2, turn: 0`, drop the first one and
-    /// check that the turn moves to `1`.
+    ///
+    /// HOW:
+    /// - Issue two tickets, check `next: 2, turn: 0`, drop the first one and check that the
+    ///   turn moves to `1`.
     #[test]
     fn tickets_debug() {
         let tickets = Tickets::new();
@@ -721,10 +725,11 @@ mod tests {
         assert_eq!(format!("{tickets:?}"), "Tickets { next: 2, turn: 1 }");
     }
 
-    /// STATEMENT: Sequencer `Debug` output shows ticket state and hides filters
-    /// and extractors.
-    /// HOW: Format a plain and a filtered `Arrival` after issuing a ticket, and a
-    /// `tickets()` sequencer; check the exact strings.
+    /// STATEMENT: Sequencer `Debug` output shows ticket state and hides filters and extractors.
+    ///
+    /// HOW:
+    /// - Format a plain and a filtered `Arrival` after issuing a ticket, and a `tickets()`
+    ///   sequencer; check the exact strings.
     #[test]
     fn sequencer_debug() {
         let arrival = Arrival::new();
@@ -744,10 +749,11 @@ mod tests {
         assert_eq!(format!("{external:?}"), "External");
     }
 
-    /// STATEMENT: `Ordered` and `OrderedFactory` `Debug` show both services and
-    /// the sequencer.
-    /// HOW: Build both with `Debug` stand-ins for `A` and `B`, with the default
-    /// sequencer and with `tickets()`, and check the exact strings.
+    /// STATEMENT: `Ordered` and `OrderedFactory` `Debug` show both services and the sequencer.
+    ///
+    /// HOW:
+    /// - Build both with `Debug` stand-ins for `A` and `B`, with the default sequencer and with
+    ///   `tickets()`, and check the exact strings.
     #[test]
     fn ordered_debug() {
         let svc = Ordered::new("a", 1u8);
@@ -774,7 +780,9 @@ mod tests {
     }
 
     /// STATEMENT: Passing the turn skips tickets dropped before their turn.
-    /// HOW: Drop middle tickets out of order, pass the first, the last holds the turn.
+    ///
+    /// HOW:
+    /// - Drop middle tickets out of order, pass the first, the last holds the turn.
     #[test]
     fn pass_and_skip() {
         let tickets = Tickets::new();
@@ -809,7 +817,9 @@ mod tests {
     }
 
     /// STATEMENT: The next turn owner is woken only when it gets the turn.
-    /// HOW: Wait for the turn of the third ticket, drop the second, pass the first.
+    ///
+    /// HOW:
+    /// - Wait for the turn of the third ticket, drop the second, pass the first.
     #[test]
     fn wake_next_owner() {
         let tickets = Tickets::new();
@@ -1102,7 +1112,9 @@ mod tests {
     }
 
     /// STATEMENT: `B` is entered in arrival order and each caller gets its own result.
-    /// HOW: Later requests finish `A` first; check entry order and per-caller results.
+    ///
+    /// HOW:
+    /// - Later requests finish `A` first; check entry order and per-caller results.
     #[ntex::test]
     async fn enters_in_arrival_order() {
         let sink = Sink::default();
@@ -1120,7 +1132,9 @@ mod tests {
     }
 
     /// STATEMENT: Requests waiting for `B` readiness enter it in arrival order.
-    /// HOW: Make `B` not ready while all requests wait, then make it ready.
+    ///
+    /// HOW:
+    /// - Make `B` not ready while all requests wait, then make it ready.
     #[ntex::test]
     async fn b_not_ready_keeps_order() {
         let sink = Sink::default();
@@ -1137,8 +1151,10 @@ mod tests {
     }
 
     /// STATEMENT: Order holds when `B` readiness changes repeatedly during turns.
-    /// HOW: Toggle `B` readiness through `ReadyNotifier` while requests wait for
-    /// turns; the toggle task ends with `B` ready.
+    ///
+    /// HOW:
+    /// - Toggle `B` readiness through `ReadyNotifier` while requests wait for turns; the toggle
+    ///   task ends with `B` ready.
     #[ntex::test]
     async fn b_readiness_toggles() {
         let sink = Sink::default();
@@ -1200,9 +1216,10 @@ mod tests {
     }
 
     /// STATEMENT: `Ordered` forwards binding and shutdown to both services.
-    /// HOW: Wrap a recording `A` and `B` in a pipeline, check `A` is bound after
-    /// `ready()` and a call succeeds, then shut the pipeline down and check both
-    /// saw the shutdown.
+    ///
+    /// HOW:
+    /// - Wrap a recording `A` and `B` in a pipeline, check `A` is bound after `ready()` and a
+    ///   call succeeds, then shut the pipeline down and check both saw the shutdown.
     #[ntex::test]
     async fn bind_and_shutdown_reach_both() {
         let probe = Probe::default();
@@ -1220,8 +1237,10 @@ mod tests {
     }
 
     /// STATEMENT: A cloned `Ordered` starts its own arrival sequence.
-    /// HOW: Clone a service built with `Arrival::default()`; a slow request in
-    /// the original does not block a request in the clone.
+    ///
+    /// HOW:
+    /// - Clone a service built with `Arrival::default()`; a slow request in the original does
+    ///   not block a request in the clone.
     #[ntex::test]
     async fn clone_has_own_sequence() {
         let sink = Sink::default();
@@ -1237,7 +1256,9 @@ mod tests {
     }
 
     /// STATEMENT: An `A` error is returned immediately and does not block later turns.
-    /// HOW: Fail the turn owner and a waiting request.
+    ///
+    /// HOW:
+    /// - Fail the turn owner and a waiting request.
     #[ntex::test]
     async fn a_error() {
         let sink = Sink::default();
@@ -1255,7 +1276,9 @@ mod tests {
     }
 
     /// STATEMENT: A `B` readiness error is returned to the turn owner and passes the turn.
-    /// HOW: Fail `B` readiness once while requests wait for turns.
+    ///
+    /// HOW:
+    /// - Fail `B` readiness once while requests wait for turns.
     #[ntex::test]
     async fn b_ready_error() {
         let sink = Sink::default();
@@ -1268,7 +1291,9 @@ mod tests {
     }
 
     /// STATEMENT: Cancelling a request before its turn skips it.
-    /// HOW: Time out the second request while the first is in `A`.
+    ///
+    /// HOW:
+    /// - Time out the second request while the first is in `A`.
     #[ntex::test]
     async fn cancel_before_turn() {
         let sink = Sink::default();
@@ -1284,7 +1309,9 @@ mod tests {
     }
 
     /// STATEMENT: Cancelling the turn owner while it waits for `B` passes the turn.
-    /// HOW: Time out the first request while `B` is not ready.
+    ///
+    /// HOW:
+    /// - Time out the first request while `B` is not ready.
     #[ntex::test]
     async fn cancel_turn_owner() {
         let sink = Sink::default();
@@ -1326,10 +1353,12 @@ mod tests {
         assert_eq!(sink.entered(), vec![1, 2, 3]);
     }
 
-    /// STATEMENT: Requests rejected by the filter bypass turns, and their `A`
-    /// errors are returned without entering `B`.
-    /// HOW: An unordered request enters `B` while an earlier ordered one is in
-    /// `A`; a failing unordered request returns its `A` error.
+    /// STATEMENT: Requests rejected by the filter bypass turns, and their `A` errors are
+    /// returned without entering `B`.
+    ///
+    /// HOW:
+    /// - An unordered request enters `B` while an earlier ordered one is in `A`; a failing
+    ///   unordered request returns its `A` error.
     #[ntex::test]
     async fn unordered_bypass() {
         let sink = Sink::default();
@@ -1347,7 +1376,9 @@ mod tests {
     }
 
     /// STATEMENT: A full in-flight limit above `Ordered` does not stall turns.
-    /// HOW: Limits 1 and 2, with and without a `B` readiness stall.
+    ///
+    /// HOW:
+    /// - Limits 1 and 2, with and without a `B` readiness stall.
     #[ntex::test]
     async fn inflight_limit() {
         for limit in [1, 2] {
@@ -1387,7 +1418,9 @@ mod tests {
     }
 
     /// STATEMENT: In-call readiness checks in `A` do not stall turns.
-    /// HOW: `A` is an `and_then` chain under an in-flight limit of 2.
+    ///
+    /// HOW:
+    /// - `A` is an `and_then` chain under an in-flight limit of 2.
     #[ntex::test]
     async fn chained_a_with_inflight_limit() {
         let sink = Sink::default();
@@ -1406,7 +1439,9 @@ mod tests {
     }
 
     /// STATEMENT: External tickets define the order, not the call order.
-    /// HOW: Call in reverse ticket order with a ticket dropped before its call.
+    ///
+    /// HOW:
+    /// - Call in reverse ticket order with a ticket dropped before its call.
     #[ntex::test]
     async fn external_tickets() {
         let sink = Sink::default();
@@ -1432,10 +1467,12 @@ mod tests {
         assert_eq!(sink.entered(), vec![5, 1, 3, 4]);
     }
 
-    /// STATEMENT: Requests with canceled tickets return `Canceled` without entering
-    /// `B`, later tickets are not affected.
-    /// HOW: Cancel external tickets while one request is in `A` and others wait
-    /// for the turn, then call with a ticket issued after the cancel.
+    /// STATEMENT: Requests with canceled tickets return `Canceled` without entering `B`, later
+    /// tickets are not affected.
+    ///
+    /// HOW:
+    /// - Cancel external tickets while one request is in `A` and others wait for the turn, then
+    ///   call with a ticket issued after the cancel.
     #[ntex::test]
     async fn canceled_tickets() {
         let sink = Sink::default();
@@ -1461,7 +1498,9 @@ mod tests {
     }
 
     /// STATEMENT: The factory creates services with independent arrival sequences.
-    /// HOW: A slow request in one service does not block a request in another.
+    ///
+    /// HOW:
+    /// - A slow request in one service does not block a request in another.
     #[ntex::test]
     async fn factory() {
         let sink = Sink::default();
@@ -1482,8 +1521,10 @@ mod tests {
     }
 
     /// STATEMENT: The factory returns the init error of `A` or `B`.
-    /// HOW: Create with a failing `A` factory and with a failing `B` factory,
-    /// check each init error.
+    ///
+    /// HOW:
+    /// - Create with a failing `A` factory and with a failing `B` factory, check each init
+    ///   error.
     #[ntex::test]
     async fn factory_init_error() {
         let factory = OrderedFactory::new(

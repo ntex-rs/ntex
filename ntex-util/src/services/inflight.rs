@@ -180,54 +180,10 @@ mod tests {
     /// STATEMENT: In-flight middleware blocks readiness until its active call completes.
     ///
     /// HOW:
-    /// - Check default and debug configuration, then create a single-slot middleware pipeline.
+    /// - Create a single-slot middleware pipeline and check it starts ready.
     /// - Start a blocked call and verify readiness recovers only after releasing it.
     #[ntex::test]
     async fn test_middleware() {
-        assert_eq!(InFlight::default().max_inflight, 15);
-        assert_eq!(
-            format!("{:?}", InFlight::new(1)),
-            "InFlight { max_inflight: 1 }"
-        );
-
-        let (tx, rx) = mpmc::unbounded();
-        let rx = RefCell::new(Some(rx));
-        let sf = apply(
-            InFlight::new(1),
-            fn_factory(move |(): &()| {
-                let rx = rx.borrow_mut().take().unwrap();
-                async move { Ok::<_, ()>(SleepService(rx)) }
-            }),
-        );
-
-        let srv = sf.pipeline(()).await.unwrap();
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-
-        let srv2 = srv.bind();
-        ntex::rt::spawn(async move {
-            let _ = srv2.call(()).await;
-        });
-        crate::time::sleep(Duration::from_millis(25)).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
-
-        let _ = tx.send(()).await;
-        crate::time::sleep(Duration::from_millis(25)).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-    }
-
-    /// STATEMENT: A factory-created in-flight limiter restores readiness after releasing capacity.
-    ///
-    /// HOW:
-    /// - Create a single-slot middleware service and confirm its configuration.
-    /// - Observe ready, pending, and ready states around a channel-blocked request.
-    #[ntex::test]
-    async fn test_middleware2() {
-        assert_eq!(InFlight::default().max_inflight, 15);
-        assert_eq!(
-            format!("{:?}", InFlight::new(1)),
-            "InFlight { max_inflight: 1 }"
-        );
-
         let (tx, rx) = mpmc::unbounded();
         let rx = RefCell::new(Some(rx));
         let sf = apply(

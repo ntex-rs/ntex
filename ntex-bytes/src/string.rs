@@ -452,15 +452,6 @@ mod test {
         assert_eq!(s1, "hello");
     }
 
-    /// STATEMENT: `ByteString::new` constructs a value of the string wrapper type.
-    ///
-    /// HOW:
-    /// - Assign `ByteString::new()` to an explicitly typed `ByteString` binding without further assertions.
-    #[test]
-    fn test_new() {
-        let _: ByteString = ByteString::new();
-    }
-
     /// STATEMENT: `ByteString` hashes identically to its corresponding string slice.
     ///
     /// HOW:

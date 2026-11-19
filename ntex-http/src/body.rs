@@ -611,6 +611,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: `Body` and `ResponseBody` keep their expected sizes.
+    ///
+    /// HOW:
+    /// - Check `size_of` for `Body`, `ResponseBody<Bytes>` and `ResponseBody<Body>`.
+    /// - Expect 32, 32 and 40 bytes, so a layout regression fails here.
     #[ntex::test]
     async fn test_size() {
         assert_eq!(32, std::mem::size_of::<Body>());
@@ -618,6 +623,13 @@ mod tests {
         assert_eq!(40, std::mem::size_of::<ResponseBody<Body>>());
     }
 
+    /// STATEMENT: A `&'static str` body reports its length and yields its bytes once, and an
+    /// empty string yields no chunk.
+    ///
+    /// HOW:
+    /// - Check `Body::from(&str)` size and `get_ref` for empty and `test`.
+    /// - Poll fresh `"test"` values; expect a `test` chunk each time.
+    /// - Poll `""`; expect end of stream.
     #[ntex::test]
     async fn test_static_str() {
         assert_eq!(Body::from("").size(), BodySize::Sized(0));
@@ -636,6 +648,12 @@ mod tests {
         assert!(poll_fn(|cx| "".poll_next_chunk(cx)).await.is_none());
     }
 
+    /// STATEMENT: A `Body` built from `BytePages` reports the total size and yields all pages as
+    /// one chunk.
+    ///
+    /// HOW:
+    /// - Fill pages with `put_slice` and two `append` calls (12 bytes).
+    /// - Expect `BodySize::Sized(12)`, one `111122223333` chunk, then end of stream.
     #[ntex::test]
     async fn test_pages() {
         let mut pages = BytePages::default();
@@ -652,6 +670,13 @@ mod tests {
         assert!(poll_fn(|cx| body.poll_next_chunk(cx)).await.is_none());
     }
 
+    /// STATEMENT: `&'static [u8]` bodies, via `From` and `from_slice`, report their length and
+    /// yield their bytes, and an empty slice yields no chunk.
+    ///
+    /// HOW:
+    /// - Check size and `get_ref` for `Body::from` and `Body::from_slice`.
+    /// - Poll a `&[u8]` directly; expect a `test` chunk.
+    /// - Poll an empty slice; expect end of stream.
     #[ntex::test]
     async fn test_static_bytes() {
         assert_eq!(Body::from(b"test".as_ref()).size(), BodySize::Sized(4));
@@ -674,6 +699,13 @@ mod tests {
         assert!(poll_fn(|cx| (&b""[..]).poll_next_chunk(cx)).await.is_none());
     }
 
+    /// STATEMENT: `Vec<u8>` bodies report their length and yield their bytes, and an empty
+    /// vector yields no chunk.
+    ///
+    /// HOW:
+    /// - Check `Body::from(Vec)` size and `get_ref`.
+    /// - Poll fresh vectors; expect a `test` chunk each time.
+    /// - Poll an empty vector; expect end of stream.
     #[ntex::test]
     async fn test_vec() {
         assert_eq!(Body::from(Vec::from("test")).size(), BodySize::Sized(4));
@@ -701,6 +733,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: A `Bytes` body yields its content once and then ends.
+    ///
+    /// HOW:
+    /// - Check `Body::from(Bytes)` size and `get_ref`.
+    /// - Poll the same `Bytes` twice; expect `test`, then end of stream.
     #[ntex::test]
     async fn test_bytes() {
         let mut b = Bytes::from("test");
@@ -715,6 +752,11 @@ mod tests {
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
+    /// STATEMENT: A `BytesMut` body yields its content once, after which its size is zero.
+    ///
+    /// HOW:
+    /// - Poll `Body::from(BytesMut)` twice; expect `test`, then end of stream.
+    /// - Poll a `BytesMut` directly; expect `test`, `BodySize::Sized(0)`, then end of stream.
     #[ntex::test]
     async fn test_bytes_mut() {
         let mut b = Body::from(BytesMut::from("test"));
@@ -736,6 +778,12 @@ mod tests {
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
+    /// STATEMENT: `String` and `&String` bodies report their length, and a `String` yields its
+    /// content once.
+    ///
+    /// HOW:
+    /// - Check size and `get_ref` for `Body::from(String)` and `Body::from(&String)`.
+    /// - Poll the same `String` twice; expect `test`, then end of stream.
     #[ntex::test]
     async fn test_string() {
         let mut b = "test".to_owned();
@@ -752,12 +800,21 @@ mod tests {
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
+    /// STATEMENT: `()` is an empty body.
+    ///
+    /// HOW:
+    /// - Expect `BodySize::Empty` and end of stream on the first poll.
     #[ntex::test]
     async fn test_unit() {
         assert_eq!(().size(), BodySize::Empty);
         assert!(poll_fn(|cx| ().poll_next_chunk(cx)).await.is_none());
     }
 
+    /// STATEMENT: `Box<B>` forwards `size` and `poll_next_chunk` to the boxed body.
+    ///
+    /// HOW:
+    /// - Box a `()` body.
+    /// - Expect `BodySize::Empty` and end of stream on the first poll.
     #[ntex::test]
     async fn test_box() {
         let mut val = Box::new(());
@@ -765,6 +822,11 @@ mod tests {
         assert!(poll_fn(|cx| val.poll_next_chunk(cx)).await.is_none());
     }
 
+    /// STATEMENT: `Body` equality matches `None`, `Empty` and equal `Bytes`, and nothing else.
+    ///
+    /// HOW:
+    /// - Compare `None`, `Empty` and `Bytes` bodies with themselves and each other.
+    /// - Expect equal only for the same variant with the same bytes.
     #[ntex::test]
     #[allow(clippy::eq_op)]
     async fn test_body_eq() {
@@ -779,6 +841,11 @@ mod tests {
         assert_ne!(Body::Bytes(Bytes::from_static(b"1")), Body::None);
     }
 
+    /// STATEMENT: `Body` `Debug` names the variant and shows byte content.
+    ///
+    /// HOW:
+    /// - Format `None`, `Empty` and `Bytes(1)`.
+    /// - Expect `Body::None`, `Body::Empty` and the byte value in the output.
     #[ntex::test]
     async fn test_body_debug() {
         assert!(format!("{:?}", Body::None).contains("Body::None"));
@@ -786,6 +853,13 @@ mod tests {
         assert!(format!("{:?}", Body::Bytes(Bytes::from_static(b"1"))).contains('1'));
     }
 
+    /// STATEMENT: A `BodyStream` converts into a `Body::Message` that is not equal to
+    /// `Body::None` and can be wrapped in `ResponseBody`.
+    ///
+    /// HOW:
+    /// - Wrap a one-item stream in `BodyStream`; check its `Debug` output.
+    /// - Convert to `Body`; expect `Body::Message(_)` in `Debug` and inequality with `None`.
+    /// - Wrap in `ResponseBody`; expect `as_ref()` to return the body.
     #[ntex::test]
     async fn body_stream() {
         let st = BodyStream::new(stream::once(ready(Ok::<_, io::Error>(Bytes::from("1")))));
@@ -798,6 +872,13 @@ mod tests {
         assert!(res.as_ref().is_some());
     }
 
+    /// STATEMENT: A `BoxedBodyStream` converts into a `Body::Message` that is not equal to
+    /// `Body::None` and can be wrapped in `ResponseBody`.
+    ///
+    /// HOW:
+    /// - Wrap a one-item stream in `BoxedBodyStream`; check its `Debug` output.
+    /// - Convert to `Body`; expect `Body::Message(_)` in `Debug` and inequality with `None`.
+    /// - Wrap in `ResponseBody`; expect `as_ref()` to return the body.
     #[ntex::test]
     async fn boxed_body_stream() {
         let st = BoxedBodyStream::new(stream::once(ready(Ok::<_, Rc<dyn Error>>(Bytes::from(
@@ -812,6 +893,11 @@ mod tests {
         assert!(res.as_ref().is_some());
     }
 
+    /// STATEMENT: `BodyStream` skips empty chunks from the inner stream.
+    ///
+    /// HOW:
+    /// - Stream `1`, an empty chunk and `2`.
+    /// - Expect the first two polls to return `1` and `2`.
     #[ntex::test]
     async fn body_skips_empty_chunks() {
         let mut body = BodyStream::new(stream::iter(
@@ -829,6 +915,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `SizedStream` skips empty chunks from the inner stream.
+    ///
+    /// HOW:
+    /// - Stream `1`, an empty chunk and `2` with a declared size of 2.
+    /// - Expect the first two polls to return `1` and `2`.
     #[ntex::test]
     async fn sized_skips_empty_chunks() {
         let mut body = SizedStream::new(
@@ -846,6 +937,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `BoxedBodyStream` skips empty chunks from the inner stream.
+    ///
+    /// HOW:
+    /// - Stream `1`, an empty chunk and `2`.
+    /// - Expect `1`, `2`, then end of stream.
     #[ntex::test]
     async fn boxed_body_skips_empty_chunks() {
         let mut body = BoxedBodyStream::new(stream::iter(

@@ -330,6 +330,13 @@ mod tests {
         assert!(ops.0.ops.borrow().is_empty(), "connect completion was lost");
     }
 
+    /// STATEMENT: Dropping a pending IOCP connect receiver closes its socket at the next
+    /// dispatch, and keeps the operation storage alive until the kernel completes it.
+    ///
+    /// HOW:
+    /// - Drop the receiver while the operation slab is borrowed; expect the socket still open.
+    /// - Dispatch the reactor once; expect the socket closed.
+    /// - Expect the operation still stored at the same `OVERLAPPED` address, without a socket.
     #[ntex::test]
     async fn dropped_connect_closes_socket_before_completion() {
         let reactor = Reactor::new().unwrap();
@@ -365,6 +372,14 @@ mod tests {
         drain_connects(&reactor, &ops);
     }
 
+    /// STATEMENT: A connect that succeeds after its receiver is dropped is cleaned up, and its
+    /// queued cancel does not close a later connect in the same slot.
+    ///
+    /// HOW:
+    /// - Dequeue the completion of a pending connect, drop the receiver, then deliver it;
+    ///   expect no operations and the socket closed.
+    /// - Start a new connect in the same slot and tick; expect its socket open.
+    /// - Drop its receiver and tick; expect its socket closed.
     #[ntex::test]
     async fn abandoned_success_does_not_cancel_reused_slot() {
         let reactor = Reactor::new().unwrap();
@@ -421,8 +436,13 @@ mod tests {
         drain_connects(&reactor, &ops);
     }
 
-    /// A connect still in flight when the runtime stops must be cancelled:
-    /// its socket is closed and the waiting receiver gets an error.
+    /// STATEMENT: Reactor cleanup cancels an IOCP connect still in flight, closing its socket
+    /// and failing its receiver.
+    ///
+    /// HOW:
+    /// - Start a connect to a port with no listener; expect it pending.
+    /// - Run the connect handler cleanup.
+    /// - Expect no operations, the socket closed, and `IO Driver is gone` from the receiver.
     #[ntex::test]
     async fn cleanup_cancels_pending_connect() {
         let reactor = Reactor::new().unwrap();

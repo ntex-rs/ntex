@@ -764,8 +764,13 @@ mod tests {
         }
     }
 
-    /// The incoming CPU callback runs without the router's lock, an item it
-    /// submits to the same server is sent without its CPU.
+    /// STATEMENT: The incoming CPU callback runs without the router lock, so it can dispatch
+    /// to the same router.
+    ///
+    /// HOW:
+    /// - Install a callback that dispatches a second item to the router for item 1.
+    /// - Dispatch item 1 on a thread; expect `Ok` within 5 s instead of a deadlock.
+    /// - Expect one callback call, as the nested item is sent without a CPU lookup.
     #[ntex::test]
     async fn incoming_cpu_reentrant_dispatch() {
         let mut wrk = Worker::start("test".into(), Cfg, None);
@@ -989,8 +994,12 @@ mod tests {
         assert_eq!(format!("{r:?}"), "Routing { workers: 1, closed: true, .. }");
     }
 
-    /// An item submitted after the server passed the status check and
-    /// closed its router is returned, not queued.
+    /// STATEMENT: `Server::process` returns an item when the router is closed, instead of
+    /// queueing it.
+    ///
+    /// HOW:
+    /// - With a ready server and no workers, expect an item queued as a command.
+    /// - Close the router; expect the next item returned and nothing queued.
     #[test]
     fn process_closed_router() {
         let shared = Arc::new(ServerShared::new(Metrics::new(1)));

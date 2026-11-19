@@ -111,8 +111,14 @@ fn tcp_pair(sndbuf: Option<usize>) -> (net::TcpStream, net::TcpStream) {
     (client, peer)
 }
 
-/// More operations than the submission queue holds are queued and submitted
-/// over several turns, nothing is lost or reordered.
+/// STATEMENT: More operations than the submission queue holds are submitted over several
+/// turns, and nothing is lost or reordered.
+///
+/// HOW:
+/// - Use a 4-entry ring and queue 64 KiB of output in 4 KiB pages on 32 connections in
+///   the same turn.
+/// - Expect every connection to receive its echoed data.
+/// - Shut down all connections; expect each peer to read EOF without extra data.
 #[test]
 fn submission_queue_overflow() {
     const CONNS: usize = 32;
@@ -150,8 +156,12 @@ fn submission_queue_overflow() {
     });
 }
 
-/// Streams dropped in the last turn are closed when the runtime stops, with
-/// a submission queue that cannot hold all `Close` operations.
+/// STATEMENT: Streams dropped in the last turn are closed when the runtime stops, even
+/// with a submission queue that cannot hold all `Close` operations.
+///
+/// HOW:
+/// - Use a 4-entry ring, queue `data` on 16 streams, drop them and stop the runtime.
+/// - Read each peer with a 5 s timeout; expect nothing or exactly `data`.
 #[test]
 fn close_on_stop_with_full_queue() {
     let (tx, rx) = mpsc::channel();
@@ -174,7 +184,11 @@ fn close_on_stop_with_full_queue() {
     }
 }
 
-/// Wakeups from other threads reach the reactor through the notifier.
+/// STATEMENT: Wakeups from other threads reach the reactor through the notifier.
+///
+/// HOW:
+/// - Await 8 blocking-pool jobs in turn, each sleeping 5 ms.
+/// - Expect each job's result.
 #[test]
 fn cross_thread_wakeup() {
     run(64, move || async {
@@ -190,7 +204,12 @@ fn cross_thread_wakeup() {
     });
 }
 
-/// A task that is always ready does not block the reactor.
+/// STATEMENT: A task that is always ready does not block the reactor.
+///
+/// HOW:
+/// - Spawn a task that wakes itself 10,000 times.
+/// - Send `ping` to an echoing peer; expect `ping` back.
+/// - Expect the busy task to finish.
 #[test]
 fn busy_task() {
     run(64, move || async {
@@ -221,7 +240,11 @@ fn busy_task() {
     });
 }
 
-/// I/O completes while another task keeps the runtime busy.
+/// STATEMENT: I/O completes while another task keeps the runtime busy.
+///
+/// HOW:
+/// - Spawn a task that wakes itself until the I/O is done.
+/// - Send `ping` to an echoing peer; expect `ping` back, so I/O progressed while busy.
 #[test]
 fn busy_task_io_progress() {
     run(64, move || async {
@@ -250,7 +273,11 @@ fn busy_task_io_progress() {
     });
 }
 
-/// A socket address that cannot be created fails the connect.
+/// STATEMENT: A Unix socket path that cannot form a socket address fails the connect.
+///
+/// HOW:
+/// - Connect to a 256-character path.
+/// - Expect an `InvalidInput` error.
 #[test]
 fn unix_connect_invalid_path() {
     run(64, move || async {
@@ -262,8 +289,13 @@ fn unix_connect_invalid_path() {
     });
 }
 
-/// Zero-copy sends of a single page and of gathered pages, with a peer
-/// that reads slowly so that sends complete partially.
+/// STATEMENT: Zero-copy sends of single and gathered pages deliver all output, even when
+/// a small send buffer makes them complete partially.
+///
+/// HOW:
+/// - For 64 KiB and 32 KiB pages, queue 2 MiB on TCP with a 4 KiB send buffer.
+/// - Shut down the stream.
+/// - Expect the peer to read all the data in order, then EOF.
 #[test]
 fn zero_copy_sends() {
     const SIZE: usize = 2 * 1024 * 1024;
@@ -287,8 +319,13 @@ fn zero_copy_sends() {
     }
 }
 
-/// Output of gathered sends that the kernel accepted partially is resent
-/// in order.
+/// STATEMENT: The rest of a gathered send the kernel accepted partially is resent in
+/// order.
+///
+/// HOW:
+/// - Queue 4 MiB in 10,000-byte pages on a Unix socket with a 4 KiB send buffer.
+/// - Shut down the stream while the peer reads slowly.
+/// - Expect the peer to read all the data in order, then EOF.
 #[test]
 fn partial_gathered_sends() {
     const SIZE: usize = 4 * 1024 * 1024;
@@ -310,8 +347,13 @@ fn partial_gathered_sends() {
     });
 }
 
-/// Pages that do not fit into one send together are sent one by one, a
-/// partially sent page is resent from the unsent offset.
+/// STATEMENT: Pages over the send size limit are sent one by one, and a partly sent page
+/// is resent from its unsent offset.
+///
+/// HOW:
+/// - Queue 4 MiB in 100 KiB pages over TCP, so zero-copy sends take one page each.
+/// - Queue 4 MiB in 200 KiB pages over a Unix socket, so copied sends take one page each.
+/// - In both cases shut down; expect the peer to read all the data in order, then EOF.
 #[test]
 fn large_page_sends() {
     const SIZE: usize = 4 * 1024 * 1024;
@@ -352,8 +394,12 @@ fn large_page_sends() {
 
 const CANCEL_SIZE: usize = 8 * 1024 * 1024;
 
-/// An in-flight send is canceled when the stream is dropped, the peer does
-/// not receive a complete stream.
+/// STATEMENT: An in-flight send is canceled when the stream is dropped, so the peer does
+/// not receive the whole output.
+///
+/// HOW:
+/// - Queue `CANCEL_SIZE` bytes on a Unix socket and drop the stream after 50 ms.
+/// - Expect the peer to read less than `CANCEL_SIZE`, then EOF.
 #[test]
 fn send_canceled_on_drop() {
     const SIZE: usize = CANCEL_SIZE;
@@ -374,8 +420,12 @@ fn send_canceled_on_drop() {
     });
 }
 
-/// An in-flight zero-copy send is canceled when the stream is dropped, the
+/// STATEMENT: An in-flight zero-copy send is canceled when the stream is dropped, and the
 /// connection is aborted.
+///
+/// HOW:
+/// - Queue `CANCEL_SIZE` bytes over TCP and drop the stream after 50 ms.
+/// - Expect the peer to read less than `CANCEL_SIZE`, then `ConnectionReset`.
 #[test]
 fn zero_copy_send_canceled_on_drop() {
     const SIZE: usize = CANCEL_SIZE;
@@ -396,7 +446,12 @@ fn zero_copy_send_canceled_on_drop() {
     });
 }
 
-/// The io handle outlives the closed descriptor.
+/// STATEMENT: The `Io` handle can outlive its closed descriptor.
+///
+/// HOW:
+/// - Expect the peer address reported, then close the `Io` and wait for the disconnect.
+/// - Keep the `Io` for 100 ms while the descriptor close completes.
+/// - Drop the `Io` and the peer without a panic.
 #[test]
 fn io_outlives_close() {
     run(64, move || async {
@@ -483,9 +538,14 @@ impl ntex::codec::Decoder for Fixed {
     }
 }
 
-/// Receives that wait for input select buffers from the provided buffer
-/// ring. Input for more connections than the ring holds arrives at once,
-/// receives that find no buffer fall back to a buffer of their own.
+/// STATEMENT: Receives take buffers from the provided buffer ring, and receives that find
+/// the ring empty fall back to a buffer of their own.
+///
+/// HOW:
+/// - Register and drop 600 idle connections, so their receives are canceled.
+/// - Send 3000 bytes to each of 1100 connections in the same turn, for 3 rounds; expect
+///   every connection to receive its data.
+/// - Drop the connections; expect every peer to read EOF without data.
 #[test]
 fn ring_recv_many_connections() {
     const CONNS: usize = 1100;
@@ -539,8 +599,12 @@ fn ring_recv_many_connections() {
     });
 }
 
-/// Streaming input switches from ring buffers to the connection's buffer
-/// and back, nothing is lost or reordered.
+/// STATEMENT: Streaming input switches between ring buffers and the connection's buffer
+/// without loss or reordering.
+///
+/// HOW:
+/// - Write 8 MiB from the peer in writes of 1 byte to 256 KiB, with short pauses.
+/// - Expect the stream to receive all the data in order.
 #[test]
 fn ring_recv_stream() {
     const SIZE: usize = 8 * 1024 * 1024;
@@ -576,8 +640,12 @@ fn ring_recv_stream() {
     });
 }
 
-/// Input that follows a partial frame is received into the read buffer
-/// that holds it.
+/// STATEMENT: Input that follows a partial frame is received into the read buffer that
+/// holds the frame.
+///
+/// HOW:
+/// - Write 50 frames of 10,000 bytes from the peer in 3001-byte chunks.
+/// - Decode fixed-size frames; expect each to be 10,000 bytes and all data in order.
 #[test]
 fn ring_recv_partial_frames() {
     const FRAME: usize = 10_000;
@@ -607,7 +675,11 @@ fn ring_recv_partial_frames() {
     });
 }
 
-/// Eof of a connection that waits for input.
+/// STATEMENT: A connection waiting for input in the buffer ring reports the peer's EOF.
+///
+/// HOW:
+/// - Send `data` from the peer; expect it received.
+/// - Drop the peer; expect the next receive to return `None`.
 #[test]
 fn ring_recv_eof() {
     run(64, move || async {
@@ -647,8 +719,13 @@ mod tracker {
         assert_eq!(t.snapshot().live_bytes, 0);
     }
 
-    /// A ring page is charged to the connection's tracker once data is
-    /// received into it.
+    /// STATEMENT: A ring page is charged to the connection's tracker once data is received
+    /// into it, and the charge stays with the data.
+    ///
+    /// HOW:
+    /// - For shared and per-connection trackers, expect no allocation while waiting.
+    /// - Send 1000 bytes; expect one allocation after the receive.
+    /// - Drop the connection; expect the charge kept until the data is dropped.
     #[test]
     fn ring_recv_charged() {
         run(64, || async {
@@ -680,8 +757,13 @@ mod tracker {
         });
     }
 
-    /// Streaming input received into ring pages and the connection's buffers
-    /// is charged until it is released.
+    /// STATEMENT: Streaming input received into ring pages and the connection's buffers is
+    /// charged until it is released.
+    ///
+    /// HOW:
+    /// - Write 1 MiB from the peer in 10,000-byte chunks and receive all of it.
+    /// - Expect the data in order and at least 1 MiB charged.
+    /// - Drop the connection and the data; expect the charge released.
     #[test]
     fn ring_recv_stream_charged() {
         const SIZE: usize = 1024 * 1024;

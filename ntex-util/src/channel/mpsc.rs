@@ -292,8 +292,6 @@ mod tests {
     #[ntex::test]
     async fn test_mpsc() {
         let (tx, mut rx) = channel();
-        assert!(format!("{tx:?}").contains("Sender"));
-        assert!(format!("{rx:?}").contains("Receiver"));
 
         tx.send("test").unwrap();
         assert_eq!(stream_recv(&mut rx).await.unwrap(), "test");

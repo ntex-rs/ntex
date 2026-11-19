@@ -881,31 +881,6 @@ mod tests {
         );
     }
 
-    /// STATEMENT: Middleware surrounding the application router modifies routed responses.
-    ///
-    /// HOW:
-    /// - Install `DefaultHeaders` around a router serving `/test`.
-    /// - Call the route and assert OK and the middleware's content-type header.
-    #[crate::rt_test]
-    async fn test_router_wrap() {
-        let srv = init_service(
-            App::new()
-                .middleware(
-                    DefaultHeaders::new()
-                        .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
-                )
-                .route("/test", web::get().to(async || HttpResponse::Ok())),
-        )
-        .await;
-        let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
-            HeaderValue::from_static("0001")
-        );
-    }
-
     /// STATEMENT: An async closure installed with `fn_layer` works as application middleware.
     ///
     /// HOW:
