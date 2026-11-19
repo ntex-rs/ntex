@@ -281,6 +281,101 @@ impl<Err> PublishService<Err> {
             stream.reset(h2::frame::Reason::NO_ERROR);
         }
     }
+
+    /// Validates the request head and answers `Expect: 100-continue`.
+    ///
+    /// Returns `None` if the stream is already answered or reset. The pseudo
+    /// headers are consumed here, so the publish future does not keep them
+    /// across the service call.
+    // A plain fn returning `async move` stores the arguments once;
+    // an `async fn` would keep a second copy of each borrowed argument.
+    #[allow(clippy::manual_async_fn)]
+    fn request_head<'a>(
+        &'a self,
+        stream: &'a h2::StreamRef,
+        pseudo: h2::frame::PseudoHeaders,
+        headers: HeaderMap,
+        eof: bool,
+    ) -> impl Future<Output = Option<(Method, Url, HeaderMap)>> + 'a {
+        async move {
+            // repeated header names count separately, like HTTP/1
+            if headers.iter().nth(self.max_headers).is_some() {
+                log::debug!("{}: Too many headers on {:?}", self.io.tag(), stream.id());
+                self.reject(stream, StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE, eof);
+                return None;
+            }
+
+            // a malformed request is a stream error, the connection stays open,
+            // see RFC 9113 section 8.1.1
+            let Some((method, uri)) = request_uri(&pseudo, self.target_policy) else {
+                log::debug!(
+                    "{}: Malformed request on {:?}: {pseudo:?}",
+                    self.io.tag(),
+                    stream.id()
+                );
+                self.reject(stream, StatusCode::BAD_REQUEST, eof);
+                return None;
+            };
+
+            // the client waits for `100 Continue` before sending the request body,
+            // see RFC 9110 section 10.1.1
+            let (pseudo, headers) = if !eof && expect_continue(&headers) {
+                let msg = h2::Control::expect(stream.clone(), pseudo, headers);
+                match self
+                    .control
+                    .call(msg)
+                    .await
+                    .map(h2::ControlAck::into_expect)
+                {
+                    Ok(Some(ExpectResult::Continue(expect))) => {
+                        if stream
+                            .send_informational(StatusCode::CONTINUE, HeaderMap::new())
+                            .is_err()
+                        {
+                            // the stream is closed
+                            self.streams.borrow_mut().remove(&stream.id());
+                            return None;
+                        }
+                        let (_, pseudo, headers) = expect.into_parts();
+                        (pseudo, headers)
+                    }
+                    Ok(Some(ExpectResult::Failed(_, status, headers))) => {
+                        self.streams.borrow_mut().remove(&stream.id());
+
+                        let mut res = Response::new(status).drop_body();
+                        let head = res.head_mut();
+                        h2::release_header_map(mem::replace(&mut head.headers, headers));
+                        prepare_response(head, &mut BodySize::Empty);
+                        let _ = stream.send_response(status, &head.headers, true);
+
+                        // the request body is not needed
+                        stream.reset(h2::frame::Reason::NO_ERROR);
+                        return None;
+                    }
+                    result => {
+                        log::error!(
+                            "{}: Control service failed to handle expect for {:?}: {:?}",
+                            self.io.tag(),
+                            stream.id(),
+                            result.map(|_| ())
+                        );
+                        self.streams.borrow_mut().remove(&stream.id());
+                        stream.reset(h2::frame::Reason::INTERNAL_ERROR);
+                        return None;
+                    }
+                }
+            } else {
+                (pseudo, headers)
+            };
+
+            log::trace!(
+                "{}: {:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
+                self.io.tag(),
+                stream.id()
+            );
+            Some((method, uri, headers))
+        }
+    }
 }
 
 impl<Err> Service<(), h2::Message> for PublishService<Err>
@@ -412,81 +507,11 @@ where
             }
         };
 
-        // repeated header names count separately, like HTTP/1
-        if headers.iter().nth(self.max_headers).is_some() {
-            log::debug!("{}: Too many headers on {:?}", self.io.tag(), stream.id());
-            self.reject(&stream, StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE, eof);
-            return Ok(());
-        }
-
-        // a malformed request is a stream error, the connection stays open,
-        // see RFC 9113 section 8.1.1
-        let Some((method, uri)) = request_uri(&pseudo, self.target_policy) else {
-            log::debug!(
-                "{}: Malformed request on {:?}: {pseudo:?}",
-                self.io.tag(),
-                stream.id()
-            );
-            self.reject(&stream, StatusCode::BAD_REQUEST, eof);
+        let Some((method, uri, headers)) = self.request_head(&stream, pseudo, headers, eof).await
+        else {
             return Ok(());
         };
 
-        // the client waits for `100 Continue` before sending the request body,
-        // see RFC 9110 section 10.1.1
-        let (pseudo, headers) = if !eof && expect_continue(&headers) {
-            let msg = h2::Control::expect(stream.clone(), pseudo, headers);
-            match self
-                .control
-                .call(msg)
-                .await
-                .map(h2::ControlAck::into_expect)
-            {
-                Ok(Some(ExpectResult::Continue(expect))) => {
-                    if stream
-                        .send_informational(StatusCode::CONTINUE, HeaderMap::new())
-                        .is_err()
-                    {
-                        // the stream is closed
-                        self.streams.borrow_mut().remove(&stream.id());
-                        return Ok(());
-                    }
-                    let (_, pseudo, headers) = expect.into_parts();
-                    (pseudo, headers)
-                }
-                Ok(Some(ExpectResult::Failed(_, status, headers))) => {
-                    self.streams.borrow_mut().remove(&stream.id());
-
-                    let mut res = Response::new(status).drop_body();
-                    let head = res.head_mut();
-                    h2::release_header_map(mem::replace(&mut head.headers, headers));
-                    prepare_response(head, &mut BodySize::Empty);
-                    let _ = stream.send_response(status, &head.headers, true);
-
-                    // the request body is not needed
-                    stream.reset(h2::frame::Reason::NO_ERROR);
-                    return Ok(());
-                }
-                result => {
-                    log::error!(
-                        "{}: Control service failed to handle expect for {:?}: {:?}",
-                        self.io.tag(),
-                        stream.id(),
-                        result.map(|_| ())
-                    );
-                    self.streams.borrow_mut().remove(&stream.id());
-                    stream.reset(h2::frame::Reason::INTERNAL_ERROR);
-                    return Ok(());
-                }
-            }
-        } else {
-            (pseudo, headers)
-        };
-
-        log::trace!(
-            "{}: {:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
-            self.io.tag(),
-            stream.id()
-        );
         let mut req = if let Some(pl) = payload {
             Request::with_payload(crate::http::Payload::H2(pl))
         } else {
