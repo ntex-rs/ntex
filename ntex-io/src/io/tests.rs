@@ -907,7 +907,7 @@ async fn read_notify() {
     let res = lazy(|cx| io.poll_read_notify(cx)).await;
     assert!(matches!(res, Poll::Ready(Ok(Some(())))));
 
-    // disapcher is not set
+    // dispatcher is not set
     assert!(!io.st().dispatch_task.is_set());
     // rd buffer is ready
     assert!(io.st().flags.is_read_ready());
@@ -923,7 +923,7 @@ async fn read_notify() {
         Poll::Ready(Readiness::Ready)
     );
 
-    // == enable packpressure
+    // == enable backpressure
     let len = BytePageSize::Size4.capacity() - 1;
     ctx.release_read_buf(
         BytesMut::copy_from_slice(vec![b'2'; len]),
@@ -1732,7 +1732,7 @@ async fn write() {
         panic!()
     };
     assert_eq!(err.kind(), io::ErrorKind::NotConnected);
-    // statis returns error
+    // status returns error
     assert!(matches!(
         lazy(|cx| io.poll_status_update(cx)).await,
         Poll::Ready(IoStatusUpdate::PeerGone(None))

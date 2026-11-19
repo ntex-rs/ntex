@@ -97,7 +97,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     })
     .await;
 
-    log::trace!("{}: Shuting down io", context.tag());
+    log::trace!("{}: Shutting down io", context.tag());
     // The last armed interest stays in place, it is not dropped separately.
     // Teardown runs inline and dropping the control handle detaches the socket
     // before the reactor polls again, so no event is delivered for it.

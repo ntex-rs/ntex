@@ -546,7 +546,7 @@ async fn test_ws_transport() {
                     let ack = if let h1::Control::Upgrade(upg) = req {
                         let (ack, io, req, codec) = upg.handle();
 
-                        // send handshake respone
+                        // send handshake response
                         let res = handshake_response(req.head()).build();
                         io.encode(
                             h1::Message::Item((res.drop_body(), body::BodySize::None)),

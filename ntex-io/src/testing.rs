@@ -397,7 +397,7 @@ impl Handle for Rc<IoTest> {
 async fn run(io: Rc<IoTest>, ctx: IoContext) {
     poll_fn(|cx| turn(&io, &ctx, cx)).await;
 
-    log::debug!("{}: Shuting down io", ctx.tag());
+    log::debug!("{}: Shutting down io", ctx.tag());
 
     // shutdown WRITE side
     io.local

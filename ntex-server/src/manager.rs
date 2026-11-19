@@ -720,7 +720,7 @@ async fn handle_cmd<F: ServerConfiguration>(
                         state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
                     }
                     Signal::Panic(PanicSource::App(s, _)) => {
-                        log::info!("Application paniced exiting, {s}");
+                        log::info!("Application panicked, exiting, {s}");
                         state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
                     }
                     Signal::Hup => (),

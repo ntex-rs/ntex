@@ -226,7 +226,7 @@ where
     })
     .await;
 
-    log::trace!("{}: Shuting down io", ctx.tag());
+    log::trace!("{}: Shutting down io", ctx.tag());
 
     // A force-closed connection is aborted instead of closed gracefully, so
     // that a truncated stream is not terminated by a clean `FIN`.

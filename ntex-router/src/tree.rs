@@ -193,7 +193,7 @@ impl Tree {
     pub(crate) fn new(resource: &ResourceDef, value: usize) -> Tree {
         assert!(!resource.tp.is_empty(), "Non empty key is expected");
 
-        let val = if resource.tp[0].slesh {
+        let val = if resource.tp[0].slash {
             if resource.prefix {
                 Value::PrefixSlash(value)
             } else {
@@ -208,7 +208,7 @@ impl Tree {
         let mut tree = Tree::child(resource.tp[0].tp.clone(), val);
 
         for seg in &resource.tp[1..] {
-            let val = if seg.slesh {
+            let val = if seg.slash {
                 if resource.prefix {
                     Value::PrefixSlash(value)
                 } else {
@@ -399,7 +399,7 @@ impl Tree {
     pub(super) fn insert(&mut self, resource: &ResourceDef, value: usize) {
         self.exact.clear();
         for seg in &resource.tp {
-            let value = if seg.slesh {
+            let value = if seg.slash {
                 if resource.prefix {
                     Value::PrefixSlash(value)
                 } else {
@@ -710,7 +710,7 @@ impl Tree {
                     tail,
                     whole,
                 } => {
-                    // special treatment for tail, it matches regardless of sleshes
+                    // special treatment for tail, it matches regardless of slashes
                     let seg = if tail { path } else { segment.as_ref() };
 
                     if whole {

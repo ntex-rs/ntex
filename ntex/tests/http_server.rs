@@ -1525,7 +1525,7 @@ async fn test_h1_service_error() {
 /// - Verify shutdown remains pending while both requests are active.
 /// - Release the handlers, await shutdown completion, and verify the active count reaches zero.
 #[ntex::test]
-async fn test_h1_gracefull_shutdown() {
+async fn test_h1_graceful_shutdown() {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
     let release = Arc::new(AtomicBool::new(false));
@@ -1651,7 +1651,7 @@ async fn test_h1_control_init_error_does_not_block_shutdown() {
 /// - Verify shutdown remains pending while both requests are active.
 /// - Release the handlers, await shutdown completion, and verify the active count reaches zero.
 #[ntex::test]
-async fn test_h1_gracefull_shutdown_2() {
+async fn test_h1_graceful_shutdown_2() {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
     let release = Arc::new(AtomicBool::new(false));

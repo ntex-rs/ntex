@@ -70,8 +70,8 @@ impl Builder {
     /// By default, signal handling is disabled. At startup the system attempts
     /// to acquire process-wide ownership; another system's existing registration
     /// is not replaced. See [`System::enable_signals`].
-    pub fn signals(mut self, eanbled: bool) -> Self {
-        self.signals = eanbled;
+    pub fn signals(mut self, enabled: bool) -> Self {
+        self.signals = enabled;
         self
     }
 
@@ -84,8 +84,8 @@ impl Builder {
     /// The hook is installed once and remains installed for the process lifetime;
     /// `false` does not remove a hook installed earlier. By default, installation
     /// is disabled.
-    pub fn panic_handling(mut self, eanbled: bool) -> Self {
-        self.panics = eanbled;
+    pub fn panic_handling(mut self, enabled: bool) -> Self {
+        self.panics = enabled;
         self
     }
 

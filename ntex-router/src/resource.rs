@@ -9,7 +9,7 @@ use super::IntoPattern;
 #[derive(Clone, Debug)]
 pub(super) struct Segments {
     pub(super) tp: Vec<Segment>,
-    pub(super) slesh: bool,
+    pub(super) slash: bool,
 }
 
 /// `ResourceDef` describes an entry in resources table
@@ -427,7 +427,7 @@ impl ResourceDef {
             return (
                 Segments {
                     tp: Vec::new(),
-                    slesh: false,
+                    slash: false,
                 },
                 Vec::new(),
             );
@@ -493,8 +493,8 @@ impl ResourceDef {
         }
 
         // tail
-        let slesh = pattern.ends_with('/');
-        if slesh {
+        let slash = pattern.ends_with('/');
+        if slash {
             pattern = &pattern[..pattern.len() - 1];
         }
         elems.push(PathElement::Str(pattern.to_string()));
@@ -516,8 +516,8 @@ impl ResourceDef {
             }
         }
 
-        // insert last slesh
-        if slesh {
+        // insert last slash
+        if slash {
             elems.push(PathElement::Str("/".to_string()));
         }
 
@@ -539,7 +539,7 @@ impl ResourceDef {
             idx += 1;
         }
 
-        (Segments { tp: pelems, slesh }, elems)
+        (Segments { tp: pelems, slash }, elems)
     }
 }
 
