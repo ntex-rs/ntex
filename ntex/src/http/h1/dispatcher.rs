@@ -2588,7 +2588,7 @@ mod tests {
 
         let mut h1 = h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
         sleep(Millis(50)).await;
-        // required because io shutdown is async oper
+        // required because io shutdown is async operation
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready();
         sleep(Millis(50)).await;
 
@@ -4341,7 +4341,7 @@ mod tests {
         let mut h1 = h1(server, |_| {
             Box::pin(async { Err::<Response<()>, _>(io::Error::other("error")) })
         });
-        // required because io shutdown is async oper
+        // required because io shutdown is async operation
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(!h1.inner.io.is_active());
@@ -4782,7 +4782,7 @@ mod tests {
         let mut h1 = h1(server, async move |_| {
             Ok::<_, io::Error>(Response::Ok().body("TEST"))
         });
-        // required because io shutdown is async oper
+        // required because io shutdown is async operation
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(!h1.inner.io.is_active());

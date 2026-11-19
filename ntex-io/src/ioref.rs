@@ -383,7 +383,7 @@ impl IoRef {
             if st.flags.is_write_paused() {
                 // call `Handle::write()`.
                 // if write task is not paused, io write is pending
-                // need to wake write task for io completeion
+                // need to wake write task for io completion
                 if self.call_write() == WakeWriteTask::Yes {
                     st.wake_write_task();
                     st.flags.unset_write_paused();
@@ -589,7 +589,7 @@ impl IoRef {
     pub(crate) fn consolidate_write_state(&self, force: bool) -> io::Result<()> {
         let st = &self.0;
 
-        // wake write task if needsed
+        // wake write task if needed
         let size = st.buffer.write_buf_size();
         // set when a direct write may have changed the outstanding output
         let mut wrote = false;

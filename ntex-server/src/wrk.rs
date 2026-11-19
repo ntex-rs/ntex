@@ -548,7 +548,7 @@ where
                     });
                 }
                 Either::Right(Some(Shutdown { timeout, result })) => {
-                    log::info!("Shutting down {:?} worker gracefuly", self.name);
+                    log::info!("Shutting down {:?} worker gracefully", self.name);
                     self.availability.set(false);
                     // close the worker's listeners before waiting for the service
                     self.local = None;

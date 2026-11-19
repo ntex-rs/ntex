@@ -13,7 +13,7 @@ use ntex_bytes::{ByteString, Bytes, BytesMut};
 /// HTTP spec allows for a header value to contain opaque bytes as well. In this
 /// case, the header field value is not able to be represented as a string.
 ///
-/// To handle this, the `HeaderValue` is useable as a type and can be compared
+/// To handle this, the `HeaderValue` is usable as a type and can be compared
 /// with strings and implements `Debug`. [`to_str`](Self::to_str) returns an
 /// error if the value is not valid UTF-8.
 #[derive(Clone, Eq)]

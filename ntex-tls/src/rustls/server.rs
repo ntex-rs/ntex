@@ -82,7 +82,7 @@ impl TlsServerFilter {
             });
 
             crate::utils::handshake(&io, || Ok(io.filter().is_handshaking())).await?;
-            log::trace!("{}: TLS Handshake successed", io.tag());
+            log::trace!("{}: TLS Handshake succeeded", io.tag());
             Ok(io)
         })
     }

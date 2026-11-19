@@ -481,7 +481,7 @@ mod tests {
         assert!(msg.contains("Test io error"), "{msg}");
 
         assert!(
-            format!("{:?}", err.source()).contains("Test io erro"),
+            format!("{:?}", err.source()).contains("Test io error"),
             "{:?}",
             err.source().unwrap()
         );

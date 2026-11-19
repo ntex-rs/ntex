@@ -6,7 +6,7 @@ use crate::util::{BytePages, BytesMut};
 use crate::{Cfg, io::IoRef, io::Waiter, rt, time::sleep, util::select, ws};
 
 #[derive(Clone, Debug)]
-/// A clonable handle for sending messages over a WebSocket connection.
+/// A cloneable handle for sending messages over a WebSocket connection.
 ///
 /// Clones share the codec state. The sink is also the connection's codec, so
 /// the dispatcher and all sinks see the same state, e.g. once a close message

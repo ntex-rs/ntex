@@ -160,7 +160,7 @@ where
 
 // ---------------------------- FnServiceFactory ------------------------
 
-/// A service factory backed by a clonable asynchronous service function.
+/// A service factory backed by a cloneable asynchronous service function.
 pub struct FnServiceFactory<F, Req, Res, Err>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
@@ -233,7 +233,7 @@ where
 
 // ========================= FnServiceStFactory =======================
 
-/// A service factory backed by a clonable, state-aware asynchronous function.
+/// A service factory backed by a cloneable, state-aware asynchronous function.
 pub struct FnServiceStFactory<F, St, Req, Res, Err>
 where
     F: AsyncFn(&St, Req) -> Result<Res, Err> + Clone,

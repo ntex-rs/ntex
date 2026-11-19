@@ -1282,7 +1282,7 @@ mod tests {
         assert!(pool.0.waiters.borrow().waiters.is_empty());
         drop(conn);
 
-        // close connnection
+        // close connection
         let conn = pipe.call(req.clone()).await.unwrap();
         assert_eq!(store.borrow().len(), 2);
         assert_eq!(pool.0.inner.borrow().acquired, 1);

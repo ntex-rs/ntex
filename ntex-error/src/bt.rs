@@ -386,14 +386,14 @@ impl Drop for BacktraceResolver {
 fn find_loc(loc: &str, frames: &mut [Option<&ResolvedFrame>]) {
     let mut idx = 0;
 
-    'outter: for (i, frm) in frames.iter().enumerate() {
+    'outer: for (i, frm) in frames.iter().enumerate() {
         if let Some(f) = frm {
             for sym in &f.symbols {
                 if let Some(fname) = &sym.filename
                     && fname.ends_with(loc)
                 {
                     idx = i;
-                    break 'outter;
+                    break 'outer;
                 }
             }
         } else {
@@ -406,14 +406,14 @@ fn find_loc(loc: &str, frames: &mut [Option<&ResolvedFrame>]) {
     }
 
     PATHS.with(|paths| {
-        'outter: for frm in &mut frames[idx..] {
+        'outer: for frm in &mut frames[idx..] {
             if let Some(f) = frm {
                 for sym in &f.symbols {
                     if let Some(fname) = &sym.filename {
                         for p in paths {
                             if fname.ends_with(p) {
                                 *frm = None;
-                                continue 'outter;
+                                continue 'outer;
                             }
                         }
                     }
