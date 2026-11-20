@@ -409,7 +409,7 @@ pub fn rt_test(args: TokenStream, item: TokenStream) -> TokenStream {
     )
 }
 
-/// Same as [`rt_test`] for crates that depend on `ntex-rt` directly. Doesn't
+/// Same as [`rt_test`] for crates that depend on `ntex-rt` and `ntex-net` directly. Doesn't
 /// enable test logging.
 #[doc(hidden)]
 #[proc_macro_attribute]
@@ -419,7 +419,7 @@ pub fn rt_test2(args: TokenStream, item: TokenStream) -> TokenStream {
         item,
         TokenStream2::new(),
         quote!(ntex_rt::System),
-        quote!(ntex::rt::DefaultRuntime),
+        quote!(ntex_net::DefaultRuntime),
     )
 }
 
