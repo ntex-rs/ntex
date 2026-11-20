@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* A listener waiting for service readiness no longer blocks other listeners
+  on the same worker while connection capacity is available
+
 ## [4.6.1] - 2026-11-16
 
 * Enable `TCP_NODELAY` on TCP listeners; on Linux and Apple platforms accepted

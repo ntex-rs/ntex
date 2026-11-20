@@ -1,4 +1,4 @@
-use std::{io, marker::PhantomData, sync::Arc};
+use std::{io, marker::PhantomData, sync::Arc, task::Context, task::Poll};
 
 use ntex_io::Io;
 use ntex_service::{BindCtx, IntoService, Pipeline, Service, cfg::SharedCfg};
@@ -14,7 +14,9 @@ pub(crate) trait NetService {
 
     fn call(&self, _: Io, _: ConnGuard);
 
-    fn ready(&self) -> BoxFuture<'_, Result<(), ()>>;
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>>;
+
+    fn is_ready(&self) -> bool;
 
     fn shutdown(&self) -> BoxFuture<'_, ()>;
 }
@@ -99,8 +101,12 @@ impl NetService for ServerService {
         });
     }
 
-    fn ready(&self) -> BoxFuture<'_, Result<(), ()>> {
-        Box::pin(async { self.pipeline.ready().await })
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+        self.pipeline.poll_ready(cx)
+    }
+
+    fn is_ready(&self) -> bool {
+        self.pipeline.is_ready()
     }
 
     fn shutdown(&self) -> BoxFuture<'_, ()> {
