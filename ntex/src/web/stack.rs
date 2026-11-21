@@ -96,27 +96,24 @@ impl<St, In> Filter<St, In> {
     }
 }
 
-/// Converts a request passed through the identity filter.
-pub(super) type FilterBypass<In, Out> = fn(WebRequest<In>) -> WebRequest<Out>;
-
 impl<St: State, In: 'static> Filter<St, In> {
-    /// Returns a passthrough if the filter factory `F` is the identity filter.
+    /// Returns `true` if the filter factory `F` is the identity filter.
     ///
     /// The identity filter is always ready and returns its request unchanged,
-    /// so callers may skip calling it.
-    pub(super) fn bypass<F: 'static, Out: 'static>() -> Option<FilterBypass<In, Out>> {
+    /// so callers may skip calling it and convert the request with [`passthrough`].
+    pub(super) fn is_identity<F: 'static>() -> bool {
         let id = TypeId::of::<F>();
-        if id == TypeId::of::<Filter<St, In>>()
+        id == TypeId::of::<Filter<St, In>>()
             || id == TypeId::of::<ServiceChainFactory<Filter<St, In>, St, WebRequest<In>>>()
-        {
-            Some(passthrough::<In, Out>)
-        } else {
-            None
-        }
     }
 }
 
-fn passthrough<In: 'static, Out: 'static>(req: WebRequest<In>) -> WebRequest<Out> {
+/// Converts a request passed through the identity filter.
+///
+/// Call it directly, not through a function pointer, so that it is inlined
+/// and the type check folds away. Panics if `In` and `Out` differ.
+#[inline]
+pub(super) fn passthrough<In: 'static, Out: 'static>(req: WebRequest<In>) -> WebRequest<Out> {
     let mut req = Some(req);
     (&mut req as &mut dyn Any)
         .downcast_mut::<Option<WebRequest<Out>>>()

@@ -645,7 +645,7 @@ where
             st,
             WebServiceRouter::new(
                 filter,
-                Filter::<St, In>::bypass::<F, Out>(),
+                Filter::<St, In>::is_identity::<F>(),
                 self.router.clone(),
                 self.default.clone(),
             ),

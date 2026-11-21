@@ -385,6 +385,9 @@ impl HttpServiceConfig {
     ///
     /// Processing happens before application middleware, filters, routing and
     /// lower-level HTTP service handlers. They all receive the normalized URI.
+    /// For HTTP/2 the URI holds only `:path`; the normalized `:scheme` and
+    /// `:authority` are available from [`RequestHead::scheme`](super::RequestHead::scheme)
+    /// and [`RequestHead::authority`](super::RequestHead::authority).
     /// Application rewrites are not automatically validated or normalized again.
     ///
     /// HTTP/1 Host-header validation is controlled separately by

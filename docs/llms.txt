@@ -35,7 +35,8 @@ Rules for generated code:
 
 ## Web request rules
 
-- `guard::Host(..).scheme(..)` matches only when the request carries a scheme (absolute-form target or a `Host` value with a scheme). Ordinary requests have none and are rejected. It does not detect TLS; enforce HTTPS at the listener.
+- `guard::Host(..).scheme(..)` matches only when the request carries a scheme (absolute-form target, HTTP/2 `:scheme`, or a `Host` value with a scheme). Ordinary HTTP/1 requests have none and are rejected. It does not detect TLS; enforce HTTPS at the listener.
+- HTTP/2 `req.uri()` holds only `:path` (origin-form). Use `req.head().scheme()`/`authority()` or `req.connection_info()` for the scheme and host.
 - `Path` percent-decodes normal segments, but remainder captures such as `/files/{tail}*` stay percent-encoded. Decode and validate them before using them as file system paths.
 - App services are created on their first request. A failing factory does not fail startup or `test::init_service`; that request gets `500 Internal Server Error`. Assert response statuses in tests.
 - `HeaderMap::len()` counts distinct header names, not values; use `get_all(name)` for repeated headers. `HeaderValue::to_str()` accepts any UTF-8, including non-ASCII; check `is_ascii()` when ASCII is required.

@@ -206,6 +206,36 @@ async fn test_h2_request_headers_not_shared() -> io::Result<()> {
     Ok(())
 }
 
+/// STATEMENT: An HTTP/2 request uri holds only `:path`, while `:scheme` and `:authority`
+/// are available from the request head.
+///
+/// HOW:
+/// - Send a secure GET for `/p?q=1` to a handler echoing the uri, scheme and authority.
+/// - Assert the uri is in origin-form, the scheme is `https` and the authority is the
+///   server address the client connected to.
+#[ntex::test]
+async fn test_h2_origin_form_uri() -> io::Result<()> {
+    let srv = test_server(async move |_| {
+        openssl(
+            ssl_acceptor(),
+            HttpService::h2(async |req: Request| {
+                let head = req.head();
+                let body = format!("{} {:?} {:?}", head.uri, head.scheme(), head.authority());
+                Ok::<_, io::Error>(Response::Ok().body(body))
+            }),
+        )
+    });
+
+    let response = srv.srequest(Method::GET, "/p?q=1").send().await.unwrap();
+    assert_eq!(response.version(), Version::HTTP_2);
+    let authority = format!("localhost:{}", srv.addr().port());
+    assert_eq!(
+        response.body().await.unwrap(),
+        format!("/p?q=1 Some(\"https\") Some({authority:?})")
+    );
+    Ok(())
+}
+
 /// STATEMENT: The combined HTTP service dispatches negotiated HTTP/2 requests with peer metadata through OpenSSL.
 ///
 /// HOW:

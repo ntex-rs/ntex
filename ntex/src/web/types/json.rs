@@ -1,6 +1,8 @@
 //! Json extractor/responder
 use std::task::{Context, Poll, ready};
-use std::{fmt, future::Future, marker::PhantomData, ops, pin::Pin, sync::Arc};
+use std::{
+    fmt, future::Future, future::poll_fn, marker::PhantomData, mem, ops, pin::Pin, sync::Arc,
+};
 
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -160,27 +162,28 @@ where
 {
     type Error = JsonPayloadError;
 
-    async fn from_request(
+    // Checks run when the future is created, so it holds only the body reader
+    fn from_request(
         _: &St,
         req: &HttpRequest,
         payload: &mut Payload,
-    ) -> Result<Self, Self::Error> {
-        let req2 = req.clone();
+    ) -> impl Future<Output = Result<Self, Self::Error>> {
         let (limit, ctype) = req
             .app_value::<JsonConfig>()
             .map_or((32768, None), |c| (c.limit, c.content_type.as_ref()));
 
-        match JsonBody::new(req, payload, ctype).limit(limit).await {
+        let mut body = JsonBody::new(req, payload, ctype).limit(limit);
+        poll_fn(move |cx| match ready!(Pin::new(&mut body).poll(cx)) {
             Err(e) => {
                 log::debug!(
                     "Failed to deserialize Json from payload. \
                      Request path: {}",
-                    req2.path()
+                    req.path()
                 );
-                Err(e)
+                Poll::Ready(Err(e))
             }
-            Ok(data) => Ok(Json(data)),
-        }
+            Ok(data) => Poll::Ready(Ok(Json(data))),
+        })
     }
 }
 
@@ -289,10 +292,10 @@ impl fmt::Debug for JsonConfig {
 ///   (unless specified in [`JsonConfig`])
 /// * content length is greater than the limit (256k by default; the `Json`
 ///   extractor sets it from [`JsonConfig`], 32k by default)
-struct JsonBody<U> {
-    body: Option<super::ReadBody<super::BodyStream>>,
-    err: Option<JsonPayloadError>,
-    _t: PhantomData<fn() -> U>,
+enum JsonBody<U> {
+    Body(super::ReadBody<super::BodyStream>, PhantomData<fn() -> U>),
+    Err(JsonPayloadError),
+    Done,
 }
 
 impl<U> JsonBody<U>
@@ -331,24 +334,19 @@ where
             Some(Err(e)) => return Self::err(JsonPayloadError::Payload(e)),
         };
 
-        JsonBody {
-            body: Some(super::ReadBody::from_request(req, payload, 262_144).length(len)),
-            err: None,
-            _t: PhantomData,
-        }
+        JsonBody::Body(
+            super::ReadBody::from_request(req, payload, 262_144).length(len),
+            PhantomData,
+        )
     }
 
     fn err(err: JsonPayloadError) -> Self {
-        JsonBody {
-            body: None,
-            err: Some(err),
-            _t: PhantomData,
-        }
+        JsonBody::Err(err)
     }
 
     /// Change max size of payload. By default max size is 256Kb
     fn limit(mut self, limit: usize) -> Self {
-        if let Some(body) = self.body.as_mut() {
+        if let JsonBody::Body(body, _) = &mut self {
             body.limit = limit;
         }
         self
@@ -361,12 +359,18 @@ where
 {
     type Output = Result<U, JsonPayloadError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(err) = self.err.take() {
-            return Poll::Ready(Err(err));
-        }
-
-        let body = self.body.as_mut().expect("polled after completion");
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let body = match this {
+            JsonBody::Body(body, _) => body,
+            JsonBody::Err(_) => {
+                let JsonBody::Err(err) = mem::replace(this, JsonBody::Done) else {
+                    unreachable!()
+                };
+                return Poll::Ready(Err(err));
+            }
+            JsonBody::Done => panic!("polled after completion"),
+        };
         if let Some(len) = body.length
             && len > body.limit
         {

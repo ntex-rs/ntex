@@ -1,8 +1,9 @@
-use std::{cell::Cell, cell::RefCell, marker::PhantomData, mem, rc::Rc};
+use std::{cell::Cell, cell::RefCell, marker::PhantomData, mem, pin::pin, rc::Rc};
 
 use crate::error::Failure;
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
+use crate::service::__private::map_output;
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::service::{ReadyBinding, ReadyCallback, ReadyNotifier, ServiceChainFactory, boxed};
 use crate::util::OnDropFn;
@@ -10,9 +11,10 @@ use crate::{BindCtx, Ctx, Middleware, Service, ServiceFactory, factory};
 
 use super::config::{WebAppConfig, get_request};
 use super::guard::Guard;
+use super::handler::HandlerFuture;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebRoute, WebServiceConfig};
-use super::stack::{Filter, FilterBypass};
+use super::stack::{Filter, passthrough};
 use super::{HttpHandler, HttpRequest, HttpService, State, WebError, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
@@ -151,7 +153,7 @@ where
         // main service
         let service = WebServiceRouter::new(
             self.filter.create(st).await?,
-            Filter::<St, In>::bypass::<F, Out>(),
+            Filter::<St, In>::is_identity::<F>(),
             self.router.clone(),
             self.default.clone(),
         );
@@ -189,7 +191,14 @@ where
 
     crate::forward!(St, service);
 
-    async fn call(&self, req: Request, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, F::Error> {
+    // The request is built eagerly and the inner call is mapped without an
+    // `async` block, so the future holds only the inner call. It is part of
+    // the h1 per-request pipeline allocation.
+    fn call(
+        &self,
+        req: Request,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<Self::Res, F::Error>> {
         // Pooled requests keep the config of their shared configuration, so the
         // config handle is created only for new requests. Cloning it touches the
         // shared configuration's atomic ref count, which every worker uses.
@@ -222,13 +231,14 @@ where
             };
             HttpRequest::new(Path::new(head.uri.clone()), head, self.rmap.clone(), config)
         };
-        match ctx
-            .call(&self.service, WebRequest::new(req, payload, ()))
-            .await
-        {
-            Ok(r) => Ok(r.into()),
-            Err(e) => Ok(e.0.error_response(ctx.st())),
-        }
+        let st = ctx.st();
+        map_output(
+            ctx.call(&self.service, WebRequest::new(req, payload, ())),
+            move |res| match res {
+                Ok(r) => Ok(r.into()),
+                Err(e) => Ok(e.0.error_response(st)),
+            },
+        )
     }
 }
 
@@ -244,7 +254,7 @@ where
 pub struct WebServiceRouter<St: State, In, Out, F> {
     filter: ReadyBinding<CachedService<F>>,
     /// Set if `filter` is the identity filter, which is never called.
-    bypass: Option<FilterBypass<In, Out>>,
+    bypass: bool,
     router: Rc<Router<WebRoute<St, Out>, Guards>>,
     default: HttpService<St, Out>,
     /// Created route services indexed by resource id.
@@ -259,7 +269,7 @@ type CachedHandler<St, Out> = Rc<ReadyBinding<CachedService<HttpHandler<St, Out>
 impl<St: State, In, Out, F> WebServiceRouter<St, In, Out, F> {
     pub(super) fn new(
         filter: F,
-        bypass: Option<FilterBypass<In, Out>>,
+        bypass: bool,
         router: Rc<Router<WebRoute<St, Out>, Guards>>,
         default: HttpService<St, Out>,
     ) -> Self {
@@ -285,6 +295,7 @@ impl<St: State, In, Out, F> WebServiceRouter<St, In, Out, F> {
 impl<St, In, Out, F> Service<St, WebRequest<In>> for WebServiceRouter<St, In, Out, F>
 where
     St: State,
+    In: 'static,
     Out: 'static,
     F: Service<St, WebRequest<In>, Res = WebRequest<Out>, Error = WebError<St, St::Error>>,
 {
@@ -302,115 +313,132 @@ where
         }
     }
 
+    // A plain fn returning `async move` stores `ctx` once; an `async fn`
+    // would keep a second copy.
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        if self.readiness.ready.get() {
-            return Ok(());
-        }
-
-        loop {
-            let revision = self.readiness.revision.get();
-
-            ctx.ready(&self.filter).await?;
-            let default = self.cache_default.borrow().clone();
-            if let Some(default) = default {
-                ctx.ready(&default).await?;
+    #[allow(clippy::manual_async_fn)]
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Self::Error>> {
+        async move {
+            if self.readiness.ready.get() {
+                return Ok(());
             }
 
             loop {
-                let id = self.readiness.unknown.borrow_mut().pop();
-                if let Some(id) = id {
-                    let hnd = self.cache.borrow().get(id).cloned().flatten();
-                    if let Some(hnd) = hnd {
-                        let pending = OnDropFn::new(|| {
-                            self.readiness.unknown.borrow_mut().push(id);
-                        });
-                        ctx.ready(&hnd).await?;
-                        pending.cancel();
-                    }
-                } else {
-                    break;
-                }
-            }
+                let revision = self.readiness.revision.get();
 
-            if self.readiness.revision.get() == revision {
-                self.readiness.ready.set(true);
-                return Ok(());
+                ctx.ready(&self.filter).await?;
+                let default = self.cache_default.borrow().clone();
+                if let Some(default) = default {
+                    ctx.ready(&default).await?;
+                }
+
+                loop {
+                    let id = self.readiness.unknown.borrow_mut().pop();
+                    if let Some(id) = id {
+                        let hnd = self.cache.borrow().get(id).cloned().flatten();
+                        if let Some(hnd) = hnd {
+                            let pending = OnDropFn::new(|| {
+                                self.readiness.unknown.borrow_mut().push(id);
+                            });
+                            ctx.ready(&hnd).await?;
+                            pending.cancel();
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                if self.readiness.revision.get() == revision {
+                    self.readiness.ready.set(true);
+                    return Ok(());
+                }
             }
         }
     }
 
-    async fn call(
+    // A plain fn returning `async move` stores `req` and `ctx` once, an
+    // `async fn` would keep a second copy of its arguments.
+    #[allow(clippy::manual_async_fn)]
+    fn call(
         &self,
         req: WebRequest<In>,
         ctx: Ctx<'_, Self, St>,
-    ) -> Result<Self::Res, Self::Error> {
-        let mut req = if let Some(bypass) = self.bypass {
-            bypass(req)
-        } else {
-            ctx.call(&self.filter, req).await?
-        };
-        let res = self.router.recognize_checked(&mut req, |req, guards| {
-            if let Some(guards) = guards {
-                for f in guards {
-                    if !f.check(req.head()) {
-                        return false;
+    ) -> impl Future<Output = Result<Self::Res, Self::Error>> {
+        async move {
+            // `req` is borrowed while routing, so it is scoped here to keep it out
+            // of the future across the final call.
+            let (req, sf, id) = {
+                let mut req = if self.bypass {
+                    passthrough::<In, Out>(req)
+                } else {
+                    ctx.call(&self.filter, req).await?
+                };
+                let res = self.router.recognize_checked(&mut req, |req, guards| {
+                    if let Some(guards) = guards {
+                        for f in guards {
+                            if !f.check(req.head()) {
+                                return false;
+                            }
+                        }
                     }
-                }
-            }
-            true
-        });
+                    true
+                });
 
-        let (sf, id) = match res {
-            Some((WebRoute::Service(sf), id)) => (sf, Some(id)),
-            Some((WebRoute::Routes(routes), _)) => {
-                for route in routes {
-                    if route.check(&mut req) {
-                        return Ok(route.handle(ctx.st(), req).await);
+                match res {
+                    Some((WebRoute::Service(sf), id)) => (req, sf, Some(id)),
+                    Some((WebRoute::Routes(routes), _)) => {
+                        for route in routes {
+                            if route.check(&mut req) {
+                                // Built in place, the handler future is too large to move cheaply
+                                let mut fut = pin!(HandlerFuture::empty());
+                                route.handle(ctx.st(), req, fut.as_mut());
+                                return Ok(fut.await);
+                            }
+                        }
+                        return Ok(WebResponse::new(
+                            Response::MethodNotAllowed().build(),
+                            req.into_parts().0,
+                        ));
                     }
+                    None => (req, &self.default, None),
                 }
-                return Ok(WebResponse::new(
-                    Response::MethodNotAllowed().build(),
-                    req.into_parts().0,
-                ));
-            }
-            None => (&self.default, None),
-        };
-        let cached = if let Some(id) = id {
-            self.cache
-                .borrow()
-                .get(id.get() as usize)
-                .cloned()
-                .flatten()
-        } else {
-            self.cache_default.borrow().clone()
-        };
-
-        let svc = if let Some(svc) = cached {
-            svc
-        } else if let Ok(service) = ctx
-            .create(&factory(sf.clone()).apply(CachedServiceMiddleware(
-                id.map_or(usize::MAX, |id| id.get() as usize),
-                self.readiness.clone(),
-            )))
-            .await
-        {
-            let svc = Rc::new(service);
-            if let Some(id) = id {
-                let idx = id.get() as usize;
-                let mut cache = self.cache.borrow_mut();
-                if cache.len() <= idx {
-                    cache.resize(idx + 1, None);
-                }
-                cache[idx] = Some(svc.clone());
+            };
+            let cached = if let Some(id) = id {
+                self.cache
+                    .borrow()
+                    .get(id.get() as usize)
+                    .cloned()
+                    .flatten()
             } else {
-                *self.cache_default.borrow_mut() = Some(svc.clone());
-            }
-            svc
-        } else {
-            return Ok(req.into_response(Response::InternalServerError().build()));
-        };
-        ctx.call(&svc, req).await
+                self.cache_default.borrow().clone()
+            };
+
+            let svc = if let Some(svc) = cached {
+                svc
+            } else if let Ok(service) = ctx
+                .create(&factory(sf.clone()).apply(CachedServiceMiddleware(
+                    id.map_or(usize::MAX, |id| id.get() as usize),
+                    self.readiness.clone(),
+                )))
+                .await
+            {
+                let svc = Rc::new(service);
+                if let Some(id) = id {
+                    let idx = id.get() as usize;
+                    let mut cache = self.cache.borrow_mut();
+                    if cache.len() <= idx {
+                        cache.resize(idx + 1, None);
+                    }
+                    cache[idx] = Some(svc.clone());
+                } else {
+                    *self.cache_default.borrow_mut() = Some(svc.clone());
+                }
+                svc
+            } else {
+                return Ok(req.into_response(Response::InternalServerError().build()));
+            };
+            ctx.call(&svc, req).await
+        }
     }
 
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
@@ -506,8 +534,8 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for CachedService<S> {
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        ctx.ready(&self.service).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Self::Error>> {
+        ctx.ready(&self.service)
     }
 
     #[inline]
@@ -595,7 +623,7 @@ mod tests {
         }
         Rc::new(WebServiceRouter::new(
             Gated(filter),
-            None,
+            false,
             Rc::new(routes.build()),
             handler(default),
         ))
@@ -628,8 +656,8 @@ mod tests {
     /// STATEMENT: Only the default identity filter is bypassed by the app router.
     ///
     /// HOW:
-    /// - Create an app service without a filter and assert the router `bypass` is set.
-    /// - Create one with a custom filter and assert the router `bypass` is unset.
+    /// - Create an app service without a filter and assert the router `bypass` is `true`.
+    /// - Create one with a custom filter and assert the router `bypass` is `false`.
     #[crate::rt_test]
     async fn default_filter_is_bypassed() {
         use crate::service::IntoServiceFactory;
@@ -641,7 +669,7 @@ mod tests {
             .create(&())
             .await
             .unwrap();
-        assert!(srv.service.bypass.is_some());
+        assert!(srv.service.bypass);
 
         let srv = App::new()
             .filter(async |req: WebRequest<()>| Ok::<_, WebError>(req))
@@ -650,7 +678,7 @@ mod tests {
             .create(&())
             .await
             .unwrap();
-        assert!(srv.service.bypass.is_none());
+        assert!(!srv.service.bypass);
     }
 
     /// STATEMENT: Resources without middleware, filter, or fallback are dispatched without creating a resource service.
@@ -882,7 +910,7 @@ mod tests {
         );
         let outer = Rc::new(WebServiceRouter::new(
             Gated(filter.clone()),
-            None,
+            false,
             Rc::new(routes.build()),
             handler(Rc::new(Gate::default())),
         ));
@@ -949,7 +977,7 @@ mod tests {
             };
             let router = Rc::new(WebServiceRouter::new(
                 Gated(Rc::new(Gate::default())),
-                None,
+                false,
                 Rc::new(routes.build()),
                 default,
             ));

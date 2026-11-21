@@ -1,4 +1,4 @@
-use std::{fmt, mem, rc::Rc};
+use std::{fmt, mem, pin::Pin, pin::pin, rc::Rc};
 
 use crate::error::Failure;
 use crate::http::Method;
@@ -6,7 +6,9 @@ use crate::service::{Ctx, Service, ServiceFactory};
 
 use super::error::{WebError, WebResponseError};
 use super::guard::{self, AllGuard, Guard};
-use super::handler::{Handler, HandlerFn, HandlerSt, HandlerStWrapper, HandlerWrapper};
+use super::handler::{
+    Handler, HandlerFn, HandlerFuture, HandlerSt, HandlerStWrapper, HandlerWrapper,
+};
 use super::{FromRequest, HttpResponse, State, WebRequest, WebResponse};
 
 /// Connects a handler to the requests it should handle.
@@ -83,7 +85,7 @@ impl<St: State, In: 'static> Route<St, In> {
     pub(super) fn service(&self) -> RouteService<St, In> {
         RouteService {
             handler: self.handler.clone(),
-            guards: self.guards.clone(),
+            guards: (!self.guards.0.is_empty()).then(|| self.guards.clone()),
             methods: self.methods.clone(),
         }
     }
@@ -254,25 +256,28 @@ impl<St: State, In> fmt::Debug for Route<St, In> {
 pub struct RouteService<St: State, In> {
     handler: Rc<dyn HandlerFn<St, In>>,
     methods: Vec<Method>,
-    guards: Rc<AllGuard>,
+    // `None` when the route has no custom guards
+    guards: Option<Rc<AllGuard>>,
 }
 
 impl<St: State, In> RouteService<St, In> {
+    #[inline]
     pub fn check(&self, req: &mut WebRequest<In>) -> bool {
         if !self.methods.is_empty() && !self.methods.contains(&req.head().method) {
             return false;
         }
 
-        self.guards.check(req.head())
+        self.guards.as_ref().is_none_or(|g| g.check(req.head()))
     }
 
-    /// Call the route handler directly, without service readiness.
+    /// Builds the route handler future in `fut`, without service readiness.
     pub(super) fn handle<'a>(
         &'a self,
         st: &'a St,
         req: WebRequest<In>,
-    ) -> impl Future<Output = WebResponse> + 'a {
-        self.handler.call(st, req)
+        fut: Pin<&mut HandlerFuture<'a>>,
+    ) {
+        self.handler.call(st, req, fut);
     }
 }
 
@@ -281,7 +286,10 @@ impl<St: State, In> fmt::Debug for RouteService<St, In> {
         f.debug_struct("RouteService")
             .field("handler", &self.handler)
             .field("methods", &self.methods)
-            .field("guards", &self.guards)
+            .field(
+                "guards",
+                &self.guards.as_deref().unwrap_or(&AllGuard::default()),
+            )
             .finish()
     }
 }
@@ -295,7 +303,10 @@ impl<St: State, In> Service<St, WebRequest<In>> for RouteService<St, In> {
         req: WebRequest<In>,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
-        Ok(self.handler.call(ctx.st(), req).await)
+        // Built in place, the handler future is too large to move cheaply
+        let mut fut = pin!(HandlerFuture::empty());
+        self.handler.call(ctx.st(), req, fut.as_mut());
+        Ok(fut.await)
     }
 }
 

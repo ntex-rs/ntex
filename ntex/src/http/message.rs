@@ -7,7 +7,7 @@ use urly::Url;
 use crate::http::header::HeaderMap;
 use crate::http::{HeaderItem, Method, StatusCode, Version, h1::Codec};
 use crate::io::{IoBoxed, IoRef, types};
-use crate::util::Extensions;
+use crate::util::{ByteString, Extensions};
 
 /// The connection behavior selected for an HTTP message.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -80,6 +80,10 @@ pub struct RequestHead {
     /// Identifier of the connection that received the request.
     pub id: usize,
     /// Request URI.
+    ///
+    /// A request received over HTTP/2 holds only its `:path` pseudo-header
+    /// here, or its `:authority` for `CONNECT`, see [`scheme`](Self::scheme)
+    /// and [`authority`](Self::authority).
     pub uri: Url,
     /// Request method.
     pub method: Method,
@@ -97,6 +101,10 @@ pub struct RequestHead {
     pub extensions: RefCell<Extensions>,
     /// Stream this request is made on (if over http/2).
     pub(crate) stream: Option<StreamRef>,
+    /// `:scheme` pseudo-header of an HTTP/2 request.
+    pub(crate) scheme: Option<ByteString>,
+    /// `:authority` pseudo-header of an HTTP/2 request.
+    pub(crate) authority: Option<ByteString>,
     pub(crate) io: CurrentIo,
     pub(crate) flags: Flags,
 }
@@ -106,6 +114,8 @@ impl Default for RequestHead {
         RequestHead {
             id: 0,
             stream: None,
+            scheme: None,
+            authority: None,
             io: CurrentIo::None,
             uri: Url::new(),
             method: Method::default(),
@@ -121,9 +131,11 @@ impl Default for RequestHead {
 impl Head for RequestHead {
     fn clear(&mut self) {
         self.io = CurrentIo::None;
-        // the uri and headers may share the connection read buffer, a pooled
-        // head must not keep it alive
+        // the uri, pseudo-headers and headers may share the connection read
+        // buffer, a pooled head must not keep it alive
         self.uri = Url::new();
+        self.scheme = None;
+        self.authority = None;
         self.flags = Flags::empty();
         self.version = Version::HTTP_11;
         self.headers.clear();
@@ -141,6 +153,29 @@ impl Head for RequestHead {
 }
 
 impl RequestHead {
+    /// Returns the request scheme.
+    ///
+    /// The scheme of an absolute-form target, or the `:scheme` pseudo-header of
+    /// an HTTP/2 request, whose [`uri`](Self::uri) is in origin-form. Origin-form
+    /// HTTP/1 requests carry no scheme. It is not derived from the connection,
+    /// so it does not tell whether the request arrived over TLS.
+    pub fn scheme(&self) -> Option<&str> {
+        self.uri.scheme_str().or(self.scheme.as_deref())
+    }
+
+    /// Returns the request authority.
+    ///
+    /// The authority of an absolute-form or authority-form target, or the
+    /// `:authority` pseudo-header of an HTTP/2 request, whose [`uri`](Self::uri)
+    /// is in origin-form. It is not taken from the `Host` header. It is
+    /// validated only if the server validates request targets.
+    pub fn authority(&self) -> Option<&str> {
+        self.uri
+            .authority()
+            .map(urly::Authority::as_str)
+            .or(self.authority.as_deref())
+    }
+
     /// Returns the request extensions.
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {

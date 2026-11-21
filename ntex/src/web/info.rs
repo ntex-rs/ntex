@@ -340,15 +340,15 @@ impl ConnectionInfo {
 
         let scheme = fwd
             .scheme
-            .or_else(|| req.uri.scheme_str().map(ToOwned::to_owned))
+            .or_else(|| req.scheme().map(ToOwned::to_owned))
             .unwrap_or_else(|| if cfg.secure() { "https" } else { "http" }.to_owned());
 
         let host = fwd.host.unwrap_or_else(|| {
-            // the authority of an absolute-form target takes precedence over
-            // `Host`, see RFC 9112 section 3.2.2
-            req.uri
-                .authority()
-                .map(urly::Authority::host_port)
+            // the authority of an absolute-form target or the HTTP/2 `:authority`
+            // takes precedence over `Host`, see RFC 9112 section 3.2.2 and
+            // RFC 9113 section 8.3.1
+            req.authority()
+                .map(|a| a.rsplit_once('@').map_or(a, |(_, host_port)| host_port))
                 .filter(|h| !h.is_empty())
                 .or_else(|| valid_host(req.headers.get(&header::HOST)?.to_str().ok()?))
                 .unwrap_or(cfg.host())
@@ -371,7 +371,7 @@ impl ConnectionInfo {
     /// Scheme is resolved from the following sources, in this order:
     ///
     /// - `Forwarded` or `X-Forwarded-Proto`, if allowed by the [`ForwardedPolicy`]
-    /// - Uri
+    /// - Uri or the HTTP/2 `:scheme`, see [`RequestHead::scheme`]
     /// - `https` if the server is configured as secure, `http` otherwise
     #[inline]
     pub fn scheme(&self) -> &str {
@@ -383,7 +383,7 @@ impl ConnectionInfo {
     /// Hostname is resolved from the following sources, in this order:
     ///
     /// - `Forwarded` or `X-Forwarded-Host`, if allowed by the [`ForwardedPolicy`]
-    /// - Uri
+    /// - Uri or the HTTP/2 `:authority`, see [`RequestHead::authority`]
     /// - Host
     /// - Server hostname
     ///
@@ -743,6 +743,28 @@ mod tests {
             conn_info(&req, ForwardedPolicy::trust_all()).host(),
             "localhost:8080"
         );
+    }
+
+    /// STATEMENT: The HTTP/2 `:scheme` and `:authority` take precedence over `Host` and
+    /// the configured defaults.
+    ///
+    /// HOW:
+    /// - Set the head scheme and an authority containing userinfo next to a conflicting
+    ///   `Host` header, and assert both are used with the userinfo dropped.
+    /// - Set an empty authority and assert the host falls back to `Host`.
+    #[test]
+    fn test_h2_pseudo_headers() {
+        let mut req = TestRequest::default()
+            .header(header::HOST, "b.org")
+            .to_http_request();
+        req.head_mut().scheme = Some("https".into());
+        req.head_mut().authority = Some("u:p@a.org:8443".into());
+        let info = ConnectionInfo::new(req.head(), &WebAppConfig::new());
+        assert_eq!(info.scheme(), "https");
+        assert_eq!(info.host(), "a.org:8443");
+
+        req.head_mut().authority = Some("".into());
+        assert_eq!(req.connection_info().host(), "b.org");
     }
 
     /// STATEMENT: Secure application configuration determines the default connection scheme.

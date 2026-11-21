@@ -1,5 +1,5 @@
 //! Query extractor
-use std::{fmt, ops};
+use std::{fmt, future, ops};
 
 use serde::de;
 
@@ -134,18 +134,24 @@ where
     type Error = QueryPayloadError;
 
     #[inline]
-    async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
-        serde_urlencoded::from_str::<T>(req.query_string()).map_or_else(
-            move |e| {
-                let e = QueryPayloadError::Deserialize(e);
-                log::debug!(
-                    "Failed during Query extractor deserialization. \
+    fn from_request(
+        _: &St,
+        req: &HttpRequest,
+        _: &mut Payload,
+    ) -> impl Future<Output = Result<Self, Self::Error>> {
+        future::ready(
+            serde_urlencoded::from_str::<T>(req.query_string()).map_or_else(
+                move |e| {
+                    let e = QueryPayloadError::Deserialize(e);
+                    log::debug!(
+                        "Failed during Query extractor deserialization. \
                      Request path: {:?}",
-                    req.path()
-                );
-                Err(e)
-            },
-            |val| Ok(Query(val)),
+                        req.path()
+                    );
+                    Err(e)
+                },
+                |val| Ok(Query(val)),
+            ),
         )
     }
 }
