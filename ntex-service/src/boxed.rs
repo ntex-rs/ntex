@@ -123,18 +123,25 @@ impl<St, Req, Res, Err, const WORDS: usize> Service<St, Req>
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        self.inner.ready(ctx.cast()).await
+    #[allow(clippy::manual_async_fn)]
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Self::Error>> {
+        // An `async fn` would store `ctx` twice. The block is still needed
+        // because the inner future borrows both `self` and `ctx` under one lifetime.
+        async move { self.inner.ready(ctx.cast()).await }
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, Err> {
-        self.inner.call(req, ctx.cast()).await
+    #[allow(clippy::manual_async_fn)]
+    fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<Res, Err>> {
+        // See `ready`.
+        async move { self.inner.call(req, ctx.cast()).await }
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        self.inner.shutdown(ctx.cast()).await;
+    #[allow(clippy::manual_async_fn)]
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        // See `ready`.
+        async move { self.inner.shutdown(ctx.cast()).await }
     }
 }
 
@@ -147,7 +154,9 @@ trait ServiceObj<St, Req, const WORDS: usize> {
     fn ready<'a>(
         &'a self,
         ctx: Ctx<'a, (), St>,
-    ) -> InlineFuture<'a, Result<(), Self::Error>, WORDS>;
+    ) -> InlineFuture<'a, Result<(), Self::Error>, WORDS>
+    where
+        Req: 'a;
 
     fn call<'a>(
         &'a self,
@@ -175,11 +184,11 @@ where
     }
 
     #[inline]
-    fn ready<'a>(
-        &'a self,
-        ctx: Ctx<'a, (), St>,
-    ) -> InlineFuture<'a, Result<(), Self::Error>, WORDS> {
-        InlineFuture::new_with(|| async move { Service::ready(self, ctx.cast()).await })
+    fn ready<'a>(&'a self, ctx: Ctx<'a, (), St>) -> InlineFuture<'a, Result<(), Self::Error>, WORDS>
+    where
+        Req: 'a,
+    {
+        InlineFuture::new_with(|| Service::ready(self, ctx.cast()))
     }
 
     #[inline]

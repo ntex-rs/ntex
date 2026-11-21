@@ -183,31 +183,21 @@ macro_rules! forward_bind {
 #[macro_export]
 macro_rules! forward_ready {
     ($st:ty, $field:ident) => {
-        #[inline]
-        async fn ready(&self, ctx: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
-            ctx.ready(&self.$field)
-                .await
-                .map_err(::core::convert::Into::into)
-        }
+        $crate::forward_ready!($st, self.$field, ::core::convert::Into::into);
     };
     ($st:ty, $field:ident, $err:expr) => {
-        #[inline]
-        async fn ready(&self, ctx: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
-            ctx.ready(&self.$field).await.map_err($err)
-        }
+        $crate::forward_ready!($st, self.$field, $err);
     };
     ($st:ty, $this:ident.$field:tt) => {
-        #[inline]
-        async fn ready(&$this, ctx: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
-            ctx.ready(&$this.$field)
-                .await
-                .map_err(::core::convert::Into::into)
-        }
+        $crate::forward_ready!($st, $this.$field, ::core::convert::Into::into);
     };
     ($st:ty, $this:ident.$field:tt, $err:expr) => {
         #[inline]
-        async fn ready(&$this, ctx: $crate::Ctx<'_, Self, $st>) -> Result<(), Self::Error> {
-            ctx.ready(&$this.$field).await.map_err($err)
+        fn ready(
+            &$this,
+            ctx: $crate::Ctx<'_, Self, $st>,
+        ) -> impl ::core::future::Future<Output = Result<(), Self::Error>> {
+            $crate::__private::map_output(ctx.ready(&$this.$field), |res| res.map_err($err))
         }
     };
 }
@@ -217,15 +207,15 @@ macro_rules! forward_ready {
 #[macro_export]
 macro_rules! forward_shutdown {
     ($st:ty, $field:ident) => {
-        #[inline]
-        async fn shutdown(&self, ctx: $crate::Ctx<'_, Self, $st>) {
-            ctx.shutdown(&self.$field).await
-        }
+        $crate::forward_shutdown!($st, self.$field);
     };
     ($st:ty, $this:ident.$field:tt) => {
         #[inline]
-        async fn shutdown(&$this, ctx: $crate::Ctx<'_, Self, $st>) {
-            ctx.shutdown(&$this.$field).await
+        fn shutdown(
+            &$this,
+            ctx: $crate::Ctx<'_, Self, $st>,
+        ) -> impl ::core::future::Future<Output = ()> {
+            ctx.shutdown(&$this.$field)
         }
     };
 }

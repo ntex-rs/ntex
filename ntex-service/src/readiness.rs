@@ -738,40 +738,46 @@ impl ReadyScope {
     /// generation, while errors return to the owner without being cached.
     /// Completion or cancellation releases ownership and wakes waiting callers,
     /// which recheck the cache before claiming ownership themselves.
-    pub(crate) async fn check<F, Fut, E>(&self, mut check: F) -> Result<(), E>
+    //
+    // A plain fn returning `async move` stores `check` once; an `async fn`
+    // would keep a second copy.
+    #[allow(clippy::manual_async_fn)]
+    pub(crate) fn check<F, Fut, E>(&self, mut check: F) -> impl Future<Output = Result<(), E>>
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
-        // Reused across retries. Cancellation drops the check, then ownership,
-        // then the observer.
-        let mut observer = None;
-        loop {
-            if self.is_ready() {
-                return Ok(());
-            }
-
-            let observer = observer.get_or_insert_with(|| self.observer());
-            let owner = poll_fn(|cx| {
-                observer.register(cx.waker());
+        async move {
+            // Reused across retries. Cancellation drops the check, then ownership,
+            // then the observer.
+            let mut observer = None;
+            loop {
                 if self.is_ready() {
-                    Poll::Ready(None)
-                } else if self.with(|s| s.checking.replace(true)) {
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Some(CheckOwner(self)))
+                    return Ok(());
                 }
-            })
-            .await;
 
-            if let Some(owner) = owner {
-                let result = RunCheck::new(self, &mut check).await.map(|generation| {
-                    self.set_ready(generation);
-                });
-                drop(owner);
-                result?;
+                let observer = observer.get_or_insert_with(|| self.observer());
+                let owner = poll_fn(|cx| {
+                    observer.register(cx.waker());
+                    if self.is_ready() {
+                        Poll::Ready(None)
+                    } else if self.with(|s| s.checking.replace(true)) {
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(Some(CheckOwner(self)))
+                    }
+                })
+                .await;
+
+                if let Some(owner) = owner {
+                    let result = RunCheck::new(self, &mut check).await.map(|generation| {
+                        self.set_ready(generation);
+                    });
+                    drop(owner);
+                    result?;
+                }
+                // Cleanup and handoff can reenter and invalidate the success.
             }
-            // Cleanup and handoff can reenter and invalidate the success.
         }
     }
 

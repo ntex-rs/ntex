@@ -73,9 +73,17 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
-        let result = self.svc1.call(req, ctx.cast()).await;
-        self.svc2.call(result, ctx.cast()).await
+    #[allow(clippy::manual_async_fn)]
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<B::Res, B::Error>> {
+        // An `async fn` would store `req` and `ctx` twice.
+        async move {
+            let result = self.svc1.call(req, ctx.cast()).await;
+            self.svc2.call(result, ctx.cast()).await
+        }
     }
 
     #[inline]

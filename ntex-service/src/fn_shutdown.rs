@@ -52,15 +52,20 @@ where
     type Error = Err;
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        if let Some(f) = self.f_shutdown.take() {
-            (f)(ctx.st()).await;
+    #[allow(clippy::manual_async_fn)]
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        // An `async fn` would store `ctx` twice. The function is taken on first
+        // poll, as before.
+        async move {
+            if let Some(f) = self.f_shutdown.take() {
+                (f)(ctx.st()).await;
+            }
         }
     }
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Req, Err> {
-        Ok(req)
+    fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> impl Future<Output = Result<Req, Err>> {
+        std::future::ready(Ok(req))
     }
 }
 

@@ -134,70 +134,74 @@ where
 /// A completed check is restarted when the scope is invalidated before the
 /// other one completes. Returns the generation at which both are ready.
 /// Both checks are created from a copy of `ctx`.
-pub async fn ready_join<'a, S, St, E, F1, Fut1, F2, Fut2>(
+#[allow(clippy::manual_async_fn)]
+pub fn ready_join<'a, S, St, E, F1, Fut1, F2, Fut2>(
     ctx: Ctx<'a, S, St>,
     f1: F1,
     f2: F2,
-) -> Result<Generation, E>
+) -> impl Future<Output = Result<Generation, E>>
 where
     F1: Fn(Ctx<'a, S, St>) -> Fut1,
     Fut1: Future<Output = Result<Generation, E>>,
     F2: Fn(Ctx<'a, S, St>) -> Fut2,
     Fut2: Future<Output = Result<Generation, E>>,
 {
-    let mut fut1 = pin::pin!(Some(f1(ctx)));
-    let mut fut2 = pin::pin!(Some(f2(ctx)));
-    let scope = ctx.scope();
-    let mut generation1 = scope.generation();
-    let mut generation2 = scope.generation();
+    // An `async fn` would store its arguments twice.
+    async move {
+        let mut fut1 = pin::pin!(Some(f1(ctx)));
+        let mut fut2 = pin::pin!(Some(f2(ctx)));
+        let scope = ctx.scope();
+        let mut generation1 = scope.generation();
+        let mut generation2 = scope.generation();
 
-    poll_fn(|cx| {
-        if is_idle(&mut fut1) && !scope.is_current(generation1) {
-            fut1.set(Some(f1(ctx)));
-        }
-        if let Some(fut) = fut1.as_mut().as_pin_mut()
-            && let Poll::Ready(generation) = fut.poll(cx)?
-        {
-            generation1 = generation;
-            fut1.set(None);
-        }
-
-        if is_idle(&mut fut2) && !scope.is_current(generation2) {
-            fut2.set(Some(f2(ctx)));
-        }
-        if let Some(fut) = fut2.as_mut().as_pin_mut()
-            && let Poll::Ready(generation) = fut.poll(cx)?
-        {
-            generation2 = generation;
-            fut2.set(None);
-        }
-
-        let current1 = scope.is_current(generation1);
-        let current2 = scope.is_current(generation2);
-        if is_idle(&mut fut1) && is_idle(&mut fut2) && current1 && current2 {
-            Poll::Ready(Ok(generation1))
-        } else {
-            // A later poll or future drop can invalidate a completed sibling.
-            // Retain pending work, but schedule another check for the dirty child.
-            if (is_idle(&mut fut1) && !current1) || (is_idle(&mut fut2) && !current2) {
-                cx.waker().wake_by_ref();
+        poll_fn(|cx| {
+            if is_idle(&mut fut1) && !scope.is_current(generation1) {
+                fut1.set(Some(f1(ctx)));
             }
-            Poll::Pending
-        }
-    })
-    .await
+            if let Some(fut) = fut1.as_mut().as_pin_mut()
+                && let Poll::Ready(generation) = fut.poll(cx)?
+            {
+                generation1 = generation;
+                fut1.set(None);
+            }
+
+            if is_idle(&mut fut2) && !scope.is_current(generation2) {
+                fut2.set(Some(f2(ctx)));
+            }
+            if let Some(fut) = fut2.as_mut().as_pin_mut()
+                && let Poll::Ready(generation) = fut.poll(cx)?
+            {
+                generation2 = generation;
+                fut2.set(None);
+            }
+
+            let current1 = scope.is_current(generation1);
+            let current2 = scope.is_current(generation2);
+            if is_idle(&mut fut1) && is_idle(&mut fut2) && current1 && current2 {
+                Poll::Ready(Ok(generation1))
+            } else {
+                // A later poll or future drop can invalidate a completed sibling.
+                // Retain pending work, but schedule another check for the dirty child.
+                if (is_idle(&mut fut1) && !current1) || (is_idle(&mut fut2) && !current2) {
+                    cx.waker().wake_by_ref();
+                }
+                Poll::Pending
+            }
+        })
+        .await
+    }
 }
 
 /// Checks one field's readiness and maps its error.
-pub async fn ready_field<S, St, T, Req, E>(
+pub fn ready_field<S, St, T, Req, E>(
     ctx: Ctx<'_, S, St>,
     svc: &T,
     map_err: impl FnOnce(T::Error) -> E,
-) -> Result<Generation, E>
+) -> impl Future<Output = Result<Generation, E>>
 where
     T: Service<St, Req>,
 {
-    ctx.ready_generation(svc).await.map_err(map_err)
+    map_output(ctx.ready_generation(svc), |res| res.map_err(map_err))
 }
 
 // `Option::is_none()` would take `&Option<F>`, which retags the whole future
