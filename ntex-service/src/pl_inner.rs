@@ -350,17 +350,24 @@ struct PipelineInner<S: Service<St, Req>, St, Req> {
 }
 
 impl<S: Service<St, Req>, St, Req> PipelineInner<S, St, Req> {
-    // Unlike `ReadyThenCall`, the `async` block keeps `self`, `ctx` and the
-    // request for the whole call, but it is faster. Its future is boxed once
-    // per pipeline call, so the extra size is not repeated per layer.
-    fn call_impl(&self, idx: u32, req: Req) -> impl Future<Output = Result<S::Res, S::Error>> {
-        let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st);
+    // Unlike `ReadyThenCall`, the `async` block keeps `self` and the request
+    // for the whole call, but it is faster. Its future is boxed once per
+    // pipeline call, so the extra size is not repeated per layer. Contexts are
+    // built where they are used, so none is kept in the future. An `async fn`
+    // would keep a second copy of `self` and `req`.
+    #[allow(clippy::manual_async_fn)]
+    fn call_impl(&self, req: Req) -> impl Future<Output = Result<S::Res, S::Error>> {
         async move {
             if !self.waiters.scope().is_ready() {
                 // Boxed, it is only needed when the scope is not ready
-                Box::pin(self.readiness.ready(move || ctx.ready_generation(&self.s))).await?;
+                Box::pin(self.readiness.ready(move || {
+                    Ctx::<'_, S, St>::new(NO_SLOT, &self.waiters, &self.st)
+                        .ready_generation(&self.s)
+                }))
+                .await?;
             }
-            self.s.call(req, ctx.into_call()).await
+            let ctx = Ctx::<'_, S, St>::new(NO_SLOT, &self.waiters, &self.st).into_call();
+            self.s.call(req, ctx).await
         }
     }
 }
@@ -434,14 +441,14 @@ where
     }
 
     fn call(&self, req: Req) -> BoxFuture<'_, Result<S::Res, S::Error>> {
-        box_future(|| self.call_impl(NO_SLOT, req))
+        box_future(|| self.call_impl(req))
     }
 
     fn call_static(self: Rc<Self>, req: Req) -> BoxFuture<'static, Result<S::Res, S::Error>> {
         // SAFETY: `self` is `Rc`-allocated, and `WithOwner` drops the future before it
         let pl = unsafe { detach(&*self) };
         box_future(move || WithOwner {
-            fut: pl.call_impl(NO_SLOT, req),
+            fut: pl.call_impl(req),
             owner: self,
         })
     }
