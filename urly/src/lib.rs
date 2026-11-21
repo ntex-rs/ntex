@@ -43,12 +43,14 @@ macro_rules! str_type {
     ($name:ident) => {
         impl $name {
             #[allow(dead_code)]
+            #[inline]
             pub(crate) const fn from_str_unchecked(s: &str) -> &$name {
                 // SAFETY: the type is a `repr(transparent)` wrapper around `str`
                 unsafe { &*(s as *const str as *const $name) }
             }
 
             /// Returns the component as a string slice.
+            #[inline]
             pub const fn as_str(&self) -> &str {
                 &self.0
             }
@@ -70,6 +72,7 @@ macro_rules! str_type {
 macro_rules! str_fmt {
     ($name:ident) => {
         impl AsRef<str> for $name {
+            #[inline]
             fn as_ref(&self) -> &str {
                 self.as_str()
             }
@@ -93,6 +96,7 @@ macro_rules! str_fmt {
 macro_rules! str_eq {
     ($name:ident) => {
         impl PartialEq for $name {
+            #[inline]
             fn eq(&self, other: &$name) -> bool {
                 self.as_str() == other.as_str()
             }
@@ -101,24 +105,28 @@ macro_rules! str_eq {
         impl Eq for $name {}
 
         impl PartialEq<str> for $name {
+            #[inline]
             fn eq(&self, other: &str) -> bool {
                 self.as_str() == other
             }
         }
 
         impl PartialEq<&str> for $name {
+            #[inline]
             fn eq(&self, other: &&str) -> bool {
                 self.as_str() == *other
             }
         }
 
         impl PartialEq<$name> for str {
+            #[inline]
             fn eq(&self, other: &$name) -> bool {
                 self == other.as_str()
             }
         }
 
         impl PartialEq<$name> for &str {
+            #[inline]
             fn eq(&self, other: &$name) -> bool {
                 *self == other.as_str()
             }

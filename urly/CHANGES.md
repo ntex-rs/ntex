@@ -1,5 +1,16 @@
 # Changes
 
+## [1.4.2] - 2026-11-21
+
+* `Url::from_target_parts()` builds `scheme://authority/path` targets, the usual
+  HTTP/2 request, with a single sized copy instead of generic assembly
+
+* Component accessors such as `Url::path()` and `Url::query()` are inlined and
+  slice without repeating bounds and char-boundary checks
+
+* Faster `Url::from_target_parts()`: the target copy is unrolled, and searches
+  for `?` stop at the first matching 16-byte block without rescanning it
+
 ## [1.4.1] - 2026-11-12
 
 * Faster URL assembly and authority splitting: `?`, `#`, `@`, and `:` are found

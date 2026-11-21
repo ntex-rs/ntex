@@ -55,18 +55,29 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, OtSt>) -> Result<S::Res, S::Error> {
-        self.s.call(req, ctx.map_state(&self.st).cast()).await
+    #[allow(clippy::manual_async_fn)]
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, OtSt>,
+    ) -> impl Future<Output = Result<S::Res, S::Error>> {
+        // See `ready`.
+        async move { self.s.call(req, ctx.map_state(&self.st).cast()).await }
     }
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, OtSt>) -> Result<(), S::Error> {
-        self.s.ready(ctx.map_state(&self.st).cast()).await
+    #[allow(clippy::manual_async_fn)]
+    fn ready(&self, ctx: Ctx<'_, Self, OtSt>) -> impl Future<Output = Result<(), S::Error>> {
+        // An `async fn` would store `ctx` twice; `map_state` borrows `ctx`,
+        // so the mapped context must be created inside the block.
+        async move { self.s.ready(ctx.map_state(&self.st).cast()).await }
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: Ctx<'_, Self, OtSt>) {
-        self.s.shutdown(ctx.map_state(&self.st).cast()).await;
+    #[allow(clippy::manual_async_fn)]
+    fn shutdown(&self, ctx: Ctx<'_, Self, OtSt>) -> impl Future<Output = ()> {
+        // See `ready`.
+        async move { self.s.shutdown(ctx.map_state(&self.st).cast()).await }
     }
 }
 

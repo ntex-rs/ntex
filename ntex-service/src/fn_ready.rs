@@ -69,13 +69,13 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Err> {
-        (self.f)(ctx.st()).await
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Err>> {
+        (self.f)(ctx.st())
     }
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Req, Err> {
-        Ok(req)
+    fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> impl Future<Output = Result<Req, Err>> {
+        std::future::ready(Ok(req))
     }
 }
 

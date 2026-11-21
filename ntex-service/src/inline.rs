@@ -19,7 +19,7 @@
 //! # }
 //! ```
 use std::marker::{PhantomData, PhantomPinned};
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::task::{Context, Poll};
 use std::{fmt, pin::Pin, ptr};
 
@@ -52,6 +52,19 @@ struct VTable<T> {
     poll: unsafe fn(*mut (), &mut Context<'_>) -> Poll<T>,
     drop: unsafe fn(*mut ()),
 }
+
+impl<T> VTable<T> {
+    const EMPTY: Self = VTable {
+        poll: poll_empty::<T>,
+        drop: drop_empty,
+    };
+}
+
+unsafe fn poll_empty<T>(_: *mut (), _: &mut Context<'_>) -> Poll<T> {
+    panic!("`InlineFuture` polled while empty")
+}
+
+unsafe fn drop_empty(_: *mut ()) {}
 
 struct VTableOf<F>(PhantomData<F>);
 
@@ -112,6 +125,85 @@ impl<'a, T, const WORDS: usize> InlineFuture<'a, T, WORDS> {
         }
     }
 
+    /// Creates an empty placeholder, to be filled by [`set_with`](Self::set_with)
+    /// once pinned.
+    ///
+    /// Polling an empty future panics, dropping it does nothing.
+    #[inline]
+    #[must_use]
+    pub const fn empty() -> Self {
+        InlineFuture {
+            vtable: &VTable::EMPTY,
+            slot: MaybeUninit::uninit(),
+            _t: PhantomData,
+            _p: PhantomPinned,
+        }
+    }
+
+    /// Drops the stored future and replaces it with the future returned by
+    /// `f`, storing it inline if it fits and boxing it otherwise.
+    ///
+    /// The new future is built directly in the pinned storage, so a large
+    /// future is never copied. With [`empty`](Self::empty), this lets a callee
+    /// build its future in storage owned by the caller instead of returning
+    /// it by value.
+    ///
+    /// If dropping the previous future or calling `f` panics, the future is
+    /// left empty.
+    ///
+    /// ```
+    /// use std::pin::{Pin, pin};
+    /// use ntex_service::dev::InlineFuture;
+    ///
+    /// fn double(value: u32, fut: Pin<&mut InlineFuture<'static, u32, 4>>) {
+    ///     fut.set_with(|| async move { value * 2 });
+    /// }
+    ///
+    /// # async fn example() {
+    /// let mut fut = pin!(InlineFuture::empty());
+    /// double(21, fut.as_mut());
+    /// assert_eq!(fut.await, 42);
+    /// # }
+    /// ```
+    #[inline]
+    pub fn set_with<F>(self: Pin<&mut Self>, f: impl FnOnce() -> F)
+    where
+        F: Future<Output = T> + 'a,
+    {
+        // SAFETY: the stored future is dropped and replaced in place, it is
+        // never moved
+        let this = unsafe { self.get_unchecked_mut() };
+
+        // Stay empty until the new future is written, so a panic while dropping
+        // the previous one or in `f` leaves nothing to drop twice
+        let prev = mem::replace(&mut this.vtable, &VTable::EMPTY);
+        // SAFETY: the slot holds the future described by `prev`
+        unsafe { (prev.drop)((&raw mut this.slot).cast()) };
+
+        if Self::fits::<F>() {
+            // SAFETY: `F` fits into the slot, which holds no future
+            unsafe { this.write_inline(f) }
+        } else {
+            let fut = Box::<F>::new_uninit();
+            // SAFETY: a box is a single pointer, the slot holds at least one
+            unsafe { this.write_inline(|| Box::into_pin(Box::write(fut, f()))) }
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `F` must fit into the slot, and the slot must not hold a future.
+    unsafe fn write_inline<F>(&mut self, f: impl FnOnce() -> F)
+    where
+        F: Future<Output = T> + 'a,
+    {
+        debug_assert!(Self::fits::<F>());
+
+        // SAFETY: the slot is large enough and aligned for `F`
+        unsafe { (&raw mut self.slot).cast::<F>().write(f()) };
+        self.vtable = &VTableOf::<F>::VTABLE;
+    }
+
     /// Returns `true` if a future of type `F` is stored inline.
     pub const fn fits<F>() -> bool {
         size_of::<F>() <= size_of::<Slot<WORDS>>() && align_of::<F>() <= align_of::<Slot<WORDS>>()
@@ -168,6 +260,7 @@ impl<T, const WORDS: usize> fmt::Debug for InlineFuture<'_, T, WORDS> {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::{cell::Cell, future::poll_fn, pin::pin, rc::Rc};
 
     use super::*;
@@ -410,6 +503,87 @@ mod tests {
                 }
             });
             assert!(res.is_err());
+        }
+    }
+
+    /// STATEMENT: `set_with` drops the stored future once and builds the new one in place.
+    ///
+    /// HOW:
+    /// - Pin an empty `InlineFuture`, `set_with` an inline future holding a drop-counting
+    ///   guard, and poll it to `Pending`.
+    /// - `set_with` a boxed future holding another guard and check that only the first
+    ///   guard was dropped.
+    /// - Poll the new future to its output, check that the second guard was dropped on
+    ///   completion, then drop the `InlineFuture` and check that nothing more is dropped.
+    #[test]
+    fn set_with_replaces_future_in_place() {
+        let cnt = Rc::new(Cell::new(0));
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut fut = Box::pin(Fut::<u32>::empty());
+
+        let guard = DropGuard(cnt.clone());
+        fut.as_mut().set_with(|| async move {
+            yield_once().await;
+            drop(guard);
+            unreachable!()
+        });
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(cnt.get(), 0);
+
+        let guard = DropGuard(cnt.clone());
+        let large = async move {
+            let buf = [9u8; 1024];
+            yield_once().await;
+            let _guard = &guard;
+            u32::from(buf[1023])
+        };
+        assert!(!fits_of::<_, WORDS>(&large));
+        fut.as_mut().set_with(|| large);
+        assert_eq!(cnt.get(), 1);
+
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(fut.as_mut().poll(&mut cx), Poll::Ready(9));
+        assert_eq!(cnt.get(), 2);
+        drop(fut);
+        assert_eq!(cnt.get(), 2);
+    }
+
+    /// STATEMENT: A panic while `set_with` builds the future leaves an empty future, the
+    /// previous future is dropped once and polling panics.
+    ///
+    /// HOW:
+    /// - Store an inline `Padded<3>` future holding a drop-counting guard.
+    /// - Call `set_with` with a closure that panics while building an inline `Padded<3>`
+    ///   or a boxed `Padded<4>`, inside `catch_unwind`, and check the guard count is 1.
+    /// - Check that polling panics with the empty-future message and that dropping the
+    ///   `InlineFuture` drops nothing more.
+    #[test]
+    fn panic_in_set_with_leaves_empty_future() {
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+
+        for large in [false, true] {
+            let cnt = Rc::new(Cell::new(0));
+            let mut fut = Box::pin(Fut::<bool>::empty());
+            fut.as_mut()
+                .set_with(|| Padded::<3>::new(Some(DropGuard(cnt.clone()))));
+
+            let res = catch_unwind(AssertUnwindSafe(|| {
+                if large {
+                    fut.as_mut().set_with(|| -> Padded<4> { panic!("build") });
+                } else {
+                    fut.as_mut().set_with(|| -> Padded<3> { panic!("build") });
+                }
+            }));
+            assert!(res.is_err());
+            assert_eq!(cnt.get(), 1);
+
+            let err = catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(&mut cx))).unwrap_err();
+            assert_eq!(
+                err.downcast_ref::<&str>(),
+                Some(&"`InlineFuture` polled while empty")
+            );
+            drop(fut);
+            assert_eq!(cnt.get(), 1);
         }
     }
 
