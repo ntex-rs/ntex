@@ -493,29 +493,29 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     ///     }
     /// }
     /// ```
-    pub fn call<S, Req>(
+    pub fn call<'b, S, Req>(
         &self,
-        svc: &'a S,
+        svc: &'b S,
         req: Req,
-    ) -> impl Future<Output = Result<S::Res, S::Error>>
+    ) -> impl Future<Output = Result<S::Res, S::Error>> + use<'a, 'b, Svc, St, S, Req>
     where
         S: Service<St, Req>,
     {
         ReadyThenCall::new(
             (svc, self.cast::<S>()),
             req,
-            |&(svc, ctx): &(&'a S, Ctx<'a, S, St>)| {
+            |&(svc, ctx): &(&'b S, Ctx<'a, S, St>)| {
                 (!ctx.scope.is_ready()).then(|| ctx.ready_cached(svc))
             },
-            |(svc, ctx): (&'a S, Ctx<'a, S, St>), req| svc.call(req, ctx.into_call()),
+            |(svc, ctx): (&'b S, Ctx<'a, S, St>), req| svc.call(req, ctx.into_call()),
         )
     }
 
     #[allow(clippy::manual_async_fn)]
-    pub(crate) fn ready_cached<S, Req>(
+    pub(crate) fn ready_cached<'b, S, Req>(
         self,
-        svc: &'a S,
-    ) -> impl Future<Output = Result<(), S::Error>>
+        svc: &'b S,
+    ) -> impl Future<Output = Result<(), S::Error>> + use<'a, 'b, Svc, St, S, Req>
     where
         S: Service<St, Req>,
     {

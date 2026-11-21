@@ -38,6 +38,10 @@
   `PipelineBinding::call_static()` futures no longer store the call context, so
   they are 32 bytes smaller
 
+* `Ctx::call()` no longer ties the called service to the context lifetime and its
+  future does not borrow the context, so a plain `fn call(..) -> impl Future` can
+  return it without an `async` block
+
 * Boxed pipeline call futures whose size fills a mimalloc size class that is
   not a power of two get 8 bytes of padding, so `mimalloc`'s aligned
   allocation keeps its fast path
