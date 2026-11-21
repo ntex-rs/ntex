@@ -270,6 +270,8 @@ fn strip_default_port<'a>(scheme: Option<&str>, authority: &'a str) -> &'a str {
 }
 
 /// Concatenates `pieces` of total length `len` with a single copy.
+// inlining unrolls the copies for the constant number of pieces
+#[inline(always)]
 fn concat(pieces: &[&str], len: usize) -> ByteString {
     // short urls are stored inline in `Bytes`, without allocation
     const INLINE: usize = 23;

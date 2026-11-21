@@ -180,8 +180,15 @@ pub(crate) fn find_byte(b: &[u8], c: u8) -> Option<usize> {
     let pat = LO * u64::from(c);
     let mut off = 0;
     for ch in b.as_chunks::<16>().0 {
-        if first_zero(word(ch) ^ pat) | first_zero(word(&ch[8..]) ^ pat) != 0 {
-            break;
+        let lo = first_zero(word(ch) ^ pat);
+        let hi = first_zero(word(&ch[8..]) ^ pat);
+        if lo | hi != 0 {
+            let pos = if lo != 0 {
+                lo.trailing_zeros()
+            } else {
+                64 + hi.trailing_zeros()
+            };
+            return Some(off + (pos / 8) as usize);
         }
         off += 16;
     }
