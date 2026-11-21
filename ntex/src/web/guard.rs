@@ -390,9 +390,10 @@ impl HostGuard {
     #[must_use]
     /// Set request scheme to match.
     ///
-    /// The scheme is taken from the request uri if it is in absolute-form, or
-    /// from the `Host` header value otherwise. The guard fails closed: a request
-    /// that carries no scheme does not match. Ordinary origin-form requests
+    /// The scheme is taken from the request uri if it is in absolute-form, from
+    /// the `:scheme` pseudo-header of an HTTP/2 request, or from the `Host`
+    /// header value otherwise. The guard fails closed: a request
+    /// that carries no scheme does not match. Ordinary HTTP/1 origin-form requests
     /// (`GET /path` with `Host: example.com`) and authority-form `CONNECT`
     /// requests carry no scheme, so a guard with a scheme rejects them. The
     /// scheme is not derived from the connection, so this does not tell whether
@@ -401,29 +402,30 @@ impl HostGuard {
         self.1 = Some(scheme.as_ref().to_string());
         self
     }
+
+    fn matches(&self, host: Option<&str>, scheme: Option<&str>) -> bool {
+        host.is_some_and(|h| self.0.eq_ignore_ascii_case(h))
+            && self
+                .1
+                .as_ref()
+                .is_none_or(|s| scheme.is_some_and(|r| s.eq_ignore_ascii_case(r)))
+    }
 }
 
 impl Guard for HostGuard {
     fn check(&self, req: &RequestHead) -> bool {
-        let Some(req_host_uri) = get_host_uri(req) else {
+        // an HTTP/2 request carries its authority in `:authority`, which takes
+        // precedence over `Host`, see RFC 9113 section 8.3.1
+        if req.uri.authority().is_none()
+            && let Some(authority) = req.authority.as_deref()
+        {
+            let uri = Url::from_target_parts(None, Some(authority), "").ok();
+            return self.matches(uri.as_ref().and_then(Url::host), req.scheme.as_deref());
+        }
+        let Some(uri) = get_host_uri(req) else {
             return false;
         };
-
-        if let Some(uri_host) = req_host_uri.host() {
-            if !self.0.eq_ignore_ascii_case(uri_host) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-
-        if let Some(ref scheme) = self.1 {
-            return req_host_uri
-                .scheme_str()
-                .is_some_and(|s| scheme.eq_ignore_ascii_case(s));
-        }
-
-        true
+        self.matches(uri.host(), uri.scheme_str())
     }
 
     /// Debug format
@@ -585,6 +587,33 @@ mod tests {
             .header(header::HOST, "www.rust-lang.org/p")
             .to_http_request();
         assert!(!Host("www.rust-lang.org").check(req.head()));
+    }
+
+    /// STATEMENT: The HTTP/2 `:authority` and `:scheme` take precedence over `Host`.
+    ///
+    /// HOW:
+    /// - Set the head authority and scheme next to a conflicting `Host` header and assert
+    ///   the host and scheme come from the pseudo-headers only.
+    /// - Set an empty authority and assert no host matches, then clear it and assert
+    ///   `Host` is used again.
+    #[test]
+    fn test_host_h2_authority() {
+        let mut req = TestRequest::default()
+            .header(header::HOST, "crates.io")
+            .to_http_request();
+        req.head_mut().scheme = Some("https".into());
+        req.head_mut().authority = Some("www.rust-lang.org:8443".into());
+        assert!(Host("www.rust-lang.org").check(req.head()));
+        assert!(Host("www.rust-lang.org").scheme("https").check(req.head()));
+        assert!(!Host("www.rust-lang.org").scheme("http").check(req.head()));
+        assert!(!Host("crates.io").check(req.head()));
+
+        req.head_mut().authority = Some("".into());
+        assert!(!Host("crates.io").check(req.head()));
+        assert!(!Host("").check(req.head()));
+
+        req.head_mut().authority = None;
+        assert!(Host("crates.io").check(req.head()));
     }
 
     /// STATEMENT: Method guards accept their own HTTP method and reject other methods.

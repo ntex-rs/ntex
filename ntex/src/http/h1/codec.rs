@@ -164,6 +164,7 @@ impl Decoder for Codec {
     type Item = (Request, PayloadType);
     type Error = DecodeError;
 
+    #[inline]
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if let Some((mut req, payload)) = self.decoder.decode(src)? {
             let head = req.head_mut();

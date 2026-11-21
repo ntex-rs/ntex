@@ -1,4 +1,4 @@
-use std::{cell::Ref, cell::RefMut, convert::Infallible, fmt, net, rc::Rc};
+use std::{cell::Ref, cell::RefMut, convert::Infallible, fmt, future, net, rc::Rc};
 
 use urly::Url;
 
@@ -287,8 +287,12 @@ impl<St: State> FromRequest<St> for HttpRequest {
     type Error = Infallible;
 
     #[inline]
-    async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
-        Ok(req.clone())
+    fn from_request(
+        _: &St,
+        req: &HttpRequest,
+        _: &mut Payload,
+    ) -> impl Future<Output = Result<Self, Self::Error>> {
+        future::ready(Ok(req.clone()))
     }
 }
 

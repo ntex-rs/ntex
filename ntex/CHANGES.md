@@ -1,5 +1,57 @@
 # Changes
 
+## [4.10.0] - Unreleased
+
+* http: HTTP/2 request `uri()` is origin-form and holds only `:path`;
+  `:scheme` and `:authority` are available from the new `RequestHead::scheme()`
+  and `RequestHead::authority()`, which `ConnectionInfo` and `guard::Host` use.
+  Building the request no longer assembles an absolute URI from the pseudo-headers
+
+* http: The HTTP/1 request decoder is inlined into the I/O decode path, so the
+  decoded request head and payload are no longer copied through an extra return
+  slot
+
+* http: HTTP/2 responses scan header names once to find connection-specific,
+  `content-length` and `date` headers instead of removing and looking up each
+  by name
+
+* http: HTTP/2 requests skip counting header fields when the ntex-h2 decoder
+  limit (`Http2ServiceConfig::set_max_headers`) already enforces
+  `HttpServiceConfig::max_headers`; requires ntex-h2 4.7.0
+
+* http: HTTP/2 requests are validated and built before the per-stream future is
+  created, so that future no longer keeps the h2 message and request target
+  and drops from 832 to 504 bytes; the boxed pipeline call drops from 1080 to
+  752 bytes and fits allocator small-size caches
+
+* web: Route handler futures are built in place inside the router and route call
+  futures instead of being returned by value and copied
+
+* web: The default identity filter is skipped with an inlined direct call instead
+  of a stored function pointer, so the request is no longer passed through memory
+
+* web: Route matching is inlined and skips the guard check for routes without
+  custom guards
+
+* web: App router readiness no longer stores the context twice and the cached
+  service skips its own readiness layer, so the pipeline readiness future drops
+  from 1088 to 904 bytes and fits allocator small-size caches
+
+* web: Handler futures with body extractors (`Bytes`, `Json`, `Form`) are smaller,
+  so they fit the 32-word inline slot and are no longer boxed (for example
+  `(Query, Bytes)` from 336 to 192 bytes on 64-bit)
+
+* web: `Json`, `Form`, `String`, `Payload`, `Path`, `Query`, `HttpRequest` and `()`
+  extractors return plain futures instead of `async fn` state machines, so
+  extractor futures are smaller (for example `Json<T>` from 152 to 88 bytes and a
+  `Json` handler future from 240 to 176 bytes on 64-bit). Config and content-type
+  checks now run when the extractor future is created
+
+* web: The app and app router call futures no longer store the request and
+  context twice, and the app builds the web request before the inner call
+  instead of inside an `async` block, so the boxed HTTP/1 pipeline call drops
+  from 728 to 504 bytes and fits allocator small-size caches
+
 ## [4.9.3] - 2026-11-19
 
 * web: Handler futures are stored using `ntex_service::dev::InlineFuture`, futures

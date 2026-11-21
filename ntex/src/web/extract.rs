@@ -1,5 +1,5 @@
 //! Request extractors
-use std::convert::Infallible;
+use std::{convert::Infallible, future, future::Future};
 
 use super::{HttpRequest, State, WebResponseError};
 use crate::http::Payload;
@@ -233,8 +233,12 @@ impl<St: State> FromRequest<St> for () {
     type Error = Infallible;
 
     #[inline]
-    async fn from_request(_: &St, _: &HttpRequest, _: &mut Payload) -> Result<(), Self::Error> {
-        Ok(())
+    fn from_request(
+        _: &St,
+        _: &HttpRequest,
+        _: &mut Payload,
+    ) -> impl Future<Output = Result<(), Self::Error>> {
+        future::ready(Ok(()))
     }
 }
 
@@ -249,12 +253,17 @@ macro_rules! tuple_from_req {
         {
             type Error = $crate::web::InternalError<&'static str>;
 
-            async fn from_request(st: &St, req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
-                Ok((
-                    $($T::from_request(st, req, payload).await.map_err(
-                        |e|
-                        $crate::web::InternalError::from_response("Error", e.error_response(st)))?,)+
-                ))
+            // An `async` block, unlike an `async fn`, does not keep a second copy
+            // of the arguments in the future
+            #[allow(clippy::manual_async_fn)]
+            fn from_request(st: &St, req: &HttpRequest, payload: &mut Payload) -> impl Future<Output = Result<($($T,)+), Self::Error>> {
+                async move {
+                    Ok((
+                        $($T::from_request(st, req, payload).await.map_err(
+                            |e|
+                            $crate::web::InternalError::from_response("Error", e.error_response(st)))?,)+
+                    ))
+                }
             }
         }
     }

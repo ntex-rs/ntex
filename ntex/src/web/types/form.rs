@@ -1,6 +1,7 @@
 //! Form extractor
 use std::task::{Context, Poll, ready};
-use std::{borrow::Cow, fmt, future::Future, marker::PhantomData, ops, pin::Pin, str};
+use std::{borrow::Cow, fmt, future::Future, future::poll_fn, marker::PhantomData, mem, ops};
+use std::{pin::Pin, str};
 
 use encoding_rs::{Encoding, UTF_8};
 use serde::{Serialize, de::DeserializeOwned};
@@ -106,17 +107,16 @@ where
 {
     type Error = UrlencodedError;
 
-    async fn from_request(
+    // Checks run when the future is created, so it holds only the body reader
+    fn from_request(
         _: &St,
         req: &HttpRequest,
         payload: &mut Payload,
-    ) -> Result<Self, Self::Error> {
+    ) -> impl Future<Output = Result<Self, Self::Error>> {
         let limit = req.app_value::<FormConfig>().map_or(16384, |c| c.limit);
 
-        match UrlEncoded::new(req, payload).limit(limit).await {
-            Err(e) => Err(e),
-            Ok(item) => Ok(Form(item)),
-        }
+        let mut body = UrlEncoded::new(req, payload).limit(limit);
+        poll_fn(move |cx| Pin::new(&mut body).poll(cx).map_ok(Form))
     }
 }
 
@@ -215,11 +215,14 @@ impl Default for FormConfig {
 /// * content-length is greater than the limit (32k by default; the `Form`
 ///   extractor sets it from [`FormConfig`], 16k by default)
 ///
-struct UrlEncoded<U> {
-    body: Option<super::ReadBody<super::BodyStream>>,
-    encoding: &'static Encoding,
-    err: Option<UrlencodedError>,
-    _t: PhantomData<fn() -> U>,
+enum UrlEncoded<U> {
+    Body(
+        super::ReadBody<super::BodyStream>,
+        &'static Encoding,
+        PhantomData<fn() -> U>,
+    ),
+    Err(UrlencodedError),
+    Done,
 }
 
 impl<U> UrlEncoded<U> {
@@ -249,26 +252,20 @@ impl<U> UrlEncoded<U> {
             }
         }
 
-        UrlEncoded {
+        UrlEncoded::Body(
+            super::ReadBody::from_request(req, payload, 32_768).length(len),
             encoding,
-            body: Some(super::ReadBody::from_request(req, payload, 32_768).length(len)),
-            err: None,
-            _t: PhantomData,
-        }
+            PhantomData,
+        )
     }
 
     fn err(e: UrlencodedError) -> Self {
-        UrlEncoded {
-            body: None,
-            err: Some(e),
-            encoding: UTF_8,
-            _t: PhantomData,
-        }
+        UrlEncoded::Err(e)
     }
 
     /// Change max size of payload. By default max size is 32Kb
     fn limit(mut self, limit: usize) -> Self {
-        if let Some(body) = self.body.as_mut() {
+        if let UrlEncoded::Body(body, _, _) = &mut self {
             body.limit = limit;
         }
         self
@@ -281,14 +278,20 @@ where
 {
     type Output = Result<U, UrlencodedError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(err) = self.err.take() {
-            return Poll::Ready(Err(err));
-        }
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let (body, encoding) = match this {
+            UrlEncoded::Body(body, encoding, _) => (body, *encoding),
+            UrlEncoded::Err(_) => {
+                let UrlEncoded::Err(err) = mem::replace(this, UrlEncoded::Done) else {
+                    unreachable!()
+                };
+                return Poll::Ready(Err(err));
+            }
+            UrlEncoded::Done => panic!("polled after completion"),
+        };
 
         // payload size
-        let encoding = self.encoding;
-        let body = self.body.as_mut().expect("polled after completion");
         let limit = body.limit;
         if let Some(len) = body.length
             && len > limit

@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomData, rc::Rc};
+use std::{fmt, marker::PhantomData, pin::Pin, rc::Rc};
 
 use crate::service::dev::InlineFuture;
 
@@ -81,7 +81,8 @@ where
 }
 
 pub(super) trait HandlerFn<St: State, U>: fmt::Debug {
-    fn call<'a>(&'a self, _: &'a St, _: WebRequest<U>) -> HandlerFuture<'a>;
+    /// Builds the handler future for `req` in `fut`, replacing its current future.
+    fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>, fut: Pin<&mut HandlerFuture<'a>>);
 }
 
 /// Size of the inline handler future storage, in words.
@@ -124,9 +125,11 @@ where
     T::Error: WebResponseError<St, St::Error>,
     St: State,
 {
-    fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>) -> HandlerFuture<'a> {
-        HandlerFuture::new_with(|| async move {
-            let (req, mut payload, reqst) = req.into_parts();
+    fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>, fut: Pin<&mut HandlerFuture<'a>>) {
+        // split before the async block, so the dead `WebRequest` is not kept
+        // in every state of the handler future
+        let (req, mut payload, reqst) = req.into_parts();
+        fut.set_with(|| async move {
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
                 Err(e) => return WebResponse::from_err(st, &e, req),
@@ -135,7 +138,7 @@ where
             let result = self.hnd.call(st, reqst, param).await;
             let response = result.respond_to(st, &req).await;
             WebResponse::new(response, req)
-        })
+        });
     }
 }
 
@@ -173,9 +176,9 @@ where
     T::Error: WebResponseError<St, St::Error>,
     St: State,
 {
-    fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>) -> HandlerFuture<'a> {
-        HandlerFuture::new_with(|| async move {
-            let (req, mut payload, _) = req.into_parts();
+    fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>, fut: Pin<&mut HandlerFuture<'a>>) {
+        let (req, mut payload, _) = req.into_parts();
+        fut.set_with(|| async move {
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
                 Err(e) => return WebResponse::from_err(st, &e, req),
@@ -184,7 +187,7 @@ where
             let result = self.hnd.call(param).await;
             let response = result.respond_to(st, &req).await;
             WebResponse::new(response, req)
-        })
+        });
     }
 }
 

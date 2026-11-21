@@ -1,5 +1,5 @@
 //! Path extractor
-use std::{fmt, ops};
+use std::{fmt, future, ops};
 
 use serde::de;
 
@@ -169,17 +169,23 @@ where
 {
     type Error = PathError;
 
-    async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
-        de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
-            .map(|inner| Path { inner })
-            .map_err(move |e| {
-                log::debug!(
-                    "Failed during Path extractor deserialization. \
-                     Request path: {:?}",
-                    req.path()
-                );
-                PathError::from(e)
-            })
+    fn from_request(
+        _: &St,
+        req: &HttpRequest,
+        _: &mut Payload,
+    ) -> impl Future<Output = Result<Self, Self::Error>> {
+        future::ready(
+            de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
+                .map(|inner| Path { inner })
+                .map_err(move |e| {
+                    log::debug!(
+                        "Failed during Path extractor deserialization. \
+                         Request path: {:?}",
+                        req.path()
+                    );
+                    PathError::from(e)
+                }),
+        )
     }
 }
 

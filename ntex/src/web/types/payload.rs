@@ -1,8 +1,7 @@
 //! Payload/Bytes/String extractors
-use std::{
-    borrow::Cow, convert::Infallible, fmt, future::Future, pin::Pin, str, sync::Arc, task::Context,
-    task::Poll,
-};
+use std::future::{Future, poll_fn, ready};
+use std::{borrow::Cow, convert::Infallible, fmt, mem, pin::Pin, str, sync::Arc};
+use std::{task::Context, task::Poll, task::ready};
 
 use encoding_rs::UTF_8;
 use mime::Mime;
@@ -114,12 +113,12 @@ impl<St: State> FromRequest<St> for Payload {
     type Error = Infallible;
 
     #[inline]
-    async fn from_request(
+    fn from_request(
         _: &St,
         _: &HttpRequest,
         payload: &mut crate::http::Payload,
-    ) -> Result<Payload, Self::Error> {
-        Ok(Payload(payload.take()))
+    ) -> impl Future<Output = Result<Payload, Self::Error>> {
+        ready(Ok(Payload(payload.take())))
     }
 }
 
@@ -150,11 +149,12 @@ impl<St: State> FromRequest<St> for Payload {
 impl<St: State> FromRequest<St> for Bytes {
     type Error = PayloadError;
 
-    async fn from_request(
+    // Checks run when the future is created, so it holds only the body reader
+    fn from_request(
         _: &St,
         req: &HttpRequest,
         payload: &mut crate::http::Payload,
-    ) -> Result<Bytes, Self::Error> {
+    ) -> impl Future<Output = Result<Bytes, Self::Error>> {
         let tmp;
         let cfg = if let Some(cfg) = req.app_value::<PayloadConfig>() {
             cfg
@@ -163,11 +163,9 @@ impl<St: State> FromRequest<St> for Bytes {
             &tmp
         };
 
-        if let Err(e) = cfg.check_mimetype(req) {
-            Err(e)
-        } else {
-            let limit = cfg.limit;
-            HttpMessageBody::new(req, payload).limit(limit).await
+        match cfg.check_mimetype(req) {
+            Ok(()) => HttpMessageBody::new(req, payload).limit(cfg.limit),
+            Err(e) => HttpMessageBody::err(e),
         }
     }
 }
@@ -204,11 +202,12 @@ impl<St: State> FromRequest<St> for Bytes {
 impl<St: State> FromRequest<St> for String {
     type Error = PayloadError;
 
-    async fn from_request(
+    // Checks run when the future is created, so it holds only the body reader
+    fn from_request(
         _: &St,
         req: &HttpRequest,
         payload: &mut crate::http::Payload,
-    ) -> Result<String, Self::Error> {
+    ) -> impl Future<Output = Result<String, Self::Error>> {
         let tmp;
         let cfg = if let Some(cfg) = req.app_value::<PayloadConfig>() {
             cfg
@@ -217,27 +216,28 @@ impl<St: State> FromRequest<St> for String {
             &tmp
         };
 
-        // check content-type
-        cfg.check_mimetype(req)?;
-
-        // check charset
-        let encoding = match req.encoding() {
-            Ok(enc) => enc,
-            Err(e) => return Err(PayloadError::from(e)),
+        // check content-type, then charset
+        let checked = cfg
+            .check_mimetype(req)
+            .and_then(|()| req.encoding().map_err(PayloadError::from));
+        let (mut body, encoding) = match checked {
+            Ok(enc) => (HttpMessageBody::new(req, payload).limit(cfg.limit), enc),
+            Err(e) => (HttpMessageBody::err(e), UTF_8),
         };
-        let limit = cfg.limit;
-        let body = HttpMessageBody::new(req, payload).limit(limit).await?;
 
-        if encoding == UTF_8 {
-            Ok(str::from_utf8(body.as_ref())
-                .map_err(|_| PayloadError::Decoding)?
-                .to_owned())
-        } else {
-            Ok(encoding
-                .decode_without_bom_handling_and_without_replacement(&body)
-                .map(Cow::into_owned)
-                .ok_or(PayloadError::Decoding)?)
-        }
+        poll_fn(move |cx| {
+            let body = ready!(Pin::new(&mut body).poll(cx))?;
+            Poll::Ready(if encoding == UTF_8 {
+                str::from_utf8(body.as_ref())
+                    .map(str::to_owned)
+                    .map_err(|_| PayloadError::Decoding)
+            } else {
+                encoding
+                    .decode_without_bom_handling_and_without_replacement(&body)
+                    .map(Cow::into_owned)
+                    .ok_or(PayloadError::Decoding)
+            })
+        })
     }
 }
 
@@ -348,9 +348,10 @@ impl fmt::Debug for PayloadConfig {
 /// By default only 256Kb payload reads to a memory, then
 /// `PayloadError::Overflow` is returned. Use `HttpMessageBody::limit()`
 /// method to change upper limit.
-struct HttpMessageBody {
-    body: Option<super::ReadBody<super::BodyStream>>,
-    err: Option<PayloadError>,
+enum HttpMessageBody {
+    Body(super::ReadBody<super::BodyStream>),
+    Err(PayloadError),
+    Done,
 }
 
 impl HttpMessageBody {
@@ -369,37 +370,37 @@ impl HttpMessageBody {
             }
         }
 
-        HttpMessageBody {
-            body: Some(super::ReadBody::from_request(req, payload, 262_144).length(len)),
-            err: None,
-        }
+        HttpMessageBody::Body(super::ReadBody::from_request(req, payload, 262_144).length(len))
     }
 
     /// Change max size of payload. By default max size is 256Kb
     fn limit(mut self, limit: usize) -> Self {
-        if let Some(body) = self.body.as_mut() {
+        if let HttpMessageBody::Body(body) = &mut self {
             body.limit = limit;
         }
         self
     }
 
     fn err(e: PayloadError) -> Self {
-        HttpMessageBody {
-            body: None,
-            err: Some(e),
-        }
+        HttpMessageBody::Err(e)
     }
 }
 
 impl Future for HttpMessageBody {
     type Output = Result<Bytes, PayloadError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(err) = self.err.take() {
-            return Poll::Ready(Err(err));
-        }
-
-        let body = self.body.as_mut().expect("polled after completion");
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let body = match this {
+            HttpMessageBody::Body(body) => body,
+            HttpMessageBody::Err(_) => {
+                let HttpMessageBody::Err(err) = mem::replace(this, HttpMessageBody::Done) else {
+                    unreachable!()
+                };
+                return Poll::Ready(Err(err));
+            }
+            HttpMessageBody::Done => panic!("polled after completion"),
+        };
         if let Some(len) = body.length
             && len > body.limit
         {

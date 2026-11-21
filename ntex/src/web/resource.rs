@@ -10,7 +10,7 @@ use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
 use super::error::{WebError, WebResponseError};
 use super::guard::Guard;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::stack::{Filter, FilterBypass, WebStack};
+use super::stack::{Filter, WebStack, passthrough};
 use super::{
     FromRequest, Handler, HandlerSt, HttpHandler, HttpService, State, WebRequest, WebResponse,
 };
@@ -610,7 +610,7 @@ where
         if self.default.is_none()
             && TypeId::of::<M>() == TypeId::of::<Identity>()
             && TypeId::of::<Out>() == TypeId::of::<Outer>()
-            && Filter::<St, In>::bypass::<F, Out>().is_some()
+            && Filter::<St, In>::is_identity::<F>()
         {
             let routes: Vec<RouteService<St, Out>> =
                 self.routes.iter().map(Route::service).collect();
@@ -717,7 +717,7 @@ where
             st,
             ResourceService {
                 filter,
-                bypass: Filter::<St, In>::bypass::<F, Out>(),
+                bypass: Filter::<St, In>::is_identity::<F>(),
                 default,
                 routes: self.routes.iter().map(Route::service).collect(),
                 ph: PhantomData,
@@ -735,7 +735,7 @@ where
 pub struct ResourceService<St: State, In, Out, F> {
     filter: F,
     /// Set if `filter` is the identity filter, which is never called.
-    bypass: Option<FilterBypass<In, Out>>,
+    bypass: bool,
     routes: Vec<RouteService<St, Out>>,
     default: Option<ReadyBinding<HttpHandler<St, Out>>>,
     ph: PhantomData<In>,
@@ -744,6 +744,8 @@ pub struct ResourceService<St: State, In, Out, F> {
 impl<St, In, Out, F> Service<St, WebRequest<In>> for ResourceService<St, In, Out, F>
 where
     St: State,
+    In: 'static,
+    Out: 'static,
     F: Service<St, WebRequest<In>, Res = WebRequest<Out>, Error = WebError<St, St::Error>>,
 {
     type Res = WebResponse;
@@ -782,8 +784,8 @@ where
         req: WebRequest<In>,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
-        let mut req = if let Some(bypass) = self.bypass {
-            bypass(req)
+        let mut req = if self.bypass {
+            passthrough::<In, Out>(req)
         } else {
             ctx.call(&self.filter, req).await?
         };
@@ -842,8 +844,8 @@ mod tests {
     /// STATEMENT: Only the default identity filter is bypassed by resource services.
     ///
     /// HOW:
-    /// - Create a resource service without a filter and assert `bypass` is set.
-    /// - Create one with a custom filter and assert `bypass` is unset.
+    /// - Create a resource service without a filter and assert `bypass` is `true`.
+    /// - Create one with a custom filter and assert `bypass` is `false`.
     #[crate::rt_test]
     async fn default_filter_is_bypassed() {
         use crate::service::{IntoServiceFactory, ServiceFactory};
@@ -854,7 +856,7 @@ mod tests {
         .create(&())
         .await
         .unwrap();
-        assert!(srv.bypass.is_some());
+        assert!(srv.bypass);
 
         let srv = IntoServiceFactory::<_, (), WebRequest<()>>::into_factory(
             web::resource("/test")
@@ -864,7 +866,7 @@ mod tests {
         .create(&())
         .await
         .unwrap();
-        assert!(srv.bypass.is_none());
+        assert!(!srv.bypass);
     }
 
     /// STATEMENT: Resource readiness requires both the filter and initialized fallback to be ready.

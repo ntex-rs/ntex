@@ -52,24 +52,26 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 urly = { path = "urly" }
 
+ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "opt-hpack" }
+
 [workspace.dependencies]
-ntex = "4.9.3"
-ntex-bytes = "1.16.0"
+ntex = "4.10.0"
+ntex-bytes = "1.16.1"
 ntex-codec = "2.0.0"
 ntex-dispatcher = "4.5.0"
 ntex-error = "3.1.0"
-ntex-h2 = "4.6.1"
-ntex-http = "2.2.0"
+ntex-h2 = "4.7.0"
+ntex-http = "2.2.1"
 ntex-io = "4.8.0"
 ntex-macros = "4.8.0"
 ntex-net = "4.12.3"
 ntex-router = "2.3.0"
 ntex-rt = "4.10.0"
 ntex-server = "4.6.2"
-ntex-service = "5.9.0"
+ntex-service = "5.9.1"
 ntex-tls = "4.9.0"
 ntex-util = "4.11.1"
-urly = "1.4.1"
+urly = "1.4.2"
 
 ntex-io-uring = "1.2.0"
 ntex-httparse = "2.4.2"
