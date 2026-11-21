@@ -1,8 +1,9 @@
 use std::{fmt, future::poll_fn, marker::PhantomPinned, rc::Rc, task::Context, task::Poll};
 
+use crate::ctx::{NO_SLOT, WaitersRef};
 use crate::ready_call::ReadyThenCall;
 use crate::util::{BoxFuture, WithOwner, box_future};
-use crate::{BindCtx, Ctx, IntoService, ReadyCallback, ReadyLink, Service, ctx::WaitersRef};
+use crate::{BindCtx, Ctx, IntoService, ReadyCallback, ReadyLink, Service};
 
 use crate::pipeline::PipelineBinding;
 use crate::pl_inner::{PipelineApi, PipelineInternalApi, PipelineReadiness, detach};
@@ -366,7 +367,7 @@ trait PipelineStateApi<St, Req, Res, Err> {
     fn reg(&self) -> u32;
     fn unreg(&self, idx: u32);
 
-    /// Calls the service; the returned future owns the call's waiter slot.
+    /// Calls the service without registering a waiter slot.
     fn call<'a>(&'a self, req: Req, st: &'a St) -> BoxFuture<'a, Result<Res, Err>>
     where
         Req: 'a;
@@ -439,13 +440,7 @@ where
     where
         Req: 'a,
     {
-        box_future(|| {
-            let reg = self.waiters.register();
-            WithOwner {
-                fut: self.call_impl(reg.idx, req, st),
-                owner: reg,
-            }
-        })
+        box_future(|| self.call_impl(NO_SLOT, req, st))
     }
 
     fn call_static(
@@ -453,16 +448,11 @@ where
         req: Req,
         owner: Rc<PipelineInternal<St, Req, S::Res, S::Error>>,
     ) -> BoxFuture<'static, Result<S::Res, S::Error>> {
-        // SAFETY: both are `Rc`-allocated, and `WithOwner` drops the future and
-        // then the registration before them
+        // SAFETY: both are `Rc`-allocated, and `WithOwner` drops the future before them
         let (pl, st) = unsafe { (detach(&*self), &detach(&*owner).st) };
-        box_future(move || {
-            let reg = pl.waiters.register();
-            // Tuple fields are dropped in order, so `reg` is released before `self`
-            WithOwner {
-                fut: pl.call_impl(reg.idx, req, st),
-                owner: (reg, self, owner),
-            }
+        box_future(move || WithOwner {
+            fut: pl.call_impl(NO_SLOT, req, st),
+            owner: (self, owner),
         })
     }
 

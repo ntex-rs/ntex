@@ -355,7 +355,7 @@ impl<Req, Res, Err> Clone for PipelineBinding<Req, Res, Err> {
 /// future keeps the pipeline alive. It does not check whether the pipeline is shut
 /// down; the request is passed to the service as usual.
 pub struct PipelineCall<Req, Res, Err> {
-    // owns the pipeline and the call's waiter slot
+    // owns the pipeline
     fut: BoxFuture<'static, Result<Res, Err>>,
     _r: PhantomData<fn(Req)>,
 }

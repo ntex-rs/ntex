@@ -6,6 +6,12 @@ use std::{
 use crate::readiness::{Generation, ReadyScope, RunCheck, ScopeStore};
 use crate::{BindCtx, Service, ServiceFactory, ready_call::ReadyThenCall};
 
+/// Waiter index of contexts of individual pipeline calls.
+///
+/// Calls do not register a waiter slot; their readiness checks insert one
+/// only when they need the pipeline gate.
+pub(crate) const NO_SLOT: u32 = u32::MAX - 1;
+
 /// Context provided to [`Service`] lifecycle methods.
 ///
 /// A context gives a service access to pipeline state and coordinates calls to
@@ -200,14 +206,20 @@ impl WaitersRef {
     ///
     /// Takes the gate if it is free. Otherwise runs without waiting for the
     /// owner, which can wait for resources held by this call.
-    fn run_call<F, R>(&self, idx: u32, key: &mut Option<u32>, cx: &mut Context<'_>, f: F) -> Poll<R>
+    fn run_call<F, R>(
+        &self,
+        idx: &mut u32,
+        key: &mut Option<u32>,
+        cx: &mut Context<'_>,
+        f: F,
+    ) -> Poll<R>
     where
         F: FnOnce(&mut Context<'_>) -> Poll<R>,
     {
         let cur = self.cur.get();
-        if cur == u32::MAX || cur == idx {
+        if cur == u32::MAX || cur == *idx {
             self.remove_call(key);
-            return self.run(idx, cx, f);
+            return self.run(self.slot(idx), cx, f);
         }
 
         let result = f(cx);
@@ -254,6 +266,14 @@ impl WaitersRef {
         }
         self.running.set(false);
         result
+    }
+
+    /// Returns the waiter slot of a check, inserting one for a pipeline call.
+    fn slot(&self, idx: &mut u32) -> u32 {
+        if *idx == NO_SLOT {
+            *idx = self.insert();
+        }
+        *idx
     }
 
     pub(crate) fn shutdown(&self) {
@@ -356,6 +376,9 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Returns the identifier of the current pipeline binding.
+    ///
+    /// Contexts of calls made through a pipeline or a pipeline binding are not
+    /// bound to a waiter slot and share a placeholder identifier.
     pub fn id(&self) -> u32 {
         self.idx
     }
@@ -425,6 +448,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             check: RunCheck::new(self.scope, move || svc.ready(ctx.cast())),
             waiters: self.waiters,
             idx: self.idx,
+            lazy: self.idx == NO_SLOT,
             in_call: self.in_call,
             key: None,
             active: false,
@@ -583,7 +607,10 @@ pin_project_lite::pin_project! {
         #[pin]
         check: RunCheck<'a, F, Fut>,
         waiters: &'a WaitersRef,
+        // `NO_SLOT` until a check of a pipeline call inserts its own slot.
         idx: u32,
+        // A check of a pipeline call, it removes its inserted slot on drop.
+        lazy: bool,
         in_call: bool,
         // Pending call-time check that bypassed the gate owner.
         key: Option<u32>,
@@ -600,6 +627,9 @@ pin_project_lite::pin_project! {
                 this.waiters.wake_checks();
             } else if *this.active && this.waiters.cur.get() == *this.idx {
                 this.waiters.notify();
+            }
+            if *this.lazy && *this.idx != NO_SLOT {
+                this.waiters.remove(*this.idx);
             }
         }
     }
@@ -619,11 +649,15 @@ where
         loop {
             *this.active = true;
             let mut check = this.check.as_mut();
-            let f = |cx: &mut Context<'_>| check.as_mut().poll(cx);
-            let result = if *this.in_call {
-                this.waiters.run_call(*this.idx, this.key, cx, f)
+            let mut f = |cx: &mut Context<'_>| check.as_mut().poll(cx);
+            let result = if *this.idx == NO_SLOT && this.waiters.running.get() {
+                // Nested in the running check, which owns the gate; a call
+                // reaches it only from its own check.
+                f(cx)
+            } else if *this.in_call {
+                this.waiters.run_call(this.idx, this.key, cx, f)
             } else {
-                this.waiters.run(*this.idx, cx, f)
+                this.waiters.run(this.waiters.slot(this.idx), cx, f)
             };
             let Poll::Ready(result) = result else {
                 return Poll::Pending;
