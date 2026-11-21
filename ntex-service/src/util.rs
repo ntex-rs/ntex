@@ -1,4 +1,5 @@
-use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Context, task::Poll};
+use std::task::{Context, Poll};
+use std::{future::Future, future::poll_fn, mem::MaybeUninit, pin, pin::Pin};
 
 use crate::{Ctx, Service, readiness::Generation};
 
@@ -8,13 +9,89 @@ pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
 ///
 /// Allocating before `f` runs lets the future be written directly into the
 /// box instead of being built on the stack and copied.
+///
+/// A future whose size fills a mimalloc size class that is not a power of two
+/// is padded, see [`misses_aligned_fast_path`].
 #[inline]
 pub(crate) fn box_future<'a, F>(f: impl FnOnce() -> F) -> BoxFuture<'a, F::Output>
 where
     F: Future + 'a,
 {
-    let b = Box::<F>::new_uninit();
-    Box::into_pin(Box::write(b, f()))
+    if const { needs_padding::<F>() } {
+        let b = Box::<Padded<F>>::new_uninit();
+        Box::into_pin(Box::write(
+            b,
+            Padded {
+                fut: f(),
+                _pad: MaybeUninit::uninit(),
+            },
+        ))
+    } else {
+        let b = Box::<F>::new_uninit();
+        Box::into_pin(Box::write(b, f()))
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// Adds trailing padding to `fut`, which moves its box to the next size class.
+    #[repr(C)]
+    struct Padded<F> {
+        #[pin]
+        fut: F,
+        _pad: MaybeUninit<[u8; 8]>,
+    }
+}
+
+impl<F: Future> Future for Padded<F> {
+    type Output = F::Output;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.project().fut.poll(cx)
+    }
+}
+
+/// Returns `true` if a box of `F` always misses mimalloc's aligned fast path
+/// and a box of `Padded<F>` does not.
+const fn needs_padding<F>() -> bool {
+    misses_aligned_fast_path(size_of::<F>(), align_of::<F>())
+        && !misses_aligned_fast_path(size_of::<Padded<F>>(), align_of::<Padded<F>>())
+}
+
+/// Returns `true` if allocating `size` bytes aligned to `align` never takes
+/// mimalloc's aligned fast path.
+///
+/// The `mimalloc` crate allocates every layout with `mi_malloc_aligned`. Its
+/// fast path reuses a free block from the size class of `size`. Otherwise,
+/// unless the class size is a power of two, it over-allocates `size + align - 1`
+/// bytes. When `size` fills a class, that over-allocation comes from the next
+/// class, so the class of `size` never gets free blocks and every allocation
+/// takes the slow path.
+const fn misses_aligned_fast_path(size: usize, align: usize) -> bool {
+    // `MI_SMALL_SIZE_MAX`, larger sizes never take the fast path
+    const SMALL_MAX: usize = 128 * size_of::<usize>();
+
+    if align <= 1 || align > size || size > SMALL_MAX {
+        return false;
+    }
+    let class = mi_class_size(size);
+    !class.is_power_of_two() && size + align - 1 > class
+}
+
+/// Returns the block size of the mimalloc size class for `size`, see `mi_bin`.
+const fn mi_class_size(size: usize) -> usize {
+    const WORD: usize = size_of::<usize>();
+
+    let words = size.div_ceil(WORD);
+    if words == 0 {
+        WORD
+    } else if words <= 8 {
+        words * WORD
+    } else {
+        // Four classes per power of two
+        let step = 1 << ((words - 1).ilog2() - 2);
+        words.next_multiple_of(step) * WORD
+    }
 }
 
 pin_project_lite::pin_project! {

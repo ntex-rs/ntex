@@ -1,4 +1,5 @@
-use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc, task::Poll, task::Waker};
+use std::task::{Context, Poll, Waker};
+use std::{cell::Cell, cell::RefCell, future::Future, future::poll_fn, pin::Pin, rc::Rc};
 
 use ntex::channel::oneshot::{self, Receiver, Sender};
 use ntex::time::{Millis, sleep};
@@ -69,6 +70,38 @@ pub(crate) fn start(pl: &Pipeline<Req, (), ()>) -> (Sender<()>, Sender<()>) {
 
 pub(crate) async fn tick() {
     sleep(Millis(20)).await;
+}
+
+/// Future of `N` machine words that completes with its first word.
+struct Words<const N: usize>([usize; N]);
+
+impl<const N: usize> Future for Words<N> {
+    type Output = usize;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<usize> {
+        Poll::Ready(self.0[0])
+    }
+}
+
+/// STATEMENT: `box_future` pads a future only when its size fills a
+/// mimalloc size class that is not a power of two.
+///
+/// HOW:
+/// - Box a 48-word future, which fills the 48-word class, and a 52-word future,
+///   which sits inside the 56-word class.
+/// - Check that only the 48-word box grows by the 8-byte padding.
+/// - Poll both boxes and confirm each returns its first word.
+#[test]
+fn box_future_pads_full_size_classes() {
+    let mut full = super::box_future(|| Words([7; 48]));
+    let mut inner = super::box_future(|| Words([9; 52]));
+
+    assert_eq!(size_of_val(&*full), size_of::<Words<48>>() + 8);
+    assert_eq!(size_of_val(&*inner), size_of::<Words<52>>());
+
+    let mut cx = Context::from_waker(Waker::noop());
+    assert_eq!(full.as_mut().poll(&mut cx), Poll::Ready(7));
+    assert_eq!(inner.as_mut().poll(&mut cx), Poll::Ready(9));
 }
 
 /// Readiness reported for one call must not be used after another call

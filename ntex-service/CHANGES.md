@@ -34,6 +34,14 @@
 
 * Checking whether the root readiness scope is ready reads a single flag
 
+* `Pipeline::call()`, `Pipeline::call_static()`, `PipelineBinding::call()` and
+  `PipelineBinding::call_static()` futures no longer store the call context, so
+  they are 32 bytes smaller
+
+* Boxed pipeline call futures whose size fills a mimalloc size class that is
+  not a power of two get 8 bytes of padding, so `mimalloc`'s aligned
+  allocation keeps its fast path
+
 ## [5.9.0] - 2026-11-18
 
 * Add `InlineFuture`, a type-erased future that stores futures of up to
