@@ -909,3 +909,41 @@ async fn dropped_call_check_owning_gate_wakes_waiter() {
     settle().await;
     assert_eq!((calls.get(), checks.get()), (0, 1));
 }
+
+struct Direct<S>(S);
+
+impl<S: Service<(), &'static str>> Service<(), &'static str> for Direct<S> {
+    type Res = S::Res;
+    type Error = S::Error;
+
+    crate::forward!((), 0);
+
+    fn call(
+        &self,
+        req: &'static str,
+        ctx: Ctx<'_, Self>,
+    ) -> impl Future<Output = Result<S::Res, S::Error>> {
+        ctx.call(&self.0, req)
+    }
+}
+
+/// STATEMENT: A plain `fn call` can return the future of `Ctx::call` without an `async` block.
+///
+/// HOW:
+/// - Wrap `Srv` in a service whose `call` returns `ctx.call(..)` directly, which does not
+///   compile if that future borrows the local `ctx`.
+/// - Release the inner service's readiness gate and call through a pipeline.
+/// - Verify the inner readiness check ran once and its response is forwarded.
+#[ntex::test]
+async fn call_future_returned_from_plain_fn() {
+    let cnt = Rc::new(Cell::new(0));
+    let con = condition::Condition::new();
+    let pl = Pipeline::new(
+        (),
+        Direct(Srv(cnt.clone(), con.wait(), ReadyNotifier::new())),
+    );
+
+    con.notify_and_lock(());
+    assert_eq!(pl.call("srv").await, Ok("srv"));
+    assert_eq!(cnt.get(), 1);
+}
