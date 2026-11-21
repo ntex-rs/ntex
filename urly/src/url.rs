@@ -118,6 +118,37 @@ pub(crate) fn origin_form(data: ByteString, query: Option<Option<usize>>) -> Url
     }
 }
 
+/// Builds an absolute-form request-target `scheme://authority/path[?query]`
+/// with a single copy.
+///
+/// Produces the same URL as [`assemble_target`] with the split components.
+fn absolute_target(scheme: &str, authority: &str, path_and_query: &str) -> Result<Url, InvalidUrl> {
+    debug_assert!(!scheme.is_empty() && path_and_query.starts_with('/'));
+    let auth_start = scheme.len() + 3;
+    let path_start = auth_start + authority.len();
+    let len = path_start + path_and_query.len();
+    if len > parse::MAX_LEN {
+        return Err(InvalidUrl::new(ErrorKind::TooLong));
+    }
+    let data = concat(&[scheme, "://", authority, path_and_query], len);
+
+    let path_end = path_start
+        + crate::chars::find_byte(path_and_query.as_bytes(), b'?').unwrap_or(path_and_query.len());
+    let host = authority::split(authority).1;
+    let host_start = auth_start + authority::offset(authority, host);
+    // all indexes are at most `len`, which fits
+    Ok(Url {
+        data,
+        scheme_end: scheme.len() as u16,
+        auth_start: auth_start as u16,
+        path_start: path_start as u16,
+        path_end: path_end as u16,
+        query_end: len as u16,
+        host_start: host_start as u16,
+        host_end: (host_start + host.len()) as u16,
+    })
+}
+
 fn assemble_inner(
     c: &Components<'_>,
     orig: Option<&ByteString>,
@@ -394,6 +425,11 @@ impl Url {
         if scheme == Some("") {
             return Err(InvalidUrl::new(ErrorKind::InvalidScheme));
         }
+        if let (Some(scheme), Some(authority)) = (scheme, authority)
+            && path_and_query.starts_with('/')
+        {
+            return absolute_target(scheme, authority, path_and_query);
+        }
         let (path, query) = crate::chars::split_at_char(path_and_query, b'?');
         assemble_target(
             &Components {
@@ -527,38 +563,49 @@ impl Url {
         }
     }
 
+    #[inline]
     fn range(&self, start: u16, end: u16) -> &str {
-        &self.data[start as usize..end as usize]
+        let (start, end) = (start as usize, end as usize);
+        debug_assert!(self.data.get(start..end).is_some(), "{start}..{end}");
+        // SAFETY: constructors set all indexes to char boundaries within
+        // `data`, callers pass them in order
+        unsafe { self.data.get_unchecked(start..end) }
     }
 
     // ===== accessors =====
 
     /// Returns the URL as a string.
+    #[inline]
     pub fn as_str(&self) -> &str {
         &self.data
     }
 
     /// Returns the URL as bytes.
+    #[inline]
     pub fn as_bytes(&self) -> &[u8] {
         self.data.as_bytes()
     }
 
     /// Returns the underlying buffer.
+    #[inline]
     pub fn as_byte_string(&self) -> &ByteString {
         &self.data
     }
 
     /// Returns the scheme, if present.
+    #[inline]
     pub fn scheme(&self) -> Option<&Scheme> {
         self.scheme_str().map(Scheme::from_str_unchecked)
     }
 
     /// Returns the scheme as a string, if present.
+    #[inline]
     pub fn scheme_str(&self) -> Option<&str> {
         (self.scheme_end > 0).then(|| self.range(0, self.scheme_end))
     }
 
     /// Returns the authority, if present.
+    #[inline]
     pub fn authority(&self) -> Option<&Authority> {
         (self.auth_start > 0)
             .then(|| Authority::from_str_unchecked(self.range(self.auth_start, self.path_start)))
@@ -583,6 +630,7 @@ impl Url {
     /// Returns the host, if present and not empty. IPv6 addresses include the
     /// brackets. General-purpose parsers punycode-encode non-ASCII domains;
     /// raw request-targets preserve their original spelling.
+    #[inline]
     pub fn host(&self) -> Option<&str> {
         (self.host_end > self.host_start).then(|| self.range(self.host_start, self.host_end))
     }
@@ -638,17 +686,20 @@ impl Url {
     /// assert_eq!(url.path(), "//a");
     /// assert_eq!(url.path_and_query(), "//a?q");
     /// ```
+    #[inline]
     pub fn path(&self) -> &Path {
         Path::from_str_unchecked(self.range(self.path_start, self.path_end))
     }
 
     /// Returns the percent-encoded query, if present.
+    #[inline]
     pub fn query(&self) -> Option<&Query> {
         (self.query_end > self.path_end)
             .then(|| Query::from_str_unchecked(self.range(self.path_end + 1, self.query_end)))
     }
 
     /// Returns the path and query.
+    #[inline]
     pub fn path_and_query(&self) -> &PathAndQuery {
         PathAndQuery::from_str_unchecked(self.range(self.path_start, self.query_end))
     }
@@ -660,6 +711,7 @@ impl Url {
     }
 
     /// Returns `true` if the URL has a scheme.
+    #[inline]
     pub fn is_absolute(&self) -> bool {
         self.scheme_end > 0
     }
@@ -1528,5 +1580,72 @@ mod tests {
             ..crate::Parts::default()
         };
         assert_eq!(Url::from_parts(parts).unwrap().path(), "//p");
+    }
+
+    /// STATEMENT: The absolute-form fast path of `Url::from_target_parts` builds exactly the
+    /// URL and offsets that generic target assembly builds.
+    ///
+    /// HOW:
+    /// - Build inline and heap-sized targets with and without query, repeated `?`, userinfo,
+    ///   ports, IPv6 and broken IPv6 hosts, empty or delimiter-laden authorities, `//` and
+    ///   non-ASCII paths, with `absolute_target` and with `assemble_target`.
+    /// - Compare the serialization and every offset field.
+    /// - Build targets of exactly the maximum length and one byte longer; expect the same
+    ///   success and `TooLong` error from both.
+    #[test]
+    fn absolute_target_matches_assemble() {
+        fn fields(res: Result<Url, InvalidUrl>) -> Result<(String, [u16; 7]), ErrorKind> {
+            res.map(|u| {
+                let offsets = [
+                    u.scheme_end,
+                    u.auth_start,
+                    u.path_start,
+                    u.path_end,
+                    u.query_end,
+                    u.host_start,
+                    u.host_end,
+                ];
+                (u.as_str().to_owned(), offsets)
+            })
+            .map_err(|e| e.kind())
+        }
+        let limit = format!("/{}", "a".repeat(parse::MAX_LEN - "http://h/".len()));
+        let too_long = format!("{limit}a");
+        let cases = [
+            ("http", "localhost:8082", "/baseline2?a=1&b=1"),
+            ("https", "ex.com", "/"),
+            ("http", "h", "/a?"),
+            ("http", "h", "/a??b?c"),
+            ("http", "u:p@h:1", "/"),
+            ("http", "@h", "/"),
+            ("http", "[::1]:8080", "/p?q"),
+            ("http", "[::1]", "/p"),
+            ("http", "[::1", "/p"),
+            ("http", "h:443", "/"),
+            ("http", "", "/"),
+            ("ht/tp", "host/x?y#z:", "/p#f"),
+            ("http", "h", "//p?q"),
+            ("http", "münchen.de:1", "/ü?ä=ö"),
+            ("http", "h", limit.as_str()),
+            ("http", "h", too_long.as_str()),
+        ];
+        for (scheme, authority, pq) in cases {
+            let (path, query) = crate::chars::split_at_char(pq, b'?');
+            let c = Components {
+                scheme: Some(scheme),
+                authority: Some(authority),
+                path,
+                query,
+                fragment: None,
+            };
+            let fast = fields(absolute_target(scheme, authority, pq));
+            let generic = fields(assemble_target(&c, None));
+            assert_eq!(fast, generic, "{scheme} {authority} {:.40}", pq);
+        }
+        assert!(fields(absolute_target("http", "h", &limit)).is_ok());
+        assert_eq!(
+            fields(absolute_target("http", "h", &too_long)),
+            Err(ErrorKind::TooLong)
+        );
     }
 }
