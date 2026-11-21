@@ -167,8 +167,25 @@ impl HeaderMap {
 
     /// Clears the map, removing all key-value pairs. Keeps the allocated memory
     /// for reuse.
+    #[inline]
     pub fn clear(&mut self) {
-        self.inner.clear();
+        // Pooled maps are often already empty, keep that check inlined so it
+        // does not pay for the erase path's call and register spills.
+        if !self.inner.is_empty() {
+            self.clear_entries();
+        }
+    }
+
+    #[inline(never)]
+    fn clear_entries(&mut self) {
+        // `HashMap::clear` memsets every control byte. Erasing a few entries
+        // one by one is cheaper. Below 8 entries no run of 8 occupied slots
+        // can exist, so each erased slot becomes empty and capacity is kept.
+        if self.inner.len() < 8 {
+            self.inner.retain(|_, _| false);
+        } else {
+            self.inner.clear();
+        }
     }
 
     /// Returns the number of headers the map can hold without reallocating.
@@ -552,6 +569,47 @@ mod tests {
 
         map.remove(ACCEPT_ENCODING);
         assert_eq!(map.get(ACCEPT_ENCODING), None);
+    }
+
+    /// STATEMENT: `clear` empties small and large maps and keeps the full capacity, so a
+    /// reused map never loses room to stale erased slots.
+    ///
+    /// HOW:
+    /// - Repeatedly fill a `with_capacity(16)` map with 1 to 7 names, some with several
+    ///   values, and `clear` it; expect it empty and its capacity unchanged every time.
+    /// - Fill it with 12 names and `clear`; expect it empty with the same capacity.
+    /// - Insert again after clearing and expect lookups to find the new values.
+    #[test]
+    fn test_clear() {
+        let names: Vec<HeaderName> = (0..12)
+            .map(|i| HeaderName::try_from(format!("x-h{i}")).unwrap())
+            .collect();
+        let mut m = HeaderMap::with_capacity(16);
+        let cap = m.capacity();
+
+        for round in 0..1000 {
+            for name in &names[..=(round % 7)] {
+                m.append(name.clone(), HeaderValue::from_static("a"));
+                if round % 2 == 0 {
+                    m.append(name.clone(), HeaderValue::from_static("b"));
+                }
+            }
+            m.clear();
+            assert!(m.is_empty());
+            assert_eq!(m.capacity(), cap);
+        }
+
+        for name in &names {
+            m.insert(name.clone(), HeaderValue::from_static("a"));
+        }
+        m.clear();
+        assert!(m.is_empty());
+        assert_eq!(m.capacity(), cap);
+
+        m.insert(CONTENT_TYPE, HeaderValue::from_static("text"));
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.get(CONTENT_TYPE), Some(&HeaderValue::from_static("text")));
+        assert!(!m.contains_key(&names[0]));
     }
 
     /// STATEMENT: Converting an `http::HeaderMap` keeps its headers.
