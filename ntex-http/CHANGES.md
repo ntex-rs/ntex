@@ -1,5 +1,9 @@
 # Changes
 
+## [2.2.1] - 2026-11-21
+
+* `HeaderMap::clear()` returns early for empty maps and erases maps with fewer than 8 names entry by entry instead of resetting the whole table
+
 ## [2.2.0] - 2026-11-09
 
 * Add `FromStr` for `ContentEncoding` with the `InvalidContentEncoding` error
