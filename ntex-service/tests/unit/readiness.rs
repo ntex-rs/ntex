@@ -136,6 +136,50 @@ fn scope_ids_and_store_lifetime() {
     source.notify();
 }
 
+/// STATEMENT: The cached root readiness flag follows the root scope through success, invalidation, and retirement.
+///
+/// HOW:
+/// - Mark the root ready, then invalidate it by a child notification, `reset_root`, and a direct notifier.
+/// - Verify each invalidation clears `is_ready`, a stale generation does not set it, and a current one does.
+/// - Drop the waiter store while the root is ready and verify an unowned root handle reports not ready.
+#[test]
+fn root_ready_flag_tracks_root_scope() {
+    let waiters = crate::ctx::WaitersRef::new();
+    let root = waiters.scope();
+    let child = ReadyScope::new();
+    root.depend_on(&child);
+    let child_source = ReadyNotifier::new();
+    child.subscribe(&child_source);
+    let root_source = ReadyNotifier::new();
+    root.subscribe(&root_source);
+    assert!(!root.is_ready());
+
+    assert!(root.set_ready(root.generation()));
+    assert!(root.is_ready());
+    child_source.notify();
+    assert!(!root.is_ready());
+
+    assert!(root.set_ready(root.generation()));
+    root.reset_root();
+    assert!(!root.is_ready());
+
+    let stale = root.generation();
+    root_source.notify();
+    assert!(!root.set_ready(stale));
+    assert!(!root.is_ready());
+    assert!(root.set_ready(root.generation()));
+    assert!(root.is_ready());
+
+    let unowned = ReadyScope(OnceCell::from(ScopeRef {
+        store: root.bound().store.clone(),
+        id: 0,
+    }));
+    assert!(unowned.is_ready());
+    drop(waiters);
+    assert!(!unowned.is_ready());
+    assert!(!unowned.bound().store.scopes.root_ready.get());
+}
+
 /// STATEMENT: Explicit links invalidate only the destination scope and ancestors, including internal resets.
 ///
 /// HOW:

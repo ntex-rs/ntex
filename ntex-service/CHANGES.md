@@ -27,6 +27,13 @@
   return plain futures instead of `async fn` futures, so pipeline readiness futures
   are smaller
 
+* Reduce the cost of `Pipeline::call()`, `PipelineBinding::call()`,
+  `Pipeline::call_static()`, `PipelineState::call()` and `PipelineStateBinding::call()`:
+  calls no longer register a waiter slot, a readiness check inserts one only while
+  it runs. `Ctx::id()` of these calls returns a shared placeholder identifier
+
+* Checking whether the root readiness scope is ready reads a single flag
+
 ## [5.9.0] - 2026-11-18
 
 * Add `InlineFuture`, a type-erased future that stores futures of up to

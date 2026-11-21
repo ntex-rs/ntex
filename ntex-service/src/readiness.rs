@@ -181,6 +181,9 @@ fn notify_scope(store: &WaitersInner, id: usize, epoch: u64, direct: bool, callb
         }
         s.notify_epoch.set(epoch);
         s.invalidate(direct);
+        if id == 0 {
+            store.scopes.root_ready.set(false);
+        }
         let _wake = NotifyObservers(&s.observers);
         for &parent in s.parents.borrow().iter() {
             notify_scope(store, parent, epoch, false, callbacks);
@@ -389,6 +392,9 @@ impl Endpoints {
 #[derive(Debug)]
 pub(crate) struct ScopeStore {
     slots: RefCell<Vec<Option<ScopeInner>>>,
+    // Mirrors the root scope's `ready` flag so the per-call check skips the
+    // table borrow; false once the root is retired.
+    root_ready: Cell<bool>,
 }
 
 impl Default for ScopeStore {
@@ -396,6 +402,7 @@ impl Default for ScopeStore {
     fn default() -> Self {
         Self {
             slots: RefCell::new(vec![Some(ScopeInner::default())]),
+            root_ready: Cell::new(false),
         }
     }
 }
@@ -440,6 +447,7 @@ impl ScopeStore {
             return;
         }
         if id == 0 {
+            self.root_ready.set(false);
             let slots = self.slots.take();
             // Close every checker before dropping reentrant callback captures or wakers.
             for scope in slots.iter().flatten() {
@@ -595,11 +603,14 @@ impl ReadyScope {
     /// Returns cached readiness, or false for an unbound or retired scope.
     pub(crate) fn is_ready(&self) -> bool {
         self.0.get().is_some_and(|scope| {
-            scope
-                .store
-                .scopes
-                .with(scope.id, |s| s.ready.get())
-                .unwrap_or(false)
+            let scopes = &scope.store.scopes;
+            if scope.id == 0 {
+                let ready = scopes.root_ready.get();
+                debug_assert_eq!(ready, scopes.with(0, |s| s.ready.get()).unwrap_or(false));
+                ready
+            } else {
+                scopes.with(scope.id, |s| s.ready.get()).unwrap_or(false)
+            }
         })
     }
 
@@ -628,6 +639,10 @@ impl ReadyScope {
     pub(crate) fn set_ready(&self, generation: Generation) -> bool {
         if self.is_current(generation) {
             self.with(|s| s.ready.set(true));
+            let scope = self.bound();
+            if scope.id == 0 {
+                scope.store.scopes.root_ready.set(true);
+            }
             true
         } else {
             false

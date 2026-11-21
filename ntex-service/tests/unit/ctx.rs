@@ -206,7 +206,7 @@ fn waker_clone_reenters_run() {
 #[test]
 fn waker_clone_reenters_call_check() {
     let waiters = Rc::new(WaitersRef::new());
-    let (owner, idx) = (waiters.insert(), waiters.insert());
+    let (owner, mut idx) = (waiters.insert(), waiters.insert());
     let waker = reentrant_waker();
     let mut cx = Context::from_waker(&waker);
     let mut noop = Context::from_waker(Waker::noop());
@@ -219,7 +219,7 @@ fn waker_clone_reenters_call_check() {
     let mut key = None;
     assert!(
         waiters
-            .run_call(idx, &mut key, &mut noop, |_| Poll::<()>::Pending)
+            .run_call(&mut idx, &mut key, &mut noop, |_| Poll::<()>::Pending)
             .is_pending()
     );
 
@@ -227,12 +227,12 @@ fn waker_clone_reenters_call_check() {
     REENTER.set(Some(Box::new(move || {
         let mut noop = Context::from_waker(Waker::noop());
         for _ in 0..16 {
-            let _ = w.run_call(idx, &mut None, &mut noop, |_| Poll::<()>::Pending);
+            let _ = w.run_call(&mut { idx }, &mut None, &mut noop, |_| Poll::<()>::Pending);
         }
     })));
     assert!(
         waiters
-            .run_call(idx, &mut key, &mut cx, |_| Poll::<()>::Pending)
+            .run_call(&mut idx, &mut key, &mut cx, |_| Poll::<()>::Pending)
             .is_pending()
     );
     assert!(REENTER.take().is_none());
@@ -247,7 +247,7 @@ fn waker_clone_reenters_call_check() {
     })));
     assert!(
         waiters
-            .run_call(idx, &mut key, &mut noop, |_| Poll::Ready(()))
+            .run_call(&mut idx, &mut key, &mut noop, |_| Poll::Ready(()))
             .is_ready()
     );
     assert!(REENTER.take().is_none());
@@ -820,4 +820,92 @@ async fn call_check_yields_when_waking_owner_invalidates_it() {
     let _ = tx.send(());
     assert!(call.as_mut().poll(&mut noop).is_pending());
     assert!((2..10).contains(&wakes.0.load(Ordering::Relaxed)));
+}
+
+/// Records the context id and the number of waiter slots seen by checks and calls.
+struct SlotSrv(SingleWaker, Rc<RefCell<Vec<(&'static str, u32, usize)>>>);
+
+impl Service<(), ()> for SlotSrv {
+    type Res = ();
+    type Error = ();
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.bind(&self.0);
+    }
+
+    async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), ()> {
+        let slots = ctx.waiters.get().len();
+        self.1.borrow_mut().push(("ready", ctx.id(), slots));
+        ctx.ready(&self.0).await
+    }
+
+    async fn call(&self, (): (), ctx: Ctx<'_, Self>) -> Result<(), ()> {
+        let slots = ctx.waiters.get().len();
+        self.1.borrow_mut().push(("call", ctx.id(), slots));
+        Ok(())
+    }
+}
+
+/// STATEMENT: A pipeline call holds a waiter slot only while its readiness check runs.
+///
+/// HOW:
+/// - Start a call on a closed inner service, then cancel it while its check is pending.
+/// - Open the service and make two calls, the second with cached readiness.
+/// - Verify both checks see one extra slot, the calls see none, and all contexts
+///   use the placeholder id.
+#[ntex::test]
+async fn pipeline_call_check_releases_lazy_slot() {
+    let inner = SingleWaker::new(false);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let pl = Pipeline::new((), SlotSrv(inner.clone(), log.clone()));
+
+    let mut call = Box::pin(pl.call(()));
+    let mut noop = Context::from_waker(Waker::noop());
+    assert!(call.as_mut().poll(&mut noop).is_pending());
+    drop(call);
+
+    inner.open(false);
+    pl.call(()).await.unwrap();
+    pl.call(()).await.unwrap();
+
+    let log = log.take();
+    let base = log[2].2;
+    assert_eq!(
+        log,
+        [
+            ("ready", NO_SLOT, base + 1),
+            ("ready", NO_SLOT, base + 1),
+            ("call", NO_SLOT, base),
+            ("call", NO_SLOT, base),
+        ]
+    );
+}
+
+/// STATEMENT: Cancelling a call whose call-time check owns the gate wakes a queued check.
+///
+/// HOW:
+/// - Pause a call, close the inner service, and resume the call so its check takes the
+///   free gate.
+/// - Start a readiness check that queues behind it and open the service without waking.
+/// - Cancel the call and verify the queued check completes.
+#[ntex::test]
+async fn dropped_call_check_owning_gate_wakes_waiter() {
+    let inner = SingleWaker::new(true);
+    let pause = condition::Condition::new();
+    let pl = Pipeline::new((), Limited::new(inner.clone(), 10, &pause));
+    let (calls, checks) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+
+    let call = spawn_call(&pl, &calls);
+    settle().await;
+    inner.close();
+    pause.notify(());
+    settle().await;
+    spawn_ready(&pl, &checks);
+    settle().await;
+    assert_eq!((calls.get(), checks.get()), (0, 0));
+
+    inner.open(false);
+    let _ = call.send(());
+    settle().await;
+    assert_eq!((calls.get(), checks.get()), (0, 1));
 }
