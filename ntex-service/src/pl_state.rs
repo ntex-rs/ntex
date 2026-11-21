@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomPinned, rc::Rc, task::Context, task::Poll};
+use std::{fmt, future::poll_fn, marker::PhantomPinned, rc::Rc, task::Context, task::Poll};
 
 use crate::ready_call::ReadyThenCall;
 use crate::util::{BoxFuture, WithOwner, box_future};
@@ -65,12 +65,16 @@ where
     /// future must be polled or dropped: keeping it alive without polling stalls
     /// every other readiness waiter on this pipeline.
     /// Returns successfully if pipeline shutdown has started.
-    pub async fn ready(&self, st: &St) -> Result<(), Err> {
-        if self.is_ready() || self.is_shutdown() {
-            Ok(())
-        } else {
-            self.api.ready(0, st).await
-        }
+    pub fn ready<'a>(&'a self, st: &'a St) -> impl Future<Output = Result<(), Err>> {
+        let mut check = None;
+        poll_fn(move |cx| {
+            let check = match check {
+                Some(ref mut check) => check,
+                None if self.is_ready() || self.is_shutdown() => return Poll::Ready(Ok(())),
+                None => check.insert(self.api.ready(0, st)),
+            };
+            check.as_mut().poll(cx)
+        })
     }
 
     #[inline]
@@ -96,8 +100,8 @@ where
     ///
     /// Marks the pipeline as shutting down, then waits for the service's
     /// shutdown. Later calls are not rejected; see [`PipelineState`].
-    pub async fn shutdown(&self, st: &St) {
-        self.api.shutdown(0, st).await;
+    pub fn shutdown<'a>(&'a self, st: &'a St) -> impl Future<Output = ()> {
+        self.api.shutdown(0, st)
     }
 
     #[inline]

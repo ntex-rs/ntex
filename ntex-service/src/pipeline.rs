@@ -113,16 +113,15 @@ where
     /// own future, and other waiters wait for it. Like a held lock, a pending
     /// future must be polled or dropped: keeping it alive without polling stalls
     /// every other readiness waiter on this pipeline.
-    pub async fn ready(&self) -> Result<(), Err> {
-        let mut ready = std::pin::pin!(self.api.ready(0));
-        future::poll_fn(|cx| {
+    pub fn ready(&self) -> impl Future<Output = Result<(), Err>> {
+        let mut ready = self.api.ready(0);
+        future::poll_fn(move |cx| {
             if self.api.is_shutdown() {
                 Poll::Ready(Ok(()))
             } else {
-                ready.as_mut().poll(cx)
+                Pin::new(&mut ready).poll(cx)
             }
         })
-        .await
     }
 
     #[inline]
@@ -187,8 +186,8 @@ where
     ///
     /// Marks the pipeline as shutting down, then waits for the service's
     /// shutdown. Later calls are not rejected; see [`Pipeline`].
-    pub async fn shutdown(&self) {
-        future::poll_fn(|cx| self.api.poll_shutdown(cx)).await;
+    pub fn shutdown(&self) -> impl Future<Output = ()> {
+        future::poll_fn(move |cx| self.api.poll_shutdown(cx))
     }
 
     #[inline]
@@ -276,12 +275,8 @@ where
     /// own future, and other waiters wait for it. Like a held lock, a pending
     /// future must be polled or dropped: keeping it alive without polling stalls
     /// every other readiness waiter on this pipeline.
-    pub async fn ready(&self) -> Result<(), Err> {
-        if self.api.is_shutdown() {
-            Ok(())
-        } else {
-            self.api.ready(self.idx).await
-        }
+    pub fn ready(&self) -> impl Future<Output = Result<(), Err>> {
+        self.api.ready(self.idx)
     }
 
     #[inline]

@@ -141,22 +141,40 @@ where
         self.service.bind(BindCtx::new(&self.scope));
     }
 
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        let ctx = self.enter(ctx);
-        self.scope.check(|| self.service.ready(ctx)).await
-    }
-
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        let ctx = self.enter::<Self, _>(ctx);
-        if !self.scope.is_ready() {
-            // Boxed so the cold readiness wait is not inlined into the call future.
-            Box::pin(ctx.ready_cached(self)).await?;
+    // Enters the scope inside the check closure, so the future stores `ctx`
+    // once; an `async fn` with an entered `ctx` local would keep two copies.
+    #[allow(clippy::manual_async_fn)]
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Self::Error>> {
+        async move {
+            ctx.scope().assert_dependency(&self.scope);
+            self.scope
+                .check(|| self.service.ready(ctx.with_scope(&self.scope)))
+                .await
         }
-        self.service.call(req, ctx.cast()).await
     }
 
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        self.service.shutdown(self.enter(ctx)).await;
+    // An `async fn` would store `req` and `ctx` twice. The entered context
+    // borrows `self` and `ctx` under one lifetime, so it is created inside the block.
+    #[allow(clippy::manual_async_fn)]
+    fn call(
+        &self,
+        req: Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> impl Future<Output = Result<Self::Res, Self::Error>> {
+        async move {
+            let ctx = self.enter::<Self, _>(ctx);
+            if !self.scope.is_ready() {
+                // Boxed so the cold readiness wait is not inlined into the call future.
+                Box::pin(ctx.ready_cached(self)).await?;
+            }
+            self.service.call(req, ctx.cast()).await
+        }
+    }
+
+    // See `call`.
+    #[allow(clippy::manual_async_fn)]
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        async move { self.service.shutdown(self.enter(ctx)).await }
     }
 }
 

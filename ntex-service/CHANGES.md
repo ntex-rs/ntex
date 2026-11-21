@@ -1,5 +1,32 @@
 # Changes
 
+## [5.9.1] - 2026-11-21
+
+* Add `InlineFuture::empty()` and `InlineFuture::set_with()`, `set_with()` drops
+  the current future and builds the new one directly in pinned storage, so callers
+  can construct large futures in place instead of moving them
+
+* `ReadyBinding::ready()` and the readiness scope check return plain futures
+  instead of `async fn` futures, which stored the context twice, so readiness
+  futures of bound services are smaller
+
+* The default `Service::ready()`, `BoxService`, `Ready`, `MapState`, `FnReadiness`
+  and multi-field `forward!` readiness return plain futures instead of `async fn`
+  futures, so they no longer store their arguments twice. The default
+  `Service::ready()` is now declared as `fn ready(..) -> impl Future`; existing
+  `async fn ready` implementations are unaffected
+
+* `call()` and `shutdown()` of `ReadyBinding`, `BoxService`, `Ready`, `MapState`,
+  `Then`, `Apply`, `FnReadiness`, `FnShutdown` and `forward!`, the default
+  `Service::shutdown()`, `Pipeline::shutdown()` and `PipelineState::shutdown()`
+  return plain futures instead of `async fn` futures, so they no longer store their
+  arguments twice. These are now declared as `fn ..(..) -> impl Future`; existing
+  `async fn shutdown` implementations are unaffected
+
+* `Pipeline::ready()`, `PipelineBinding::ready()` and `PipelineState::ready()`
+  return plain futures instead of `async fn` futures, so pipeline readiness futures
+  are smaller
+
 ## [5.9.0] - 2026-11-18
 
 * Add `InlineFuture`, a type-erased future that stores futures of up to

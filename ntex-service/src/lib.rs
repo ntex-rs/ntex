@@ -217,15 +217,19 @@ pub trait Service<St, Req> {
     /// a reservation for one request or state value. State-taking pipeline
     /// handles share the same cache; independent gates need separate pipelines
     /// or service bindings.
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        Ok(())
+    fn ready(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<(), Self::Error>> {
+        // Unlike an `async fn`, the default future does not store its arguments.
+        async { Ok(()) }
     }
 
     #[inline]
     /// Shuts down the service.
     ///
     /// Returns when the service has been properly shut down.
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {}
+    fn shutdown(&self, ctx: Ctx<'_, Self, St>) -> impl Future<Output = ()> {
+        // Unlike an `async fn`, the default future does not store its arguments.
+        async {}
+    }
 
     #[inline]
     /// Maps this service's output to a different type, returning a new service.

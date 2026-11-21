@@ -221,13 +221,18 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: In, ctx: Ctx<'_, Self, St>) -> Result<Out, Err> {
-        let ctx = ApplyCtx {
-            ctx: ctx.cast(),
-            service: &self.svc,
-            r: marker::PhantomData,
-        };
-        (self.f)(req, &ctx).await
+    #[allow(clippy::manual_async_fn)]
+    fn call(&self, req: In, ctx: Ctx<'_, Self, St>) -> impl Future<Output = Result<Out, Err>> {
+        // An `async fn` would store `req` and `ctx` twice. The block is needed
+        // because the call future borrows the local `ApplyCtx`.
+        async move {
+            let ctx = ApplyCtx {
+                ctx: ctx.cast(),
+                service: &self.svc,
+                r: marker::PhantomData,
+            };
+            (self.f)(req, &ctx).await
+        }
     }
 
     #[inline]

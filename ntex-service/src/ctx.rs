@@ -487,34 +487,41 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
         )
     }
 
-    pub(crate) async fn ready_cached<S, Req>(self, svc: &'a S) -> Result<(), S::Error>
+    #[allow(clippy::manual_async_fn)]
+    pub(crate) fn ready_cached<S, Req>(
+        self,
+        svc: &'a S,
+    ) -> impl Future<Output = Result<(), S::Error>>
     where
         S: Service<St, Req>,
     {
-        while !self.scope.is_ready() {
-            let result = {
-                let observer = self.scope.observer();
-                let mut ready = pin::pin!(self.ready_generation(svc));
-                std::future::poll_fn(|cx| {
-                    observer.register(cx.waker());
-                    // A queued caller can use success published by another checker.
-                    if self.scope.is_ready() {
-                        Poll::Ready(Ok(None))
-                    } else {
-                        ready.as_mut().poll(cx).map(|result| result.map(Some))
-                    }
-                })
-                .await
-            };
-            let generation = result?;
-            // Dropping the check or its observer can invalidate its success.
-            if self.scope.is_ready()
-                || generation.is_some_and(|generation| self.scope.is_current(generation))
-            {
-                return Ok(());
+        // An `async fn` would store `self` and `svc` twice.
+        async move {
+            while !self.scope.is_ready() {
+                let result = {
+                    let observer = self.scope.observer();
+                    let mut ready = pin::pin!(self.ready_generation(svc));
+                    std::future::poll_fn(|cx| {
+                        observer.register(cx.waker());
+                        // A queued caller can use success published by another checker.
+                        if self.scope.is_ready() {
+                            Poll::Ready(Ok(None))
+                        } else {
+                            ready.as_mut().poll(cx).map(|result| result.map(Some))
+                        }
+                    })
+                    .await
+                };
+                let generation = result?;
+                // Dropping the check or its observer can invalidate its success.
+                if self.scope.is_ready()
+                    || generation.is_some_and(|generation| self.scope.is_current(generation))
+                {
+                    return Ok(());
+                }
             }
+            Ok(())
         }
-        Ok(())
     }
 
     #[inline]

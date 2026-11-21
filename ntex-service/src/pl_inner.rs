@@ -293,12 +293,18 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         self.0.scope().is_ready()
     }
 
-    pub(crate) async fn ready(&self, idx: u32) -> Result<(), Err> {
-        if self.is_ready() {
-            Ok(())
-        } else {
-            self.0.ready(idx).await
-        }
+    /// Resolves at once if readiness is valid or shutdown has started when first
+    /// polled, otherwise drives the shared readiness check.
+    pub(crate) fn ready(&self, idx: u32) -> impl Future<Output = Result<(), Err>> + Unpin {
+        let mut check = None;
+        poll_fn(move |cx| {
+            let check = match check {
+                Some(ref mut check) => check,
+                None if self.is_ready() || self.is_shutdown() => return Poll::Ready(Ok(())),
+                None => check.insert(self.0.ready(idx)),
+            };
+            check.as_mut().poll(cx)
+        })
     }
 
     pub(crate) fn call(&self, req: Req) -> BoxFuture<'_, Result<Res, Err>> {
