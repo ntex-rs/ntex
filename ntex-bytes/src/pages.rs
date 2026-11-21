@@ -190,6 +190,7 @@ impl BytePages {
     ///
     /// assert_eq!(pages.freeze(), b"content-type: text/plain\r\n"[..]);
     /// ```
+    #[inline]
     pub fn put_slices(&mut self, src: &[&[u8]]) {
         let len = src.iter().map(|s| s.len()).sum::<usize>();
 
@@ -197,15 +198,7 @@ impl BytePages {
         if let Some(st) = self.current.as_mut()
             && st.remaining() > len
         {
-            let start = st.len();
-            let spare = st.spare_mut();
-            let mut pos = 0;
-            for s in src {
-                spare[pos..pos + s.len()].copy_from_slice(s);
-                pos += s.len();
-            }
-            // SAFETY: the copies above initialized `len` bytes after `start`
-            unsafe { st.set_len(start + len) };
+            st.put_slices(src);
         } else {
             for s in src {
                 self.put_slice(s);
@@ -1873,6 +1866,31 @@ mod tests {
         check(b"abc", &[&fill, b"yz"]);
         check(b"abc", &[&fill, b"yz!"]);
         check(b"abc", &[b"y", &large, b"z"]);
+    }
+
+    /// STATEMENT: `put_slices` copies every byte of slices of any length into the current page,
+    /// including lengths at the edges of the small-copy size classes.
+    ///
+    /// HOW:
+    /// - Start a page with `!`, then for each length from 0 to 40 put a slice of distinct bytes
+    ///   between `<` and `>`; all of it fits into the current page, so every call copies in place.
+    /// - Check that no page moved to the page list and that the frozen bytes equal the slices
+    ///   appended to a `Vec`.
+    #[test]
+    fn put_slices_all_small_lengths() {
+        let data: Vec<u8> = (1..=40).collect();
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        pages.put_slice(b"!");
+        let mut expected = b"!".to_vec();
+
+        for n in 0..=data.len() {
+            pages.put_slices(&[b"<", &data[..n], b">"]);
+            expected.push(b'<');
+            expected.extend_from_slice(&data[..n]);
+            expected.push(b'>');
+        }
+        assert_eq!(pages.pages().len(), 0);
+        assert_eq!(pages.freeze(), expected[..]);
     }
 
     /// STATEMENT: Cloned pages preserve contents while short storage is copied inline and longer mutable storage is shared.

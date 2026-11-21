@@ -221,11 +221,29 @@ impl StorageVec {
     #[inline]
     pub(crate) fn put_slice_partial(&mut self, src: &[u8]) -> usize {
         let cnt = cmp::min(src.len(), self.remaining());
-        self.spare_mut()[..cnt].copy_from_slice(&src[..cnt]);
+        copy_small(&mut self.spare_mut()[..cnt], &src[..cnt]);
         // SAFETY: The `cnt` appended bytes were initialized by the copy above and fit in spare
         // capacity.
         unsafe { self.set_len(self.len() + cnt) };
         cnt
+    }
+
+    /// Appends the given slices in order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slices do not fit into the spare capacity.
+    #[inline]
+    pub(crate) fn put_slices(&mut self, src: &[&[u8]]) {
+        let start = self.len();
+        let spare = self.spare_mut();
+        let mut pos = 0;
+        for s in src {
+            copy_small(&mut spare[pos..pos + s.len()], s);
+            pos += s.len();
+        }
+        // SAFETY: The copies above initialized `pos` bytes after `start`, within spare capacity.
+        unsafe { self.set_len(start + pos) };
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -820,6 +838,37 @@ fn grown_capacity(len: usize, required: usize) -> usize {
     cmp::max(required, cmp::min(len.saturating_mul(2), MAX_CAPACITY))
 }
 
+/// Copies `src` into `dst`, which has the same length.
+///
+/// Copies of up to 32 bytes use fixed-size moves instead of a `memcpy` call.
+#[inline]
+fn copy_small(dst: &mut UninitSlice, src: &[u8]) {
+    let n = src.len();
+    match n {
+        0 => {}
+        1..=3 => {
+            dst.write_byte(0, src[0]);
+            dst.write_byte(n / 2, src[n / 2]);
+            dst.write_byte(n - 1, src[n - 1]);
+        }
+        4..=7 => copy_ends::<4>(dst, src),
+        8..=16 => copy_ends::<8>(dst, src),
+        17..=32 => copy_ends::<16>(dst, src),
+        _ => dst.copy_from_slice(src),
+    }
+}
+
+/// Copies the first and the last `N` bytes of `src`, which together cover
+/// a source of `N..=2 * N` bytes.
+#[inline]
+fn copy_ends<const N: usize>(dst: &mut UninitSlice, src: &[u8]) {
+    let n = src.len();
+    let head: [u8; N] = src[..N].try_into().unwrap();
+    let tail: [u8; N] = src[n - N..].try_into().unwrap();
+    dst[..N].copy_from_slice(&head);
+    dst[n - N..n].copy_from_slice(&tail);
+}
+
 const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
     let s_layout = match Layout::from_size_align(cap, Layout::new::<u8>().align()) {
         Ok(l) => l,
@@ -1162,6 +1211,35 @@ mod tests {
         assert_eq!(st.remaining(), BytePageSize::Size8.capacity());
         assert_eq!(st.put_slice_partial(b"world"), 5);
         assert_eq!(st.as_ref(), b"world");
+    }
+
+    /// STATEMENT: `put_slice_partial` copies every small length exactly, whether the source fits or is cut to the remaining space.
+    ///
+    /// HOW:
+    /// - For each spare size from 0 to 40 bytes, fill a buffer up to that spare size and append a 40-byte source of distinct bytes.
+    /// - Check the returned count is the spare size, the buffer is full, and the tail equals the source prefix.
+    /// - For each length from 0 to 40, append that many source bytes to a one-byte buffer and check the count and contents.
+    #[test]
+    fn put_slice_partial_small_lengths() {
+        let src: Vec<u8> = (100..140).collect();
+
+        for spare in 0..=src.len() {
+            let mut st = StorageVec::with_capacity(100);
+            let fill = st.capacity() - spare;
+            assert_eq!(st.put_slice_partial(&pattern(fill)), fill);
+            assert_eq!(st.put_slice_partial(&src), spare);
+            assert!(st.is_full());
+            assert_eq!(&st.as_ref()[..fill], &pattern(fill)[..]);
+            assert_eq!(&st.as_ref()[fill..], &src[..spare]);
+        }
+
+        for n in 0..=src.len() {
+            let mut st = StorageVec::with_capacity(100);
+            st.put_u8(1);
+            assert_eq!(st.put_slice_partial(&src[..n]), n);
+            assert_eq!(st.as_ref()[0], 1);
+            assert_eq!(&st.as_ref()[1..], &src[..n]);
+        }
     }
 
     /// STATEMENT: Remaining capacity follows initialized data and view offsets and is restored when unique storage is reclaimed.

@@ -1,5 +1,11 @@
 # Changes
 
+## [1.16.1] - 2026-11-21
+
+* Copy short slices in `BytePages::put_slices()`, `BytePages::put_slice()` and
+  `BytesMut::put_slice()` with fixed-size moves instead of `memcpy` calls, and
+  allow `BytePages::put_slices()` to be inlined
+
 ## [1.16.0] - 2026-11-19
 
 * Add `BytesMut::spare_writer()`, which returns a `SpareWriter` that appends
