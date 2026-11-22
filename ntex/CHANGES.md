@@ -52,6 +52,9 @@
   instead of inside an `async` block, so the boxed HTTP/1 pipeline call drops
   from 728 to 504 bytes and fits allocator small-size caches
 
+* ws: Masking processes payloads in unaligned 8-byte words, so it no longer
+  branches on alignment; small packed frames mask about twice as fast
+
 ## [4.9.3] - 2026-11-19
 
 * web: Handler futures are stored using `ntex_service::dev::InlineFuture`, futures
