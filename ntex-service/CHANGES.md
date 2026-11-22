@@ -1,6 +1,6 @@
 # Changes
 
-## [5.9.1] - 2026-11-21
+## [5.10.0] - 2026-11-22
 
 * Add `InlineFuture::empty()` and `InlineFuture::set_with()`, `set_with()` drops
   the current future and builds the new one directly in pinned storage, so callers
@@ -45,6 +45,11 @@
 * Boxed pipeline call futures whose size fills a mimalloc size class that is
   not a power of two get 8 bytes of padding, so `mimalloc`'s aligned
   allocation keeps its fast path
+
+* Experimental: `Pipeline::call()`, `Pipeline::call_static()`, `PipelineBinding::call()`
+  and `PipelineBinding::call_static()` reuse the allocations of finished call
+  futures, as do `PipelineState::call()` and the calls of its bindings. Each
+  pipeline keeps up to 4 of them, so warm calls do not allocate
 
 ## [5.9.0] - 2026-11-18
 

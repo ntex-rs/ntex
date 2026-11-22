@@ -83,25 +83,39 @@ impl<const N: usize> Future for Words<N> {
     }
 }
 
-/// STATEMENT: `box_future` pads a future only when its size fills a
-/// mimalloc size class that is not a power of two.
+impl super::PoolOwner for &super::CallPool {
+    fn pool(&self) -> &super::CallPool {
+        self
+    }
+}
+
+/// STATEMENT: A call future block is padded only when the future's size fills
+/// a mimalloc size class that is not a power of two.
 ///
 /// HOW:
-/// - Box a 48-word future, which fills the 48-word class, and a 52-word future,
-///   which sits inside the 56-word class.
-/// - Check that only the 48-word box grows by the 8-byte padding.
-/// - Poll both boxes and confirm each returns its first word.
+/// - Compute the block layouts of a 48-word future, which fills the 48-word
+///   class, and a 52-word future, which sits inside the 56-word class.
+/// - Check that only the 48-word block grows by the 8-byte padding.
+/// - Build 47- and 51-word futures with `CallFuture::pooled`, whose one-word
+///   owner makes their blocks 48 and 52 words, poll them, and confirm each
+///   returns its first word.
 #[test]
-fn box_future_pads_full_size_classes() {
-    let mut full = super::box_future(|| Words([7; 48]));
-    let mut inner = super::box_future(|| Words([9; 52]));
+fn call_future_pads_full_size_classes() {
+    assert_eq!(
+        super::block_layout::<Words<48>>().size(),
+        size_of::<Words<48>>() + 8
+    );
+    assert_eq!(
+        super::block_layout::<Words<52>>().size(),
+        size_of::<Words<52>>()
+    );
 
-    assert_eq!(size_of_val(&*full), size_of::<Words<48>>() + 8);
-    assert_eq!(size_of_val(&*inner), size_of::<Words<52>>());
-
+    let pool = super::CallPool::new();
+    let mut full = super::CallFuture::pooled(&pool, |_| Words::<47>([7; 47]));
+    let mut inner = super::CallFuture::pooled(&pool, |_| Words::<51>([9; 51]));
     let mut cx = Context::from_waker(Waker::noop());
-    assert_eq!(full.as_mut().poll(&mut cx), Poll::Ready(7));
-    assert_eq!(inner.as_mut().poll(&mut cx), Poll::Ready(9));
+    assert_eq!(Pin::new(&mut full).poll(&mut cx), Poll::Ready(7));
+    assert_eq!(Pin::new(&mut inner).poll(&mut cx), Poll::Ready(9));
 }
 
 /// Readiness reported for one call must not be used after another call

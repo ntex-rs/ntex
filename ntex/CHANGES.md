@@ -1,6 +1,6 @@
 # Changes
 
-## [4.10.0] - Unreleased
+## [4.10.0] - 2026-11-22
 
 * http: HTTP/2 request `uri()` is origin-form and holds only `:path`;
   `:scheme` and `:authority` are available from the new `RequestHead::scheme()`

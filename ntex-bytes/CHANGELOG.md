@@ -1,6 +1,6 @@
 # Changes
 
-## [1.16.1] - 2026-11-21
+## [1.16.1] - 2026-11-22
 
 * Copy short slices in `BytePages::put_slices()`, `BytePages::put_slice()` and
   `BytesMut::put_slice()` with fixed-size moves instead of `memcpy` calls, and

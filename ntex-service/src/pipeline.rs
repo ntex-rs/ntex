@@ -53,7 +53,7 @@ use std::{fmt, future, future::Future, marker::PhantomData, pin::Pin, task::Cont
 
 use crate::pl_inner::PipelineApi;
 use crate::{
-    BindCtx, IntoService, ReadyCallback, ReadyLink, Service, ServiceCaller, util::BoxFuture,
+    BindCtx, IntoService, ReadyCallback, ReadyLink, Service, ServiceCaller, util::CallFuture,
 };
 
 pub use crate::pl_factory::PipelineFactory;
@@ -356,12 +356,12 @@ impl<Req, Res, Err> Clone for PipelineBinding<Req, Res, Err> {
 /// down; the request is passed to the service as usual.
 pub struct PipelineCall<Req, Res, Err> {
     // owns the pipeline
-    fut: BoxFuture<'static, Result<Res, Err>>,
+    fut: CallFuture<'static, Result<Res, Err>>,
     _r: PhantomData<fn(Req)>,
 }
 
 impl<Req, Res, Err> PipelineCall<Req, Res, Err> {
-    fn new(fut: BoxFuture<'static, Result<Res, Err>>) -> Self {
+    fn new(fut: CallFuture<'static, Result<Res, Err>>) -> Self {
         PipelineCall {
             fut,
             _r: PhantomData,
@@ -374,7 +374,7 @@ impl<Req, Res, Err> future::Future for PipelineCall<Req, Res, Err> {
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.fut.as_mut().poll(cx)
+        Pin::new(&mut self.fut).poll(cx)
     }
 }
 

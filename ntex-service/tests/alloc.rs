@@ -3,13 +3,15 @@
 //! Run the timing comparison separately from other tests:
 //! `cargo test -p ntex-service --release --test alloc benchmark_readiness -- --ignored --exact --nocapture`.
 //! It reports seven warmed samples using the counting system allocator, with no
-//! executor or I/O. Timings are descriptive, not pass/fail thresholds. Cached
-//! calls still include dispatch boxing; invalidated cases include notification.
+//! executor or I/O. Timings are descriptive, not pass/fail thresholds. Warm
+//! `Pipeline` and `PipelineState` calls reuse a pooled call block; invalidated
+//! cases include notification.
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::{Cell, RefCell},
-    future::{Future, poll_fn},
-    pin::pin,
+    future::{Future, pending, poll_fn},
+    panic::{AssertUnwindSafe, catch_unwind},
+    pin::{Pin, pin},
     rc::Rc,
     sync::{
         Arc,
@@ -20,7 +22,9 @@ use std::{
 
 use ntex_service::{
     BindCtx, Ctx, Pipeline, ReadyBinding, ReadyCallback, ReadyNotifier, Service, ServiceCaller,
-    boxed, map_state, pipeline::PipelineState, ready,
+    boxed, map_state,
+    pipeline::{PipelineBinding, PipelineState},
+    ready,
 };
 
 struct Counting;
@@ -414,11 +418,13 @@ fn checker_wake_uses_inline_storage_for_eight_observers() {
     }
 }
 
-/// STATEMENT: Cached pipeline handles avoid readiness allocations and retain only call-dispatch allocation.
+/// STATEMENT: Cached pipeline handles avoid readiness allocations, and warm calls reuse the
+/// pipeline's pooled call block.
 ///
 /// HOW:
-/// - Warm readiness and measure direct, bound, cloned, owned, and trait-based entry points.
-/// - Verify zero readiness allocations, one per call, notification rechecks, and shutdown behavior.
+/// - Warm readiness, then measure one cold call, which allocates the call block.
+/// - Measure direct, bound, cloned, owned, and trait-based entry points.
+/// - Verify zero readiness and call allocations, notification rechecks, and shutdown behavior.
 #[test]
 fn cached_pipeline_handles_skip_readiness_allocations() {
     let (svc, gate) = probe();
@@ -430,6 +436,10 @@ fn cached_pipeline_handles_skip_readiness_allocations() {
     binding.on_notify(&callback);
     alias.on_notify(&callback.clone());
     assert_eq!(complete(pl.ready()), Ok(()));
+    assert_eq!(
+        expect_allocs("cold call", 1, || complete(pl.call(2))),
+        Ok(12)
+    );
 
     for _ in 0..4 {
         assert_eq!(expect_allocs("ready", 0, || complete(pl.ready())), Ok(()));
@@ -447,21 +457,21 @@ fn cached_pipeline_handles_skip_readiness_allocations() {
             }),
             Poll::Ready(Ok(()))
         );
-        assert_eq!(expect_allocs("call", 1, || complete(pl.call(2))), Ok(12));
+        assert_eq!(expect_allocs("call", 0, || complete(pl.call(2))), Ok(12));
         assert_eq!(
-            expect_allocs("binding call", 1, || complete(binding.call(2))),
+            expect_allocs("binding call", 0, || complete(binding.call(2))),
             Ok(12)
         );
         assert_eq!(
-            expect_allocs("call_static", 1, || complete(pl.call_static(2))),
+            expect_allocs("call_static", 0, || complete(pl.call_static(2))),
             Ok(12)
         );
         assert_eq!(
-            expect_allocs("binding call_static", 1, || complete(alias.call_static(2))),
+            expect_allocs("binding call_static", 0, || complete(alias.call_static(2))),
             Ok(12)
         );
         assert_eq!(
-            expect_allocs("ServiceCaller", 1, || complete(pl.call_service(2))),
+            expect_allocs("ServiceCaller", 0, || complete(pl.call_service(2))),
             Ok(12)
         );
     }
@@ -491,8 +501,10 @@ fn cached_pipeline_handles_skip_readiness_allocations() {
 /// STATEMENT: State-taking and fixed-state handles share allocation-free cached readiness.
 ///
 /// HOW:
-/// - Warm a `PipelineState` and measure readiness and calls across state values and handle types.
-/// - Check dispatch-only call allocations, revalidation, and callback lifetime after handle drops.
+/// - Warm a `PipelineState` and its call block, then measure readiness and calls across
+///   state values and handle types.
+/// - Check that calls reuse the pooled block without allocating, and check revalidation and
+///   callback lifetime after handle drops.
 #[test]
 fn cached_state_handles_skip_readiness_allocations() {
     let (svc, gate) = probe();
@@ -508,6 +520,7 @@ fn cached_state_handles_skip_readiness_allocations() {
     attached.on_notify(&callback);
     attached_alias.on_notify(&callback);
     assert_eq!(complete(pl.ready(&10)), Ok(()));
+    assert_eq!(complete(pl.call(2, &10)), Ok(12));
 
     for st in [10, 20, 30, 40] {
         assert_eq!(
@@ -531,23 +544,23 @@ fn cached_state_handles_skip_readiness_allocations() {
             Poll::Ready(Ok(()))
         );
         assert_eq!(
-            expect_allocs("state call", 1, || complete(pl.call(2, &st))),
+            expect_allocs("state call", 0, || complete(pl.call(2, &st))),
             Ok(st + 2)
         );
         assert_eq!(
-            expect_allocs("state binding call", 1, || complete(binding.call(2, &st))),
+            expect_allocs("state binding call", 0, || complete(binding.call(2, &st))),
             Ok(st + 2)
         );
         assert_eq!(
-            expect_allocs("state alias call", 1, || complete(alias.call(2, &st))),
+            expect_allocs("state alias call", 0, || complete(alias.call(2, &st))),
             Ok(st + 2)
         );
         assert_eq!(
-            expect_allocs("attached call", 1, || complete(attached.call(2))),
+            expect_allocs("attached call", 0, || complete(attached.call(2))),
             Ok(22)
         );
         assert_eq!(
-            expect_allocs("attached call_static", 1, || {
+            expect_allocs("attached call_static", 0, || {
                 complete(attached_alias.call_static(2))
             }),
             Ok(22)
@@ -594,26 +607,31 @@ impl<S: Service<usize, usize>> Service<usize, usize> for Forward<S> {
     }
 }
 
-/// STATEMENT: Cached context forwarding adds no allocations beyond the pipeline call dispatch.
+/// STATEMENT: Cached context forwarding adds no allocations beyond the pipeline call block.
 ///
 /// HOW:
 /// - Warm nested readiness/state/mapping wrappers and an erased-service wrapper.
-/// - Verify zero readiness allocations, one call box per call (two through the erased
-///   service, whose default zero-word slot boxes its call future), and one underlying
-///   readiness check.
+/// - Verify zero readiness allocations and one underlying readiness check.
+/// - Verify that a cold call allocates the pipeline call block and warm calls reuse it,
+///   and that the erased service, whose default zero-word slot boxes its call future,
+///   adds one allocation per call.
 #[test]
 fn cached_context_and_wrapper_forwarding_add_no_allocations() {
     let (svc, gate) = probe();
     let child = ready(map_state(7usize, ReadyBinding::new(svc))).map(|res| res + 1);
     let pl = Pipeline::new(10, Forward(child));
     assert_eq!(complete(pl.ready()), Ok(()));
+    assert_eq!(
+        expect_allocs("cold forwarded call", 1, || complete(pl.call(2))),
+        Ok(10)
+    );
     for _ in 0..4 {
         assert_eq!(
             expect_allocs("forwarded ready", 0, || complete(pl.ready())),
             Ok(())
         );
         assert_eq!(
-            expect_allocs("forwarded Ctx::ready/call", 1, || complete(pl.call(2))),
+            expect_allocs("forwarded Ctx::ready/call", 0, || complete(pl.call(2))),
             Ok(10)
         );
     }
@@ -626,9 +644,13 @@ fn cached_context_and_wrapper_forwarding_add_no_allocations() {
         expect_allocs("ready around erased service", 0, || complete(pl.ready())),
         Ok(())
     );
-    // Pipeline dispatch and the default zero-word `BoxService` slot each box the call future.
+    // The cold pipeline call block and the default zero-word `BoxService` slot
     assert_eq!(
-        expect_allocs("erased Ctx::ready/call", 2, || complete(pl.call(2))),
+        expect_allocs("cold erased Ctx::ready/call", 2, || complete(pl.call(2))),
+        Ok(12)
+    );
+    assert_eq!(
+        expect_allocs("erased Ctx::ready/call", 1, || complete(pl.call(2))),
         Ok(12)
     );
     assert_eq!(gate.checks.get(), 1);
@@ -639,17 +661,19 @@ fn cached_context_and_wrapper_forwarding_add_no_allocations() {
 /// HOW:
 /// - Wrap probe services with an 8-word slot via `BoxService::new_inline` and with the
 ///   default zero-word slot via `boxed::service`.
-/// - Call each through a warmed `Pipeline` and verify one allocation per call (pipeline dispatch)
-///   for the 8-word slot and two for the default slot, whose call future exceeds one word.
+/// - Call each through a warmed `Pipeline`, whose call block is reused after the first call.
+/// - Verify no allocations per call for the 8-word slot and one for the default slot,
+///   whose call future exceeds one word.
 #[test]
 fn boxed_service_slot_size_controls_call_boxing() {
     let (svc, _gate) = probe();
     let svc: boxed::BoxService<usize, usize, usize, (), 8> = boxed::BoxService::new_inline(svc);
     let pl = Pipeline::new(10, svc);
     assert_eq!(complete(pl.ready()), Ok(()));
+    assert_eq!(complete(pl.call(2)), Ok(12));
     for _ in 0..4 {
         assert_eq!(
-            expect_allocs("8-word slot", 1, || complete(pl.call(2))),
+            expect_allocs("8-word slot", 0, || complete(pl.call(2))),
             Ok(12)
         );
     }
@@ -657,9 +681,10 @@ fn boxed_service_slot_size_controls_call_boxing() {
     let (svc, _gate) = probe();
     let pl = Pipeline::new(10, boxed::service(svc));
     assert_eq!(complete(pl.ready()), Ok(()));
+    assert_eq!(complete(pl.call(2)), Ok(12));
     for _ in 0..4 {
         assert_eq!(
-            expect_allocs("default zero-word slot", 2, || complete(pl.call(2))),
+            expect_allocs("default zero-word slot", 1, || complete(pl.call(2))),
             Ok(12)
         );
     }
@@ -801,7 +826,8 @@ impl Service<usize, usize> for Linked {
 ///
 /// HOW:
 /// - Link 16 parent pipelines to one state-taking child and measure repeated readiness and calls.
-/// - Require zero readiness allocations and only the two pipeline dispatch boxes for calls.
+/// - Warm each parent's call block and the child's shared call block, then require zero
+///   readiness and call allocations.
 /// - Invalidate the child without allocations, verify all parents become unready, and observe one child recheck.
 #[test]
 fn shared_child_cache_hits_do_not_allocate_per_parent() {
@@ -812,6 +838,7 @@ fn shared_child_cache_hits_do_not_allocate_per_parent() {
         .collect();
     for parent in &parents {
         complete(parent.ready()).unwrap();
+        complete(parent.call(2)).unwrap();
     }
     assert_eq!(gate.checks.get(), 1);
 
@@ -821,7 +848,7 @@ fn shared_child_cache_hits_do_not_allocate_per_parent() {
                 complete(parent.ready()).unwrap();
             });
             assert_eq!(
-                expect_allocs("shared child cached call", 2, || complete(parent.call(2))),
+                expect_allocs("shared child cached call", 0, || complete(parent.call(2))),
                 Ok(st + 2)
             );
         }
@@ -839,6 +866,210 @@ fn shared_child_cache_hits_do_not_allocate_per_parent() {
             complete(parent.ready()).unwrap();
         });
     }
+}
+
+/// STATEMENT: A pipeline keeps up to four call blocks for reuse and frees blocks beyond that.
+///
+/// HOW:
+/// - Warm the pipeline with one call, then hold five unpolled calls and verify that only
+///   four of them allocate, and that dropping all five frees one block.
+/// - Hold four calls without allocating, verify that a fifth call allocates, then complete
+///   all five and verify their results and that one block is freed.
+#[test]
+fn pipeline_call_pool_keeps_four_blocks() {
+    let (svc, _gate) = probe();
+    let pl = Pipeline::new(10, svc);
+    assert_eq!(complete(pl.ready()), Ok(()));
+    assert_eq!(complete(pl.call(2)), Ok(12));
+
+    let mut calls = Vec::with_capacity(5);
+    let ((), counts) = measure(|| calls.extend((0..5).map(|_| pl.call(2))));
+    assert_eq!(counts.allocs, 4, "five calls: {counts:?}");
+    let ((), counts) = measure(|| calls.clear());
+    assert_eq!(counts.deallocs, 1, "drop five calls: {counts:?}");
+
+    expect_allocs("four pooled calls", 0, || {
+        calls.extend((0..4).map(|_| pl.call(2)));
+    });
+    expect_allocs("fifth call", 1, || calls.push(pl.call(2)));
+    let (all_ok, counts) = measure(|| calls.drain(..).all(|call| complete(call) == Ok(12)));
+    assert!(all_ok);
+    assert_eq!((counts.allocs, counts.deallocs), (0, 1), "{counts:?}");
+}
+
+/// STATEMENT: An owned call that outlives every pipeline handle returns its block before the
+/// pipeline and its pool are dropped.
+///
+/// HOW:
+/// - Build a pipeline, warm it with one call, start an owned call, and drop the pipeline
+///   handle; verify that the call keeps the service alive.
+/// - Complete and drop the call, and verify that the service is dropped.
+/// - Verify that everything allocated in the scenario, including the pooled block, is freed.
+#[test]
+fn owned_call_outliving_the_pipeline_frees_its_block() {
+    let ((), counts) = measure(|| {
+        let (svc, gate) = probe();
+        let pl = Pipeline::new(10, svc);
+        assert_eq!(complete(pl.ready()), Ok(()));
+        assert_eq!(complete(pl.call(2)), Ok(12));
+
+        let call = pl.call_static(2);
+        drop(pl);
+        assert_eq!(Rc::strong_count(&gate), 3, "the call keeps the service");
+        assert_eq!(complete(call), Ok(12));
+        assert_eq!(
+            Rc::strong_count(&gate),
+            1,
+            "the last call drops the service"
+        );
+    });
+    assert_eq!(counts.allocs, counts.deallocs, "{counts:?}");
+}
+
+/// STATEMENT: An owned state call that outlives every `PipelineState` handle reuses the
+/// shared call block and returns it before the pipeline and its pool are dropped.
+///
+/// HOW:
+/// - Build a `PipelineState`, warm it with one call, bind a state, and start an owned call
+///   on the binding without allocating.
+/// - Drop the `PipelineState` and the binding, and verify that the call keeps the service alive.
+/// - Complete and drop the call, and verify that the service is dropped.
+/// - Verify that everything allocated in the scenario, including the pooled block, is freed.
+#[test]
+fn owned_state_call_outliving_the_pipeline_frees_its_block() {
+    let ((), counts) = measure(|| {
+        let (svc, gate) = probe();
+        let pl = PipelineState::new(svc);
+        assert_eq!(complete(pl.ready(&10)), Ok(()));
+        assert_eq!(complete(pl.call(2, &10)), Ok(12));
+
+        let attached = pl.bind_state(20);
+        let call = expect_allocs("owned state call", 0, || attached.call_static(2));
+        drop((pl, attached));
+        assert_eq!(Rc::strong_count(&gate), 3, "the call keeps the service");
+        assert_eq!(complete(call), Ok(22));
+        assert_eq!(
+            Rc::strong_count(&gate),
+            1,
+            "the last call drops the service"
+        );
+    });
+    assert_eq!(counts.allocs, counts.deallocs, "{counts:?}");
+}
+
+/// Panics when dropped while armed.
+struct PanicOnDrop(bool);
+
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        assert!(!self.0, "call future dropped");
+    }
+}
+
+/// Completes `false` calls; `true` calls stay pending and panic when dropped.
+struct PanicOnCancel {
+    _alive: Rc<()>,
+}
+
+impl Service<(), bool> for PanicOnCancel {
+    type Res = ();
+    type Error = ();
+
+    async fn call(&self, stall: bool, _: Ctx<'_, Self>) -> Result<(), ()> {
+        let _guard = PanicOnDrop(stall);
+        if stall {
+            pending::<()>().await;
+        }
+        Ok(())
+    }
+}
+
+/// STATEMENT: A call future that panics when dropped still returns its block to the pool and
+/// releases the pipeline it keeps.
+///
+/// HOW:
+/// - Warm a pipeline with one call, then start an owned call whose future panics when
+///   dropped, and poll it once.
+/// - Drop the call inside `catch_unwind` and verify that it panicked.
+/// - Verify that the next call reuses the block without allocating.
+/// - Drop the pipeline handle and verify that the service is dropped, so the panicking call
+///   released its pipeline.
+#[test]
+fn panicking_call_future_drop_releases_its_block() {
+    let alive = Rc::new(());
+    let pl = Pipeline::new(
+        (),
+        PanicOnCancel {
+            _alive: alive.clone(),
+        },
+    );
+    assert_eq!(complete(pl.ready()), Ok(()));
+    assert_eq!(complete(pl.call(false)), Ok(()));
+
+    let mut call = pl.call_static(true);
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut call).poll(&mut cx).is_pending());
+    assert!(catch_unwind(AssertUnwindSafe(|| drop(call))).is_err());
+
+    assert_eq!(
+        expect_allocs("call after a panicking drop", 0, || complete(
+            pl.call(false)
+        )),
+        Ok(())
+    );
+    drop(pl);
+    assert_eq!(Rc::strong_count(&alive), 1, "the service is dropped");
+}
+
+/// A request that calls its pipeline when dropped.
+struct CallOnDrop(Option<PipelineBinding<CallOnDrop, (), ()>>);
+
+impl Drop for CallOnDrop {
+    fn drop(&mut self) {
+        if let Some(pl) = self.0.take() {
+            assert_eq!(complete(pl.call(CallOnDrop(None))), Ok(()));
+        }
+    }
+}
+
+/// Completes calls with an empty request; calls holding a pipeline stay pending.
+struct Reenter;
+
+impl Service<(), CallOnDrop> for Reenter {
+    type Res = ();
+    type Error = ();
+
+    async fn call(&self, req: CallOnDrop, _: Ctx<'_, Self>) -> Result<(), ()> {
+        if req.0.is_some() {
+            pending::<()>().await;
+        }
+        Ok(())
+    }
+}
+
+/// STATEMENT: A call made while a pooled call future is dropped cannot reuse the block being
+/// released.
+///
+/// HOW:
+/// - Warm a pipeline with one call, then start and poll a call whose request calls the same
+///   pipeline when dropped; the call takes the only pooled block.
+/// - Drop the call and verify that the nested call allocates a new block.
+/// - Verify that both blocks are pooled afterwards: two concurrent calls do not allocate.
+#[test]
+fn call_during_call_future_drop_uses_another_block() {
+    let pl = Pipeline::new((), Reenter);
+    assert_eq!(complete(pl.ready()), Ok(()));
+    assert_eq!(complete(pl.call(CallOnDrop(None))), Ok(()));
+
+    let mut call = pl.call(CallOnDrop(Some(pl.bind())));
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut call).poll(&mut cx).is_pending());
+    expect_allocs("call during drop", 1, || drop(call));
+
+    let results = expect_allocs("two pooled calls", 0, || {
+        [pl.call(CallOnDrop(None)), pl.call(CallOnDrop(None))].map(complete)
+    });
+    assert_eq!(results, [Ok(()), Ok(())]);
 }
 
 /// STATEMENT: Readiness timing comparisons retain cache-sharing and checker-handoff invariants.
