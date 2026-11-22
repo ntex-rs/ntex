@@ -138,6 +138,7 @@ sha2 = "0.10"
 simdutf8 = "0.1.5"
 slab = "0.4.9"
 socket2 = "0.6.1"
+sonic-rs = "0.5.12"
 variadics_please = "1.1"
 unsynn = { version = "0.3", default-features = false, features = ["proc_macro2"] }
 windows-sys = "0.61.0"

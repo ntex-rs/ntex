@@ -113,7 +113,7 @@ where
     JsonError: WebResponseError<St, St::Error>,
 {
     async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {
-        let body = match crate::http::helpers::json_body(&self.0) {
+        let body = match crate::http::json::to_bytes(&self.0) {
             Ok(body) => body,
             Err(e) => return e.error_response(st),
         };
@@ -385,7 +385,7 @@ where
                 return Poll::Ready(Err(JsonPayloadError::Payload(err)));
             }
         };
-        Poll::Ready(serde_json::from_slice::<U>(&body).map_err(JsonPayloadError::from))
+        Poll::Ready(crate::http::json::from_slice::<U>(&body).map_err(JsonPayloadError::from))
     }
 }
 
@@ -484,7 +484,8 @@ mod tests {
     /// HOW:
     /// - Extract a valid object and assert its field and `into_inner` value.
     /// - Set a ten-byte `JsonConfig` limit and assert the overflow error text.
-    /// - Supply malformed JSON and assert its error is a deserialization failure.
+    /// - Supply malformed JSON and assert it yields a `Deserialize` error whose `JsonError` is a
+    ///   syntax error.
     #[crate::rt_test]
     async fn test_extract() {
         let (req, mut pl, ()) = TestRequest::default()
@@ -540,7 +541,9 @@ mod tests {
             .payload(Bytes::from_static(b"--name-: -test--"))
             .to_http_parts();
         let s = from_request::<_, Json<serde_json::Value>>(&(), &req, &mut pl).await;
-        assert!(format!("{:?}", s.err().unwrap()).contains("Deserialize(Error("));
+        let err = s.err().unwrap();
+        assert!(format!("{err:?}").contains("Deserialize(JsonError("));
+        assert!(matches!(err, JsonPayloadError::Deserialize(ref e) if e.is_syntax()));
     }
 
     /// STATEMENT: `Json` reads its config from the `WebAppConfig` value store, never from application state.

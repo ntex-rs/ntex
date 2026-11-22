@@ -2,7 +2,6 @@
 use std::{error::Error, fmt, io, str::Utf8Error};
 
 use serde::de::value::Error as DeError;
-use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
 
 use crate::client;
@@ -13,7 +12,7 @@ use crate::util::timeout::TimeoutError;
 #[cfg(feature = "ws")]
 use crate::ws::error::HandshakeError;
 
-use super::{HttpResponse, WebResponseError, error};
+use super::{HttpResponse, WebResponseError, error, error::JsonError};
 
 // =========== DefaultError marker ============
 
@@ -43,6 +42,20 @@ impl<St> WebResponseError<St, DefaultError> for DefaultError {
 /// Serialization errors are server-side failures, such as a `Json<T>` or
 /// `Form<T>` responder failing to encode its value.
 impl<St> WebResponseError<St, DefaultError> for JsonError {
+    fn error_response(&self, _: &St) -> HttpResponse {
+        HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, self)
+    }
+}
+
+/// `InternalServerError` for `serde_json::Error`.
+impl<St> WebResponseError<St, DefaultError> for serde_json::Error {
+    fn error_response(&self, _: &St) -> HttpResponse {
+        HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, self)
+    }
+}
+
+/// `InternalServerError` for `sonic_rs::Error`.
+impl<St> WebResponseError<St, DefaultError> for sonic_rs::Error {
     fn error_response(&self, _: &St) -> HttpResponse {
         HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, self)
     }

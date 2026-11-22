@@ -6,7 +6,10 @@ use std::{error, fmt};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::util::Bytes;
+#[cfg(not(feature = "serde"))]
+use ntex_bytes::SpareWriter;
+
+use crate::util::{Bytes, BytesMut};
 
 /// An error that occurred while encoding or decoding a JSON body.
 ///
@@ -135,19 +138,59 @@ pub(crate) fn from_slice<T: DeserializeOwned>(body: &[u8]) -> Result<T, JsonErro
     }
 }
 
+/// Initial buffer capacity of an encoded JSON body.
+const INITIAL_CAPACITY: usize = 256;
+
 /// Serializes `value` as a JSON body.
 pub(crate) fn to_bytes<T: ?Sized + Serialize>(value: &T) -> Result<Bytes, JsonError> {
+    let mut buf = BytesMut::with_capacity(INITIAL_CAPACITY);
+    // The serializer issues many small writes, `SpareWriter` keeps the write
+    // position local instead of updating the buffer header on every write.
     #[cfg(feature = "serde")]
-    {
-        let mut buf = crate::util::BytesMut::new();
-        // The serializer issues many small writes, `SpareWriter` keeps the write
-        // position local instead of updating the buffer header on every write.
-        serde_json::to_writer(buf.spare_writer(0), value)?;
-        Ok(buf.freeze())
-    }
+    serde_json::to_writer(buf.spare_writer(0), value)?;
     #[cfg(not(feature = "serde"))]
-    {
-        Ok(Bytes::from(sonic_rs::to_vec(value)?))
+    sonic_rs::to_writer(SonicWriter(buf.spare_writer(0)), value)?;
+    Ok(buf.freeze())
+}
+
+/// Lets `sonic-rs` encode strings directly into the spare capacity of a
+/// `BytesMut`.
+#[cfg(not(feature = "serde"))]
+struct SonicWriter<'a>(SpareWriter<'a>);
+
+#[cfg(not(feature = "serde"))]
+#[allow(clippy::inline_always)]
+impl std::io::Write for SonicWriter<'_> {
+    #[inline(always)]
+    fn write(&mut self, src: &[u8]) -> std::io::Result<usize> {
+        self.0.extend_from_slice(src);
+        Ok(src.len())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "serde"))]
+#[allow(clippy::inline_always)]
+impl sonic_rs::writer::WriteExt for SonicWriter<'_> {
+    #[inline(always)]
+    fn reserve_with(
+        &mut self,
+        additional: usize,
+    ) -> std::io::Result<&mut [std::mem::MaybeUninit<u8>]> {
+        self.0.reserve(additional);
+        Ok(&mut self.0.spare_capacity_mut()[..additional])
+    }
+
+    #[inline(always)]
+    unsafe fn flush_len(&mut self, additional: usize) -> std::io::Result<()> {
+        // SAFETY: The caller initialized `additional` bytes of the slice
+        // returned by `reserve_with`, which starts at the spare capacity.
+        unsafe { self.0.advance(additional) };
+        Ok(())
     }
 }
 
@@ -173,6 +216,13 @@ mod tests {
     /// - Assert a small body is stored inline.
     #[test]
     fn to_bytes_matches_serde_json() {
+        fn check<T: ?Sized + Serialize>(value: &T) {
+            assert_eq!(
+                to_bytes(value).unwrap(),
+                serde_json::to_string(value).unwrap()
+            );
+        }
+
         let small = vec![1, 2, 3];
         let large: Vec<String> = (0..1000).map(|i| format!("item-{i}")).collect();
         let map: BTreeMap<_, _> = (0..50).map(|i| (i.to_string(), i)).collect();
@@ -182,11 +232,15 @@ mod tests {
             tags: vec![String::new(), "a".repeat(100)],
             extra: Some([("k".to_string(), -1), ("m".to_string(), i64::MAX)].into()),
         };
-        let floats = [0.0, -0.0, 1.5, 1e300, 1e-300, 123_456_789.012_345_68, f64::MIN];
-
-        fn check<T: ?Sized + Serialize>(value: &T) {
-            assert_eq!(to_bytes(value).unwrap(), serde_json::to_string(value).unwrap());
-        }
+        let floats = [
+            0.0,
+            -0.0,
+            1.5,
+            1e300,
+            1e-300,
+            123_456_789.012_345_68,
+            f64::MIN,
+        ];
         check(&small);
         check(&large);
         check(&map);
@@ -270,7 +324,8 @@ mod tests {
     #[test]
     fn error_display() {
         let input = b"{\n  \"secret\": tru }";
-        let serde = JsonError::from(serde_json::from_slice::<serde_json::Value>(input).unwrap_err());
+        let serde =
+            JsonError::from(serde_json::from_slice::<serde_json::Value>(input).unwrap_err());
         let sonic = JsonError::from(sonic_rs::from_slice::<serde_json::Value>(input).unwrap_err());
 
         for err in [serde, sonic] {

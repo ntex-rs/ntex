@@ -6,6 +6,7 @@ use ntex_http::{StatusCode, header};
 
 // Re-export for convenience.
 pub use crate::channel::Canceled;
+pub use crate::http::json::JsonError;
 pub use ntex_http::error::Error as HttpError;
 
 use crate::error::Failure;
@@ -58,7 +59,13 @@ impl ResponseError for HttpError {}
 impl ResponseError for io::Error {}
 
 /// `InternalServerError` for `JsonError`
-impl ResponseError for serde_json::error::Error {}
+impl ResponseError for JsonError {}
+
+/// `InternalServerError` for `serde_json::Error`
+impl ResponseError for serde_json::Error {}
+
+/// `InternalServerError` for `sonic_rs::Error`
+impl ResponseError for sonic_rs::Error {}
 
 /// Errors that can occur while encoding HTTP streams.
 #[derive(thiserror::Error, Clone, Debug)]

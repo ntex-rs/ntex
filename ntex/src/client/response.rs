@@ -494,7 +494,7 @@ where
             Poll::Ready(result) => result.map_err(|e| e.map(JsonPayloadError::from))?,
             Poll::Pending => return Poll::Pending,
         };
-        Poll::Ready(serde_json::from_slice::<U>(&body).map_err(|e| {
+        Poll::Ready(crate::http::json::from_slice::<U>(&body).map_err(|e| {
             Error::from(JsonPayloadError::from(e)).with_service(this.config.service())
         }))
     }

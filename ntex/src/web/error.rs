@@ -1,8 +1,8 @@
 //! Web error
 use std::{cell::RefCell, error::Error, fmt, io::Write};
 
+pub use crate::http::error::JsonError;
 pub use ntex_http::error::Error as HttpError;
-pub use serde_json::error::Error as JsonError;
 pub use urly::InvalidUrl as UrlParseError;
 
 use crate::http::body::Body;
@@ -194,7 +194,7 @@ pub enum JsonPayloadError {
     Deserialize(
         #[from]
         #[source]
-        serde_json::error::Error,
+        JsonError,
     ),
     /// Payload error
     #[error("Error that occur during reading payload: {0}")]
@@ -203,6 +203,18 @@ pub enum JsonPayloadError {
         #[source]
         error::PayloadError,
     ),
+}
+
+impl From<serde_json::Error> for JsonPayloadError {
+    fn from(err: serde_json::Error) -> Self {
+        JsonPayloadError::Deserialize(JsonError::from(err))
+    }
+}
+
+impl From<sonic_rs::Error> for JsonPayloadError {
+    fn from(err: sonic_rs::Error) -> Self {
+        JsonPayloadError::Deserialize(JsonError::from(err))
+    }
 }
 
 /// A set of errors that can occur during parsing request paths
@@ -1255,7 +1267,8 @@ mod tests {
     /// STATEMENT: Default renderers classify serialization, cancellation, and payload failures.
     ///
     /// HOW:
-    /// - Render JSON, URL-encoding, header, URL-generation, and cancellation errors as 500.
+    /// - Render `JsonError`, `serde_json::Error`, `sonic_rs::Error`, URL-encoding, header,
+    ///   URL-generation, and cancellation errors as 500.
     /// - Assert generic deserialization and client-payload failures return 400, overflow returns 413,
     ///   and an enabled OpenSSL error returns 400.
     #[test]
@@ -1267,6 +1280,12 @@ mod tests {
         }
 
         let err = serde_json::from_str::<i32>("x").unwrap_err();
+        assert_eq!(status(&err), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            status(&JsonError::from(err)),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let err = sonic_rs::from_str::<i32>("x").unwrap_err();
         assert_eq!(status(&err), StatusCode::INTERNAL_SERVER_ERROR);
         let err = serde_urlencoded::to_string(1).unwrap_err();
         assert_eq!(status(&err), StatusCode::INTERNAL_SERVER_ERROR);

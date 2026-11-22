@@ -308,7 +308,7 @@ where
 {
     let body = read_response(app, req).await;
 
-    serde_json::from_slice(&body)
+    crate::http::json::from_slice(&body)
         .unwrap_or_else(|e| panic!("read_response_json failed during deserialization, {e:?}"))
 }
 
@@ -527,7 +527,7 @@ impl<St> TestRequest<St> {
     /// The `Content-Type` header is set to `application/json`.
     pub fn json<T: Serialize>(mut self, data: &T) -> Self {
         let bytes =
-            crate::http::helpers::json_body(data).expect("Failed to serialize test data to json");
+            crate::http::json::to_bytes(data).expect("Failed to serialize test data to json");
         self.req.set_payload(bytes);
         self.req.header(CONTENT_TYPE, "application/json");
         self

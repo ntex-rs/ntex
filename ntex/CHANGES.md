@@ -59,9 +59,25 @@
   and the unused hidden `DateService::bset_date_header()` is removed
 
 * http: JSON bodies (`HttpResponse::json()`, the `web::types::Json` responder,
-  client `send_json()`) are serialized through `BytesMut::spare_writer()`,
-  about 2.6x faster for 1-10 KiB bodies; `web::test::TestRequest::json()` uses
-  the same path instead of copying a `String`
+  client `send_json()`) and JSON payloads (the `web::types::Json` extractor, client
+  `ClientResponse::json()`, `web::test::read_response_json()`) are encoded and
+  decoded with `sonic-rs` by default; `web::test::TestRequest::json()` uses the
+  same path instead of copying a `String`. Both backends serialize directly into
+  a `BytesMut` with 256 bytes of initial capacity instead of a `Vec<u8>` that is
+  copied into `Bytes`; requires ntex-bytes 1.16.1
+
+* Add `serde` feature that encodes and decodes JSON bodies with `serde_json`
+  instead of `sonic-rs`. `serde_json` remains a dependency, and
+  `serde_json::Error` and `sonic_rs::Error` both keep `ResponseError` and
+  `WebResponseError` impls that render 500
+
+* `http::error::JsonError` and `web::error::JsonError` are an opaque
+  ntex type instead of an alias for `serde_json::Error`, and the client and web
+  `JsonPayloadError::Deserialize` variants hold it. It provides `line()`,
+  `column()`, `is_io()`, `is_syntax()`, `is_data()`, `is_eof()` and `From` impls
+  for both backend errors. Custom error domains must implement
+  `WebResponseError` for `JsonError` instead of `serde_json::Error` to use the
+  `Json<T>` responder
 
 ## [4.9.3] - 2026-11-19
 
