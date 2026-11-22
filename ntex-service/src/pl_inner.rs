@@ -4,7 +4,7 @@ use std::{future::Future, future::poll_fn, marker::PhantomPinned, mem, ptr, rc::
 
 use crate::ctx::{NO_SLOT, WaitersRef};
 use crate::readiness::{Generation, ReadyObserver, ReadyScope};
-use crate::util::{BoxFuture, WithOwner, box_future};
+use crate::util::{BoxFuture, CallFuture, CallPool, PoolOwner};
 use crate::{BindCtx, Ctx, ReadyCallback, ReadyLink, Service};
 
 // Pipeline-owned checks can be driven by any waiting caller. Caller-owned
@@ -261,6 +261,7 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
             waiters,
             st_runtime: RefCell::new(RuntimeState::New),
             _pinned: PhantomPinned,
+            pool: CallPool::new(),
         }))
     }
 
@@ -308,12 +309,12 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         })
     }
 
-    pub(crate) fn call(&self, req: Req) -> BoxFuture<'_, Result<Res, Err>> {
+    pub(crate) fn call(&self, req: Req) -> CallFuture<'_, Result<Res, Err>> {
         self.0.call(req)
     }
 
     /// Calls the service with a future that keeps the pipeline alive.
-    pub(crate) fn call_static(&self, req: Req) -> BoxFuture<'static, Result<Res, Err>> {
+    pub(crate) fn call_static(&self, req: Req) -> CallFuture<'static, Result<Res, Err>> {
         self.0.clone().call_static(req)
     }
 
@@ -347,12 +348,28 @@ struct PipelineInner<S: Service<St, Req>, St, Req> {
     // The pending readiness future borrows the other fields. `!Unpin` keeps
     // `&mut self` in `Drop` from invalidating those borrows.
     _pinned: PhantomPinned,
+    // Blocks of finished call futures. Declared last, so it is dropped after
+    // the other fields.
+    pool: CallPool,
+}
+
+impl<S: Service<St, Req>, St, Req> PoolOwner for &PipelineInner<S, St, Req> {
+    fn pool(&self) -> &CallPool {
+        &self.pool
+    }
+}
+
+impl<S: Service<St, Req>, St, Req> PoolOwner for Rc<PipelineInner<S, St, Req>> {
+    fn pool(&self) -> &CallPool {
+        &self.pool
+    }
 }
 
 impl<S: Service<St, Req>, St, Req> PipelineInner<S, St, Req> {
     // Unlike `ReadyThenCall`, the `async` block keeps `self` and the request
-    // for the whole call, but it is faster. Its future is boxed once per
-    // pipeline call, so the extra size is not repeated per layer. Contexts are
+    // for the whole call, but it is faster. Its future is stored once per
+    // pipeline call, in a block reused from the pipeline's pool, so the extra
+    // size is not repeated per layer. Contexts are
     // built where they are used, so none is kept in the future. An `async fn`
     // would keep a second copy of `self` and `req`.
     #[allow(clippy::manual_async_fn)]
@@ -400,9 +417,9 @@ pub(crate) trait PipelineInternalApi<Req, Res, Err> {
     fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>>;
 
     /// Calls the service without registering a waiter slot.
-    fn call(&self, req: Req) -> BoxFuture<'_, Result<Res, Err>>;
+    fn call(&self, req: Req) -> CallFuture<'_, Result<Res, Err>>;
 
-    fn call_static(self: Rc<Self>, req: Req) -> BoxFuture<'static, Result<Res, Err>>;
+    fn call_static(self: Rc<Self>, req: Req) -> CallFuture<'static, Result<Res, Err>>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>>;
 
@@ -440,16 +457,14 @@ where
         }))
     }
 
-    fn call(&self, req: Req) -> BoxFuture<'_, Result<S::Res, S::Error>> {
-        box_future(|| self.call_impl(req))
+    fn call(&self, req: Req) -> CallFuture<'_, Result<S::Res, S::Error>> {
+        CallFuture::pooled(self, |&pl| pl.call_impl(req))
     }
 
-    fn call_static(self: Rc<Self>, req: Req) -> BoxFuture<'static, Result<S::Res, S::Error>> {
-        // SAFETY: `self` is `Rc`-allocated, and `WithOwner` drops the future before it
-        let pl = unsafe { detach(&*self) };
-        box_future(move || WithOwner {
-            fut: pl.call_impl(req),
-            owner: self,
+    fn call_static(self: Rc<Self>, req: Req) -> CallFuture<'static, Result<S::Res, S::Error>> {
+        CallFuture::pooled(self, |pl| {
+            // SAFETY: `pl` is `Rc`-allocated, and the call future is dropped before it
+            unsafe { detach(&**pl) }.call_impl(req)
         })
     }
 

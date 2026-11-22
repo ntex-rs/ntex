@@ -1,6 +1,6 @@
 # Changes
 
-## [1.4.2] - 2026-11-21
+## [1.4.2] - 2026-11-22
 
 * `Url::from_target_parts()` builds `scheme://authority/path` targets, the usual
   HTTP/2 request, with a single sized copy instead of generic assembly

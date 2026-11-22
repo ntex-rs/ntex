@@ -1,8 +1,8 @@
-use std::{fmt, future::poll_fn, marker::PhantomPinned, rc::Rc, task::Context, task::Poll};
+use std::{fmt, future::poll_fn, marker::PhantomPinned, ptr, rc::Rc, task::Context, task::Poll};
 
 use crate::ctx::{NO_SLOT, WaitersRef};
 use crate::ready_call::ReadyThenCall;
-use crate::util::{BoxFuture, WithOwner, box_future};
+use crate::util::{BoxFuture, CallFuture, CallPool, PoolOwner};
 use crate::{BindCtx, Ctx, IntoService, ReadyCallback, ReadyLink, Service};
 
 use crate::pipeline::PipelineBinding;
@@ -50,6 +50,7 @@ where
                 readiness: PipelineReadiness::new(waiters.scope()),
                 waiters,
                 _pinned: PhantomPinned,
+                pool: CallPool::new(),
             }),
         }
     }
@@ -282,6 +283,14 @@ struct PipelineInternal<St, Req, Res, Err> {
     api: Rc<dyn PipelineStateApi<St, Req, Res, Err>>,
 }
 
+// Owner of `call_static` futures. One pointer, like the `&PipelineInner` owner
+// of `call` futures, so both kinds of futures share the pool's block layout.
+impl<St, Req, Res, Err> PoolOwner for Rc<PipelineInternal<St, Req, Res, Err>> {
+    fn pool(&self) -> &CallPool {
+        self.api.pool()
+    }
+}
+
 impl<St, Req, Res, Err> PipelineInternalApi<Req, Res, Err> for PipelineInternal<St, Req, Res, Err> {
     fn scope(&self) -> &ReadyScope {
         self.api.scope()
@@ -299,11 +308,11 @@ impl<St, Req, Res, Err> PipelineInternalApi<Req, Res, Err> for PipelineInternal<
         self.api.ready(idx, &self.st)
     }
 
-    fn call(&self, req: Req) -> BoxFuture<'_, Result<Res, Err>> {
+    fn call(&self, req: Req) -> CallFuture<'_, Result<Res, Err>> {
         self.api.call(req, &self.st)
     }
 
-    fn call_static(self: Rc<Self>, req: Req) -> BoxFuture<'static, Result<Res, Err>> {
+    fn call_static(self: Rc<Self>, req: Req) -> CallFuture<'static, Result<Res, Err>> {
         self.api.clone().call_static(req, self)
     }
 
@@ -329,6 +338,15 @@ struct PipelineInner<S, E> {
     // The pending readiness future borrows the other fields. `!Unpin` keeps
     // `&mut self` in `Drop` from invalidating those borrows.
     _pinned: PhantomPinned,
+    // Blocks of finished call futures, shared by all states. Declared last,
+    // so it is dropped after the other fields.
+    pool: CallPool,
+}
+
+impl<S, E> PoolOwner for &PipelineInner<S, E> {
+    fn pool(&self) -> &CallPool {
+        &self.pool
+    }
 }
 
 impl<S, E> PipelineInner<S, E> {
@@ -364,20 +382,23 @@ impl<S, E> Drop for PipelineInner<S, E> {
 trait PipelineStateApi<St, Req, Res, Err> {
     fn scope(&self) -> &ReadyScope;
 
+    fn pool(&self) -> &CallPool;
+
     fn reg(&self) -> u32;
     fn unreg(&self, idx: u32);
 
     /// Calls the service without registering a waiter slot.
-    fn call<'a>(&'a self, req: Req, st: &'a St) -> BoxFuture<'a, Result<Res, Err>>
+    fn call<'a>(&'a self, req: Req, st: &'a St) -> CallFuture<'a, Result<Res, Err>>
     where
         Req: 'a;
 
-    /// Calls with a future that keeps `self` and `owner`, which holds the state, alive.
+    /// Calls with a future that keeps `owner` alive. `owner` holds the state,
+    /// and its `api` must be the `Rc` that holds `self`.
     fn call_static(
-        self: Rc<Self>,
+        &self,
         req: Req,
         owner: Rc<PipelineInternal<St, Req, Res, Err>>,
-    ) -> BoxFuture<'static, Result<Res, Err>>;
+    ) -> CallFuture<'static, Result<Res, Err>>;
 
     fn ready<'a>(&'a self, idx: u32, st: &'a St) -> BoxFuture<'a, Result<(), Err>>
     where
@@ -401,6 +422,10 @@ where
 {
     fn scope(&self) -> &ReadyScope {
         self.waiters.scope()
+    }
+
+    fn pool(&self) -> &CallPool {
+        &self.pool
     }
 
     fn reg(&self) -> u32 {
@@ -436,23 +461,24 @@ where
         })
     }
 
-    fn call<'a>(&'a self, req: Req, st: &'a St) -> BoxFuture<'a, Result<S::Res, S::Error>>
+    fn call<'a>(&'a self, req: Req, st: &'a St) -> CallFuture<'a, Result<S::Res, S::Error>>
     where
         Req: 'a,
     {
-        box_future(|| self.call_impl(NO_SLOT, req, st))
+        CallFuture::pooled(self, |&pl| pl.call_impl(NO_SLOT, req, st))
     }
 
     fn call_static(
-        self: Rc<Self>,
+        &self,
         req: Req,
         owner: Rc<PipelineInternal<St, Req, S::Res, S::Error>>,
-    ) -> BoxFuture<'static, Result<S::Res, S::Error>> {
-        // SAFETY: both are `Rc`-allocated, and `WithOwner` drops the future before them
-        let (pl, st) = unsafe { (detach(&*self), &detach(&*owner).st) };
-        box_future(move || WithOwner {
-            fut: pl.call_impl(NO_SLOT, req, st),
-            owner: (self, owner),
+    ) -> CallFuture<'static, Result<S::Res, S::Error>> {
+        debug_assert!(ptr::addr_eq(Rc::as_ptr(&owner.api), self));
+        CallFuture::pooled(owner, |owner| {
+            // SAFETY: `owner` and `owner.api`, which holds `self`, are `Rc`-allocated,
+            // and the call future is dropped before `owner`
+            let (pl, st) = unsafe { (detach(self), &detach(&**owner).st) };
+            pl.call_impl(NO_SLOT, req, st)
         })
     }
 

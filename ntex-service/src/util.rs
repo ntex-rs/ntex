@@ -1,54 +1,248 @@
+use std::alloc::{self, Layout};
 use std::task::{Context, Poll};
-use std::{future::Future, future::poll_fn, mem::MaybeUninit, pin, pin::Pin};
+use std::{cell::Cell, future::Future, future::poll_fn, marker::PhantomData, mem, pin, pin::Pin};
+use std::{mem::MaybeUninit, ptr, ptr::NonNull};
 
 use crate::{Ctx, Service, readiness::Generation};
 
 pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
 
-/// Boxes the future built by `f`.
+/// A heap-allocated, type-erased pipeline call future.
 ///
-/// Allocating before `f` runs lets the future be written directly into the
-/// box instead of being built on the stack and copied.
+/// Experimental: pipeline calls keep the blocks of finished call futures in a
+/// per-pipeline [`CallPool`] for reuse. This may change or be reverted.
+///
+/// Unlike [`BoxFuture`], dropping the future returns its block to the
+/// [`CallPool`] of its owner.
+pub(crate) struct CallFuture<'a, R> {
+    ptr: NonNull<u8>,
+    // A reference would require `R: 'a`, which `BoxFuture` does not
+    vtable: NonNull<CallVTable<R>>,
+    // Same auto traits, variance and drop check as `BoxFuture`
+    _marker: PhantomData<BoxFuture<'a, R>>,
+}
+
+struct CallVTable<R> {
+    poll: unsafe fn(NonNull<u8>, &mut Context<'_>) -> Poll<R>,
+    release: unsafe fn(NonNull<u8>),
+}
+
+impl<'a, R> CallFuture<'a, R> {
+    /// Builds the future with `f` in a block taken from the pool of `owner`.
+    ///
+    /// The future keeps `owner`. Dropping the future returns the block to the
+    /// pool of `owner` before `owner` is dropped. Taking the block before `f`
+    /// runs lets the future be written directly into the block instead of
+    /// being built on the stack and copied.
+    #[inline]
+    pub(crate) fn pooled<F, O>(owner: O, f: impl FnOnce(&O) -> F) -> Self
+    where
+        F: Future<Output = R> + 'a,
+        O: PoolOwner + 'a,
+    {
+        let block = owner
+            .pool()
+            .take(const { block_layout::<WithOwner<F, O>>() });
+        let fut = f(&owner);
+        // SAFETY: the block fits `WithOwner<F, O>`
+        unsafe {
+            block
+                .ptr
+                .cast::<WithOwner<F, O>>()
+                .write(WithOwner { fut, owner });
+        };
+        Self {
+            ptr: block.into_ptr(),
+            vtable: NonNull::from(
+                const {
+                    &CallVTable {
+                        poll: poll_block::<WithOwner<F, O>>,
+                        release: release_block::<F, O>,
+                    }
+                },
+            ),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<R> Future for CallFuture<'_, R> {
+    type Output = R;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<R> {
+        // SAFETY: `vtable` is a constant, and `ptr` holds the future it was built for
+        unsafe { (self.vtable.as_ref().poll)(self.ptr, cx) }
+    }
+}
+
+impl<R> Drop for CallFuture<'_, R> {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: `vtable` is a constant, and `ptr` holds the future it was built for
+        unsafe { (self.vtable.as_ref().release)(self.ptr) }
+    }
+}
+
+/// # Safety
+///
+/// `ptr` must hold a pinned `F`.
+unsafe fn poll_block<F: Future>(ptr: NonNull<u8>, cx: &mut Context<'_>) -> Poll<F::Output> {
+    // SAFETY: guaranteed by the caller
+    unsafe { Pin::new_unchecked(ptr.cast::<F>().as_mut()) }.poll(cx)
+}
+
+/// # Safety
+///
+/// `ptr` must hold a `WithOwner<F, O>` in a block built by [`CallFuture::pooled`].
+unsafe fn release_block<F, O: PoolOwner>(ptr: NonNull<u8>) {
+    // Releases the block and the owner even if dropping the future panics
+    struct Release<O: PoolOwner> {
+        ptr: NonNull<u8>,
+        owner: *mut O,
+        layout: Layout,
+    }
+
+    impl<O: PoolOwner> Drop for Release<O> {
+        fn drop(&mut self) {
+            // SAFETY: `owner` is initialized and is not used after this read
+            let owner = unsafe { self.owner.read() };
+            // SAFETY: the block was allocated with `layout`, and the future in it
+            // has been dropped. The pool outlives `owner`, which is dropped last.
+            unsafe { owner.pool().put(self.ptr, self.layout) };
+        }
+    }
+
+    let fut = ptr.cast::<WithOwner<F, O>>().as_ptr();
+    let _release = Release {
+        ptr,
+        // SAFETY: guaranteed by the caller
+        owner: unsafe { &raw mut (*fut).owner },
+        layout: const { block_layout::<WithOwner<F, O>>() },
+    };
+    // SAFETY: guaranteed by the caller
+    unsafe { ptr::drop_in_place(&raw mut (*fut).fut) };
+}
+
+/// Provides the pool that a pooled call future returns its block to.
+pub(crate) trait PoolOwner {
+    fn pool(&self) -> &CallPool;
+}
+
+const POOL_CAP: usize = 4;
+
+/// Blocks of dropped call futures, reused by later calls.
+///
+/// A sequential caller reuses one block. Up to `POOL_CAP` blocks are kept,
+/// and all of them have the layout of the last returned block.
+pub(crate) struct CallPool {
+    blocks: [Cell<NonNull<u8>>; POOL_CAP],
+    len: Cell<usize>,
+    layout: Cell<Layout>,
+}
+
+impl CallPool {
+    pub(crate) fn new() -> Self {
+        Self {
+            blocks: [const { Cell::new(NonNull::dangling()) }; POOL_CAP],
+            len: Cell::new(0),
+            layout: Cell::new(Layout::new::<()>()),
+        }
+    }
+
+    /// Takes a block of `layout`, or allocates one if the pool has none.
+    #[inline]
+    fn take(&self, layout: Layout) -> Block {
+        let len = self.len.get();
+        if len > 0 && self.layout.get() == layout {
+            self.len.set(len - 1);
+            Block {
+                ptr: self.blocks[len - 1].get(),
+                layout,
+            }
+        } else {
+            Block::alloc(layout)
+        }
+    }
+
+    /// Keeps a block for a later call, or frees it if the pool cannot keep it.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be a block allocated with `layout` and must not be used again.
+    #[inline]
+    unsafe fn put(&self, ptr: NonNull<u8>, layout: Layout) {
+        let len = self.len.get();
+        if len < POOL_CAP && (len == 0 || self.layout.get() == layout) {
+            self.blocks[len].set(ptr);
+            self.layout.set(layout);
+            self.len.set(len + 1);
+        } else {
+            drop(Block { ptr, layout });
+        }
+    }
+}
+
+impl Drop for CallPool {
+    fn drop(&mut self) {
+        let layout = self.layout.get();
+        for block in &self.blocks[..self.len.get()] {
+            drop(Block {
+                ptr: block.get(),
+                layout,
+            });
+        }
+    }
+}
+
+/// An allocated block, freed on drop.
+struct Block {
+    ptr: NonNull<u8>,
+    layout: Layout,
+}
+
+impl Block {
+    fn alloc(layout: Layout) -> Self {
+        // SAFETY: `block_layout` never returns a zero-sized layout
+        let ptr = unsafe { alloc::alloc(layout) };
+        match NonNull::new(ptr) {
+            Some(ptr) => Self { ptr, layout },
+            None => alloc::handle_alloc_error(layout),
+        }
+    }
+
+    fn into_ptr(self) -> NonNull<u8> {
+        let ptr = self.ptr;
+        mem::forget(self);
+        ptr
+    }
+}
+
+impl Drop for Block {
+    fn drop(&mut self) {
+        // SAFETY: the block was allocated with `layout`
+        unsafe { alloc::dealloc(self.ptr.as_ptr(), self.layout) }
+    }
+}
+
+/// Returns the layout of a block that holds `F` at its start.
 ///
 /// A future whose size fills a mimalloc size class that is not a power of two
 /// is padded, see [`misses_aligned_fast_path`].
-#[inline]
-pub(crate) fn box_future<'a, F>(f: impl FnOnce() -> F) -> BoxFuture<'a, F::Output>
-where
-    F: Future + 'a,
-{
-    if const { needs_padding::<F>() } {
-        let b = Box::<Padded<F>>::new_uninit();
-        Box::into_pin(Box::write(
-            b,
-            Padded {
-                fut: f(),
-                _pad: MaybeUninit::uninit(),
-            },
-        ))
+const fn block_layout<F>() -> Layout {
+    assert!(size_of::<F>() > 0, "call futures are never zero-sized");
+    if needs_padding::<F>() {
+        Layout::new::<Padded<F>>()
     } else {
-        let b = Box::<F>::new_uninit();
-        Box::into_pin(Box::write(b, f()))
+        Layout::new::<F>()
     }
 }
 
-pin_project_lite::pin_project! {
-    /// Adds trailing padding to `fut`, which moves its box to the next size class.
-    #[repr(C)]
-    struct Padded<F> {
-        #[pin]
-        fut: F,
-        _pad: MaybeUninit<[u8; 8]>,
-    }
-}
-
-impl<F: Future> Future for Padded<F> {
-    type Output = F::Output;
-
-    #[inline]
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.project().fut.poll(cx)
-    }
+/// Adds trailing padding to `F`, which moves its block to the next size class.
+#[repr(C)]
+struct Padded<F> {
+    _fut: F,
+    _pad: MaybeUninit<[u8; 8]>,
 }
 
 /// Returns `true` if a box of `F` always misses mimalloc's aligned fast path
