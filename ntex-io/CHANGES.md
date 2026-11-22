@@ -1,9 +1,12 @@
 # Changes
 
-## [4.8.1] - 2026-11-22 (Unreleased)
+## [4.8.1] - 2026-11-22
 
 * Encoding reads the buffered output size while the write buffer is still
   borrowed, instead of borrowing the buffers again afterwards
+
+* Restarting a timer reuses the time elapsed since the timer clock base while
+  the cached `now()` does not change, instead of recomputing it on every restart
 
 ## [4.8.0] - 2026-11-17
 

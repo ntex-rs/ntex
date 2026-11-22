@@ -105,11 +105,25 @@ struct TimerStorage {
     base: Instant,
     /// Whole seconds elapsed since `base`, the keys up to it have expired.
     current: u32,
+    /// The last cached [`now()`](ntex_util::time::now) and its time since
+    /// `base`, the cached time is fixed during a runtime turn.
+    now: (Instant, Duration),
     cache: VecDeque<HashSet<Id>>,
     notifications: BTreeMap<u32, HashSet<Id>>,
 }
 
 impl TimerStorage {
+    fn new(base: Instant) -> Self {
+        TimerStorage {
+            running: false,
+            base,
+            current: 0,
+            now: (base, Duration::ZERO),
+            cache: VecDeque::with_capacity(CAP),
+            notifications: BTreeMap::default(),
+        }
+    }
+
     fn unregister(&mut self, hnd: TimerHandle, io: &IoRef) {
         if let Some(items) = self.notifications.get_mut(&hnd.0) {
             items.remove(&io.id());
@@ -142,7 +156,11 @@ impl TimerStorage {
     /// The start is the cached [`now()`](ntex_util::time::now), a timer
     /// expires early by the age of the cached time.
     fn deadline(&mut self, timeout: Seconds) -> u32 {
-        let elapsed = now().saturating_duration_since(self.base);
+        self.deadline_at(timeout, now())
+    }
+
+    fn deadline_at(&mut self, timeout: Seconds, now: Instant) -> u32 {
+        let elapsed = self.elapsed(now);
         let secs = elapsed.as_secs() as u32;
         if secs < self.current {
             // the cached time lags the ticker, keys up to `current` expired
@@ -155,11 +173,21 @@ impl TimerStorage {
             // expires after exactly `timeout`. `current` does not change,
             // stale handles cannot match a new key
             self.base += Duration::new(0, elapsed.subsec_nanos());
+            self.now.1 = Duration::from_secs(elapsed.as_secs());
             self.current + u32::from(timeout.0)
         } else {
             let partial = u32::from(elapsed.subsec_nanos() != 0);
             self.current + partial + u32::from(timeout.0)
         }
+    }
+
+    /// Returns the time from `base` to `now`, timers restarted at the same
+    /// cached instant reuse it.
+    fn elapsed(&mut self, now: Instant) -> Duration {
+        if self.now.0 != now {
+            self.now = (now, now.saturating_duration_since(self.base));
+        }
+        self.now.1
     }
 
     fn register(&mut self, timeout: Seconds, io: &IoRef) -> TimerHandle {
@@ -260,14 +288,8 @@ impl Default for IoManager {
 
         IoManager {
             storage,
-            timers: TimerStorage {
-                running: false,
-                // the clock of `now()`, it may lag `Instant::now()`
-                base: now(),
-                current: 0,
-                cache: VecDeque::with_capacity(CAP),
-                notifications: BTreeMap::default(),
-            },
+            // the clock of `now()`, it may lag `Instant::now()`
+            timers: TimerStorage::new(now()),
             iops: Iops {
                 running: false,
                 waker: None,
@@ -468,13 +490,7 @@ mod tests {
     /// - Recycle additional empty sets and verify the cache stops growing at `CAP`.
     #[test]
     fn large_timer_sets_are_not_cached() {
-        let mut timers = TimerStorage {
-            running: false,
-            base: Instant::now(),
-            current: 0,
-            cache: VecDeque::new(),
-            notifications: BTreeMap::new(),
-        };
+        let mut timers = TimerStorage::new(Instant::now());
 
         let mut small = HashSet::default();
         small.insert(Id(NonZeroUsize::new(1)));
@@ -497,6 +513,33 @@ mod tests {
             timers.recycle(HashSet::default());
         }
         assert_eq!(timers.cache.len(), CAP);
+    }
+
+    /// STATEMENT: The cached elapsed time follows a re-anchored `base` and a new cached instant.
+    ///
+    /// HOW:
+    /// - Start a 5-second timer at `base + 1.5s` with no timers pending, which moves `base` by 0.5s.
+    /// - Register it, start another at the same instant, and check both get key 6, not 7.
+    /// - Start one at `base + 1.75s` and check it rounds up to key 7.
+    #[test]
+    fn deadline_reuses_elapsed_after_reanchor() {
+        let base = Instant::now();
+        let mut timers = TimerStorage::new(base);
+
+        let at = base + Duration::from_millis(1500);
+        let first = timers.deadline_at(Seconds(5), at);
+        assert_eq!(first, 6);
+        assert_eq!(timers.base, base + Duration::from_millis(500));
+
+        timers
+            .notifications
+            .entry(first)
+            .or_default()
+            .insert(Id(NonZeroUsize::new(1)));
+        assert_eq!(timers.deadline_at(Seconds(5), at), 6);
+
+        let later = base + Duration::from_millis(1750);
+        assert_eq!(timers.deadline_at(Seconds(5), later), 7);
     }
 
     /// STATEMENT: Starting an idle timer does not add an extra ticker interval to its timeout.
