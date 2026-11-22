@@ -1,5 +1,3 @@
-use serde::Serialize;
-
 use crate::util::{Bytes, BytesMut};
 
 /// Checks target syntax and the method/protocol's target form without rewriting it.
@@ -69,18 +67,6 @@ pub(crate) fn process_request_target(
     Ok(())
 }
 
-/// Serializes `value` as JSON.
-///
-/// The JSON is written into the buffer that becomes the body, it is not
-/// copied from an intermediate `String`.
-pub(crate) fn json_body<T: ?Sized + Serialize>(value: &T) -> serde_json::Result<Bytes> {
-    let mut buf = BytesMut::new();
-    // The serializer issues many small writes, `SpareWriter` keeps the write
-    // position local instead of updating the buffer header on every write.
-    serde_json::to_writer(buf.spare_writer(0), value)?;
-    Ok(buf.freeze())
-}
-
 /// Takes the data of `buf`, copied if more than a fifth of the buffer would
 /// be unused.
 ///
@@ -137,44 +123,5 @@ mod tests {
         assert_eq!(body, [2; 512][..]);
         assert_ne!(body.as_ptr(), ptr);
         assert!(buf.is_empty());
-    }
-
-    /// STATEMENT: Direct JSON body serialization matches string serialization and stores small results inline.
-    ///
-    /// HOW:
-    /// - Serialize small and large collections, a map, and an empty string, then compare bytes and inline storage.
-    #[test]
-    fn json_body_matches_to_string() {
-        let small = vec![1, 2, 3];
-        let large: Vec<String> = (0..1000).map(|i| format!("item-{i}")).collect();
-        let map: std::collections::BTreeMap<_, _> = (0..50).map(|i| (i.to_string(), i)).collect();
-
-        assert_eq!(
-            json_body(&small).unwrap(),
-            serde_json::to_string(&small).unwrap()
-        );
-        assert_eq!(
-            json_body(&large).unwrap(),
-            serde_json::to_string(&large).unwrap()
-        );
-        assert_eq!(
-            json_body(&map).unwrap(),
-            serde_json::to_string(&map).unwrap()
-        );
-        assert_eq!(json_body("").unwrap(), "\"\"");
-
-        // a small body is stored inline
-        assert!(json_body(&small).unwrap().is_inline());
-    }
-
-    /// STATEMENT: Direct JSON body serialization propagates unsupported map-key errors.
-    ///
-    /// HOW:
-    /// - Serialize a map with a vector key and verify serialization fails.
-    #[test]
-    fn json_body_error() {
-        let mut map = std::collections::HashMap::new();
-        map.insert(vec![1u8], 1);
-        assert!(json_body(&map).is_err());
     }
 }

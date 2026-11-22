@@ -1,10 +1,8 @@
 //! HTTP client errors.
 use std::{error::Error as StdError, io, ops::Deref, rc::Rc};
 
-use serde_json::error::Error as JsonError;
-
 use crate::error::ErrorDiagnostic;
-use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
+use crate::http::error::{DecodeError, EncodeError, HttpError, JsonError, PayloadError};
 use crate::util::{Either, clone_io_error};
 
 /// Errors that can occur while deserializing a JSON response payload.
@@ -38,6 +36,18 @@ impl Clone for JsonPayloadError {
 impl From<JsonError> for JsonPayloadError {
     fn from(err: JsonError) -> JsonPayloadError {
         JsonPayloadError::Deserialize(Some(err))
+    }
+}
+
+impl From<serde_json::Error> for JsonPayloadError {
+    fn from(err: serde_json::Error) -> JsonPayloadError {
+        JsonPayloadError::Deserialize(Some(err.into()))
+    }
+}
+
+impl From<sonic_rs::Error> for JsonPayloadError {
+    fn from(err: sonic_rs::Error) -> JsonPayloadError {
+        JsonPayloadError::Deserialize(Some(err.into()))
     }
 }
 

@@ -9,6 +9,7 @@ pub mod encoding;
 pub(crate) mod helpers;
 mod httpcodes;
 mod httpmessage;
+pub(crate) mod json;
 mod message;
 mod payload;
 mod request;

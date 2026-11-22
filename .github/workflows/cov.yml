@@ -22,7 +22,7 @@ jobs:
           large-packages: false
 
       - name: Install Rust
-        run: rustup update nightly
+        run: rustup update stable && rustup component add llvm-tools-preview --toolchain stable
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -36,23 +36,23 @@ jobs:
         uses: Swatinem/rust-cache@v2.8.2
 
       - name: Clean coverage results
-        run: cargo +nightly llvm-cov clean --workspace
+        run: cargo +stable llvm-cov clean --workspace
 
       - name: Code coverage (neon-poling)
         timeout-minutes: 10
         continue-on-error: true
-        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo +stable llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (neon-uring)
         timeout-minutes: 10
-        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo +stable llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (tokio)
         timeout-minutes: 10
-        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo +stable llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Generate coverage report
-        run: cargo +nightly llvm-cov report --lcov --output-path lcov.info
+        run: cargo +stable llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -74,7 +74,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: nightly-x86_64-pc-windows-msvc
+          toolchain: stable-x86_64-pc-windows-msvc
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
@@ -100,22 +100,22 @@ jobs:
           echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL\lib\VC\x64\MD" >> $env:GITHUB_ENV
 
       - name: Clean coverage results
-        run: cargo +nightly llvm-cov clean --workspace
+        run: cargo +stable llvm-cov clean --workspace
 
       - name: Code coverage (neon)
         timeout-minutes: 20
-        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo +stable llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (tokio)
         timeout-minutes: 20
-        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo +stable llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (compio)
         timeout-minutes: 20
-        run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo +stable llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Generate coverage report
-        run: cargo +nightly llvm-cov report --lcov --output-path lcov.info
+        run: cargo +stable llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
