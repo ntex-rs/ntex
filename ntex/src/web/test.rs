@@ -526,7 +526,8 @@ impl<St> TestRequest<St> {
     ///
     /// The `Content-Type` header is set to `application/json`.
     pub fn json<T: Serialize>(mut self, data: &T) -> Self {
-        let bytes = serde_json::to_string(data).expect("Failed to serialize test data to json");
+        let bytes =
+            crate::http::helpers::json_body(data).expect("Failed to serialize test data to json");
         self.req.set_payload(bytes);
         self.req.header(CONTENT_TYPE, "application/json");
         self
