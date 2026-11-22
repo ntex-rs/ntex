@@ -592,6 +592,24 @@ impl Reactor {
     }
 }
 
+/// Submit the queue and post deferred completions without waiting.
+///
+/// With deferred task running only an enter with `GETEVENTS` runs task work,
+/// a plain submit never posts completions that arrived since the last wait.
+fn submit_getevents(
+    sq: SubmissionQueue<'_, SEntry>,
+    submitter: &Submitter<'_>,
+) -> io::Result<usize> {
+    sq.sync();
+    // SAFETY: Valid arguments for an enter without extra arguments.
+    let res = unsafe {
+        submitter.enter::<libc::sigset_t>(sq.len() as u32, 0, EnterFlags::GETEVENTS.bits(), None)
+    };
+    // the kernel consumes entries during the enter, even if it fails
+    sq.sync();
+    res
+}
+
 impl AsRawFd for Reactor {
     fn as_raw_fd(&self) -> RawFd {
         self.fd
@@ -680,9 +698,10 @@ impl ntex_rt::Driver for Reactor {
 
                     if sq.len() >= 96 {
                         // flush the full queue without ending the turn; consumed
-                        // entries are published first, the enter may post more
+                        // entries are published first, the enter posts completions
+                        // that arrived during the turn
                         cq.sync();
-                        if submitter.submit().is_err() {
+                        if submit_getevents(sq, &submitter).is_err() {
                             // the end of the turn retries and reports the error
                             break true;
                         }
@@ -711,22 +730,8 @@ impl ntex_rt::Driver for Reactor {
                 // submit publishes the queue tail, and skips the syscall if
                 // there is nothing to submit and no deferred completions to post.
                 let result = if more_tasks {
-                    // Without the taskrun flag a plain submit never runs deferred
-                    // task work, so a task that keeps the runtime busy would starve
-                    // completions. GETEVENTS with no minimum posts them without waiting.
-                    sq.sync();
-                    // SAFETY: Valid arguments for an enter without extra arguments.
-                    let res = unsafe {
-                        submitter.enter::<libc::sigset_t>(
-                            sq.len() as u32,
-                            0,
-                            EnterFlags::GETEVENTS.bits(),
-                            None,
-                        )
-                    };
-                    // the kernel consumes entries during the enter, even if it fails
-                    sq.sync();
-                    res
+                    // a task that keeps the runtime busy would starve completions
+                    submit_getevents(sq, &submitter)
                 } else if more_changes
                     || more_cqes
                     || !cqueue::CompletionQueue::<'_, _>::is_empty(&cq)
