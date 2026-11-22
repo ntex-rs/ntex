@@ -1,5 +1,10 @@
 # Changes
 
+## [4.8.1] - 2026-11-22 (Unreleased)
+
+* Encoding reads the buffered output size while the write buffer is still
+  borrowed, instead of borrowing the buffers again afterwards
+
 ## [4.8.0] - 2026-11-17
 
 * Add hidden `IoRef::is_in_filter_callbacks()`, returns `true` while filter callbacks

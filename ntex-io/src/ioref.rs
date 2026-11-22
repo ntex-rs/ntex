@@ -486,8 +486,8 @@ impl IoRef {
         let st = &self.0;
 
         if st.flags.is_active() {
-            let result = st.buffer.with_write_src(self, f);
-            self.consolidate_write_state(false)?;
+            let (result, size) = st.buffer.with_write_src(self, f);
+            self.consolidate_write_state_for(size, false)?;
             Ok(result)
         } else if st.flags.is_peer_gone() {
             Err(st.error_or_disconnected())
@@ -541,25 +541,6 @@ impl IoRef {
         self.0.buffer.with_write_dst(self, f)
     }
 
-    /// Schedules buffered output for delivery and updates write state.
-    ///
-    /// When output is buffered and the write task is paused, this either
-    /// performs an eager in-place write through the transport handle or
-    /// schedules a write operation. An eager write requires direct writes to be
-    /// enabled and, unless `force` is set, at least
-    /// [`IoConfig::write_buf_threshold`](crate::IoConfig::write_buf_threshold)
-    /// bytes to be buffered; `force` makes any non-empty buffer eligible. A
-    /// write operation is scheduled when an eager write leaves data behind, or
-    /// when no eager write was attempted.
-    ///
-    /// Returns the connection error once the connection is stopping or
-    /// terminating with an error set. This is how a failed eager write or
-    /// filter reaches the caller, and it also prevents further eager writes on
-    /// a connection that is already gone.
-    ///
-    /// Finally enables write back-pressure and wakes the dispatcher if buffered
-    /// output has reached the configured high watermark. The size is re-read
-    /// first because an eager write may have drained it.
     /// Ends the connection after the filter chain failed.
     ///
     /// Output the application queued can not be encoded anymore and is
@@ -586,11 +567,35 @@ impl IoRef {
         st.filters_stopped();
     }
 
+    /// Schedules buffered output for delivery and updates write state.
+    ///
+    /// When output is buffered and the write task is paused, this either
+    /// performs an eager in-place write through the transport handle or
+    /// schedules a write operation. An eager write requires direct writes to be
+    /// enabled and, unless `force` is set, at least
+    /// [`IoConfig::write_buf_threshold`](crate::IoConfig::write_buf_threshold)
+    /// bytes to be buffered; `force` makes any non-empty buffer eligible. A
+    /// write operation is scheduled when an eager write leaves data behind, or
+    /// when no eager write was attempted.
+    ///
+    /// Returns the connection error once the connection is stopping or
+    /// terminating with an error set. This is how a failed eager write or
+    /// filter reaches the caller, and it also prevents further eager writes on
+    /// a connection that is already gone.
+    ///
+    /// Finally enables write back-pressure and wakes the dispatcher if buffered
+    /// output has reached the configured high watermark. The size is re-read
+    /// first because an eager write may have drained it.
+    #[inline]
     pub(crate) fn consolidate_write_state(&self, force: bool) -> io::Result<()> {
+        self.consolidate_write_state_for(self.0.buffer.write_buf_size(), force)
+    }
+
+    /// Same as [`consolidate_write_state`](Self::consolidate_write_state),
+    /// `size` is the current `Stack::write_buf_size()`.
+    fn consolidate_write_state_for(&self, size: usize, force: bool) -> io::Result<()> {
         let st = &self.0;
 
-        // wake write task if needed
-        let size = st.buffer.write_buf_size();
         // set when a direct write may have changed the outstanding output
         let mut wrote = false;
 

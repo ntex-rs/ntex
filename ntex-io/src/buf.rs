@@ -145,6 +145,7 @@ impl Stack {
         self.borrow().app.with_read(io, f)
     }
 
+    #[inline]
     pub(crate) fn write_buf_size(&self) -> usize {
         // check size for first level because delayed filter processing
         let layers = self.borrow();
@@ -169,11 +170,21 @@ impl Stack {
         layers.wire.is_some() && layers.app.write_len() != 0
     }
 
-    pub(crate) fn with_write_src<F, R>(&self, io: &IoRef, f: F) -> R
+    /// Accesses the application-facing write buffer.
+    ///
+    /// Returns the result of `f` and [`write_buf_size`](Self::write_buf_size)
+    /// as of `f` returning, read under the same borrows.
+    pub(crate) fn with_write_src<F, R>(&self, io: &IoRef, f: F) -> (R, usize)
     where
         F: FnOnce(&mut BytePages) -> R,
     {
-        self.borrow().app.with_write_of(io, f)
+        let layers = self.borrow();
+        let (result, len) = layers.app.with_write_len_of(io, f);
+        if let Some(wire) = &layers.wire {
+            (result, len + wire.write_len())
+        } else {
+            (result, len)
+        }
     }
 
     pub(crate) fn with_write_dst<F, R>(&self, io: &IoRef, f: F) -> R
@@ -434,6 +445,7 @@ impl Buffer {
         }
     }
 
+    #[inline]
     fn write_len(&self) -> usize {
         self.write.borrow().len()
     }
@@ -477,6 +489,21 @@ impl Buffer {
             wb.clear();
         }
         result
+    }
+
+    /// Same as [`with_write_of`](Self::with_write_of), also returns the size
+    /// of the write buffer afterwards.
+    fn with_write_len_of<F, R>(&self, io: &IoRef, f: F) -> (R, usize)
+    where
+        F: FnOnce(&mut BytePages) -> R,
+    {
+        let mut wb = self.write.borrow_mut();
+        let result = f(&mut wb);
+        if io.0.is_output_discarded() {
+            wb.clear();
+        }
+        let len = wb.len();
+        (result, len)
     }
 }
 

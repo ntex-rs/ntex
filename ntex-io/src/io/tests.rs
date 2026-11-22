@@ -2002,6 +2002,40 @@ async fn write_backpressure() {
     assert!(!io.flags().is_wr_backpressure());
 }
 
+/// STATEMENT: Encoding behind a filter counts output the filter already passed
+/// toward the transport.
+///
+/// HOW:
+/// - Block the peer, encode 12 bytes behind `Passthrough`, and let the write
+///   task move them to the transport-facing buffer.
+/// - Encode 8 more bytes and check write backpressure (watermark 16) is
+///   enabled and `write_buffered` reports all 20 bytes.
+#[ntex::test]
+async fn encode_counts_output_passed_by_filter() {
+    let cfg = SharedCfg::new("SRV")
+        .add(
+            IoConfig::default()
+                .set_metrics(true)
+                .set_write_backpressure(16),
+        )
+        .build();
+    let metrics = cfg.get::<IoConfig>().metrics();
+
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(0);
+    let io = Io::new(server, cfg).add_filter(Passthrough);
+    assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+
+    io.encode_slice(b"123456789012").unwrap();
+    sleep(Millis(10)).await;
+    assert_eq!(io.st().buffer.write_dst_size(), 12);
+    assert!(!io.flags().is_wr_backpressure());
+
+    io.encode_slice(b"12345678").unwrap();
+    assert!(io.flags().is_wr_backpressure());
+    assert_eq!(metrics.snapshot().write_buffered, 20);
+}
+
 /// STATEMENT: Partial flush releases write backpressure only at the half-watermark.
 ///
 /// HOW:
@@ -3414,6 +3448,31 @@ async fn stop_while_write_buffer_in_use_discards_output() {
     });
     assert_eq!(io.st().write_outstanding(), 0);
     assert_eq!(io.st().wr_buffered.get(), 0);
+}
+
+/// STATEMENT: Output queued while terminating inside `IoRef::with_write_src` is
+/// discarded and not reported as buffered.
+///
+/// HOW:
+/// - Terminate from inside the closure, then append eight bytes, with a write
+///   backpressure watermark of four.
+/// - Check the write buffer is empty, `wr_buffered` is zero, and write
+///   backpressure stays off.
+#[ntex::test]
+async fn terminate_inside_write_src_discards_output() {
+    let io = Io::new(
+        ManualTransport,
+        SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(4)),
+    );
+    io.with_write_src(|buf| {
+        io.terminate();
+        buf.extend_from_slice(b"12345678");
+    })
+    .unwrap();
+
+    assert_eq!(io.st().buffer.write_buf_size(), 0);
+    assert_eq!(io.st().wr_buffered.get(), 0);
+    assert!(!io.flags().is_wr_backpressure());
 }
 
 /// STATEMENT: Explicit read-more and read-notification requests lift read-output backpressure pauses.
