@@ -246,6 +246,7 @@ impl StorageVec {
         unsafe { self.set_len(start + pos) };
     }
 
+    #[inline]
     pub(crate) fn len(&self) -> usize {
         // SAFETY: The handle owns a reference to the live header; only this view can change its
         // length.

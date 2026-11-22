@@ -212,6 +212,7 @@ impl BytePages {
         self.st.as_ref().unwrap().len + self.current_len()
     }
 
+    #[inline]
     fn current_len(&self) -> usize {
         self.current
             .as_ref()
