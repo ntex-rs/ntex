@@ -75,7 +75,9 @@ pub(crate) fn process_request_target(
 /// copied from an intermediate `String`.
 pub(crate) fn json_body<T: ?Sized + Serialize>(value: &T) -> serde_json::Result<Bytes> {
     let mut buf = BytesMut::new();
-    serde_json::to_writer(&mut buf, value)?;
+    // The serializer issues many small writes, `SpareWriter` keeps the write
+    // position local instead of updating the buffer header on every write.
+    serde_json::to_writer(buf.spare_writer(0), value)?;
     Ok(buf.freeze())
 }
 

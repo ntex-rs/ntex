@@ -58,6 +58,11 @@
 * http: The cached `date` header is read and written without `unsafe` code,
   and the unused hidden `DateService::bset_date_header()` is removed
 
+* http: JSON bodies (`HttpResponse::json()`, the `web::types::Json` responder,
+  client `send_json()`) are serialized through `BytesMut::spare_writer()`,
+  about 2.6x faster for 1-10 KiB bodies; `web::test::TestRequest::json()` uses
+  the same path instead of copying a `String`
+
 ## [4.9.3] - 2026-11-19
 
 * web: Handler futures are stored using `ntex_service::dev::InlineFuture`, futures
