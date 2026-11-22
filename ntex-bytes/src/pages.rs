@@ -200,9 +200,15 @@ impl BytePages {
         {
             st.put_slices(src);
         } else {
-            for s in src {
-                self.put_slice(s);
-            }
+            self.put_slices_pages(src);
+        }
+    }
+
+    // kept out of line so the in-page path stays small enough to inline
+    #[inline(never)]
+    fn put_slices_pages(&mut self, src: &[&[u8]]) {
+        for s in src {
+            self.put_slice(s);
         }
     }
 

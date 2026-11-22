@@ -4,7 +4,7 @@ use crate::http::header::HeaderValue;
 use crate::io::{IoRef, cfg::FrameReadRate};
 use crate::service::cfg::{CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{channel::oneshot, util::BytePages, util::Bytes, util::BytesMut, util::HashSet};
+use crate::{channel::oneshot, util::BytePages, util::BytesMut, util::HashSet};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive behavior.
@@ -728,9 +728,9 @@ impl DateService {
             date.current_value
                 .borrow_mut()
                 .get_or_insert_with(|| {
-                    let bytes = Bytes::copy_from_slice(&date.current_date.get()[6..35]);
-                    // SAFETY: the formatted date is visible ASCII
-                    unsafe { HeaderValue::from_shared_unchecked(bytes) }
+                    // validated once per date update
+                    HeaderValue::from_bytes(&date.current_date.get()[6..35])
+                        .expect("formatted date is visible ASCII")
                 })
                 .clone()
         })
@@ -739,28 +739,13 @@ impl DateService {
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
-        DATE.with(|date| {
-            // SAFETY: The TLS date array stays live and cannot be updated during this non-reentrant copy.
-            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
-        });
+        DATE.with(|date| dst.extend_from_slice(&date.current_date.get()));
     }
 
     #[doc(hidden)]
     pub fn set_date_header2(&self, dst: &mut BytePages) {
         DateService::check_date();
-        DATE.with(|date| {
-            // SAFETY: The TLS date array stays live and cannot be updated during this non-reentrant copy.
-            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
-        });
-    }
-
-    #[doc(hidden)]
-    pub fn bset_date_header(&self, dst: &mut BytesMut) {
-        DateService::check_date();
-        DATE.with(|date| {
-            // SAFETY: The TLS date array stays live and cannot be updated during this non-reentrant copy.
-            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
-        });
+        DATE.with(|date| dst.extend_from_slice(&date.current_date.get()));
     }
 }
 
@@ -771,7 +756,7 @@ mod tests {
     /// STATEMENT: Date header serialization reuses cached values until the date service invalidates them.
     ///
     /// HOW:
-    /// - Compare repeated writes through both buffer APIs and match the cached header value.
+    /// - Compare repeated `BytesMut` writes, and a `BytePages` write, with each other and match the cached header value.
     /// - Update the service, verify cache invalidation, and check the regenerated value length.
     #[crate::rt_test]
     async fn test_date() {
@@ -781,11 +766,9 @@ mod tests {
         DateService.set_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
 
-        let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
-        DateService.bset_date_header(&mut buf1);
-        let mut buf2 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
-        DateService.bset_date_header(&mut buf2);
-        assert_eq!(buf1, buf2);
+        let mut pages = BytePages::default();
+        DateService.set_date_header2(&mut pages);
+        assert_eq!(pages.freeze(), &buf1[..]);
 
         // the header value is the cached date
         let value = DateService::header_value();

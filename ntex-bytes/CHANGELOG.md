@@ -3,8 +3,10 @@
 ## [1.16.1] - 2026-11-22
 
 * Copy short slices in `BytePages::put_slices()`, `BytePages::put_slice()` and
-  `BytesMut::put_slice()` with fixed-size moves instead of `memcpy` calls, and
-  allow `BytePages::put_slices()` to be inlined
+  `BytesMut::put_slice()` with fixed-size moves instead of `memcpy` calls
+
+* `BytePages::put_slices()` inlines into callers: the multi-page path is moved
+  out of line, so writes that fit the current page no longer call a function
 
 ## [1.16.0] - 2026-11-19
 

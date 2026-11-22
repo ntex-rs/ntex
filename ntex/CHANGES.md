@@ -55,6 +55,9 @@
 * ws: Masking processes payloads in unaligned 8-byte words, so it no longer
   branches on alignment; small packed frames mask about twice as fast
 
+* http: The cached `date` header is read and written without `unsafe` code,
+  and the unused hidden `DateService::bset_date_header()` is removed
+
 ## [4.9.3] - 2026-11-19
 
 * web: Handler futures are stored using `ntex_service::dev::InlineFuture`, futures
