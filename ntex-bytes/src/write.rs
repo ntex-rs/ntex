@@ -1,4 +1,4 @@
-use std::{fmt, io, ptr};
+use std::{fmt, io, mem::MaybeUninit, ptr, slice};
 
 use crate::BytesMut;
 
@@ -6,9 +6,9 @@ use crate::BytesMut;
 ///
 /// Created by [`BytesMut::spare_writer`]. Bytes are written into the spare
 /// capacity, which is not initialized first, and the writer reserves more
-/// capacity when it is full. The buffer length is updated when the writer
-/// is dropped. If the writer is leaked, the buffer may not include all of
-/// the written bytes.
+/// capacity when it is full, at least doubling the buffer capacity. The
+/// buffer length is updated when the writer is dropped. If the writer is
+/// leaked, the buffer may not include all of the written bytes.
 pub struct SpareWriter<'a> {
     buf: &'a mut BytesMut,
     /// Buffer length when the writer was created.
@@ -44,9 +44,12 @@ impl<'a> SpareWriter<'a> {
     }
 }
 
+// Serializers call these per value through a writer wrapper in another crate,
+// a missed inline turns each call into a function call.
+#[allow(clippy::inline_always)]
 impl SpareWriter<'_> {
     /// Appends a byte.
-    #[inline]
+    #[inline(always)]
     pub fn push(&mut self, byte: u8) {
         if self.len == self.cap {
             self.grow(1);
@@ -57,7 +60,7 @@ impl SpareWriter<'_> {
     }
 
     /// Appends a byte slice.
-    #[inline]
+    #[inline(always)]
     pub fn extend_from_slice(&mut self, src: &[u8]) {
         if src.len() > self.cap - self.len {
             self.grow(src.len());
@@ -77,6 +80,61 @@ impl SpareWriter<'_> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Reserves capacity for at least `additional` more bytes after the
+    /// written bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
+    #[inline(always)]
+    pub fn reserve(&mut self, additional: usize) {
+        if additional > self.cap - self.len {
+            self.grow(additional);
+        }
+    }
+
+    /// Returns the spare capacity after the written bytes.
+    ///
+    /// Bytes written into it are added to the writer with
+    /// [`advance`](Self::advance).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesMut;
+    ///
+    /// let mut buf = BytesMut::new();
+    /// let mut w = buf.spare_writer(0);
+    /// w.reserve(2);
+    /// let spare = w.spare_capacity_mut();
+    /// spare[0].write(b'o');
+    /// spare[1].write(b'k');
+    /// // SAFETY: The first two bytes of the spare capacity are initialized
+    /// unsafe { w.advance(2) };
+    /// drop(w);
+    ///
+    /// assert_eq!(&buf[..], b"ok");
+    /// ```
+    #[inline(always)]
+    pub fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        // SAFETY: `cap - len` bytes after the written bytes are spare capacity
+        // of the buffer, exclusively borrowed by the writer
+        unsafe { slice::from_raw_parts_mut(self.ptr.add(self.len).cast(), self.cap - self.len) }
+    }
+
+    /// Adds `cnt` bytes of the spare capacity to the written bytes.
+    ///
+    /// # Safety
+    ///
+    /// The first `cnt` bytes of [`spare_capacity_mut`](Self::spare_capacity_mut)
+    /// must be initialized.
+    #[inline(always)]
+    pub unsafe fn advance(&mut self, cnt: usize) {
+        debug_assert!(cnt <= self.cap - self.len);
+        self.len += cnt;
     }
 
     #[inline]
@@ -112,8 +170,9 @@ impl Drop for SpareWriter<'_> {
     }
 }
 
+#[allow(clippy::inline_always)]
 impl io::Write for SpareWriter<'_> {
-    #[inline]
+    #[inline(always)]
     fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
         self.extend_from_slice(src);
         Ok(src.len())
@@ -184,5 +243,37 @@ mod tests {
         w.extend_from_slice(b"defg");
         std::mem::forget(w);
         assert_eq!(&buf[..], b"abc");
+    }
+
+    /// STATEMENT: Bytes initialized in `SpareWriter::spare_capacity_mut` are added to the
+    /// buffer by `advance`, and `reserve` keeps the written bytes when it grows the buffer.
+    ///
+    /// HOW:
+    /// - Start a writer after existing bytes, write one byte, then `reserve` more than the
+    ///   spare capacity and check the spare slice is at least that long.
+    /// - Fill part of the spare slice, `advance` over it, append with `push`, and check the
+    ///   writer length and the buffer contents after the drop.
+    #[test]
+    fn spare_writer_advance() {
+        let mut buf = BytesMut::copy_from_slice(b"abc");
+        let mut w = buf.spare_writer(0);
+        w.push(b'd');
+        let need = w.spare_capacity_mut().len() + 100;
+        w.reserve(need);
+        let spare = w.spare_capacity_mut();
+        assert!(spare.len() >= need);
+        for (i, b) in spare[..need].iter_mut().enumerate() {
+            b.write((i % 251) as u8);
+        }
+        // SAFETY: The first `need` bytes of the spare capacity are initialized
+        unsafe { w.advance(need) };
+        w.push(b'z');
+        assert_eq!(w.len(), need + 2);
+        drop(w);
+
+        let mut expected = b"abcd".to_vec();
+        expected.extend((0..need).map(|i| (i % 251) as u8));
+        expected.push(b'z');
+        assert_eq!(&buf[..], &expected[..]);
     }
 }

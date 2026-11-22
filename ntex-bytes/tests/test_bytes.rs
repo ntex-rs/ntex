@@ -675,6 +675,28 @@ fn reserve_recycling() {
     assert_eq!(bytes.capacity(), 38);
 }
 
+/// STATEMENT: `reserve` grows a tiny buffer to at least eight bytes, like `Vec<u8>`, while `reserve_exact` does not.
+///
+/// HOW:
+/// - Reserve one byte in an empty zero-capacity buffer and in a full one-byte buffer, and check both capacities are eight and the payload is kept.
+/// - Reserve one byte exactly in a zero-capacity buffer and check the capacity is one.
+#[test]
+fn reserve_min_capacity() {
+    let mut bytes = BytesMut::with_capacity(0);
+    bytes.reserve(1);
+    assert_eq!(bytes.capacity(), 8);
+
+    let mut bytes = BytesMut::copy_from_slice(b"a");
+    assert_eq!(bytes.capacity(), 1);
+    bytes.reserve(1);
+    assert_eq!(bytes.capacity(), 8);
+    assert_eq!(bytes, "a");
+
+    let mut bytes = BytesMut::with_capacity(0);
+    bytes.reserve_exact(1);
+    assert_eq!(bytes.capacity(), 1);
+}
+
 /// STATEMENT: Extending an initially zero-capacity mutable buffer grows it to hold an iterator's bytes.
 ///
 /// HOW:

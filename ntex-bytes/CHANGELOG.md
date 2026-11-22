@@ -8,6 +8,13 @@
 * `BytePages::put_slices()` inlines into callers: the multi-page path is moved
   out of line, so writes that fit the current page no longer call a function
 
+* Add `SpareWriter::reserve()`, `SpareWriter::spare_capacity_mut()` and
+  `SpareWriter::advance()` for serializers that write into uninitialized
+  spare capacity directly
+
+* `BytesMut::reserve()` grows the buffer to at least twice its capacity instead
+  of twice its length, and to at least 8 bytes, the same policy as `Vec<u8>`
+
 ## [1.16.0] - 2026-11-19
 
 * Add `BytesMut::spare_writer()`, which returns a `SpareWriter` that appends

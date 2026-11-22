@@ -51,6 +51,9 @@ const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
 /// Maximum buffer capacity, offsets and sizes are stored as `u32`.
 pub(crate) const MAX_CAPACITY: usize = u32::MAX as usize - METADATA_SIZE;
 
+/// Smallest capacity `reserve` grows a buffer to, the same as `Vec<u8>`.
+const MIN_GROW_CAPACITY: usize = 8;
+
 /// Largest capacity step of `reserve_more` for buffers without a page size.
 const MAX_MORE_STEP: usize = 64 * 1024;
 
@@ -492,7 +495,7 @@ impl StorageVec {
             let grow_cap = if exact {
                 new_cap
             } else {
-                grown_capacity(len, new_cap)
+                grown_capacity(self.capacity(), new_cap)
             };
             let size = self.page_size();
 
@@ -830,13 +833,15 @@ pub(crate) fn release_shared_vec(ptr: *mut Header) {
     }
 }
 
-/// The capacity a buffer of `len` bytes grows to when it needs `required`.
+/// The capacity a buffer of `capacity` grows to when it needs `required`.
 ///
-/// It is at least twice the length, so appending in small steps reallocates a
-/// logarithmic number of times, a buffer holding little data still gets what
-/// it asked for.
-fn grown_capacity(len: usize, required: usize) -> usize {
-    cmp::max(required, cmp::min(len.saturating_mul(2), MAX_CAPACITY))
+/// It is at least twice the capacity, so appending in small steps
+/// reallocates a logarithmic number of times, also when every step reserves
+/// more than it writes. A tiny buffer grows to at least
+/// [`MIN_GROW_CAPACITY`], like `Vec<u8>`.
+fn grown_capacity(capacity: usize, required: usize) -> usize {
+    let doubled = cmp::min(capacity.saturating_mul(2), MAX_CAPACITY);
+    cmp::max(required, cmp::max(doubled, MIN_GROW_CAPACITY))
 }
 
 /// Copies `src` into `dst`, which has the same length.
@@ -1109,7 +1114,7 @@ mod tests {
     /// STATEMENT: A reservation exceeding all page classes falls back to uncached ordinary storage.
     ///
     /// HOW:
-    /// - Reserve a `Size256` capacity after 1,000 initialized bytes and check `Unset`, exact capacity, and preserved data.
+    /// - Reserve a `Size256` capacity after 1,000 initialized bytes and check `Unset`, a doubled capacity, and preserved data.
     /// - Verify the old page is cached and dropping the oversized buffer adds no cached pages.
     #[test]
     fn reserve_pooled_page_above_largest_page_size() {
@@ -1120,7 +1125,7 @@ mod tests {
         assert_eq!(st.put_slice_partial(&data), data.len());
         st.reserve(BytePageSize::Size256.capacity());
         assert_eq!(st.page_size(), BytePageSize::Unset);
-        assert_eq!(st.capacity(), 1000 + BytePageSize::Size256.capacity());
+        assert_eq!(st.capacity(), 2 * BytePageSize::Size256.capacity());
         assert_eq!(st.as_ref(), &data[..]);
         assert_eq!(cache::cached_pages(BytePageSize::Size256), 1);
 
@@ -1524,7 +1529,7 @@ mod tracker_tests {
     ///
     /// HOW:
     /// - Grow tracked `Size4` to `Size8`, checking its single new charge and cached old page.
-    /// - Split a view and force replacement `Size8` storage, check two charges and a new pointer, then release handles and check charges fall to zero.
+    /// - Split off most of the page so the view's doubled capacity still fits `Size8`, then force replacement `Size8` storage, check two charges and a new pointer, then release handles and check charges fall to zero.
     #[test]
     fn move_to_page_carries_tracker() {
         cache::reset();
@@ -1538,8 +1543,9 @@ mod tracker_tests {
         assert_eq!(cache::cached_pages(BytePageSize::Size4), 1);
 
         // a shared page stays charged until its last handle is dropped, the
-        // data moves to a new page of the same size
-        let head = b.split_to(1000);
+        // data moves to a new page of the same size: twice the remaining
+        // view capacity still fits a `Size8` page
+        let head = b.split_to(4500);
         let ptr = b.as_ptr();
         b.extend_from_slice(&[2; 4000]);
         assert_eq!(b.page_size(), BytePageSize::Size8);

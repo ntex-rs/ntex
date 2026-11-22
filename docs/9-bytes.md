@@ -546,7 +546,8 @@ Appending data also reserves space as needed.
    `Bytes` views split off the buffer keep the old allocation alive.
 
 When growth needs more storage, the target capacity is at least twice the
-current length. Repeated small appends therefore do not allocate each time.
+current capacity and at least 8 bytes, the same policy as `Vec<u8>`. Repeated
+small appends therefore do not allocate each time.
 `realloc` may extend an allocation in place or move it. The buffer makes no
 promise that its address stays the same.
 
