@@ -598,8 +598,9 @@ impl BytesMut {
     ///
     /// Otherwise a unique buffer that is not a pooled page is reallocated,
     /// often in place, and a new buffer is allocated in all other cases. The
-    /// new capacity is at least twice the current length, so appending in
-    /// small steps reallocates a logarithmic number of times. Use
+    /// new capacity is at least twice the current capacity and at least 8
+    /// bytes, like `Vec<u8>`, so appending in small steps reallocates a
+    /// logarithmic number of times. Use
     /// [`reserve_exact`](Self::reserve_exact) to avoid the doubling.
     ///
     /// A buffer with a [`page_size`](Self::page_size) moves to a page of the
@@ -655,7 +656,7 @@ impl BytesMut {
     /// Behaves like [`reserve`](Self::reserve), it reclaims the existing buffer
     /// when possible and reallocates a unique buffer, but a new allocation is
     /// sized to hold exactly `additional` more bytes instead of growing to at
-    /// least twice the current length. The allocation size is the new capacity
+    /// least twice the current capacity. The allocation size is the new capacity
     /// plus the buffer header, [`METADATA_SIZE`](crate::METADATA_SIZE) bytes.
     /// The contents are not moved when the buffer already has enough remaining
     /// capacity.

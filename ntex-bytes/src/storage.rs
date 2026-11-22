@@ -953,7 +953,7 @@ mod tests {
         assert_eq!(bv.as_ref().len(), 5);
         assert_eq!(bv.as_ref()[0], b"h"[0]);
         assert_eq!(bv.remaining_mut(), 0);
-        // growth is at least twice the length
+        // growth is at least twice the capacity
         bv.reserve(1);
         assert_eq!(bv.capacity(), 10);
         assert_eq!(bv.remaining_mut(), 5);
@@ -961,13 +961,13 @@ mod tests {
         assert_eq!(bv.as_ref(), &b"hello "[..]);
         assert_eq!(bv.remaining_mut(), 4);
         bv.reserve(5);
-        assert_eq!(bv.capacity(), 12);
-        assert_eq!(bv.remaining_mut(), 6);
+        assert_eq!(bv.capacity(), 20);
+        assert_eq!(bv.remaining_mut(), 14);
         bv.put_slice(b"world");
         assert_eq!(bv, "hello world");
         bv.advance_to(6);
         assert_eq!(bv, "world");
-        assert_eq!(bv.remaining_mut(), 1);
+        assert_eq!(bv.remaining_mut(), 9);
 
         let bv = BytesMut::copy_from_slice(&b"hello world"[..]);
         let b = Bytes::from(bv);
