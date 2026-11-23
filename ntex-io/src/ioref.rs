@@ -834,6 +834,7 @@ impl IoRef {
     /// `IoRef` they hold.
     pub fn register_filter_callbacks<F: crate::IoCallbacks + 'static>(&self, f: F) {
         if !self.0.flags.is_closed() && !self.0.is_io_dropped() {
+            self.0.flags.unset_plain_filter();
             self.0.extensions.register_filter_callbacks(f);
         }
     }

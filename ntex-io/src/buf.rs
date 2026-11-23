@@ -194,6 +194,38 @@ impl Stack {
         self.borrow().transport().with_write_of(io, f)
     }
 
+    /// Same as [`with_write_dst`](Self::with_write_dst), also returns
+    /// [`write_buf_size`](Self::write_buf_size) before and after `f`, read
+    /// under the same borrow.
+    pub(crate) fn with_write_dst_sizes<F, R>(&self, io: &IoRef, f: F) -> (R, usize, usize)
+    where
+        F: FnOnce(&mut BytePages) -> R,
+    {
+        let layers = self.borrow();
+        if let Some(wire) = &layers.wire {
+            let before = layers.app.write_len() + wire.write_len();
+            let (result, len) = wire.with_write_len_of(io, f);
+            (result, before, layers.app.write_len() + len)
+        } else {
+            let before = layers.app.write_len();
+            let (result, after) = layers.app.with_write_len_of(io, f);
+            (result, before, after)
+        }
+    }
+
+    /// Returns [`write_buf_size`](Self::write_buf_size) and
+    /// [`write_dst_size`](Self::write_dst_size), read under one borrow.
+    pub(crate) fn write_sizes(&self) -> (usize, usize) {
+        let layers = self.borrow();
+        let app = layers.app.write_len();
+        if let Some(wire) = &layers.wire {
+            let dst = wire.write_len();
+            (app + dst, dst)
+        } else {
+            (app, app)
+        }
+    }
+
     pub(crate) fn read_dst_size(&self) -> usize {
         self.borrow().app.read_len()
     }
@@ -256,7 +288,7 @@ impl Stack {
     }
 
     pub(crate) fn process_read_buf(&self, io: &IoRef) -> io::Result<FilterUpdates> {
-        if io.0.flags.is_filter_failed() {
+        if io.0.flags.is_filter_skipped() {
             return Ok(FilterUpdates { wants_write: false });
         }
         let layers = self.borrow();
@@ -274,7 +306,7 @@ impl Stack {
     }
 
     pub(crate) fn process_read_buf_no_cb(&self, io: &IoRef) -> io::Result<FilterUpdates> {
-        if io.0.flags.is_filter_failed() {
+        if io.0.flags.is_filter_skipped() {
             return Ok(FilterUpdates { wants_write: false });
         }
         let layers = self.borrow();
@@ -288,8 +320,11 @@ impl Stack {
     }
 
     pub(crate) fn process_write_buf(&self, io: &IoRef) -> io::Result<()> {
+        if io.0.flags.is_filter_skipped() {
+            return Ok(());
+        }
         let layers = self.borrow();
-        if layers.app.is_write_empty() || io.0.flags.is_filter_failed() {
+        if layers.app.is_write_empty() {
             Ok(())
         } else {
             let mut ctx = FilterCtx {
@@ -307,8 +342,11 @@ impl Stack {
     }
 
     pub(crate) fn process_write_buf_no_cb(&self, io: &IoRef) -> io::Result<()> {
+        if io.0.flags.is_filter_skipped() {
+            return Ok(());
+        }
         let layers = self.borrow();
-        if layers.app.is_write_empty() || io.0.flags.is_filter_failed() {
+        if layers.app.is_write_empty() {
             Ok(())
         } else {
             let mut ctx = FilterCtx {
@@ -322,7 +360,7 @@ impl Stack {
     }
 
     pub(crate) fn process_write_buf_force(&self, io: &IoRef) -> io::Result<()> {
-        if io.0.flags.is_filter_failed() {
+        if io.0.flags.is_filter_skipped() {
             return Ok(());
         }
         let layers = self.borrow();
@@ -340,7 +378,7 @@ impl Stack {
     }
 
     pub(crate) fn process_shutdown(&self, io: &IoRef) -> io::Result<Poll<()>> {
-        if io.0.flags.is_filter_failed() {
+        if io.0.flags.is_filter_skipped() {
             return Ok(Poll::Ready(()));
         }
         self.process_write_buf(io)?;

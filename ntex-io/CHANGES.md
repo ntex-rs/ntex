@@ -1,5 +1,13 @@
 # Changes
 
+## [4.8.2] - 2026-11-24
+
+* Connections without filters or filter callbacks skip filter processing, and
+  write status updates read the buffered output sizes under one borrow
+
+* The `read_buffers_held` and `read_buffer_capacity` metrics are updated with
+  one atomic operation instead of two, and a snapshot reads them consistently
+
 ## [4.8.1] - 2026-11-22
 
 * Encoding reads the buffered output size while the write buffer is still

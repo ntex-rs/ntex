@@ -388,6 +388,7 @@ impl<F: Filter> Io<F> {
         state.0.buffer.add_layer(state.0.cfg().write_size());
 
         // Replace current filter
+        state.0.flags.unset_plain_filter();
         state.0.filter.add_filter::<F, U>(nf);
 
         let io = Io(UnsafeCell::new(state), marker::PhantomData);
@@ -438,6 +439,7 @@ impl<F: Filter> Io<F> {
         }
 
         let guard = Guard(self.io_ref());
+        self.st().flags.unset_plain_filter();
         self.st().filter.map_filter::<F, U, R>(f);
         mem::forget(guard);
 

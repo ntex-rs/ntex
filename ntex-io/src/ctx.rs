@@ -548,14 +548,12 @@ impl IoContext {
             self.0.fail_filters(e);
         }
 
-        let before = st.buffer.write_buf_size();
-        let result = st.buffer.with_write_dst(&self.0, |buffer| f(buffer));
+        let (result, before, after) = st.buffer.with_write_dst_sizes(&self.0, f);
         if st.is_output_discarded() {
             // `f` stopped or aborted the connection, pages it took are gone
             st.wr_inflight.set(0);
             st.sync_write_buffered();
         } else {
-            let after = st.buffer.write_buf_size();
             st.track_wr_inflight(before, after);
             st.sync_write_buffered_for(after + st.wr_inflight.get() as usize);
         }
@@ -593,7 +591,8 @@ impl IoContext {
                 // through the filter chain yet. It is processed here, so that
                 // only output a filter holds back stays out of the
                 // transport-facing buffer.
-                if st.buffer.write_dst_size() == 0
+                if !st.flags.is_filter_skipped()
+                    && st.buffer.write_dst_size() == 0
                     && let Err(e) = st.buffer.process_write_buf(&self.0)
                 {
                     self.0.fail_filters(e);
@@ -601,10 +600,10 @@ impl IoContext {
                 // Filter processing, here or in `with_write_dst`, may have
                 // grown the output. It is checked once the write attempt is
                 // accounted for, an eager write may have drained it already.
-                let mut len = st.buffer.write_buf_size();
+                let (mut len, mut dst) = st.buffer.write_sizes();
                 let mut outstanding = len + st.wr_inflight.get() as usize;
                 if st.enable_wr_backpressure_for(outstanding) {
-                    len = st.buffer.write_buf_size();
+                    (len, dst) = st.buffer.write_sizes();
                     outstanding = len + st.wr_inflight.get() as usize;
                 }
                 st.sync_write_buffered_for(outstanding);
@@ -655,12 +654,13 @@ impl IoContext {
                         st.wake_write_task();
                     }
                     IoTaskStatus::Pause
-                } else if st.buffer.write_dst_size() == 0 {
+                } else if dst == 0 && st.buffer.write_dst_size() == 0 {
                     // A filter holds the output back, for example application
                     // data during a TLS handshake, so the transport has
                     // nothing to write. The write task pauses until new output
                     // is queued or input lets the filter make progress, see
-                    // `process_read_status`.
+                    // `process_read_status`. A cached non-zero `dst` stays
+                    // valid, only the write task drains that buffer.
                     st.flags.set_write_paused();
                     IoTaskStatus::Pause
                 } else {
