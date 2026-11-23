@@ -784,30 +784,34 @@ pub(crate) fn release_shared_vec(ptr: *mut Header) {
         // A unique owner skips the read-modify-write: nobody else holds a
         // reference that could clone the page. The count is left at 1, a
         // recycled page resets it and a freed one is never read again. The
-        // load reads the value of the last `Release` decrement, so the fence
-        // below synchronizes with it as with a `fetch_sub`.
-        if (*ptr).ref_count.load(Relaxed) != 1 && (*ptr).ref_count.fetch_sub(1, Release) != 1 {
-            return;
-        }
+        // `Acquire` load reads the value of the last `Release` decrement, so
+        // it synchronizes with it as the fence below does with a `fetch_sub`,
+        // without a separate fence instruction.
+        if (*ptr).ref_count.load(Acquire) != 1 {
+            if (*ptr).ref_count.fetch_sub(1, Release) != 1 {
+                return;
+            }
 
-        // This fence is needed to prevent reordering of use of the data and
-        // deletion of the data.  Because it is marked `Release`, the decreasing
-        // of the reference count synchronizes with this `Acquire` fence. This
-        // means that use of the data happens before decreasing the reference
-        // count, which happens before this fence, which happens before the
-        // deletion of the data.
-        //
-        // As explained in the [Boost documentation][1],
-        //
-        // > It is important to enforce any possible access to the object in one
-        // > thread (through an existing reference) to *happen before* deleting
-        // > the object in a different thread. This is achieved by a "release"
-        // > operation after dropping a reference (any access to the object
-        // > through this reference must obviously happened before), and an
-        // > "acquire" operation before deleting the object.
-        //
-        // [1]: https://www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html
-        atomic::fence(Acquire);
+            // This fence is needed to prevent reordering of use of the data
+            // and deletion of the data.  Because it is marked `Release`, the
+            // decreasing of the reference count synchronizes with this
+            // `Acquire` fence. This means that use of the data happens before
+            // decreasing the reference count, which happens before this
+            // fence, which happens before the deletion of the data.
+            //
+            // As explained in the [Boost documentation][1],
+            //
+            // > It is important to enforce any possible access to the object
+            // > in one thread (through an existing reference) to *happen
+            // > before* deleting the object in a different thread. This is
+            // > achieved by a "release" operation after dropping a reference
+            // > (any access to the object through this reference must
+            // > obviously happened before), and an "acquire" operation before
+            // > deleting the object.
+            //
+            // [1]: https://www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html
+            atomic::fence(Acquire);
+        }
 
         let capacity = (*ptr).capacity;
 

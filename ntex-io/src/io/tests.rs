@@ -234,6 +234,42 @@ async fn test_drop_releases_callbacks() {
     assert!(state.upgrade().is_none());
 }
 
+/// STATEMENT: Callbacks registered on a connection without filters run when
+/// its input and output are processed.
+///
+/// HOW:
+/// - Register counting callbacks on an `Io` with the base filter only.
+/// - Receive a message and check the callbacks ran, then send one and check
+///   they ran again and the peer got it.
+#[ntex::test]
+async fn callbacks_run_without_filters() {
+    struct Cb(Rc<Cell<usize>>);
+    impl crate::IoCallbacks for Cb {
+        fn before_processing(&self, _: &IoRef) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn after_processing(&self, _: &IoRef) {}
+    }
+
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let calls = Rc::new(Cell::new(0));
+    io.register_filter_callbacks(Cb(calls.clone()));
+
+    client.write(TEXT);
+    assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), TEXT);
+    let after_read = calls.get();
+    assert!(after_read > 0);
+
+    io.send(Bytes::from_static(b"test"), &BytesCodec)
+        .await
+        .unwrap();
+    io.flush(true).await.unwrap();
+    assert!(calls.get() > after_read);
+    assert_eq!(client.read_any(), b"test".as_ref());
+}
+
 /// STATEMENT: Dropped or closed connections do not retain newly registered callbacks.
 ///
 /// HOW:

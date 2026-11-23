@@ -68,7 +68,7 @@ pub struct Flags {
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct FlagsKind: u16 {
+    pub struct FlagsKind: u32 {
         /// filter callbacks are running
         const IN_CALLBACKS        = 1 << 0;
         /// pause io read
@@ -106,6 +106,10 @@ bitflags::bitflags! {
         const DSP_W_BACKPRESSURE  = 1 << 14;
         /// is direct-write enabled
         const DIRECT_WR_SUP       = 1 << 15;
+
+        /// the filter chain is the base filter and no filter callbacks are
+        /// registered, filter processing is a no-op
+        const PLAIN_FILTER        = 1 << 16;
     }
 }
 
@@ -121,9 +125,9 @@ impl Clone for Flags {
 impl Flags {
     pub(crate) fn new(direct_wr: bool) -> Self {
         let bits = if direct_wr {
-            FlagsKind::WR_PAUSED | FlagsKind::DIRECT_WR_SUP
+            FlagsKind::WR_PAUSED | FlagsKind::PLAIN_FILTER | FlagsKind::DIRECT_WR_SUP
         } else {
-            FlagsKind::WR_PAUSED
+            FlagsKind::WR_PAUSED | FlagsKind::PLAIN_FILTER
         };
         Self {
             bits: Cell::new(bits),
@@ -328,6 +332,19 @@ impl Flags {
 
     pub(crate) fn set_filter_failed(&self) {
         self.insert(FlagsKind::FILTER_FAILED);
+    }
+
+    /// Checks whether filter processing is skipped, the filter chain is
+    /// plain or has failed.
+    #[inline]
+    pub(crate) fn is_filter_skipped(&self) -> bool {
+        self.intersects(FlagsKind::PLAIN_FILTER | FlagsKind::FILTER_FAILED)
+    }
+
+    /// Records that a filter or filter callbacks were installed, it is never
+    /// set again.
+    pub(crate) fn unset_plain_filter(&self) {
+        self.remove(FlagsKind::PLAIN_FILTER);
     }
 
     pub(crate) fn is_in_callbacks(&self) -> bool {

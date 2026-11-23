@@ -243,8 +243,9 @@ pub struct IoMetrics {
     rd: Backpressure,
     wr: Backpressure,
     read_buffered: AtomicUsize,
-    read_buffers_held: AtomicUsize,
-    read_buffer_capacity: AtomicUsize,
+    /// `read_buffers_held` in the bits above `HELD_SHIFT`, and
+    /// `read_buffer_capacity` below it, so both change with one update.
+    read_buffers: AtomicU64,
     write_buffered: AtomicUsize,
     bytes_read: AtomicU64,
     bytes_written: AtomicU64,
@@ -255,6 +256,11 @@ pub struct IoMetrics {
 }
 
 const CLOSE_REASONS: usize = 18;
+
+/// Packing of `IoMetrics::read_buffers`, it counts up to 2^24 (16M) held read
+/// buffers with up to 1 TiB of capacity.
+const HELD_SHIFT: u32 = 40;
+const CAPACITY_MASK: u64 = (1 << HELD_SHIFT) - 1;
 
 /// Reason a connection was closed.
 ///
@@ -445,8 +451,7 @@ impl IoMetrics {
             rd: Backpressure::default(),
             wr: Backpressure::default(),
             read_buffered: AtomicUsize::new(0),
-            read_buffers_held: AtomicUsize::new(0),
-            read_buffer_capacity: AtomicUsize::new(0),
+            read_buffers: AtomicU64::new(0),
             write_buffered: AtomicUsize::new(0),
             bytes_read: AtomicU64::new(0),
             bytes_written: AtomicU64::new(0),
@@ -470,6 +475,7 @@ impl IoMetrics {
             self.rd.read(self.base);
         let (write_backpressure, write_backpressure_active, write_backpressure_time) =
             self.wr.read(self.base);
+        let read_buffers = self.read_buffers.load(Relaxed);
         IoMetricsSnapshot {
             read_backpressure,
             write_backpressure,
@@ -478,8 +484,8 @@ impl IoMetrics {
             read_backpressure_time,
             write_backpressure_time,
             read_buffered: self.read_buffered.load(Relaxed),
-            read_buffers_held: self.read_buffers_held.load(Relaxed),
-            read_buffer_capacity: self.read_buffer_capacity.load(Relaxed),
+            read_buffers_held: (read_buffers >> HELD_SHIFT) as usize,
+            read_buffer_capacity: (read_buffers & CAPACITY_MASK) as usize,
             write_buffered: self.write_buffered.load(Relaxed),
             bytes_read: self.bytes_read.load(Relaxed),
             bytes_written: self.bytes_written.load(Relaxed),
@@ -586,15 +592,14 @@ impl IoMetrics {
     /// capacity, a connection with capacity holds a read buffer.
     pub(crate) fn update_read_buffered(&self, prev: u32, cur: u32, prev_cap: u32, cap: u32) {
         update(&self.read_buffered, prev, cur);
-        update(&self.read_buffer_capacity, prev_cap, cap);
-        match (prev_cap > 0, cap > 0) {
-            (false, true) => {
-                self.read_buffers_held.fetch_add(1, Relaxed);
-            }
-            (true, false) => {
-                self.read_buffers_held.fetch_sub(1, Relaxed);
-            }
-            _ => (),
+
+        // A connection's packed contribution never goes below zero, so a
+        // wrapping delta updates both fields of the total without borrowing
+        // from or carrying into the other one.
+        let packed = |cap: u32| (u64::from(cap > 0) << HELD_SHIFT) | u64::from(cap);
+        let (prev, cur) = (packed(prev_cap), packed(cap));
+        if cur != prev {
+            self.read_buffers.fetch_add(cur.wrapping_sub(prev), Relaxed);
         }
     }
 
@@ -741,6 +746,37 @@ mod tests {
         let s = m.snapshot();
         assert_eq!(s.read_backpressure_active, 0);
         assert!(s.read_backpressure > 0);
+    }
+
+    /// STATEMENT: The packed read-buffer gauge keeps held count and capacity
+    /// apart when capacities shrink or exceed 32 bits in total.
+    ///
+    /// HOW:
+    /// - Give two connections `u32::MAX` capacity, then shrink one while both
+    ///   stay held.
+    /// - Release both and check `read_buffers_held` and `read_buffer_capacity`
+    ///   in each snapshot.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn read_buffer_gauges_stay_separate() {
+        let m = IoMetrics::new();
+        let held = || {
+            let s = m.snapshot();
+            (s.read_buffers_held, s.read_buffer_capacity)
+        };
+        let max = u32::MAX as usize;
+
+        m.update_read_buffered(0, 0, 0, u32::MAX);
+        m.update_read_buffered(0, 0, 0, u32::MAX);
+        assert_eq!(held(), (2, 2 * max));
+
+        m.update_read_buffered(0, 0, u32::MAX, 16);
+        assert_eq!(held(), (2, max + 16));
+
+        m.update_read_buffered(0, 0, 16, 0);
+        assert_eq!(held(), (1, max));
+        m.update_read_buffered(0, 0, u32::MAX, 0);
+        assert_eq!(held(), (0, 0));
     }
 
     /// STATEMENT: Only registered configurations receive cached dedicated metrics.

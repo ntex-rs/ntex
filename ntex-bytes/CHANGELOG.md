@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* Releasing the last reference of a page uses an `Acquire` load instead of a
+  relaxed load and an `Acquire` fence
+
 ## [1.16.1] - 2026-11-22
 
 * Copy short slices in `BytePages::put_slices()`, `BytePages::put_slice()` and
