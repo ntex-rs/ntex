@@ -1341,6 +1341,26 @@ impl WeakStreamCtl {
             .try_with(|storage| storage.streams.get(self.id).map(|item| f(&item.io)))
             .flatten()
     }
+
+    /// Submits a send for buffered output, without the write task.
+    ///
+    /// The write status is reported once the transport took the output or
+    /// has nothing to take, so the write task stays paused; the send
+    /// completion continues writing. Does nothing if the stream is closing
+    /// or gone, or if called while the storage is in use, the write task
+    /// sends the output then.
+    pub(crate) fn write(&self, ctx: &IoContext) {
+        let submitted = self.inner.try_with(|storage| {
+            storage.send(self.id, &self.inner.api);
+            storage
+                .streams
+                .get(self.id)
+                .is_some_and(|item| !item.flags.contains(Flags::CLOSING))
+        });
+        if submitted == Some(true) {
+            ctx.update_write_status(Ok(0));
+        }
+    }
 }
 
 impl Drop for WeakStreamCtl {

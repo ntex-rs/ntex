@@ -1,5 +1,10 @@
 # Changes
 
+## [4.12.5] - 2026-11-23
+
+* io-uring: `Handle::write` submits the send directly, instead of waking the
+  connection io task to submit it
+
 ## [4.12.4] - 2026-11-22
 
 * io-uring: Post deferred completions when the submission queue is flushed

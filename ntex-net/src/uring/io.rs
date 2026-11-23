@@ -27,10 +27,9 @@ impl ntex_io::IoStream for super::UnixStream {
 
 struct HandleWrapper(WeakStreamCtl);
 
-// `Handle::write` is not implemented, eager writes are not supported.
-// A send queued early would still reach the kernel with the next submit,
-// and submitting immediately would add a syscall per eager write instead
-// of batching the sends of all connections.
+// `Handle::write` queues the send without waking the write task. The send
+// reaches the kernel with the next reactor submit, together with the sends
+// of all other connections.
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
@@ -40,6 +39,10 @@ impl Handle for HandleWrapper {
             }
         }
         None
+    }
+
+    fn write(&self, ctx: &IoContext) {
+        self.0.write(ctx);
     }
 }
 
