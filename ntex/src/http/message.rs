@@ -552,20 +552,29 @@ impl<T: Head> std::ops::DerefMut for Message<T> {
 
 impl<T: Head> Drop for Message<T> {
     fn drop(&mut self) {
-        if let Some(head) = Rc::get_mut(&mut self.head) {
-            // clearing may drop other messages (e.g. stored in extensions),
-            // so the pool must not be borrowed at this point
-            head.clear();
-            T::with_pool(|pool| {
-                if let Ok(mut v) = pool.0.try_borrow_mut()
-                    && v.len() < 128
-                {
-                    v.push(self.head.clone());
-                }
-            });
+        let Some(head) = Rc::get_mut(&mut self.head) else {
+            return;
+        };
+        // a head the pool would reject is freed as is, clearing it first
+        // would be wasted work
+        if !T::with_pool(MessagePool::has_room).unwrap_or(false) {
+            return;
         }
+        // clearing may drop other messages (e.g. stored in extensions),
+        // so the pool must not be borrowed at this point
+        head.clear();
+        T::with_pool(|pool| {
+            if let Ok(mut v) = pool.0.try_borrow_mut()
+                && v.len() < POOL_CAP
+            {
+                v.push(self.head.clone());
+            }
+        });
     }
 }
+
+/// Maximum number of cleared heads kept by each thread-local pool
+const POOL_CAP: usize = 128;
 
 /// Request's objects pool
 pub(crate) struct MessagePool<T: Head>(RefCell<Vec<Rc<T>>>);
@@ -582,6 +591,10 @@ impl<T: Head> MessagePool<T> {
     #[inline]
     fn get_head(&self) -> Option<Rc<T>> {
         self.0.try_borrow_mut().ok()?.pop()
+    }
+
+    fn has_room(&self) -> bool {
+        self.0.try_borrow().is_ok_and(|v| v.len() < POOL_CAP)
     }
 }
 

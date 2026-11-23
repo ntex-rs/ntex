@@ -9,7 +9,10 @@
 //!
 //! Local [`JoinHandle`]s are neither `Send` nor `Sync`, even for `Send` outputs.
 //! They detach on drop by default. Use [`JoinHandle::cancel_on_drop()`] to
-//! request cancellation on drop instead.
+//! request cancellation on drop instead. On the native runtime, a detached
+//! task is cancelled once it is pending and no clone of its waker is stored,
+//! see [`rt::spawn()`]. The Tokio and Compio adapters keep such tasks until
+//! the runtime shuts down.
 //!
 //! Use [`spawn_sendable()`] to spawn a local future whose `Send` output can be
 //! awaited on another thread through a [`SendableJoinHandle`]. Dropping that
