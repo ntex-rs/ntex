@@ -1,9 +1,12 @@
 # Changes
 
-## [Unreleased]
+## [4.10.1] - 2026-11-24
 
 * Fix use-after-free when a native runtime's notifier drops the runtime during
   local task scheduling or cancellation
+
+* Document that the native runtime cancels a detached pending task once no
+  clone of its waker is stored
 
 ## [4.10.0] - 2026-11-17
 

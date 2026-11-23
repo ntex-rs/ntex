@@ -76,6 +76,15 @@ pub fn now() -> Instant {
 /// detaches it unless [`cancel_on_drop`](JoinHandle::cancel_on_drop) is enabled.
 /// Completion is not guaranteed if the runtime shuts down.
 ///
+/// A pending task is cancelled once nothing can wake it: no clone of its
+/// waker is stored and its join handle has been dropped. The runtime then
+/// drops the future on its thread without completing it. For example, a
+/// detached task awaiting [`std::future::pending()`], which discards its
+/// waker, is dropped after its first poll along with everything it owns. A
+/// task that waits must leave its waker with whatever ends the wait. While
+/// the join handle is held, the task stays pending instead. The Tokio and
+/// Compio adapters keep such tasks until the runtime shuts down.
+///
 /// # Panics
 ///
 /// Panics if no native runtime is active on the current thread.
@@ -94,7 +103,8 @@ where
 ///
 /// The future and its output need not be `Send`. The output is dropped on
 /// completion. Like [`spawn()`], this applies registered task callbacks, but
-/// does not create a join handle.
+/// does not create a join handle. Without a handle, the task is cancelled as
+/// soon as it is pending and no clone of its waker is stored, see [`spawn()`].
 ///
 /// # Panics
 ///
@@ -298,7 +308,8 @@ impl Runtime {
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.
     /// The future and output need not be `Send`. Unlike [`crate::rt::spawn()`],
-    /// this low-level method does not apply registered task callbacks.
+    /// this low-level method does not apply registered task callbacks. A
+    /// pending task that nothing can wake is cancelled, as described there.
     #[track_caller]
     pub fn spawn<F: Future + 'static>(&self, future: F) -> JoinHandle<F::Output> {
         // SAFETY: `Runtime` is thread-confined, and the future owns all captured data.
@@ -343,7 +354,8 @@ impl Runtime {
     ///
     /// The future and output need not be `Send`. The output is dropped on the
     /// runtime thread when the task completes. This low-level method does not
-    /// apply registered task callbacks.
+    /// apply registered task callbacks. The task is cancelled as soon as it is
+    /// pending and no clone of its waker is stored, see [`crate::rt::spawn()`].
     #[track_caller]
     pub fn spawn_detached<F: Future + 'static>(&self, future: F) {
         // SAFETY: `Runtime` is thread-confined, and the future owns all captured data.
@@ -708,7 +720,8 @@ impl Handle {
     /// The returned join handle is neither `Send` nor `Sync`; dropping it
     /// detaches the task. Submissions rejected after shutdown are never polled
     /// and their futures may be dropped on the submitting thread. This low-level
-    /// method does not apply registered task callbacks.
+    /// method does not apply registered task callbacks. A pending task that
+    /// nothing can wake is cancelled, see [`crate::rt::spawn()`].
     ///
     /// ```no_run
     /// # async fn check(hnd: ntex_rt::rt::Handle) {
@@ -745,6 +758,8 @@ impl Handle {
     /// The future must be `Send`, even when submitted on the owner thread.
     /// Rejected submissions are never polled and their futures may be dropped
     /// on the submitting thread. Registered task callbacks are not applied.
+    /// The task is cancelled as soon as it is pending and no clone of its waker
+    /// is stored, see [`crate::rt::spawn()`].
     #[track_caller]
     pub fn spawn_detached<F>(&self, future: F)
     where

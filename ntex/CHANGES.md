@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* http: Dropping a request or response head while the thread's message pool is
+  full frees it directly instead of clearing it first
+
 ## [4.10.0] - 2026-11-22
 
 * http: HTTP/2 request `uri()` is origin-form and holds only `:path`;
