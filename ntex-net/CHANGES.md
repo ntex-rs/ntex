@@ -1,5 +1,12 @@
 # Changes
 
+## [4.13.0] - 2026-11-24
+
+* io-uring: Register stream sockets in the ring's fixed file table, so reads
+  and writes skip the per-operation descriptor lookup. The default table size
+  is 16384, capped by the open file limit; set `NTEX_URING_FIXED_FILES` to
+  change it, or to `0` to disable it
+
 ## [4.12.5] - 2026-11-23
 
 * io-uring: `Handle::write` submits the send directly, instead of waking the

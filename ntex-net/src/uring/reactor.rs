@@ -148,6 +148,24 @@ impl ReactorApi {
     pub fn unregister_buf_ring(&self, bgid: u16) -> io::Result<()> {
         self.inner.ring.submitter().unregister_buf_ring(bgid)
     }
+
+    /// Registers an empty file table with `nr` slots, kernel 5.19 or greater.
+    ///
+    /// The ring has one table, it is released with the ring.
+    pub fn register_files_sparse(&self, nr: u32) -> io::Result<()> {
+        self.inner.ring.submitter().register_files_sparse(nr)
+    }
+
+    /// Replaces slots of the file table starting at `offset`, `-1` clears a slot.
+    ///
+    /// Issued operations keep the file they resolved, a replaced or cleared
+    /// file is released once they complete.
+    pub fn register_files_update(&self, offset: u32, fds: &[RawFd]) -> io::Result<usize> {
+        self.inner
+            .ring
+            .submitter()
+            .register_files_update(offset, fds)
+    }
 }
 
 /// io-uring reactor.
