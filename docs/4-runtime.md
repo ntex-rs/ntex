@@ -42,6 +42,14 @@ Tokio and Compio are useful when your application uses libraries from those
 ecosystems. The native backend uses the platform reactor directly, without
 running a second general-purpose runtime.
 
+With io_uring, each runtime thread registers its sockets in the ring's fixed
+file table, so reads and writes skip the kernel's per-operation descriptor
+lookup. The table has 16384 slots by default, capped by the open file limit
+(`RLIMIT_NOFILE`). Each slot takes 8 to 16 bytes of kernel memory. Connections
+beyond the table size, and all connections on kernels older than 5.19, use
+plain descriptors. To change the size, set the `NTEX_URING_FIXED_FILES`
+environment variable before the first runtime starts; `0` disables the table.
+
 Let `#[ntex::main]` own the process entry point unless you need another setup.
 `SystemRunner::block_on` blocks the current thread. Do not call it inside an
 async Tokio task to nest one runtime inside another.
