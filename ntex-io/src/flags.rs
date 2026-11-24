@@ -236,6 +236,16 @@ impl Flags {
         self.phase.get() == Phase::Active
     }
 
+    /// Checks whether the next item can be decoded right away.
+    ///
+    /// True while the connection is active and neither a dispatcher timeout
+    /// nor write backpressure is pending, so a receiver has nothing to report
+    /// before decoding.
+    #[inline]
+    pub(crate) fn is_recv_ready(&self) -> bool {
+        self.is_active() && !self.intersects(FlagsKind::DSP_TIMEOUT | FlagsKind::DSP_W_BACKPRESSURE)
+    }
+
     pub(crate) fn is_stopping_filters(&self) -> bool {
         self.reached(Phase::FiltersStopping(Manner::Graceful))
     }
@@ -359,6 +369,7 @@ impl Flags {
         self.remove(FlagsKind::IN_CALLBACKS);
     }
 
+    #[inline]
     pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {
         self.intersects(FlagsKind::RD_PAUSED | FlagsKind::RD_BACKPRESSURE)
     }
@@ -495,6 +506,7 @@ impl Flags {
         disabled
     }
 
+    #[inline]
     pub(crate) fn unset_read_ready(&self) {
         self.remove(FlagsKind::BUF_R_READY);
     }

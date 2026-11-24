@@ -366,14 +366,18 @@ impl<F> Io<F> {
         U: Decoder,
     {
         let st = self.st();
-        st.flags.unset_read_ready();
+        if !st.flags.is_recv_ready() {
+            // `decode_item` clears read readiness too, this only matters
+            // for the early returns
+            st.flags.unset_read_ready();
 
-        let closed = st.flags.is_stopping() || st.flags.is_terminating();
-        if !closed {
-            if st.flags.check_dispatcher_timeout() {
-                return Err(RecvError::Timeout);
-            } else if st.flags.is_wr_backpressure() {
-                return Err(RecvError::WriteBackpressure);
+            let closed = st.flags.is_stopping() || st.flags.is_terminating();
+            if !closed {
+                if st.flags.check_dispatcher_timeout() {
+                    return Err(RecvError::Timeout);
+                } else if st.flags.is_wr_backpressure() {
+                    return Err(RecvError::WriteBackpressure);
+                }
             }
         }
 

@@ -67,7 +67,7 @@ impl WsClientConfig {
             addr: None,
             max_size: 65_536,
             max_message_size: 4 * 1024 * 1024,
-            validate_utf8: true,
+            validate_utf8: false,
             server_mode: false,
             timeout: Millis(5_000),
             close_timeout: Millis(5_000),
@@ -172,9 +172,10 @@ impl WsClientConfig {
     }
 
     #[must_use]
-    /// Enables or disables UTF-8 validation of incoming text messages.
+    /// Enables or disables UTF-8 validation of single-frame text messages.
     ///
-    /// Validation is enabled by default, see
+    /// Validation is disabled by default, fragmented text messages are always
+    /// validated, see
     /// [`Codec::validate_utf8()`](super::Codec::validate_utf8).
     pub fn set_validate_utf8(mut self, enabled: bool) -> Self {
         self.validate_utf8 = enabled;
