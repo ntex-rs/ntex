@@ -383,8 +383,13 @@ mod serde {
 }
 
 mod utf8 {
+    /// `simdutf8` hands inputs shorter than its 64-byte block to
+    /// `core::str::from_utf8`, which is several times slower than an ASCII
+    /// scan on short text.
+    const SHORT: usize = 64;
+
     pub(super) fn is_valid(input: &[u8]) -> bool {
-        simdutf8::basic::from_utf8(input).is_ok()
+        (input.len() < SHORT && input.is_ascii()) || simdutf8::basic::from_utf8(input).is_ok()
     }
 }
 
@@ -497,11 +502,16 @@ mod test {
     ///
     /// HOW:
     /// - Convert valid `nice bytes` and invalid byte sequences from slices, vectors, owned and borrowed `Bytes`, and `BytesMut`.
+    /// - Convert short non-ASCII text, which fails the short ASCII fast path, and expect it unchanged.
     /// - Unwrap valid conversions and verify each invalid conversion returns an error.
     #[test]
     fn test_try_from() {
         let _ = ByteString::try_from(&b"nice bytes"[..]).unwrap();
         assert!(ByteString::try_from(b"\xc3\x28".as_ref()).is_err());
+        assert_eq!(
+            ByteString::try_from("caf\u{e9}".as_bytes()).unwrap(),
+            "caf\u{e9}"
+        );
 
         let _ = ByteString::try_from(b"nice bytes".to_vec()).unwrap();
         assert!(ByteString::try_from(vec![b'\xc3']).is_err());

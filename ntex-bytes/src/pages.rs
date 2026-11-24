@@ -2,7 +2,7 @@
 use std::{borrow::Borrow, cell::Cell, cmp, collections::VecDeque, fmt, io, mem, ops};
 
 use crate::{Buf, BufMut, BytePageSize, ByteString, Bytes, BytesMut};
-use crate::{buf::UninitSlice, stvec::StorageVec};
+use crate::{buf::UninitSlice, stvec::StorageVec, stvec::slices_len};
 
 /// A growable sequence of byte pages.
 ///
@@ -192,7 +192,7 @@ impl BytePages {
     /// ```
     #[inline]
     pub fn put_slices(&mut self, src: &[&[u8]]) {
-        let len = src.iter().map(|s| s.len()).sum::<usize>();
+        let len = slices_len(src);
 
         // a small write that leaves the current page non-full is copied in place
         if let Some(st) = self.current.as_mut()

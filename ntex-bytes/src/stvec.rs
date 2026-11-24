@@ -224,7 +224,9 @@ impl StorageVec {
     #[inline]
     pub(crate) fn put_slice_partial(&mut self, src: &[u8]) -> usize {
         let cnt = cmp::min(src.len(), self.remaining());
-        copy_small(&mut self.spare_mut()[..cnt], &src[..cnt]);
+        // SAFETY: `cnt` bytes fit into the spare capacity, and the spare capacity cannot
+        // overlap `src`.
+        unsafe { copy_small(self.spare_mut().as_mut_ptr(), &src[..cnt]) };
         // SAFETY: The `cnt` appended bytes were initialized by the copy above and fit in spare
         // capacity.
         unsafe { self.set_len(self.len() + cnt) };
@@ -239,14 +241,21 @@ impl StorageVec {
     #[inline]
     pub(crate) fn put_slices(&mut self, src: &[&[u8]]) {
         let start = self.len();
-        let spare = self.spare_mut();
-        let mut pos = 0;
+        let len = slices_len(src);
+        assert!(len <= self.remaining());
+
+        let mut dst = self.spare_mut().as_mut_ptr();
         for s in src {
-            copy_small(&mut spare[pos..pos + s.len()], s);
-            pos += s.len();
+            // SAFETY: All slices fit into the spare capacity, checked above, which cannot overlap
+            // them; `dst` advances past each copied slice.
+            unsafe {
+                copy_small(dst, s);
+                dst = dst.add(s.len());
+            }
         }
-        // SAFETY: The copies above initialized `pos` bytes after `start`, within spare capacity.
-        unsafe { self.set_len(start + pos) };
+        // SAFETY: The copies above initialized `len` bytes after `start`, within spare capacity,
+        // and the length is stored without re-reading the header the copies may alias.
+        unsafe { (*self.as_inner()).len = (start + len) as u32 };
     }
 
     #[inline]
@@ -848,35 +857,52 @@ fn grown_capacity(capacity: usize, required: usize) -> usize {
     cmp::max(required, cmp::max(doubled, MIN_GROW_CAPACITY))
 }
 
-/// Copies `src` into `dst`, which has the same length.
+/// Returns the total length of `src`, saturating so that a length that
+/// overflows `usize` never fits into a buffer.
+#[inline]
+pub(crate) fn slices_len(src: &[&[u8]]) -> usize {
+    src.iter().fold(0, |len, s| len.saturating_add(s.len()))
+}
+
+/// Copies `src` to `dst`.
 ///
 /// Copies of up to 32 bytes use fixed-size moves instead of a `memcpy` call.
+///
+/// # Safety
+///
+/// `dst` must be valid for writes of `src.len()` bytes and must not overlap
+/// `src`.
 #[inline]
-fn copy_small(dst: &mut UninitSlice, src: &[u8]) {
+unsafe fn copy_small(dst: *mut u8, src: &[u8]) {
     let n = src.len();
+    let src = src.as_ptr();
     match n {
         0 => {}
         1..=3 => {
-            dst.write_byte(0, src[0]);
-            dst.write_byte(n / 2, src[n / 2]);
-            dst.write_byte(n - 1, src[n - 1]);
+            *dst = *src;
+            *dst.add(n / 2) = *src.add(n / 2);
+            *dst.add(n - 1) = *src.add(n - 1);
         }
-        4..=7 => copy_ends::<4>(dst, src),
-        8..=16 => copy_ends::<8>(dst, src),
-        17..=32 => copy_ends::<16>(dst, src),
-        _ => dst.copy_from_slice(src),
+        4..=7 => copy_ends::<4>(dst, src, n),
+        8..=16 => copy_ends::<8>(dst, src, n),
+        17..=32 => copy_ends::<16>(dst, src, n),
+        _ => ptr::copy_nonoverlapping(src, dst, n),
     }
 }
 
-/// Copies the first and the last `N` bytes of `src`, which together cover
-/// a source of `N..=2 * N` bytes.
+/// Copies the first and the last `N` of `n` bytes, which together cover
+/// `N..=2 * N` bytes.
+///
+/// # Safety
+///
+/// `n` must be at least `N`, `src` must be valid for reads and `dst` for
+/// writes of `n` bytes, and they must not overlap.
 #[inline]
-fn copy_ends<const N: usize>(dst: &mut UninitSlice, src: &[u8]) {
-    let n = src.len();
-    let head: [u8; N] = src[..N].try_into().unwrap();
-    let tail: [u8; N] = src[n - N..].try_into().unwrap();
-    dst[..N].copy_from_slice(&head);
-    dst[n - N..n].copy_from_slice(&tail);
+unsafe fn copy_ends<const N: usize>(dst: *mut u8, src: *const u8, n: usize) {
+    let head = src.cast::<[u8; N]>().read_unaligned();
+    let tail = src.add(n - N).cast::<[u8; N]>().read_unaligned();
+    dst.cast::<[u8; N]>().write_unaligned(head);
+    dst.add(n - N).cast::<[u8; N]>().write_unaligned(tail);
 }
 
 const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
@@ -1250,6 +1276,34 @@ mod tests {
             assert_eq!(st.as_ref()[0], 1);
             assert_eq!(&st.as_ref()[1..], &src[..n]);
         }
+    }
+
+    /// STATEMENT: `put_slices` fills the spare capacity exactly, and panics without changing the
+    /// view when the slices are longer than the spare capacity.
+    ///
+    /// HOW:
+    /// - Put two slices that together fill the spare capacity of a buffer holding one byte and
+    ///   check the contents and that nothing remains.
+    /// - On a second such buffer, put slices one byte longer than its spare capacity inside
+    ///   `catch_unwind`, and check that it panicked and the length is unchanged.
+    #[test]
+    fn put_slices_fits_spare_capacity() {
+        let mut st = StorageVec::with_capacity(100);
+        st.put_u8(1);
+        let data = pattern(st.remaining());
+        let (a, b) = data.split_at(data.len() / 2);
+        st.put_slices(&[a, b]);
+        assert_eq!(st.remaining(), 0);
+        assert_eq!(st.as_ref()[0], 1);
+        assert_eq!(&st.as_ref()[1..], &data[..]);
+
+        let mut st = StorageVec::with_capacity(100);
+        st.put_u8(1);
+        let data = pattern(st.remaining() + 1);
+        let (a, b) = data.split_at(data.len() / 2);
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| st.put_slices(&[a, b])));
+        assert!(res.is_err());
+        assert_eq!(st.len(), 1);
     }
 
     /// STATEMENT: Remaining capacity follows initialized data and view offsets and is restored when unique storage is reclaimed.

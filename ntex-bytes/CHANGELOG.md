@@ -1,9 +1,15 @@
 # Changes
 
-## [Unreleased]
+## [1.16.2] - 2026-11-24
+
+* Copying slices into the current page checks the spare capacity once instead
+  of once per slice and per copy, so the copy is small enough to inline
 
 * Releasing the last reference of a page uses an `Acquire` load instead of a
   relaxed load and an `Acquire` fence
+
+* `ByteString` conversions check text shorter than 64 bytes with an ASCII scan
+  first, `simdutf8` validates such input with the slower `core::str::from_utf8`
 
 ## [1.16.1] - 2026-11-22
 
