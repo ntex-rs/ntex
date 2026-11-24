@@ -1,6 +1,7 @@
 use std::{cell::Cell, cell::Ref, cell::RefCell, fmt, io, iter, mem, task::Poll};
 
 use ntex_bytes::{BytePageSize, BytePages, BytesMut};
+use ntex_codec::Encoder;
 
 use crate::IoRef;
 
@@ -180,6 +181,29 @@ impl Stack {
     {
         let layers = self.borrow();
         let (result, len) = layers.app.with_write_len_of(io, f);
+        if let Some(wire) = &layers.wire {
+            (result, len + wire.write_len())
+        } else {
+            (result, len)
+        }
+    }
+
+    /// Same as [`with_write_src`](Self::with_write_src), encodes `item` with
+    /// `codec` instead of calling a closure.
+    ///
+    /// A closure would take `item` by value, as a capture or an argument, and
+    /// that copies it on every call.
+    pub(crate) fn encode<U>(
+        &self,
+        io: &IoRef,
+        item: U::Item,
+        codec: &U,
+    ) -> (Result<(), U::Error>, usize)
+    where
+        U: Encoder,
+    {
+        let layers = self.borrow();
+        let (result, len) = layers.app.encode_len_of(io, item, codec);
         if let Some(wire) = &layers.wire {
             (result, len + wire.write_len())
         } else {
@@ -537,6 +561,26 @@ impl Buffer {
     {
         let mut wb = self.write.borrow_mut();
         let result = f(&mut wb);
+        if io.0.is_output_discarded() {
+            wb.clear();
+        }
+        let len = wb.len();
+        (result, len)
+    }
+
+    /// Same as [`with_write_len_of`](Self::with_write_len_of), encodes `item`
+    /// with `codec` instead of calling a closure.
+    fn encode_len_of<U>(
+        &self,
+        io: &IoRef,
+        item: U::Item,
+        codec: &U,
+    ) -> (Result<(), U::Error>, usize)
+    where
+        U: Encoder,
+    {
+        let mut wb = self.write.borrow_mut();
+        let result = codec.encode(item, &mut wb);
         if io.0.is_output_discarded() {
             wb.clear();
         }

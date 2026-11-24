@@ -1,5 +1,18 @@
 # Changes
 
+## [4.8.3] - 2026-11-24
+
+* Encoding into a connection that needs no write started and stays below the
+  write back-pressure watermark updates the write state inline, without calling
+  the full write state update
+
+* Decoding from a connection without read back-pressure or a read pause
+  updates the read state inline, without calling the full read state update
+
+* `IoRef::encode` passes the item to the codec without copying it first, and
+  encoding into a closed connection no longer replaces the stored I/O error
+  with a copy that loses its payload
+
 ## [4.8.2] - 2026-11-24
 
 * Connections without filters or filter callbacks skip filter processing, and

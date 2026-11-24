@@ -317,6 +317,7 @@ impl IoState {
         size >= self.cfg().read_backpressure()
     }
 
+    #[inline]
     pub(crate) fn is_wr_backpressure_needed(&self, size: usize) -> bool {
         size >= self.cfg().write_backpressure()
     }
@@ -445,6 +446,7 @@ impl IoState {
 
     /// Reports `outstanding`, the current [`IoState::write_outstanding`], as
     /// the write buffer size to the metrics.
+    #[inline]
     pub(crate) fn sync_write_buffered_for(&self, outstanding: usize) {
         let size = u32::try_from(outstanding).unwrap_or(u32::MAX);
         let prev = self.wr_buffered.replace(size);

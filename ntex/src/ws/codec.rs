@@ -33,8 +33,8 @@ pub enum Message {
 pub enum Frame {
     /// Text frame.
     ///
-    /// The payload is valid UTF-8 unless validation is disabled with
-    /// [`Codec::validate_utf8()`].
+    /// The payload is checked for valid UTF-8 only if validation is enabled
+    /// with [`Codec::validate_utf8()`].
     Text(Bytes),
     /// Binary frame.
     Binary(Bytes),
@@ -52,8 +52,8 @@ pub enum Frame {
 ///
 /// When decoding, a single fragment of a text message is not necessarily
 /// valid UTF-8 on its own, a character can be split between fragments. The
-/// codec validates the text of the whole message, see
-/// [`Codec::validate_utf8()`].
+/// codec always validates the text of the whole fragmented message, so the
+/// fragments form valid UTF-8 when joined.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     /// First fragment of a text message.
@@ -75,8 +75,8 @@ pub enum Item {
 ///
 /// The decoder limits the payload of each frame, see [`Codec::max_size()`],
 /// and the total payload of a message, see [`Codec::max_message_size()`].
-/// It also checks that text messages are valid UTF-8, see
-/// [`Codec::validate_utf8()`].
+/// It checks that fragmented text messages are valid UTF-8, and can check
+/// single-frame text messages too, see [`Codec::validate_utf8()`].
 pub struct Codec {
     flags: Cell<Flags>,
     max_size: usize,
@@ -145,7 +145,9 @@ fn validate_utf8(tail: Utf8Tail, mut data: &[u8], fin: bool) -> Result<Utf8Tail,
         }
     }
 
-    if simdutf8::basic::from_utf8(data).is_ok() {
+    // simdutf8 validates inputs shorter than 64 bytes with the much slower
+    // `core::str::from_utf8`, short text is usually ASCII
+    if (data.len() < 64 && data.is_ascii()) || simdutf8::basic::from_utf8(data).is_ok() {
         return Ok(Utf8Tail::default());
     }
     match simdutf8::compat::from_utf8(data) {
@@ -165,14 +167,14 @@ fn validate_utf8(tail: Utf8Tail, mut data: &[u8], fin: bool) -> Result<Utf8Tail,
 impl Codec {
     /// Creates a codec in server mode.
     ///
-    /// The codec limits frames to 64 KiB and messages to 4 MiB of payload,
-    /// and validates incoming text messages.
+    /// The codec limits frames to 64 KiB and messages to 4 MiB of payload.
+    /// Single-frame text messages are not validated as UTF-8.
     #[must_use]
     pub fn new() -> Codec {
         Codec {
             max_size: 65_536,
             max_message_size: 4 * 1024 * 1024,
-            validate_utf8: true,
+            validate_utf8: false,
             msg_size: Cell::new(0),
             utf8_tail: Cell::new(Utf8Tail::default()),
             flags: Cell::new(Flags::SERVER),
@@ -213,15 +215,19 @@ impl Codec {
         self
     }
 
-    /// Enables or disables UTF-8 validation of incoming text messages.
+    /// Enables or disables UTF-8 validation of single-frame text messages.
     ///
-    /// When enabled, the payload of [`Frame::Text`] is valid UTF-8 and the
-    /// fragments of a text message form valid UTF-8 when joined. A single
-    /// fragment can end or start in the middle of a character. Invalid text
-    /// fails with [`ProtocolError::InvalidUtf8`] as soon as it is detected,
-    /// as RFC 6455 requires.
+    /// When enabled, the payload of [`Frame::Text`] is valid UTF-8, invalid
+    /// text fails with [`ProtocolError::InvalidUtf8`] as RFC 6455 requires.
     ///
-    /// Validation is enabled by default.
+    /// Validation is disabled by default, the payload of [`Frame::Text`] is
+    /// passed on as received. Convert it with a checked conversion, such as
+    /// `ByteString::try_from()`, before using it as text.
+    ///
+    /// Fragmented text messages are always validated, regardless of this
+    /// setting: the fragments form valid UTF-8 when joined, a single fragment
+    /// can end or start in the middle of a character. Invalid text fails with
+    /// [`ProtocolError::InvalidUtf8`] as soon as it is detected.
     #[must_use]
     pub fn validate_utf8(mut self, enabled: bool) -> Self {
         self.validate_utf8 = enabled;
@@ -344,15 +350,22 @@ impl Codec {
         fin: bool,
     ) -> Result<(), ProtocolError>
     where
+        B: AsRef<[u8]>,
         BytePage: From<B>,
     {
-        let payload = BytePage::from(payload);
         #[cfg(feature = "compress")]
         if let Some(deflate) = &self.deflate
-            && !(first && fin && deflate.is_skipped(payload.len(), self.is_server()))
+            && !(first && fin && deflate.is_skipped(payload.as_ref().len(), self.is_server()))
         {
             let payload = deflate.compress(payload.as_ref(), fin, self.is_server());
-            return Parser::write_frame(dst, payload.into(), op, fin, first, !self.is_server());
+            return Parser::write_frame::<BytesMut>(
+                dst,
+                payload,
+                op,
+                fin,
+                first,
+                !self.is_server(),
+            );
         }
         let _ = first;
         Parser::write_frame(dst, payload, op, fin, false, !self.is_server())
@@ -390,15 +403,12 @@ impl Codec {
     }
 
     /// Checks the payload of an incoming data frame against the message size
-    /// limit and, for a text message, validates its UTF-8 encoding.
+    /// limit and, for a fragmented text message or with `validate_utf8`
+    /// enabled, validates its UTF-8 encoding.
     ///
     /// `first` is `Some(is_text)` for the first frame of a message.
-    fn check_data(
-        &self,
-        data: Bytes,
-        first: Option<bool>,
-        fin: bool,
-    ) -> Result<Bytes, ProtocolError> {
+    #[inline]
+    fn check_data(&self, data: &[u8], first: Option<bool>, fin: bool) -> Result<(), ProtocolError> {
         let (size, text) = match first {
             Some(text) => (data.len(), text),
             None => (
@@ -409,13 +419,14 @@ impl Codec {
         if size > self.max_message_size {
             return Err(ProtocolError::Overflow);
         }
-        if text && self.validate_utf8 {
+        // a single-frame message is validated only if enabled
+        if text && (self.validate_utf8 || first.is_none() || !fin) {
             let tail = if first.is_some() {
                 Utf8Tail::default()
             } else {
                 self.utf8_tail.get()
             };
-            self.utf8_tail.set(validate_utf8(tail, &data, fin)?);
+            self.utf8_tail.set(validate_utf8(tail, data, fin)?);
         }
 
         if !fin {
@@ -426,7 +437,58 @@ impl Codec {
                 self.remove_flags(Flags::R_TEXT);
             }
         }
-        Ok(data)
+        Ok(())
+    }
+
+    /// Encodes a data frame, `first` and `fin` mark the message bounds.
+    // inlined into `Encoder::encode`, its only caller, to keep the data
+    // path free of calls
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn encode_data(
+        &self,
+        dst: &mut BytePages,
+        payload: Bytes,
+        op: OpCode,
+        first: bool,
+        fin: bool,
+    ) -> Result<(), ProtocolError> {
+        let started = self.flags().contains(Flags::W_CONTINUATION);
+        if first {
+            if started {
+                return Err(ProtocolError::ContinuationStarted);
+            }
+            if !fin {
+                self.insert_flags(Flags::W_CONTINUATION);
+            }
+        } else if !started {
+            return Err(ProtocolError::ContinuationNotStarted);
+        } else if fin {
+            self.remove_flags(Flags::W_CONTINUATION);
+        }
+        self.write_data(dst, payload, op, first, fin)
+    }
+
+    #[inline(never)]
+    fn encode_control(&self, item: Message, dst: &mut BytePages) -> Result<(), ProtocolError> {
+        match item {
+            Message::Ping(txt) => {
+                Parser::write_message(dst, txt, OpCode::Ping, true, !self.is_server())
+            }
+            Message::Pong(txt) => {
+                Parser::write_message(dst, txt, OpCode::Pong, true, !self.is_server())?;
+                self.insert_flags(Flags::W_PONG);
+                Ok(())
+            }
+            Message::Close(reason) => {
+                Parser::write_close(dst, reason, !self.is_server())?;
+                self.insert_flags(Flags::CLOSED);
+                Ok(())
+            }
+            Message::Text(_) | Message::Binary(_) | Message::Continuation(_) => {
+                unreachable!("data messages are encoded by `Encoder::encode`")
+            }
+        }
     }
 
     /// Encodes `page` as a final binary frame.
@@ -459,68 +521,23 @@ impl Encoder for Codec {
     type Item = Message;
     type Error = ProtocolError;
 
+    #[inline]
     fn encode(&self, item: Message, dst: &mut BytePages) -> Result<(), Self::Error> {
         if self.is_closed() {
             return Err(ProtocolError::Closed);
         }
 
-        match item {
-            Message::Text(txt) => {
-                if self.flags().contains(Flags::W_CONTINUATION) {
-                    return Err(ProtocolError::ContinuationStarted);
-                }
-                self.write_data(dst, txt, OpCode::Text, true, true)?;
-            }
-            Message::Binary(bin) => {
-                if self.flags().contains(Flags::W_CONTINUATION) {
-                    return Err(ProtocolError::ContinuationStarted);
-                }
-                self.write_data(dst, bin, OpCode::Binary, true, true)?;
-            }
-            Message::Ping(txt) => {
-                Parser::write_message(dst, txt, OpCode::Ping, true, !self.is_server())?;
-            }
-            Message::Pong(txt) => {
-                Parser::write_message(dst, txt, OpCode::Pong, true, !self.is_server())?;
-                self.insert_flags(Flags::W_PONG);
-            }
-            Message::Close(reason) => {
-                Parser::write_close(dst, reason, !self.is_server())?;
-                self.insert_flags(Flags::CLOSED);
-            }
-            Message::Continuation(cont) => match cont {
-                Item::FirstText(data) => {
-                    if self.flags().contains(Flags::W_CONTINUATION) {
-                        return Err(ProtocolError::ContinuationStarted);
-                    }
-                    self.insert_flags(Flags::W_CONTINUATION);
-                    self.write_data(dst, data, OpCode::Text, true, false)?;
-                }
-                Item::FirstBinary(data) => {
-                    if self.flags().contains(Flags::W_CONTINUATION) {
-                        return Err(ProtocolError::ContinuationStarted);
-                    }
-                    self.insert_flags(Flags::W_CONTINUATION);
-                    self.write_data(dst, data, OpCode::Binary, true, false)?;
-                }
-                Item::Continue(data) => {
-                    if self.flags().contains(Flags::W_CONTINUATION) {
-                        self.write_data(dst, data, OpCode::Continue, false, false)?;
-                    } else {
-                        return Err(ProtocolError::ContinuationNotStarted);
-                    }
-                }
-                Item::Last(data) => {
-                    if self.flags().contains(Flags::W_CONTINUATION) {
-                        self.remove_flags(Flags::W_CONTINUATION);
-                        self.write_data(dst, data, OpCode::Continue, false, true)?;
-                    } else {
-                        return Err(ProtocolError::ContinuationNotStarted);
-                    }
-                }
-            },
-        }
-        Ok(())
+        let (payload, op, first, fin) = match item {
+            Message::Text(txt) => (txt.into_bytes(), OpCode::Text, true, true),
+            Message::Binary(bin) => (bin, OpCode::Binary, true, true),
+            Message::Continuation(Item::FirstText(data)) => (data, OpCode::Text, true, false),
+            Message::Continuation(Item::FirstBinary(data)) => (data, OpCode::Binary, true, false),
+            Message::Continuation(Item::Continue(data)) => (data, OpCode::Continue, false, false),
+            Message::Continuation(Item::Last(data)) => (data, OpCode::Continue, false, true),
+            // control frames are rare, they are kept out of the data path
+            control => return self.encode_control(control, dst),
+        };
+        self.encode_data(dst, payload, op, first, fin)
     }
 }
 
@@ -558,9 +575,8 @@ impl Decoder for Codec {
                     if self.flags().contains(Flags::R_CONTINUATION) {
                         self.remove_flags(Flags::R_CONTINUATION);
                         let data = self.read_data(payload, true)?;
-                        Ok(Some(Frame::Continuation(Item::Last(
-                            self.check_data(data, None, true)?,
-                        ))))
+                        self.check_data(&data, None, true)?;
+                        Ok(Some(Frame::Continuation(Item::Last(data))))
                     } else {
                         Err(ProtocolError::ContinuationNotStarted)
                     }
@@ -581,11 +597,8 @@ impl Decoder for Codec {
                         Err(ProtocolError::ContinuationStarted)
                     } else {
                         let data = self.read_data(payload, true)?;
-                        Ok(Some(Frame::Binary(self.check_data(
-                            data,
-                            Some(false),
-                            true,
-                        )?)))
+                        self.check_data(&data, Some(false), true)?;
+                        Ok(Some(Frame::Binary(data)))
                     }
                 }
                 OpCode::Text => {
@@ -593,11 +606,8 @@ impl Decoder for Codec {
                         Err(ProtocolError::ContinuationStarted)
                     } else {
                         let data = self.read_data(payload, true)?;
-                        Ok(Some(Frame::Text(self.check_data(
-                            data,
-                            Some(true),
-                            true,
-                        )?)))
+                        self.check_data(&data, Some(true), true)?;
+                        Ok(Some(Frame::Text(data)))
                     }
                 }
             }
@@ -606,9 +616,8 @@ impl Decoder for Codec {
                 OpCode::Continue => {
                     if self.flags().contains(Flags::R_CONTINUATION) {
                         let data = self.read_data(payload, false)?;
-                        Ok(Some(Frame::Continuation(Item::Continue(
-                            self.check_data(data, None, false)?,
-                        ))))
+                        self.check_data(&data, None, false)?;
+                        Ok(Some(Frame::Continuation(Item::Continue(data))))
                     } else {
                         Err(ProtocolError::ContinuationNotStarted)
                     }
@@ -619,9 +628,8 @@ impl Decoder for Codec {
                     } else {
                         self.insert_flags(Flags::R_CONTINUATION);
                         let data = self.read_data(payload, false)?;
-                        Ok(Some(Frame::Continuation(Item::FirstBinary(
-                            self.check_data(data, Some(false), false)?,
-                        ))))
+                        self.check_data(&data, Some(false), false)?;
+                        Ok(Some(Frame::Continuation(Item::FirstBinary(data))))
                     }
                 }
                 OpCode::Text => {
@@ -630,9 +638,8 @@ impl Decoder for Codec {
                     } else {
                         self.insert_flags(Flags::R_CONTINUATION);
                         let data = self.read_data(payload, false)?;
-                        Ok(Some(Frame::Continuation(Item::FirstText(
-                            self.check_data(data, Some(true), false)?,
-                        ))))
+                        self.check_data(&data, Some(true), false)?;
+                        Ok(Some(Frame::Continuation(Item::FirstText(data))))
                     }
                 }
                 // rejected by the parser, kept for exhaustiveness
@@ -649,45 +656,45 @@ mod tests {
     use super::*;
     use crate::ws::CloseCode;
 
-    /// STATEMENT: Text frames are UTF-8 validated by default, and disabling validation returns the payload unchanged.
+    /// STATEMENT: Single-frame text messages are not UTF-8 validated by default, and enabled validation rejects invalid text.
     ///
     /// HOW:
-    /// - Decode a text frame containing `0xff` with a default codec and expect `InvalidUtf8`.
-    /// - Expect `InvalidUtf8` for a text frame that ends inside a multi-byte character.
-    /// - Decode valid multi-byte text with a default codec and expect it unchanged.
-    /// - Decode the invalid frame with `validate_utf8(false)` and expect the raw byte back.
+    /// - Decode a text frame containing `0xff` with a default codec and expect the raw byte back.
+    /// - With `validate_utf8(true)`, expect `InvalidUtf8` for the same frame and for a text frame that ends inside a multi-byte character.
+    /// - With `validate_utf8(true)`, decode valid multi-byte text and expect it unchanged.
     #[test]
     fn text_payload_is_validated() {
         let codec = Codec::new().set_client_mode();
         assert!(matches!(
             decode(&codec, &[0x81, 0x01, 0xff]),
-            Err(ProtocolError::InvalidUtf8)
-        ));
-        assert!(matches!(
-            decode(&Codec::new().set_client_mode(), b"\x81\x02a\xe2"),
-            Err(ProtocolError::InvalidUtf8)
-        ));
-        assert!(matches!(
-            decode(&Codec::new().set_client_mode(), b"\x81\x03a\xc3\xa9"),
-            Ok(Some(Frame::Text(data))) if data == "a\u{e9}".as_bytes()
+            Ok(Some(Frame::Text(data))) if data == Bytes::from_static(&[0xff])
         ));
 
-        let codec = Codec::new().set_client_mode().validate_utf8(false);
+        let codec = || Codec::new().set_client_mode().validate_utf8(true);
         assert!(matches!(
-            decode(&codec, &[0x81, 0x01, 0xff]),
-            Ok(Some(Frame::Text(data))) if data == Bytes::from_static(&[0xff])
+            decode(&codec(), &[0x81, 0x01, 0xff]),
+            Err(ProtocolError::InvalidUtf8)
+        ));
+        assert!(matches!(
+            decode(&codec(), b"\x81\x02a\xe2"),
+            Err(ProtocolError::InvalidUtf8)
+        ));
+        assert!(matches!(
+            decode(&codec(), b"\x81\x03a\xc3\xa9"),
+            Ok(Some(Frame::Text(data))) if data == "a\u{e9}".as_bytes()
         ));
     }
 
-    /// STATEMENT: Fragmented text is validated as a whole message, so characters may span fragments but the message must be valid UTF-8.
+    /// STATEMENT: Fragmented text is always validated as a whole message, regardless of `validate_utf8`, so characters may span fragments but the message must be valid UTF-8.
     ///
     /// HOW:
-    /// - Split `\u{20ac}` (`e2 82 ac`) over first, continue, and last fragments with an empty fragment in between and expect all to decode.
-    /// - Expect `InvalidUtf8` when a split character is completed with a non-continuation byte, when a message ends inside a character, and for an invalid byte in a later fragment.
+    /// - With `validate_utf8(false)`, split `\u{20ac}` (`e2 82 ac`) over first, continue, and last fragments with an empty fragment in between and expect all to decode.
+    /// - With `validate_utf8(false)`, expect `InvalidUtf8` for an invalid byte in the first fragment, when a split character is completed with a non-continuation byte, when a message ends inside a character, and for an invalid byte in a later fragment.
     /// - Decode binary fragments with `0xff` and confirm binary data is not validated.
     #[test]
     fn fragmented_text_is_validated() {
-        let codec = Codec::new().set_client_mode();
+        let codec = || Codec::new().set_client_mode().validate_utf8(false);
+        let text = codec();
         for frame in [
             &b"\x01\x02a\xe2"[..],
             b"\x00\x00",
@@ -695,37 +702,42 @@ mod tests {
             b"\x80\x02\xacb",
         ] {
             assert!(matches!(
-                decode(&codec, frame),
+                decode(&text, frame),
                 Ok(Some(Frame::Continuation(_)))
             ));
         }
 
-        let codec = Codec::new().set_client_mode();
-        assert!(decode(&codec, b"\x01\x01\xe2").is_ok());
         assert!(matches!(
-            decode(&codec, b"\x80\x01a"),
+            decode(&codec(), b"\x01\x02a\xff"),
             Err(ProtocolError::InvalidUtf8)
         ));
 
-        let codec = Codec::new().set_client_mode();
-        assert!(decode(&codec, b"\x01\x02a\xe2").is_ok());
-        assert!(decode(&codec, b"\x00\x01\x82").is_ok());
+        let text = codec();
+        assert!(decode(&text, b"\x01\x01\xe2").is_ok());
         assert!(matches!(
-            decode(&codec, b"\x80\x00"),
+            decode(&text, b"\x80\x01a"),
             Err(ProtocolError::InvalidUtf8)
         ));
 
-        let codec = Codec::new().set_client_mode();
-        assert!(decode(&codec, b"\x01\x01a").is_ok());
+        let text = codec();
+        assert!(decode(&text, b"\x01\x02a\xe2").is_ok());
+        assert!(decode(&text, b"\x00\x01\x82").is_ok());
         assert!(matches!(
-            decode(&codec, b"\x00\x02b\xff"),
+            decode(&text, b"\x80\x00"),
             Err(ProtocolError::InvalidUtf8)
         ));
 
-        let codec = Codec::new().set_client_mode();
-        assert!(decode(&codec, b"\x02\x01\xe2").is_ok());
+        let text = codec();
+        assert!(decode(&text, b"\x01\x01a").is_ok());
         assert!(matches!(
-            decode(&codec, b"\x80\x01\xff"),
+            decode(&text, b"\x00\x02b\xff"),
+            Err(ProtocolError::InvalidUtf8)
+        ));
+
+        let binary = codec();
+        assert!(decode(&binary, b"\x02\x01\xe2").is_ok());
+        assert!(matches!(
+            decode(&binary, b"\x80\x01\xff"),
             Ok(Some(Frame::Continuation(Item::Last(_))))
         ));
     }

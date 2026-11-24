@@ -2,6 +2,12 @@ use super::proto::{CloseCode, CloseReason, OpCode};
 use super::{error::ProtocolError, mask::apply_mask};
 use crate::util::{BufMut, BytePage, BytePages, Bytes, BytesMut};
 
+/// Largest unmasked payload that is copied together with the frame header.
+const SMALL_PAYLOAD: usize = 4096;
+
+/// Largest decoded payload that fits inline in `Bytes`.
+const INLINE_PAYLOAD: usize = 3 * size_of::<usize>() - 1;
+
 /// WebSocket frame parser.
 #[derive(Debug)]
 pub struct Parser;
@@ -146,20 +152,28 @@ impl Parser {
             return Ok(None);
         }
 
-        // remove prefix
-        src.advance_to(idx);
-
         // no need for body
         if length == 0 {
+            src.advance_to(idx);
             return Ok(Some((finished, rsv1, opcode, None)));
         }
 
         // unmask
+        let end = idx + length;
         if let Some(mask) = mask {
-            apply_mask(&mut src[..length], mask);
+            apply_mask(&mut src[idx..end], mask);
         }
 
-        Ok(Some((finished, rsv1, opcode, Some(src.split_to(length)))))
+        // inline payloads are copied, so `src` is advanced only once
+        let payload = if length <= INLINE_PAYLOAD {
+            let payload = Bytes::copy_from_slice(&src[idx..end]);
+            src.advance_to(end);
+            payload
+        } else {
+            src.advance_to(idx);
+            src.split_to(length)
+        };
+        Ok(Some((finished, rsv1, opcode, Some(payload))))
     }
 
     /// Parses a close-frame payload.
@@ -215,12 +229,39 @@ impl Parser {
     where
         BytePage: From<B>,
     {
-        Parser::write_frame(dst, BytePage::from(pl), op, fin, false, mask)
+        Parser::write_frame::<BytePage>(dst, BytePage::from(pl), op, fin, false, mask)
     }
 
     /// Encodes a WebSocket frame into `dst`, like [`Parser::write_message`],
     /// `rsv1` sets the RSV1 bit.
-    pub(super) fn write_frame(
+    // the small frame path is inlined into the encoder
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub(super) fn write_frame<B>(
+        dst: &mut BytePages,
+        payload: B,
+        op: OpCode,
+        fin: bool,
+        rsv1: bool,
+        mask: bool,
+    ) -> Result<(), ProtocolError>
+    where
+        B: AsRef<[u8]>,
+        BytePage: From<B>,
+    {
+        let data = payload.as_ref();
+        // a small unmasked frame has a 2-byte header
+        if !mask && data.len() < 126 && (fin || !op.is_control()) {
+            let one = u8::from(op) | (u8::from(fin) << 7) | (u8::from(rsv1) << 6);
+            dst.put_slices(&[&[one, data.len() as u8], data]);
+            Ok(())
+        } else {
+            Parser::write_frame_large(dst, BytePage::from(payload), op, fin, rsv1, mask)
+        }
+    }
+
+    #[inline(never)]
+    fn write_frame_large(
         dst: &mut BytePages,
         payload: BytePage,
         op: OpCode,
@@ -245,27 +286,37 @@ impl Parser {
             one |= 0x40;
         }
         let payload_len = payload.len();
-        let two = if mask { 0x80 } else { 0 };
 
-        // the extended length is 2 or 8 big-endian bytes
-        let ext_len = (payload_len as u64).to_be_bytes();
-        let (len, ext): (u8, &[u8]) = if payload_len < 126 {
-            (payload_len as u8, &[])
+        // 2 bytes, then 2 or 8 bytes of big-endian extended length, then
+        // the 4-byte masking key
+        let mut header = [0u8; 14];
+        header[0] = one;
+        let mut hlen = 2;
+        if payload_len < 126 {
+            header[1] = payload_len as u8;
         } else if payload_len <= 65_535 {
-            (126, &ext_len[6..])
+            header[1] = 126;
+            header[2..4].copy_from_slice(&(payload_len as u16).to_be_bytes());
+            hlen = 4;
         } else {
-            (127, &ext_len)
-        };
-        let header = [one, two | len];
+            header[1] = 127;
+            header[2..10].copy_from_slice(&(payload_len as u64).to_be_bytes());
+            hlen = 10;
+        }
 
         if mask {
             let mask = fastrand::u32(..);
+            header[1] |= 0x80;
+            header[hlen..hlen + 4].copy_from_slice(&mask.to_ne_bytes());
             let mut buf = BytesMut::from(payload);
             apply_mask(&mut buf, mask);
-            dst.put_slices(&[&header, ext, &mask.to_ne_bytes()]);
+            dst.put_slice(&header[..hlen + 4]);
             dst.append::<BytesMut>(buf);
+        } else if payload_len <= SMALL_PAYLOAD {
+            // copied with the header, as `append` would copy it after the header
+            dst.put_slices(&[&header[..hlen], payload.as_ref()]);
         } else {
-            dst.put_slices(&[&header, ext]);
+            dst.put_slice(&header[..hlen]);
             dst.append::<BytePage>(payload);
         }
         Ok(())
@@ -699,5 +750,39 @@ mod tests {
         assert!(frame.finished);
         assert_eq!(frame.opcode, OpCode::Binary);
         assert_eq!(frame.payload, payload);
+    }
+
+    /// STATEMENT: Back-to-back frames of every payload size class round-trip, and parsing leaves the next frame at the buffer start.
+    ///
+    /// HOW:
+    /// - For unmasked and masked frames, encode payloads around the inline, 7-bit length, and copied-with-header limits into one buffer.
+    /// - Parse the frames in order, compare each payload, and check that the buffer is empty afterwards.
+    #[test]
+    fn test_frame_sizes_back_to_back() {
+        let sizes = [
+            5,
+            INLINE_PAYLOAD,
+            INLINE_PAYLOAD + 1,
+            125,
+            126,
+            SMALL_PAYLOAD,
+            SMALL_PAYLOAD + 1,
+        ];
+        for mask in [false, true] {
+            let mut pages = BytePages::default();
+            for (byte, size) in (1u8..).zip(sizes) {
+                let payload = Bytes::from(vec![byte; size]);
+                Parser::write_message(&mut pages, payload, OpCode::Binary, true, mask).unwrap();
+            }
+
+            let mut buf = BytesMut::from(&Bytes::from(pages)[..]);
+            for (byte, size) in (1u8..).zip(sizes) {
+                let frame = extract(Parser::parse(&mut buf, mask, 100_000));
+                assert!(frame.finished);
+                assert_eq!(frame.opcode, OpCode::Binary);
+                assert_eq!(frame.payload, Bytes::from(vec![byte; size]));
+            }
+            assert!(buf.is_empty());
+        }
     }
 }

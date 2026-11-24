@@ -1,9 +1,23 @@
 # Changes
 
-## [Unreleased]
+## [4.10.1] - 2026-11-24
 
 * http: Dropping a request or response head while the thread's message pool is
   full frees it directly instead of clearing it first
+
+* ws: Text frame payloads shorter than 64 bytes are UTF-8 validated with an
+  ASCII scan first, `simdutf8` validates such input with the slower
+  `core::str::from_utf8`
+
+* ws: Faster frame encoding and decoding. Data frames are encoded without
+  nested calls, small unmasked data frames are written in one copy, frames up
+  to 4 KiB are copied together with their header, and payloads that fit inline
+  in `Bytes` are decoded with a single advance of the read buffer
+
+* ws: `Codec` and `WsClientConfig` no longer validate single-frame text
+  messages (`Frame::Text`) as UTF-8 by default. Enable validation with
+  `Codec::validate_utf8(true)` or `WsClientConfig::set_validate_utf8(true)`.
+  Fragmented text messages are always validated
 
 ## [4.10.0] - 2026-11-22
 

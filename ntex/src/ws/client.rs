@@ -771,7 +771,7 @@ mod tests {
     ///
     /// HOW:
     /// - Negotiate with `set_max_message_size(2)` and expect `Overflow` when a second fragment takes the message to 3 bytes.
-    /// - Expect the default configuration to reject a text frame holding `0xff`, and `set_validate_utf8(false)` to return it.
+    /// - Expect the default configuration to return a text frame holding `0xff`, and `set_validate_utf8(true)` to reject it.
     #[crate::rt_test]
     async fn message_limits_apply_to_codec() {
         use crate::codec::Decoder;
@@ -795,12 +795,12 @@ mod tests {
         let text = || BytesMut::from(&b"\x81\x01\xff"[..]);
         assert!(matches!(
             codec(WsClientConfig::new()).decode(&mut text()),
-            Err(ws::error::ProtocolError::InvalidUtf8)
-        ));
-        let unchecked = codec(WsClientConfig::new().set_validate_utf8(false));
-        assert!(matches!(
-            unchecked.decode(&mut text()),
             Ok(Some(ws::Frame::Text(_)))
+        ));
+        let checked = codec(WsClientConfig::new().set_validate_utf8(true));
+        assert!(matches!(
+            checked.decode(&mut text()),
+            Err(ws::error::ProtocolError::InvalidUtf8)
         ));
     }
 

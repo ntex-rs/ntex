@@ -257,8 +257,19 @@ impl IoRef {
     where
         U: Encoder,
     {
-        self.with_write_src(|buf| codec.encode(item, buf))
-            .unwrap_or_else(|_| Ok(()))
+        let st = &self.0;
+
+        // Not built on `with_write_src`: a closure would copy `item` on every
+        // call, and the inactive path would build an error only to discard it.
+        if st.flags.is_active() {
+            let (result, size) = st.buffer.encode(self, item, codec);
+            match self.consolidate_write_state_for(size, false) {
+                Ok(()) => result,
+                Err(_) => Ok(()),
+            }
+        } else {
+            Ok(())
+        }
     }
 
     #[inline]
@@ -593,7 +604,44 @@ impl IoRef {
 
     /// Same as [`consolidate_write_state`](Self::consolidate_write_state),
     /// `size` is the current `Stack::write_buf_size()`.
+    ///
+    /// Inlined fast path for the per-item case: an active connection whose
+    /// output starts no write and stays below the high watermark only has its
+    /// write gauge updated. Everything else goes through
+    /// [`consolidate_write_state_slow`](Self::consolidate_write_state_slow).
+    #[inline]
     fn consolidate_write_state_for(&self, size: usize, force: bool) -> io::Result<()> {
+        let st = &self.0;
+
+        if st.flags.is_active() && !self.is_write_needed(size, force) {
+            let outstanding = size + st.wr_inflight.get() as usize;
+            if st.flags.is_wr_backpressure() || !st.is_wr_backpressure_needed(outstanding) {
+                st.sync_write_buffered_for(outstanding);
+                return Ok(());
+            }
+        }
+        self.consolidate_write_state_slow(size, force)
+    }
+
+    /// Checks whether `size` bytes of buffered output start an eager write or
+    /// schedule a write operation.
+    #[inline]
+    fn is_write_needed(&self, size: usize, force: bool) -> bool {
+        let st = &self.0;
+        size > 0
+            && st.flags.is_write_paused()
+            && (!st.flags.is_wr_send_scheduled() || self.is_eager_write(size, force))
+    }
+
+    /// Checks whether `size` bytes of buffered output are written in-place.
+    #[inline]
+    fn is_eager_write(&self, size: usize, force: bool) -> bool {
+        let st = &self.0;
+        st.flags.is_direct_wr_enabled() && (force || size >= st.cfg().write_buf_threshold())
+    }
+
+    #[inline(never)]
+    fn consolidate_write_state_slow(&self, size: usize, force: bool) -> io::Result<()> {
         let st = &self.0;
 
         // set when a direct write may have changed the outstanding output
@@ -613,8 +661,7 @@ impl IoRef {
             // which introduces latency. To prevent this behavior and
             // flatten data delivery to the peer, IoRef can initiate
             // out-of-order writes based on a configured threshold.
-            if st.flags.is_direct_wr_enabled() && (force || size >= st.cfg().write_buf_threshold())
-            {
+            if self.is_eager_write(size, force) {
                 // Send data in-place
                 wrote = true;
                 let partial = self.call_write() == WakeWriteTask::Yes;
@@ -680,6 +727,7 @@ impl IoRef {
     /// See [`release_read_destination`](Self::release_read_destination) for the
     /// variant used when the caller may have drained a different buffer of the
     /// filter chain.
+    #[inline]
     fn update_read_destination(&self, buf: &mut BytesMut) {
         let st = &self.0;
 
@@ -690,6 +738,19 @@ impl IoRef {
             buf.len(),
             st.flags
         );
+
+        if st.flags.is_read_paused_or_backpressure() {
+            self.update_read_destination_slow(buf);
+        } else {
+            st.flags.unset_read_ready();
+        }
+    }
+
+    /// Releases read back-pressure and a read pause for
+    /// [`update_read_destination`](Self::update_read_destination).
+    #[inline(never)]
+    fn update_read_destination_slow(&self, buf: &BytesMut) {
+        let st = &self.0;
 
         if st.flags.is_rd_backpressure() {
             // Keep reads paused until enough buffered data has been consumed.

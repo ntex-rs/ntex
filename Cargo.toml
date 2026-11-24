@@ -54,7 +54,7 @@ urly = { path = "urly" }
 
 [workspace.dependencies]
 ntex = "4.10.0"
-ntex-bytes = "1.16.1"
+ntex-bytes = "1.16.2"
 ntex-codec = "2.0.0"
 ntex-dispatcher = "4.5.0"
 ntex-error = "3.1.0"

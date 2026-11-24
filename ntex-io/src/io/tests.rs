@@ -828,6 +828,36 @@ async fn encode_on_closed_io_drops_item_silently() {
     assert_eq!(io.st().buffer.write_buf_size(), 0);
 }
 
+/// STATEMENT: `encode` on a connection stopped by a transport error leaves the stored
+/// error untouched, so its original payload is still reported later.
+///
+/// HOW:
+/// - Stop the transport with an `io::Error` wrapping a custom `TransportFault` payload.
+/// - Call `encode` with `BytesCodec` and verify it returns `Ok`.
+/// - Read the stored error and verify its payload still downcasts to `TransportFault`.
+#[ntex::test]
+async fn encode_on_stopped_io_keeps_stored_error() {
+    #[derive(Debug)]
+    struct TransportFault;
+
+    impl std::fmt::Display for TransportFault {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("transport fault")
+        }
+    }
+
+    impl std::error::Error for TransportFault {}
+
+    let io = Io::new(ManualTransport, SharedCfg::new("SRV"));
+    let ctx = IoContext::new(io.get_ref());
+    ctx.stopped(Some(io::Error::other(TransportFault)));
+    assert!(io.is_closed());
+
+    assert!(io.encode(Bytes::from_static(b"lost"), &BytesCodec).is_ok());
+    let err = io.st().error().unwrap();
+    assert!(err.get_ref().unwrap().is::<TransportFault>());
+}
+
 /// STATEMENT: Dropping a connection with undeliverable output requests transport abort.
 ///
 /// HOW:
@@ -1272,7 +1302,8 @@ async fn write_backpressure_metrics() {
 /// STATEMENT: I/O metrics distinguish complete and partial eager writes, scheduled batches, and transferred bytes.
 ///
 /// HOW:
-/// - Use budgeted transports above and below the eager threshold, including disabled eager writes.
+/// - Use budgeted transports above and below the eager threshold, including disabled eager writes
+///   and a scheduled write whose buffer then reaches the threshold.
 /// - Check eager/partial/scheduled counters and written bytes, then receive input and check read bytes.
 #[ntex::test]
 async fn write_metrics() {
@@ -1327,6 +1358,12 @@ async fn write_metrics() {
     io3.encode_slice(&[0; 1]).unwrap();
     let m = metrics.snapshot();
     assert_eq!((m.eager_writes, m.scheduled_writes), (2, 1));
+
+    // reaching the threshold with a write already scheduled writes in place
+    io3.encode_slice(&[0; 1]).unwrap();
+    let m = metrics.snapshot();
+    assert_eq!((m.eager_writes, m.scheduled_writes), (3, 1));
+    assert_eq!(m.bytes_written, 15);
 
     // eager writes are disabled
     let io4 = new_io(usize::MAX, &cfg0);

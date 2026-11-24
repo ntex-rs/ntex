@@ -603,11 +603,13 @@ impl IoMetrics {
         }
     }
 
+    #[inline]
     pub(crate) fn update_write_buffered(&self, prev: u32, cur: u32) {
         update(&self.write_buffered, prev, cur);
     }
 }
 
+#[inline]
 fn update(gauge: &AtomicUsize, prev: u32, cur: u32) {
     if cur > prev {
         gauge.fetch_add((cur - prev) as usize, Relaxed);
