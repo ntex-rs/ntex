@@ -259,8 +259,8 @@ impl Stream for LocalAccept {
             let pos = (this.next + n) % num;
             let (idx, token, nodelay, ref mut lst) = this.socks[pos];
             loop {
-                match lst.poll_accept(cx) {
-                    Poll::Ready(Ok((stream, _))) => {
+                match lst.poll_accept_stream(cx) {
+                    Poll::Ready(Ok(stream)) => {
                         metrics.accepted(idx);
                         this.next = pos + 1;
                         return Poll::Ready(Some(Connection {

@@ -1,5 +1,10 @@
 # Changes
 
+## [4.6.3] - 2026-11-25
+
+* `LoadBalancing::Reuseport` workers accept connections without querying the
+  peer address, which saves a `getpeername` call per connection on io-uring
+
 ## [4.6.1] - 2026-11-16
 
 * Enable `TCP_NODELAY` on TCP listeners; on Linux and Apple platforms accepted
