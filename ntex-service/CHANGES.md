@@ -11,6 +11,9 @@
 
 * `PipelineFactory` reuses the memory of finished create futures
 
+* A pipeline's readiness scope table starts with room for four scopes, so binding
+  the first dependencies no longer reallocates it
+
 ## [5.10.0] - 2026-11-22
 
 * Add `InlineFuture::empty()` and `InlineFuture::set_with()`, `set_with()` drops
