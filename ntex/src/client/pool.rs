@@ -65,6 +65,7 @@ struct ConnectionPoolInner {
 pub(super) struct Inner {
     cfg: Cfg<ClientConfig>,
     stopped: bool,
+    /// http/1 connections in use and connections being opened
     acquired: usize,
     available: HashMap<Key, VecDeque<AvailableConnection>>,
     h2: HashMap<Key, Vec<H2Client>>,
@@ -563,6 +564,8 @@ fn add_h2_client(
     client
 }
 
+/// Counts a connection being opened against the http/1 connection limit,
+/// the protocol is not known until the connection is established.
 struct OpenGuard {
     key: Key,
     inner: Option<Rc<RefCell<Inner>>>,
@@ -570,17 +573,22 @@ struct OpenGuard {
 
 impl OpenGuard {
     fn new(key: Key, inner: Rc<RefCell<Inner>>) -> Self {
-        inner.borrow_mut().connecting.insert(key.clone());
+        {
+            let mut pool = inner.borrow_mut();
+            pool.connecting.insert(key.clone());
+            pool.acquired += 1;
+        }
         OpenGuard {
             key,
             inner: Some(inner),
         }
     }
 
+    /// Keeps counting the established http/1 connection.
     fn consume(mut self) -> Acquired {
         let inner = self.inner.take().unwrap();
         inner.borrow_mut().connecting.remove(&self.key);
-        Acquired::new(self.key.clone(), inner)
+        Acquired(self.key.clone(), inner)
     }
 }
 
@@ -589,6 +597,7 @@ impl Drop for OpenGuard {
         if let Some(inner) = self.inner.take() {
             let mut pool = inner.borrow_mut();
             pool.connecting.remove(&self.key);
+            pool.acquired -= 1;
             pool.check_availability();
         }
     }
@@ -645,6 +654,7 @@ mod tests {
     use std::{future::Future, pin::Pin};
 
     use super::*;
+    use crate::channel::condition::Condition;
     use crate::service::{Pipeline, boxed, fn_service};
     use crate::time::{Millis, Seconds, sleep};
     use crate::{io as nio, testing::IoTest, util::lazy};
@@ -708,6 +718,155 @@ mod tests {
         assert!(c2.is_ok());
         assert_eq!(store.borrow().len(), 2);
         assert_eq!(pool.0.inner.borrow().acquired, 2);
+    }
+
+    /// STATEMENT: Connections being opened count against the HTTP/1 connection limit, so concurrent requests to different hosts never open more connections than the limit.
+    ///
+    /// HOW:
+    /// - Use a limit of 2 and a connector that holds every connect until a gate is released.
+    /// - Poll requests to four hosts once and verify that only two connects start, `acquired` is 2, and the other two requests stay pending.
+    /// - Release the gate and verify that the first two requests complete without starting another connect.
+    /// - Drop one connection and verify that exactly one waiting host connects; drop the other and verify that the last host connects.
+    #[crate::rt_test]
+    async fn opening_connections_count_against_h1_limit() {
+        let gate = Condition::new();
+        let store = Rc::new(RefCell::new(Vec::new()));
+        let (gate2, store2) = (gate.clone(), store.clone());
+
+        let cfg = SharedCfg::new("C")
+            .add(ClientConfig::new().set_h1_connection_limit(2))
+            .build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push(server);
+                let gate = gate2.wait();
+                Box::pin(async move {
+                    let _ = gate.await;
+                    Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default())))
+                })
+            }))),
+            cfg.get(),
+        );
+        let pipe = Pipeline::new(cfg, pool.clone());
+        let req = |host: &str| Connect {
+            uri: Url::try_from(format!("http://{host}/test")).unwrap(),
+            addr: None,
+        };
+
+        let mut f1 = std::pin::pin!(pipe.call(req("host1")));
+        let mut f2 = std::pin::pin!(pipe.call(req("host2")));
+        let mut f3 = std::pin::pin!(pipe.call(req("host3")));
+        let mut f4 = std::pin::pin!(pipe.call(req("host4")));
+        assert!(lazy(|cx| f1.as_mut().poll(cx)).await.is_pending());
+        assert!(lazy(|cx| f2.as_mut().poll(cx)).await.is_pending());
+        assert!(lazy(|cx| f3.as_mut().poll(cx)).await.is_pending());
+        assert!(lazy(|cx| f4.as_mut().poll(cx)).await.is_pending());
+
+        // connect tasks run, both connects are held by the gate
+        sleep(Millis(10)).await;
+        assert_eq!(store.borrow().len(), 2);
+        assert_eq!(pool.0.inner.borrow().acquired, 2);
+        assert_eq!(pool.0.waiters.borrow().waiters.len(), 2);
+
+        gate.notify_and_lock(());
+        let timeout = |fut| crate::time::timeout(Millis(1000), fut);
+        let c1 = timeout(f1).await.unwrap().unwrap();
+        let c2 = timeout(f2).await.unwrap().unwrap();
+        sleep(Millis(10)).await;
+        assert_eq!(store.borrow().len(), 2);
+        assert_eq!(pool.0.inner.borrow().acquired, 2);
+        assert!(lazy(|cx| f3.as_mut().poll(cx)).await.is_pending());
+        assert!(lazy(|cx| f4.as_mut().poll(cx)).await.is_pending());
+
+        // a closed connection frees one slot for one waiting host
+        drop(c1);
+        let (c3, mut rest) =
+            match crate::time::timeout(Millis(1000), crate::util::select(f3.as_mut(), f4.as_mut()))
+                .await
+                .unwrap()
+            {
+                crate::util::Either::Left(conn) => (conn.unwrap(), f4),
+                crate::util::Either::Right(conn) => (conn.unwrap(), f3),
+            };
+        sleep(Millis(10)).await;
+        assert_eq!(store.borrow().len(), 3);
+        assert_eq!(pool.0.inner.borrow().acquired, 2);
+        assert!(lazy(|cx| rest.as_mut().poll(cx)).await.is_pending());
+
+        drop(c2);
+        let c4 = timeout(rest).await.unwrap().unwrap();
+        assert_eq!(store.borrow().len(), 4);
+        assert_eq!(pool.0.inner.borrow().acquired, 2);
+        drop((c3, c4));
+        assert_eq!(pool.0.inner.borrow().acquired, 0);
+    }
+
+    /// STATEMENT: With an HTTP/1 connection limit above one, concurrent requests to one host use at most that many connections, and waiting requests reuse released connections before new ones are opened.
+    ///
+    /// HOW:
+    /// - Use a limit of 3 and send five concurrent requests to one host.
+    /// - Verify that three requests get connections from three connects, `acquired` is 3, and two requests stay pending.
+    /// - Release one connection to the pool and verify that the next waiter reuses it without a connect.
+    /// - Close another connection and verify that the last waiter opens a new one.
+    #[crate::rt_test]
+    async fn h1_limit_caps_concurrent_requests_per_host() {
+        let store = Rc::new(RefCell::new(Vec::new()));
+        let store2 = store.clone();
+
+        let cfg = SharedCfg::new("C")
+            .add(ClientConfig::new().set_h1_connection_limit(3))
+            .build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push(server);
+                Box::pin(
+                    async move { Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default()))) },
+                )
+            }))),
+            cfg.get(),
+        );
+        let pipe = Pipeline::new(cfg, pool.clone());
+        let req = Connect {
+            uri: Url::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+
+        let mut futs: Vec<_> = (0..5).map(|_| Box::pin(pipe.call(req.clone()))).collect();
+        for fut in &mut futs {
+            assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        }
+        let mut futs = futs.into_iter();
+        let timeout = |fut| crate::time::timeout(Millis(1000), fut);
+
+        // connects to one host are serialized, waiters are served in order
+        let c1 = timeout(futs.next().unwrap()).await.unwrap().unwrap();
+        let c2 = timeout(futs.next().unwrap()).await.unwrap().unwrap();
+        let c3 = timeout(futs.next().unwrap()).await.unwrap().unwrap();
+        let mut f4 = futs.next().unwrap();
+        let mut f5 = futs.next().unwrap();
+        sleep(Millis(10)).await;
+        assert_eq!(store.borrow().len(), 3);
+        assert_eq!(pool.0.inner.borrow().acquired, 3);
+        assert!(lazy(|cx| f4.as_mut().poll(cx)).await.is_pending());
+        assert!(lazy(|cx| f5.as_mut().poll(cx)).await.is_pending());
+
+        // a released connection is reused by the next waiter
+        c1.release(false);
+        let c4 = timeout(f4).await.unwrap().unwrap();
+        sleep(Millis(10)).await;
+        assert_eq!(store.borrow().len(), 3);
+        assert_eq!(pool.0.inner.borrow().acquired, 3);
+        assert!(lazy(|cx| f5.as_mut().poll(cx)).await.is_pending());
+
+        // a closed connection is replaced by a new one
+        c2.release(true);
+        let c5 = timeout(f5).await.unwrap().unwrap();
+        assert_eq!(store.borrow().len(), 4);
+        assert_eq!(pool.0.inner.borrow().acquired, 3);
+        drop((c3, c4, c5));
+        assert_eq!(pool.0.inner.borrow().acquired, 0);
     }
 
     fn h2_pool(

@@ -1,5 +1,11 @@
 # Changes
 
+## [4.11.1] - unreleased
+
+* client: Connections being opened count against the HTTP/1 connection limit,
+  so concurrent requests to different hosts no longer open more connections
+  than `ClientConfig::set_h1_connection_limit()` allows
+
 ## [4.11.0] - 2026-11-26
 
 * http: An HTTP/1 service readiness error while no request is in progress is
