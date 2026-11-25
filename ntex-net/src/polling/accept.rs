@@ -85,10 +85,10 @@ impl ListenerOps for TcpListener {
     fn poll_accept(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<io::Result<(net::TcpStream, net::SocketAddr)>> {
+    ) -> Poll<io::Result<(net::TcpStream, Option<net::SocketAddr>)>> {
         loop {
             match self.sock.accept() {
-                Ok(res) => return Poll::Ready(Ok(res)),
+                Ok((stream, addr)) => return Poll::Ready(Ok((stream, Some(addr)))),
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => return Poll::Ready(Err(err)),

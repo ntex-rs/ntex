@@ -1,5 +1,26 @@
 # Changes
 
+## [4.13.1] - 2026-11-25
+
+* io-uring: Skip the `shutdown(2)` call when closing a connection that the
+  peer reset or that timed out, the socket is closed already
+
+* io-uring: Close the descriptor of a stream registered in the fixed file
+  table without a completion; saves a completion per connection
+
+* io-uring: Register a stream socket in the fixed file table on its 16th
+  receive instead of at start, short connections skip the `io_uring_register`
+  call and the extra `Close` of the slot
+
+* io-uring: Require Linux 6.1+, detected by the ring setup flags, features and
+  opcodes; without `neon-uring`, older kernels use the polling driver. Remove
+  the fallbacks for older kernels, listeners always use a multishot accept.
+  Deprecate `ReactorApi::is_new()`, it is always `true`
+
+* Add `Listener::poll_accept_stream()`, which returns an accepted connection
+  without its peer address; the io-uring listener calls `getpeername` only
+  when the address is requested
+
 ## [4.13.0] - 2026-11-24
 
 * io-uring: Register stream sockets in the ring's fixed file table, so reads

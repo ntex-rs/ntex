@@ -5,12 +5,11 @@ use std::{task::Context, task::Poll, task::Waker};
 use ntex_io_uring::{cqueue::more, opcode, types::Fd};
 use ntex_rt::Arbiter;
 use slab::Slab;
-use socket2::{SockAddr, SockAddrStorage};
 
 use super::{Handler, Reactor, ReactorApi};
 use crate::{Listener, ListenerOps};
 
-type AcceptResult = io::Result<(net::TcpStream, net::SocketAddr)>;
+type AcceptResult = io::Result<(net::TcpStream, Option<net::SocketAddr>)>;
 
 /// Accepted connections a listener queues before its multishot accept is
 /// canceled, it is armed again once the queue is drained
@@ -26,8 +25,6 @@ struct AcceptOpsHandler {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum State {
     Idle,
-    /// `Accept` is submitted
-    Accept,
     /// Multishot `Accept` is submitted, it posts a completion per connection
     Multi,
     /// `PollAdd` is submitted, the listener reported `EAGAIN`
@@ -38,8 +35,6 @@ enum State {
 struct Entry {
     /// The socket stays open until the kernel is done with it
     sock: net::TcpListener,
-    /// Peer address, written by the kernel
-    addr: Box<(libc::sockaddr_storage, libc::socklen_t)>,
     state: State,
     /// The multishot accept is canceled because the queue is full
     paused: bool,
@@ -51,9 +46,6 @@ struct Entry {
 
 struct AcceptOpsInner {
     api: ReactorApi,
-    supported: bool,
-    /// Kernel supports multishot accept, available since 5.19
-    multishot: bool,
     entries: RefCell<Slab<Entry>>,
 }
 
@@ -67,12 +59,8 @@ impl AcceptOps {
         Arbiter::get_value(move || {
             let mut inner = None;
             reactor.register(|api| {
-                let supported = api.is_supported(opcode::Accept::CODE)
-                    && api.is_supported(opcode::PollAdd::CODE);
                 let ops = Rc::new(AcceptOpsInner {
-                    multishot: api.is_new(),
                     api,
-                    supported,
                     entries: RefCell::new(Slab::new()),
                 });
                 inner = Some(ops.clone());
@@ -82,22 +70,9 @@ impl AcceptOps {
         })
     }
 
-    pub(crate) fn is_supported(&self) -> bool {
-        self.0.supported
-    }
-
-    pub(crate) fn listener(&self, sock: net::TcpListener) -> io::Result<Listener> {
-        if !self.0.supported {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "io-uring accept is not supported by the kernel",
-            ));
-        }
-
+    pub(crate) fn listener(&self, sock: net::TcpListener) -> Listener {
         let id = self.0.entries.borrow_mut().insert(Entry {
             sock,
-            // SAFETY: all zeros is a valid `sockaddr_storage`
-            addr: Box::new((unsafe { mem::zeroed() }, 0)),
             state: State::Idle,
             paused: false,
             results: VecDeque::new(),
@@ -106,37 +81,21 @@ impl AcceptOps {
         });
         let id = u32::try_from(id).expect("Too many listeners");
 
-        Ok(Listener::new(TcpListener {
+        Listener::new(TcpListener {
             id,
             ops: self.0.clone(),
-        }))
+        })
     }
 }
 
 impl AcceptOpsInner {
     fn submit_accept(&self, id: u32, entry: &mut Entry) {
         let fd = entry.sock.as_raw_fd();
-        if self.multishot {
-            entry.state = State::Multi;
-            // SAFETY: the slab owns the socket until the operation completes
-            unsafe {
-                self.api.submit(id, move |en| {
-                    opcode::AcceptMulti::new(en, Fd(fd)).flags(libc::SOCK_CLOEXEC);
-                });
-            }
-            return;
-        }
-
-        entry.state = State::Accept;
-        entry.addr.1 = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-        let addr = (&raw mut entry.addr.0).cast::<libc::sockaddr>();
-        let len = &raw mut entry.addr.1;
-
-        // SAFETY: the slab owns the boxed address and the socket until the
-        // operation completes
+        entry.state = State::Multi;
+        // SAFETY: the slab owns the socket until the operation completes
         unsafe {
             self.api.submit(id, move |en| {
-                opcode::Accept::new(en, Fd(fd), addr, len).flags(libc::SOCK_CLOEXEC);
+                opcode::AcceptMulti::new(en, Fd(fd)).flags(libc::SOCK_CLOEXEC);
             });
         }
     }
@@ -222,36 +181,12 @@ impl Drop for TcpListener {
     }
 }
 
-fn accepted(fd: RawFd, addr: &(libc::sockaddr_storage, libc::socklen_t)) -> AcceptResult {
+/// Takes ownership of an accepted socket. Multishot accept does not report the
+/// peer address, every completion would overwrite a shared buffer; [`Listener`]
+/// queries it only when requested.
+fn accepted(fd: RawFd) -> net::TcpStream {
     // SAFETY: the kernel returned a new connected socket owned by us
-    let stream = unsafe { net::TcpStream::from_raw_fd(fd) };
-
-    let mut storage = SockAddrStorage::zeroed();
-    // SAFETY: `sockaddr_storage` is a platform socket address type, the
-    // kernel initialized `addr.1` bytes of it
-    let addr = unsafe {
-        *storage.view_as::<libc::sockaddr_storage>() = addr.0;
-        SockAddr::new(storage, addr.1)
-    };
-    match addr.as_socket() {
-        Some(addr) => Ok((stream, addr)),
-        None => Err(io::Error::other("accepted socket has non-inet address")),
-    }
-}
-
-/// Multishot accept does not report the peer address, every completion would
-/// overwrite a shared buffer.
-fn accepted_multi(fd: RawFd) -> AcceptResult {
-    // SAFETY: the kernel returned a new connected socket owned by us
-    let stream = unsafe { net::TcpStream::from_raw_fd(fd) };
-    match stream.peer_addr() {
-        Ok(addr) => Ok((stream, addr)),
-        // the peer reset the connection before it was accepted
-        Err(err) if err.raw_os_error() == Some(libc::ENOTCONN) => {
-            Err(io::ErrorKind::ConnectionAborted.into())
-        }
-        Err(err) => Err(err),
-    }
+    unsafe { net::TcpStream::from_raw_fd(fd) }
 }
 
 impl Handler for AcceptOpsHandler {
@@ -279,8 +214,8 @@ impl Handler for AcceptOpsHandler {
         // multishot accept stays armed
         if more(flags) {
             if let Ok(fd) = result {
-                self.inner
-                    .push_result(id as u32, entry, accepted_multi(fd as RawFd));
+                let stream = accepted(fd as RawFd);
+                self.inner.push_result(id as u32, entry, Ok((stream, None)));
             }
             return;
         }
@@ -289,8 +224,7 @@ impl Handler for AcceptOpsHandler {
         entry.paused = false;
 
         let res = match result {
-            Ok(fd) if state == State::Accept => accepted(fd as RawFd, &entry.addr),
-            Ok(fd) if state == State::Multi => accepted_multi(fd as RawFd),
+            Ok(fd) if state == State::Multi => Ok((accepted(fd as RawFd), None)),
             // the listener is readable
             Ok(_) => {
                 if entry.dropped {
@@ -366,20 +300,11 @@ mod tests {
 
     /// The reactor is never run, submitted operations stay in its queue.
     fn setup() -> Option<(Reactor, AcceptOps, AcceptOpsHandler)> {
-        setup_with(true, false)
-    }
-
-    fn setup_with(
-        supported: bool,
-        multishot: bool,
-    ) -> Option<(Reactor, AcceptOps, AcceptOpsHandler)> {
         let reactor = Reactor::new(8).ok()?;
         let mut inner = None;
         reactor.register(|api| {
             let ops = Rc::new(AcceptOpsInner {
                 api,
-                supported,
-                multishot,
                 entries: RefCell::new(Slab::new()),
             });
             inner = Some(ops.clone());
@@ -395,7 +320,7 @@ mod tests {
     fn listener(ops: &AcceptOps) -> Listener {
         let sock = net::TcpListener::bind("127.0.0.1:0").unwrap();
         sock.set_nonblocking(true).unwrap();
-        ops.listener(sock).unwrap()
+        ops.listener(sock)
     }
 
     fn state(ops: &AcceptOps) -> Option<State> {
@@ -436,7 +361,7 @@ mod tests {
     ///   connection is returned and the next poll arms a new multishot accept.
     #[test]
     fn multishot_accept_queues_connections() {
-        let Some((_reactor, ops, mut handler)) = setup_with(true, true) else {
+        let Some((_reactor, ops, mut handler)) = setup() else {
             return;
         };
         let mut listener = listener(&ops);
@@ -455,7 +380,7 @@ mod tests {
         assert_eq!(handler.in_flight(), 1);
 
         for client in [&c1, &c2] {
-            let Poll::Ready(Ok((_, addr))) = listener.0.poll_accept(&mut cx) else {
+            let Poll::Ready(Ok((_, addr))) = listener.poll_accept(&mut cx) else {
                 panic!("expected a connection");
             };
             assert_eq!(addr, client.local_addr().unwrap());
@@ -466,7 +391,7 @@ mod tests {
         let (fd3, c3) = connected_fd();
         handler.completed(0, 0, Ok(fd3));
         assert_eq!(state(&ops), Some(State::Idle));
-        let Poll::Ready(Ok((_, addr))) = listener.0.poll_accept(&mut cx) else {
+        let Poll::Ready(Ok((_, addr))) = listener.poll_accept(&mut cx) else {
             panic!("expected a connection");
         };
         assert_eq!(addr, c3.local_addr().unwrap());
@@ -481,13 +406,14 @@ mod tests {
     /// - Poll an accept, then deliver `MAX_QUEUED` completions with `F_MORE`
     ///   for unconnected sockets and check the accept is paused.
     /// - Deliver one more completion and check it is still queued.
-    /// - Check an unconnected socket is returned as `ConnectionAborted`.
+    /// - Check `Listener::poll_accept` reports an unconnected socket as
+    ///   `ConnectionAborted` when it queries the peer address.
     /// - Report the cancellation, then check the remaining connections are
     ///   returned without arming an accept, and the poll after them arms a
     ///   new multishot accept.
     #[test]
     fn multishot_accept_pauses_when_queue_is_full() {
-        let Some((_reactor, ops, mut handler)) = setup_with(true, true) else {
+        let Some((_reactor, ops, mut handler)) = setup() else {
             return;
         };
         let mut listener = listener(&ops);
@@ -501,7 +427,7 @@ mod tests {
         handler.completed(0, F_MORE, Ok(socket_fd()));
         assert_eq!(ops.0.entries.borrow()[0].results.len(), MAX_QUEUED + 1);
 
-        let Poll::Ready(Err(err)) = listener.0.poll_accept(&mut cx) else {
+        let Poll::Ready(Err(err)) = listener.poll_accept(&mut cx) else {
             panic!("expected an error");
         };
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
@@ -517,6 +443,33 @@ mod tests {
         assert_eq!(state(&ops), Some(State::Multi));
     }
 
+    /// STATEMENT: `Listener::poll_accept_stream` returns a multishot-accepted
+    /// connection without querying its peer address, so a connection reset
+    /// before it was accepted is returned rather than rejected.
+    ///
+    /// HOW:
+    /// - Poll `poll_accept_stream`, then deliver an unconnected socket with
+    ///   `F_MORE`.
+    /// - Check the next poll returns that socket, and its `peer_addr` fails
+    ///   with `NotConnected`.
+    #[test]
+    fn accept_stream_skips_peer_addr() {
+        let Some((_reactor, ops, mut handler)) = setup() else {
+            return;
+        };
+        let mut listener = listener(&ops);
+        let mut cx = Context::from_waker(Waker::noop());
+
+        assert!(listener.poll_accept_stream(&mut cx).is_pending());
+        handler.completed(0, F_MORE, Ok(socket_fd()));
+
+        let Poll::Ready(Ok(stream)) = listener.poll_accept_stream(&mut cx) else {
+            panic!("expected a connection");
+        };
+        let err = stream.peer_addr().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+    }
+
     /// STATEMENT: A dropped listener closes connections its multishot accept
     /// still delivers, and is released by the final completion.
     ///
@@ -526,7 +479,7 @@ mod tests {
     /// - Report the cancellation and check the entry is released.
     #[test]
     fn multishot_accept_of_dropped_listener() {
-        let Some((_reactor, ops, mut handler)) = setup_with(true, true) else {
+        let Some((_reactor, ops, mut handler)) = setup() else {
             return;
         };
         let mut listener = listener(&ops);
@@ -544,35 +497,14 @@ mod tests {
     }
 
     /// STATEMENT: A multishot accept that fails with `EAGAIN` waits for the
-    /// listener to become readable and is armed again.
+    /// listener to become readable and is armed again, and an interrupted
+    /// accept is retried.
     ///
     /// HOW:
-    /// - Poll an accept, complete it with `WouldBlock` and check a `PollAdd`
-    ///   is in flight.
-    /// - Complete the poll and check a multishot accept is in flight again.
-    #[test]
-    fn multishot_accept_would_block_falls_back_to_poll() {
-        let Some((_reactor, ops, mut handler)) = setup_with(true, true) else {
-            return;
-        };
-        let mut listener = listener(&ops);
-        let mut cx = Context::from_waker(Waker::noop());
-
-        assert!(listener.0.poll_accept(&mut cx).is_pending());
-        handler.completed(0, 0, Err(io::ErrorKind::WouldBlock.into()));
-        assert_eq!(state(&ops), Some(State::Poll));
-        handler.completed(0, 0, Ok(1));
-        assert_eq!(state(&ops), Some(State::Multi));
-    }
-
-    /// STATEMENT: An accept that fails with `EAGAIN` waits for the listener to
-    /// become readable and retries, and an interrupted accept is retried.
-    ///
-    /// HOW:
-    /// - Poll an accept and check an `Accept` is in flight.
+    /// - Poll an accept and check a multishot accept is in flight.
     /// - Complete it with `WouldBlock` and check a `PollAdd` is in flight.
-    /// - Complete the poll and check an `Accept` is in flight again, then
-    ///   complete it with `Interrupted` and check it is resubmitted.
+    /// - Complete the poll and check a multishot accept is in flight again,
+    ///   then complete it with `Interrupted` and check it is resubmitted.
     /// - Check the waker is never called and no result is stored.
     #[test]
     fn would_block_falls_back_to_poll() {
@@ -584,17 +516,17 @@ mod tests {
         let mut cx = Context::from_waker(&waker);
 
         assert!(listener.0.poll_accept(&mut cx).is_pending());
-        assert_eq!(state(&ops), Some(State::Accept));
+        assert_eq!(state(&ops), Some(State::Multi));
         assert_eq!(handler.in_flight(), 1);
 
         handler.completed(0, 0, Err(io::ErrorKind::WouldBlock.into()));
         assert_eq!(state(&ops), Some(State::Poll));
 
         handler.completed(0, 0, Ok(1));
-        assert_eq!(state(&ops), Some(State::Accept));
+        assert_eq!(state(&ops), Some(State::Multi));
 
         handler.completed(0, 0, Err(io::ErrorKind::Interrupted.into()));
-        assert_eq!(state(&ops), Some(State::Accept));
+        assert_eq!(state(&ops), Some(State::Multi));
 
         assert_eq!(woken.get(), 0);
         assert!(ops.0.entries.borrow()[0].results.is_empty());
@@ -605,11 +537,12 @@ mod tests {
     /// the next accept, which then submits a new operation.
     ///
     /// HOW:
-    /// - Poll an accept so a waker is stored and an `Accept` is in flight.
+    /// - Poll an accept so a waker is stored and a multishot accept is in
+    ///   flight.
     /// - Complete it with `ConnectionAborted` and check the waker is called
     ///   and nothing is in flight.
     /// - Poll again and check the error is returned, then check the following
-    ///   poll submits a new `Accept`.
+    ///   poll submits a new multishot accept.
     #[test]
     fn accept_error_is_returned() {
         let Some((_reactor, ops, mut handler)) = setup() else {
@@ -629,17 +562,18 @@ mod tests {
         };
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted);
         assert!(listener.0.poll_accept(&mut cx).is_pending());
-        assert_eq!(state(&ops), Some(State::Accept));
+        assert_eq!(state(&ops), Some(State::Multi));
     }
 
     /// STATEMENT: A canceled accept of a live listener wakes the task, and the
     /// next accept submits a new operation.
     ///
     /// HOW:
-    /// - Poll an accept so a waker is stored and an `Accept` is in flight.
+    /// - Poll an accept so a waker is stored and a multishot accept is in
+    ///   flight.
     /// - Report the operation as canceled and check the waker is called and
     ///   the entry is idle but kept.
-    /// - Poll again and check a new `Accept` is in flight.
+    /// - Poll again and check a new multishot accept is in flight.
     #[test]
     fn canceled_accept_is_resubmitted() {
         let Some((_reactor, ops, mut handler)) = setup() else {
@@ -655,7 +589,7 @@ mod tests {
         assert_eq!(state(&ops), Some(State::Idle));
 
         assert!(listener.0.poll_accept(&mut cx).is_pending());
-        assert_eq!(state(&ops), Some(State::Accept));
+        assert_eq!(state(&ops), Some(State::Multi));
     }
 
     /// STATEMENT: A dropped listener with an operation in flight keeps its
@@ -736,37 +670,5 @@ mod tests {
         );
         drop(listener);
         assert!(ops.0.entries.borrow().is_empty());
-    }
-
-    /// STATEMENT: An accepted socket with a non-inet peer address is reported
-    /// as an error and closed.
-    ///
-    /// HOW:
-    /// - Pass the fd of a new socket and a zeroed address, whose family is
-    ///   `AF_UNSPEC`, to `accepted`.
-    /// - Check the non-inet address error is returned.
-    #[test]
-    fn non_inet_peer_address_is_rejected() {
-        // SAFETY: all zeros is a valid `sockaddr_storage`
-        let addr = (unsafe { mem::zeroed() }, 0);
-        let fd = RawFd::try_from(socket_fd()).unwrap();
-        let err = accepted(fd, &addr).unwrap_err();
-        assert_eq!(err.to_string(), "accepted socket has non-inet address");
-    }
-
-    /// STATEMENT: Listeners are rejected when the kernel lacks the accept or
-    /// poll opcodes.
-    ///
-    /// HOW:
-    /// - Mark the accept operations as unsupported.
-    /// - Create a listener and check an `Unsupported` error is returned.
-    #[test]
-    fn unsupported_kernel_rejects_listener() {
-        let Some((_reactor, ops, _handler)) = setup_with(false, false) else {
-            return;
-        };
-        let sock = net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let err = ops.listener(sock).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 }
