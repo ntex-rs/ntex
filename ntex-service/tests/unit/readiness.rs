@@ -36,6 +36,42 @@ fn new_scope() -> ReadyScope {
     })
 }
 
+/// STATEMENT: Callbacks created from one `Rc` share an identity, deliver scope data to the
+/// handler, and are released with their scope.
+///
+/// HOW:
+/// - Register two `ReadyCallback::from_rc` handles of one handler on a subscribed root scope
+///   and verify the scope retains a single reference.
+/// - Notify the source and verify the handler records the root data once.
+/// - Drop the waiter store and verify the handler's only remaining reference is the test's.
+#[test]
+fn callbacks_from_one_rc_share_identity() {
+    struct Handler(RefCell<Vec<usize>>);
+
+    impl ReadyHandler for Handler {
+        fn notify(&self, data: usize) {
+            self.0.borrow_mut().push(data);
+        }
+    }
+
+    let handler = Rc::new(Handler(RefCell::default()));
+    let waiters = crate::ctx::WaitersRef::new();
+    let source = ReadyNotifier::new();
+    waiters.scope().subscribe(&source);
+    waiters
+        .scope()
+        .on_notify(&ReadyCallback::from_rc(handler.clone()));
+    waiters
+        .scope()
+        .on_notify(&ReadyCallback::from_rc(handler.clone()));
+    assert_eq!(Rc::strong_count(&handler), 2);
+
+    source.notify();
+    assert_eq!(*handler.0.borrow(), [0]);
+    drop(waiters);
+    assert_eq!(Rc::strong_count(&handler), 1);
+}
+
 /// STATEMENT: Readiness diagnostics identify handles without invoking callbacks or borrowing scopes.
 ///
 /// HOW:
@@ -614,7 +650,7 @@ fn callbacks_follow_notifications_and_belong_to_scopes() {
 
     let calls = Rc::new(Cell::new(0));
     let captured = calls.clone();
-    let identity = Rc::new(std::cell::OnceCell::<Weak<dyn Fn(usize)>>::new());
+    let identity = Rc::new(std::cell::OnceCell::<Weak<dyn ReadyHandler>>::new());
     let captured_identity = identity.clone();
     let references = Rc::new(Cell::new(0));
     let captured_references = references.clone();

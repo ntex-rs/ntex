@@ -56,7 +56,7 @@ pub use crate::fn_service::{fn_factory, fn_service, fn_service_st};
 pub use crate::map_state::{map_state, map_state_factory};
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
-pub use crate::readiness::{ReadyCallback, ReadyLink, ReadyNotifier};
+pub use crate::readiness::{ReadyCallback, ReadyHandler, ReadyLink, ReadyNotifier};
 pub use crate::ready::{ready, ready_factory};
 pub use crate::state::{RequestState, State};
 

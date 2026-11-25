@@ -80,7 +80,7 @@ impl<E> PipelineReadiness<E> {
                     if self.scope.is_ready() {
                         return Poll::Ready(Ok(()));
                     }
-                    match self.poll_check() {
+                    match self.poll_check(&observer) {
                         Poll::Ready(None) => {
                             self.checker.replace(Checker::Caller);
                             owner = Some(CallerCheck(self));
@@ -116,7 +116,7 @@ impl<E> PipelineReadiness<E> {
             if self.scope.is_ready() {
                 return Poll::Ready(Ok(()));
             }
-            match self.poll_check() {
+            match self.poll_check(&self.observer) {
                 Poll::Ready(None) => {
                     let Some(check) = check.take() else {
                         cx.waker().wake_by_ref();
@@ -138,7 +138,12 @@ impl<E> PipelineReadiness<E> {
         }
     }
 
-    fn poll_check(&self) -> Poll<Option<Result<(), E>>> {
+    /// Polls a retained check for the task registered in `observer`.
+    ///
+    /// The task receives a completed result directly, so the check's own
+    /// completion and checker-waker wakes do not wake it. They are delivered if
+    /// the check stays pending or is cancelled.
+    fn poll_check(&self, observer: &ReadyObserver) -> Poll<Option<Result<(), E>>> {
         let previous = {
             let mut checker = self.checker.borrow_mut();
             match &*checker {
@@ -152,6 +157,8 @@ impl<E> PipelineReadiness<E> {
         let Checker::Pipeline(fut) = previous else {
             unreachable!()
         };
+        // Dropped after `guard`, which wakes observers.
+        let muted = observer.mute();
         let mut guard = PipelineCheck {
             readiness: self,
             fut: Some(fut),
@@ -180,6 +187,7 @@ impl<E> PipelineReadiness<E> {
             self.scope.set_ready(generation);
         });
         drop(guard);
+        muted.deliver();
         Poll::Ready(Some(result))
     }
 }
