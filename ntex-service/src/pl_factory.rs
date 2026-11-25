@@ -1,10 +1,54 @@
 use std::{fmt, rc::Rc};
 
-use crate::{ServiceFactory, pipeline::Pipeline, util::BoxFuture};
+use crate::util::{CallFuture, CallPool, PoolOwner};
+use crate::{ServiceFactory, pipeline::Pipeline};
 
 /// Factory for a service pipeline.
+///
+/// Create futures are allocated in blocks that later creates reuse.
 pub struct PipelineFactory<St, Req, Res, Err, InitErr> {
-    f: Rc<dyn Fn(St) -> BoxFuture<'static, Result<Pipeline<Req, Res, Err>, InitErr>>>,
+    f: Rc<dyn CreatePipeline<St, Req, Res, Err, InitErr>>,
+}
+
+trait CreatePipeline<St, Req, Res, Err, InitErr> {
+    fn create(
+        self: Rc<Self>,
+        st: St,
+    ) -> CallFuture<'static, Result<Pipeline<Req, Res, Err>, InitErr>>;
+}
+
+struct Factory<Sf> {
+    sf: Sf,
+    // Blocks of finished create futures. Declared last, so it is dropped after `sf`.
+    pool: CallPool,
+}
+
+impl<Sf> PoolOwner for Rc<Factory<Sf>> {
+    fn pool(&self) -> &CallPool {
+        &self.pool
+    }
+}
+
+impl<Sf, St, Req> CreatePipeline<St, Req, Sf::Res, Sf::Error, Sf::InitError> for Factory<Sf>
+where
+    Sf: ServiceFactory<St, Req> + 'static,
+    St: 'static,
+    Req: 'static,
+    Sf::Res: 'static,
+    Sf::Error: 'static,
+{
+    fn create(
+        self: Rc<Self>,
+        st: St,
+    ) -> CallFuture<'static, Result<Pipeline<Req, Sf::Res, Sf::Error>, Sf::InitError>> {
+        CallFuture::pooled(self, |factory| {
+            let factory = factory.clone();
+            async move {
+                let svc = factory.sf.create(&st).await?;
+                Ok(Pipeline::new(st, svc))
+            }
+        })
+    }
 }
 
 impl<St, Req, Res, Err, InitErr> PipelineFactory<St, Req, Res, Err, InitErr> {
@@ -17,21 +61,17 @@ impl<St, Req, Res, Err, InitErr> PipelineFactory<St, Req, Res, Err, InitErr> {
         Res: 'static,
         Err: 'static,
     {
-        let sf = Rc::new(sf);
         Self {
-            f: Rc::new(move |st: St| {
-                let sf = sf.clone();
-                Box::pin(async move {
-                    let svc = sf.create(&st).await?;
-                    Ok(Pipeline::new(st, svc))
-                })
+            f: Rc::new(Factory {
+                sf,
+                pool: CallPool::new(),
             }),
         }
     }
 
     /// Creates a service with `st` and wraps both in a [`Pipeline`].
     pub async fn create(&self, st: St) -> Result<Pipeline<Req, Res, Err>, InitErr> {
-        (self.f)(st).await
+        self.f.clone().create(st).await
     }
 }
 

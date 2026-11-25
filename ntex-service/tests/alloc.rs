@@ -22,8 +22,8 @@ use std::{
 
 use ntex_service::{
     BindCtx, Ctx, Pipeline, ReadyBinding, ReadyCallback, ReadyNotifier, Service, ServiceCaller,
-    boxed, map_state,
-    pipeline::{PipelineBinding, PipelineState},
+    boxed, fn_factory, map_state,
+    pipeline::{PipelineBinding, PipelineFactory, PipelineState},
     ready,
 };
 
@@ -895,6 +895,25 @@ fn pipeline_call_pool_keeps_four_blocks() {
     let (all_ok, counts) = measure(|| calls.drain(..).all(|call| complete(call) == Ok(12)));
     assert!(all_ok);
     assert_eq!((counts.allocs, counts.deallocs), (0, 1), "{counts:?}");
+}
+
+/// STATEMENT: A pipeline factory reuses the block of a finished create future.
+///
+/// HOW:
+/// - Create and drop a pipeline, then measure a second create and drop.
+/// - Verify that the second cycle allocates one block fewer than the first and frees
+///   everything it allocates.
+/// - Drop the factory and verify that it frees the pooled block.
+#[test]
+fn pipeline_factory_reuses_create_future_blocks() {
+    let factory = PipelineFactory::new(fn_factory(async |_: &usize| Ok::<_, ()>(probe().0)));
+    let cycle = || drop(complete(factory.create(10)).unwrap());
+    let ((), first) = measure(cycle);
+    let ((), second) = measure(cycle);
+    assert_eq!(first.allocs, second.allocs + 1, "{first:?} {second:?}");
+    assert_eq!(second.allocs, second.deallocs, "{second:?}");
+    let ((), counts) = measure(|| drop(factory));
+    assert_eq!(counts.deallocs, 2, "factory and pooled block: {counts:?}");
 }
 
 /// STATEMENT: An owned call that outlives every pipeline handle returns its block before the

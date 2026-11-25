@@ -324,6 +324,85 @@ async fn test_ready_waker_not_recloned() {
     assert_eq!(cnt1.wakes.get(), wakes);
 }
 
+/// STATEMENT: A first `poll_ready` that completes its own check does not wake its caller.
+///
+/// HOW:
+/// - Poll a new pipeline over an open `SingleWaker` once with a counting waker.
+/// - Verify readiness, no wake, and a single waker clone kept for invalidation.
+#[test]
+fn completed_first_check_does_not_wake_the_caller() {
+    let srv = Pipeline::new((), SingleWaker::new(true));
+    let (cnt, waker) = counting_waker();
+    let mut cx = Context::from_waker(&waker);
+
+    assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
+    assert_eq!(cnt.wakes.get(), 0);
+    assert_eq!(cnt.clones.get(), 1);
+}
+
+/// STATEMENT: A caller woken by its pending check is not woken again when it completes the check.
+///
+/// HOW:
+/// - Poll a pipeline over a closed `SingleWaker` and verify it is pending without a wake.
+/// - Open the gate through the check's waker and verify one caller wake.
+/// - Poll again and verify readiness without a second wake.
+#[test]
+fn completing_a_woken_check_wakes_the_caller_once() {
+    let sw = SingleWaker::new(false);
+    let srv = Pipeline::new((), sw.clone());
+    let (cnt, waker) = counting_waker();
+    let mut cx = Context::from_waker(&waker);
+
+    assert_eq!(srv.poll_ready(&mut cx), Poll::Pending);
+    assert_eq!(cnt.wakes.get(), 0);
+    sw.open(true);
+    assert_eq!(cnt.wakes.get(), 1);
+    assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
+    assert_eq!(cnt.wakes.get(), 1);
+}
+
+/// Wakes its check's waker and stays pending on the first poll
+struct YieldOnce(Cell<bool>);
+
+impl Service<(), ()> for YieldOnce {
+    type Res = ();
+    type Error = ();
+
+    async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
+        poll_fn(|cx| {
+            if self.0.replace(true) {
+                Poll::Ready(Ok(()))
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+/// STATEMENT: A check that wakes itself and stays pending still wakes the caller driving it.
+///
+/// HOW:
+/// - Poll a pipeline whose check wakes its waker and returns pending once.
+/// - Verify the pending poll woke the caller once.
+/// - Poll again and verify readiness without another wake.
+#[test]
+fn self_woken_pending_check_wakes_the_caller() {
+    let srv = Pipeline::new((), YieldOnce(Cell::new(false)));
+    let (cnt, waker) = counting_waker();
+    let mut cx = Context::from_waker(&waker);
+
+    assert_eq!(srv.poll_ready(&mut cx), Poll::Pending);
+    assert_eq!(cnt.wakes.get(), 1);
+    assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
+    assert_eq!(cnt.wakes.get(), 1);
+}
+
 /// STATEMENT: Dropping the current readiness future releases ownership for another checker.
 ///
 /// HOW:

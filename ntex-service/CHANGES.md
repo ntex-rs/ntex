@@ -1,5 +1,16 @@
 # Changes
 
+## [5.10.1] - 2026-11-25
+
+* A pipeline's `poll_ready` no longer wakes its caller when the caller's own poll
+  completes the readiness check, so the caller is not polled again for a result
+  it already received
+
+* Add `ReadyCallback::from_rc()` and the `ReadyHandler` trait, a callback can
+  share an existing `Rc` handler instead of allocating a closure
+
+* `PipelineFactory` reuses the memory of finished create futures
+
 ## [5.10.0] - 2026-11-22
 
 * Add `InlineFuture::empty()` and `InlineFuture::set_with()`, `set_with()` drops

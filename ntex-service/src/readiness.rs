@@ -56,12 +56,33 @@ thread_local! {
 /// or other strong references that would create a reference cycle.
 /// This type is neither `Send` nor `Sync`.
 #[derive(Clone)]
-pub struct ReadyCallback(Rc<dyn Fn(usize)>);
+pub struct ReadyCallback(Rc<dyn ReadyHandler>);
 
 impl ReadyCallback {
     /// Creates an independent callback identity.
     pub fn new(callback: impl Fn(usize) + 'static) -> Self {
         Self(Rc::new(callback))
+    }
+
+    /// Creates a callback that shares `handler` without allocating.
+    ///
+    /// Callbacks created from the same `Rc` share one identity. A scope that
+    /// retains the callback keeps `handler` alive, so `handler` must not retain
+    /// the callback.
+    pub fn from_rc(handler: Rc<impl ReadyHandler + 'static>) -> Self {
+        Self(handler)
+    }
+}
+
+/// A handler of readiness notifications, see [`ReadyCallback::from_rc`].
+pub trait ReadyHandler {
+    /// Handles a notification with the receiving scope's user data.
+    fn notify(&self, data: usize);
+}
+
+impl<F: Fn(usize)> ReadyHandler for F {
+    fn notify(&self, data: usize) {
+        self(data);
     }
 }
 
@@ -193,7 +214,7 @@ fn notify_scope(store: &WaitersInner, id: usize, epoch: u64, direct: bool, callb
         }
         if callbacks {
             for callback in s.callbacks.borrow().iter() {
-                (callback.0)(s.data.get());
+                callback.0.notify(s.data.get());
             }
         }
     });
@@ -865,6 +886,10 @@ impl ScopeInner {
 struct ReadyObservers {
     slots: RefCell<slab::Slab<Option<Waker>>>,
     checker: OnceCell<Arc<CheckerWake>>,
+    /// Slot whose task drives a check, see `ReadyObserver::mute`
+    muted: Cell<Option<usize>>,
+    /// Whether a wake of the muted slot was deferred
+    muted_woken: Cell<bool>,
     _local: PhantomData<Rc<()>>,
 }
 
@@ -895,12 +920,18 @@ impl ReadyObservers {
 
     /// Moves registered wakers into the delivery buffer without removing slots.
     ///
-    /// Wakers matching `skip` data remain registered. Drop the buffer only after
+    /// Wakers matching `skip` data remain registered. The muted slot remains
+    /// registered and its wake is deferred. Drop the buffer only after
     /// releasing scope and observer borrows, since delivery may reenter.
     fn take_wakers(&self, wakers: &mut Wakers, skip: Option<*const ()>) {
+        let muted = self.muted.get();
         // Waker clone/drop/wake may reenter; keep them outside the borrow.
-        for (_, waker) in self.slots.borrow_mut().iter_mut() {
-            if let Some(waker) = waker.take_if(|waker| Some(waker.data()) != skip) {
+        for (idx, waker) in self.slots.borrow_mut().iter_mut() {
+            if Some(idx) == muted {
+                if waker.is_some() {
+                    self.muted_woken.set(true);
+                }
+            } else if let Some(waker) = waker.take_if(|waker| Some(waker.data()) != skip) {
                 wakers.push(waker);
             }
         }
@@ -1043,6 +1074,69 @@ impl ReadyObserver {
         let registered = previous.is_some();
         drop(previous);
         registered
+    }
+
+    /// Defers wakes of this observer while its task drives a check.
+    ///
+    /// Completion wakes and checker-waker wakes are deferred; invalidation still
+    /// wakes the task. Use `MutedObserver::deliver` when the task receives the
+    /// check result, otherwise dropping the guard delivers a deferred wake.
+    pub(crate) fn mute(&self) -> MutedObserver<'_> {
+        let previous = self.store.scopes.with(self.scope, |s| {
+            (
+                s.observers.muted.replace(Some(self.idx)),
+                s.observers.muted_woken.replace(false),
+            )
+        });
+        MutedObserver {
+            observer: self,
+            previous,
+        }
+    }
+}
+
+/// Restores the previous mute of a scope's observers, see `ReadyObserver::mute`.
+pub(crate) struct MutedObserver<'a> {
+    observer: &'a ReadyObserver,
+    previous: Option<(Option<usize>, bool)>,
+}
+
+impl MutedObserver<'_> {
+    /// Drops deferred wakes, the task received the check result and rechecks
+    /// readiness before waiting again.
+    pub(crate) fn deliver(mut self) {
+        self.restore();
+    }
+
+    /// Returns whether a wake was deferred.
+    fn restore(&mut self) -> bool {
+        let Some((muted, woken)) = self.previous.take() else {
+            return false;
+        };
+        let observer = self.observer;
+        observer
+            .store
+            .scopes
+            .with(observer.scope, |s| {
+                s.observers.muted.set(muted);
+                s.observers.muted_woken.replace(woken)
+            })
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for MutedObserver<'_> {
+    /// Wakes the observer if a wake was deferred, also on unwind.
+    fn drop(&mut self) {
+        if self.restore() {
+            let observer = self.observer;
+            let waker = observer.store.scopes.with(observer.scope, |s| {
+                s.observers.slots.borrow_mut()[observer.idx].take()
+            });
+            if let Some(Some(waker)) = waker {
+                waker.wake();
+            }
+        }
     }
 }
 

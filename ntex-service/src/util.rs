@@ -7,10 +7,11 @@ use crate::{Ctx, Service, readiness::Generation};
 
 pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
 
-/// A heap-allocated, type-erased pipeline call future.
+/// A heap-allocated, type-erased pipeline call or pipeline create future.
 ///
 /// Experimental: pipeline calls keep the blocks of finished call futures in a
-/// per-pipeline [`CallPool`] for reuse. This may change or be reverted.
+/// per-pipeline [`CallPool`] for reuse, and `PipelineFactory` does the same for
+/// create futures. This may change or be reverted.
 ///
 /// Unlike [`BoxFuture`], dropping the future returns its block to the
 /// [`CallPool`] of its owner.
