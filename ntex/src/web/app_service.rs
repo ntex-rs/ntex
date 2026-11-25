@@ -5,7 +5,9 @@ use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::__private::map_output;
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
-use crate::service::{ReadyBinding, ReadyCallback, ReadyNotifier, ServiceChainFactory, boxed};
+use crate::service::{
+    ReadyBinding, ReadyCallback, ReadyHandler, ReadyNotifier, ServiceChainFactory, boxed,
+};
 use crate::util::OnDropFn;
 use crate::{BindCtx, Ctx, Middleware, Service, ServiceFactory, factory};
 
@@ -459,24 +461,15 @@ struct RouterReadiness {
     revision: Cell<u64>,
     changed: ReadyNotifier,
     unknown: RefCell<Vec<usize>>,
-    callback: ReadyCallback,
 }
 
 impl RouterReadiness {
     fn new() -> Rc<Self> {
-        Rc::<Self>::new_cyclic(|readiness| {
-            let readiness = readiness.clone();
-            Self {
-                ready: Cell::new(true),
-                revision: Cell::new(0),
-                unknown: RefCell::new(Vec::new()),
-                changed: ReadyNotifier::new(),
-                callback: ReadyCallback::new(move |id| {
-                    if let Some(readiness) = readiness.upgrade() {
-                        readiness.set_unknown(id);
-                    }
-                }),
-            }
+        Rc::new(Self {
+            ready: Cell::new(true),
+            revision: Cell::new(0),
+            unknown: RefCell::new(Vec::new()),
+            changed: ReadyNotifier::new(),
         })
     }
 
@@ -491,6 +484,12 @@ impl RouterReadiness {
         if id != usize::MAX {
             self.unknown.borrow_mut().push(id);
         }
+    }
+}
+
+impl ReadyHandler for RouterReadiness {
+    fn notify(&self, id: usize) {
+        self.set_unknown(id);
     }
 }
 
@@ -515,7 +514,8 @@ impl<S> CachedService<S> {
         readiness.changed.notify();
         CachedService {
             service,
-            changed: readiness.callback.clone(),
+            // Scopes retain the callback; `RouterReadiness` must not retain it.
+            changed: ReadyCallback::from_rc(readiness.clone()),
         }
     }
 }
@@ -729,11 +729,38 @@ mod tests {
         assert_eq!(cached(), 1);
     }
 
+    /// STATEMENT: Router readiness is freed with its pipeline although scopes retain its callbacks.
+    ///
+    /// HOW:
+    /// - Build a pipeline over a router, cache two handlers, notify one handler's gate, and
+    ///   recheck readiness.
+    /// - Drop the pipeline, which owns the only router handle, and verify that a weak handle
+    ///   to the router readiness no longer upgrades.
+    #[crate::rt_test]
+    async fn router_readiness_is_freed_with_the_pipeline() {
+        let gates = [Rc::new(Gate::default()), Rc::new(Gate::default())];
+        let router = router(Rc::default(), &gates, Rc::default());
+        let readiness = Rc::downgrade(&router.readiness);
+        let srv = Pipeline::new((), CheckRouter(router));
+        for id in 0..2 {
+            srv.call(Some(
+                TestRequest::with_uri(&format!("/{id}")).to_srv_request(),
+            ))
+            .await
+            .unwrap();
+        }
+        gates[0].changed.notify();
+        srv.call(None).await.unwrap();
+        assert_eq!(gates[0].checks.get(), 2);
+
+        drop(srv);
+        assert!(readiness.upgrade().is_none());
+    }
+
     /// STATEMENT: Cached aggregate readiness visits no handlers and invalidation targets one entry.
     ///
     /// HOW:
     /// - Cache many routes and a default, leaving one unavailable route uncreated.
-    /// - Verify cached handlers share the filter's callback without adding weak router captures.
     /// - Probe raw readiness through the same pipeline with both caches mutably borrowed.
     /// - Notify resource zero and another route repeatedly, checking their tags and targeted rechecks.
     /// - Invalidate the default and filter independently and verify unaffected entries stay cached.
@@ -744,7 +771,6 @@ mod tests {
         let gates: Vec<_> = (0..17).map(|_| Rc::new(Gate::default())).collect();
         gates[16].blocked.set(true);
         let router = router(filter.clone(), &gates, default.clone());
-        let captures = Rc::weak_count(&router.readiness);
         let srv = Pipeline::new((), CheckRouter(router.clone()));
         for id in 0..16 {
             srv.call(Some(
@@ -758,7 +784,6 @@ mod tests {
             .unwrap();
         srv.call(None).await.unwrap();
         assert_eq!(gates[16].checks.get(), 0);
-        assert_eq!(Rc::weak_count(&router.readiness), captures);
 
         let probe = srv.bind();
         for _ in 0..3 {

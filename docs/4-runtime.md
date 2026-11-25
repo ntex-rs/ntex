@@ -24,12 +24,12 @@ async runtime and its matching ntex network reactor:
 * `compio` creates a Compio runtime on each runtime thread. Compio chooses the
   I/O driver for the platform and configuration.
 * With neither feature, ntex uses its [native runtime](#native-runtime). On
-  Linux it tries io_uring and falls back to polling; other Unix platforms use
-  polling, and Windows uses IOCP.
+  Linux it tries io_uring, which requires Linux 6.1 or later, and falls back to
+  polling; other Unix platforms use polling, and Windows uses IOCP.
 
 Tokio takes precedence if you enable both `tokio` and `compio`. With the native
 backend, `neon-polling` forces polling on Unix. The `neon-uring` feature
-requires io_uring on Linux. Do not enable both native features.
+requires io_uring on Linux 6.1 or later. Do not enable both native features.
 
 For example:
 
@@ -42,13 +42,15 @@ Tokio and Compio are useful when your application uses libraries from those
 ecosystems. The native backend uses the platform reactor directly, without
 running a second general-purpose runtime.
 
-With io_uring, each runtime thread registers its sockets in the ring's fixed
-file table, so reads and writes skip the kernel's per-operation descriptor
-lookup. The table has 16384 slots by default, capped by the open file limit
-(`RLIMIT_NOFILE`). Each slot takes 8 to 16 bytes of kernel memory. Connections
-beyond the table size, and all connections on kernels older than 5.19, use
-plain descriptors. To change the size, set the `NTEX_URING_FIXED_FILES`
-environment variable before the first runtime starts; `0` disables the table.
+With io_uring, each runtime thread registers the sockets of longer connections
+in the ring's fixed file table, so reads and writes skip the kernel's
+per-operation descriptor lookup. A socket is registered on its 16th receive;
+shorter connections keep plain descriptors, the registration would cost them
+more than it saves. The table has 16384 slots by default, capped by the open
+file limit (`RLIMIT_NOFILE`). Each slot takes 8 to 16 bytes of kernel memory.
+Connections beyond the table size use plain descriptors. To change the size,
+set the `NTEX_URING_FIXED_FILES` environment variable before the first runtime
+starts; `0` disables the table.
 
 Let `#[ntex::main]` own the process entry point unless you need another setup.
 `SystemRunner::block_on` blocks the current thread. Do not call it inside an
