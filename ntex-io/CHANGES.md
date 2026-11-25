@@ -1,5 +1,11 @@
 # Changes
 
+## [4.9.0] - 2026-11-25
+
+* Add `Io::recv_item()`, which receives the next item with its end of stream
+  and failures reported as `RecvError`. Its result is cheaper to return than
+  that of `Io::recv()`, which helps per-item loops
+
 ## [4.8.3] - 2026-11-24
 
 * Encoding into a connection that needs no write started and stays below the
