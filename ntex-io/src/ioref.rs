@@ -164,7 +164,7 @@ impl IoRef {
 
     #[inline]
     /// Checks whether the filter chain is not ready, see
-    /// [`Filter::poll_ready`](crate::Filter::poll_ready).
+    /// [`Filter::poll_ready`].
     ///
     /// Transport reads are paused and output the chain holds does not reach
     /// the transport during the pause. It is not caused by the peer, so read
@@ -414,7 +414,10 @@ impl IoRef {
     /// The destination exposed by
     /// [`FilterBuf::with_read_buffers`](crate::FilterBuf::with_read_buffers) is
     /// the application-facing read destination, so consuming enough of it
-    /// releases read backpressure and cancels an installed read pause.
+    /// releases read backpressure, and an installed read pause is cancelled if
+    /// the destination is smaller after the access. Access that leaves it at
+    /// least as large as before, for example a filter callback that only reads
+    /// buffer sizes, keeps the pause.
     ///
     /// Buffer access is not reentrant. The closure must not use this
     /// connection to access an overlapping read or write buffer, or change the
@@ -423,10 +426,11 @@ impl IoRef {
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
     {
+        let dst_size = self.paused_read_dst_size();
         self.with_callbacks(|cb| cb.before_processing(self));
         let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
         self.with_callbacks(|cb| cb.after_processing(self));
-        self.release_read_destination();
+        self.release_read_destination(dst_size);
         self.0.sync_read_buffered();
 
         self.consolidate_write_state(false)?;
@@ -517,8 +521,12 @@ impl IoRef {
     ///
     /// Without a filter installed this is the same buffer as the
     /// application-facing destination, so consuming enough of it releases read
-    /// backpressure and cancels an installed read pause. Unlike
-    /// [`with_read_dst`](Self::with_read_dst) it never clears read readiness.
+    /// backpressure, and an installed read pause is cancelled if the buffer is
+    /// smaller after the access. Access that leaves it at least as large as
+    /// before, for example reading the buffer length, keeps the pause. With a
+    /// filter installed the source is a different buffer and the pause is
+    /// kept. Unlike [`with_read_dst`](Self::with_read_dst) it never clears
+    /// read readiness.
     ///
     /// The closure must not access this connection's transport-facing read
     /// source again. Nested access is unsupported and may terminate the
@@ -527,8 +535,9 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
+        let dst_size = self.paused_read_dst_size();
         let result = self.0.buffer.with_read_src(self, f);
-        self.release_read_destination();
+        self.release_read_destination(dst_size);
         self.0.sync_read_buffered();
         result
     }
@@ -726,7 +735,7 @@ impl IoRef {
     ///
     /// See [`release_read_destination`](Self::release_read_destination) for the
     /// variant used when the caller may have drained a different buffer of the
-    /// filter chain.
+    /// filter chain; it cancels the pause only when the destination shrank.
     #[inline]
     fn update_read_destination(&self, buf: &mut BytesMut) {
         let st = &self.0;
@@ -767,22 +776,52 @@ impl IoRef {
         }
     }
 
-    /// Releases read backpressure and any installed read pause.
+    /// Releases read backpressure and cancels an installed read pause after
+    /// the application-facing read destination was consumed.
     ///
     /// Used by the accessors that can drain the application-facing read
     /// destination without going through
-    /// [`with_read_dst`](Self::with_read_dst). Unlike
+    /// [`with_read_dst`](Self::with_read_dst). `dst_size` is the destination
+    /// size before the access, from
+    /// [`paused_read_dst_size`](Self::paused_read_dst_size). Unlike
     /// `update_read_destination()` this never clears read readiness, because
-    /// the caller may have touched a different buffer of the chain. It only
-    /// removes a stale pause, so it can never suppress a wakeup.
-    fn release_read_destination(&self) {
+    /// the caller may have touched a different buffer of the chain.
+    ///
+    /// A pause installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause)
+    /// is cancelled only if read backpressure was released or the destination
+    /// shrank. Access that consumed nothing, for example a filter callback
+    /// reading buffer sizes during a write flush, keeps the pause, so the
+    /// transport does not read input the dispatcher is not ready for.
+    #[inline]
+    fn release_read_destination(&self, dst_size: usize) {
+        if self.0.flags.is_read_paused_or_backpressure() {
+            self.release_read_destination_slow(dst_size);
+        }
+    }
+
+    /// Returns the application-facing read destination size if reads are
+    /// paused, `0` otherwise; a pause installed during the access is kept.
+    #[inline]
+    fn paused_read_dst_size(&self) -> usize {
+        if self.0.flags.is_read_paused() {
+            self.0.buffer.read_dst_size()
+        } else {
+            0
+        }
+    }
+
+    #[inline(never)]
+    fn release_read_destination_slow(&self, dst_size: usize) {
         let st = &self.0;
+        let size = st.buffer.read_dst_size();
 
         if st.flags.is_rd_backpressure() {
-            if !st.should_disable_rd_backpressure(st.buffer.read_dst_size()) {
+            if !st.should_disable_rd_backpressure(size) {
                 return;
             }
             st.unset_read_ready_and_backpressure();
+        } else if size >= dst_size {
+            return;
         }
 
         if st.flags.is_read_paused() {
@@ -865,7 +904,7 @@ impl IoRef {
         Waiter::new_static(self.clone(), TAG_DISCONNECT)
     }
 
-    /// Wakes all [`Waiter`](crate::Waiter) waiters of the tag.
+    /// Wakes all [`Waiter`] waiters of the tag.
     ///
     /// Tags reserved for internal use are ignored.
     pub fn wake(&self, tag: usize) {
@@ -874,7 +913,7 @@ impl IoRef {
         }
     }
 
-    /// Creates a [`Waiter`](crate::Waiter) for the tag.
+    /// Creates a [`Waiter`] for the tag.
     ///
     /// The waiter registers on its first poll.
     ///

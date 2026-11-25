@@ -3911,9 +3911,10 @@ async fn read_task_is_woken_after_state_is_published() {
     io.with_read_dst(|_| ());
     assert_eq!(seen.get(), Some(true), "read_dst resume");
 
+    io.with_read_src(|buf| buf.extend_from_slice(b"x"));
     io.st().flags.set_read_paused();
     let seen = wake_read_task_inline(&io, not_paused);
-    io.with_read_src(|_| ());
+    io.with_read_src(BytesMut::clear);
     assert_eq!(seen.get(), Some(true), "read_src resume");
 
     let (_client, server) = IoTest::create();
@@ -4997,6 +4998,114 @@ async fn read_dst_size_keeps_read_state() {
     assert!(io.flags().is_read_ready());
     assert_eq!(io.with_read_dst(BytesMut::take), b"data");
     assert!(!io.flags().is_read_ready());
+}
+
+/// STATEMENT: Read-source and filter-buffer access that consumes nothing keeps an installed read pause.
+///
+/// HOW:
+/// - Buffer input, pause reads, then read lengths and append through `with_read_src` and `with_buf`.
+/// - Send more bytes and verify they stay unread until consuming through `with_read_src` cancels the pause.
+#[ntex::test]
+async fn read_src_access_without_consuming_keeps_read_pause() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+
+    client.write("data");
+    assert_eq!(io.read_notify().await.unwrap(), Some(()));
+    assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+
+    assert_eq!(io.with_read_src(|buf| buf.len()), 4);
+    let len = io.with_buf(|buf| buf.with_read_buffers(|_, dst| dst.len()));
+    assert_eq!(len.unwrap(), 4);
+    io.with_read_src(|buf| buf.extend_from_slice(b"!"));
+    assert!(io.flags().is_read_paused());
+
+    // the transport does not read while paused
+    client.write("more");
+    sleep(Millis(25)).await;
+    assert_eq!(io.read_dst_size(), 5);
+    assert!(io.flags().is_read_paused());
+
+    // consuming cancels the pause
+    assert_eq!(io.with_read_src(|buf| buf.split_to(1)), b"d");
+    assert!(!io.flags().is_read_paused());
+    sleep(Millis(25)).await;
+    assert_eq!(io.with_read_dst(BytesMut::take), b"ata!more");
+}
+
+/// STATEMENT: Consuming the read destination through filter-buffer access cancels an installed read pause.
+///
+/// HOW:
+/// - Receive input through a passthrough filter, pause reads, and clear the transport-facing source.
+/// - Verify later input stays unread, then consume through `with_buf` and verify it arrives.
+#[ntex::test]
+async fn read_pause_with_filter_is_cancelled_by_consuming() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV")).add_filter(Passthrough);
+
+    client.write("data");
+    assert_eq!(io.read_notify().await.unwrap(), Some(()));
+    assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+
+    // the source is not the application-facing destination
+    io.with_read_src(BytesMut::clear);
+    io.with_buf(|_| ()).unwrap();
+    assert!(io.flags().is_read_paused());
+
+    client.write("more");
+    sleep(Millis(25)).await;
+    assert_eq!(io.read_dst_size(), 4);
+
+    let head = io.with_buf(|buf| buf.with_read_buffers(|_, dst| dst.split_to(1)));
+    assert_eq!(head.unwrap(), b"d");
+    assert!(!io.flags().is_read_paused());
+    sleep(Millis(25)).await;
+    assert_eq!(io.with_read_dst(BytesMut::take), b"atamore");
+}
+
+/// STATEMENT: Filter callbacks that read the read-source size during output processing keep an installed read pause.
+///
+/// HOW:
+/// - Register callbacks that read the read-source length, as throughput accounting does, and pause reads.
+/// - Send output so the callbacks run, then send peer input and verify it stays unread until reads resume.
+#[ntex::test]
+async fn output_callbacks_keep_read_pause() {
+    struct Cb(Rc<Cell<usize>>);
+    impl crate::IoCallbacks for Cb {
+        fn before_processing(&self, io: &IoRef) {
+            self.0.set(self.0.get() + 1);
+            io.with_read_src(|buf| buf.len());
+        }
+        fn after_processing(&self, io: &IoRef) {
+            io.with_read_src(|buf| buf.len());
+        }
+    }
+
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let calls = Rc::new(Cell::new(0));
+    io.register_filter_callbacks(Cb(calls.clone()));
+    assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+
+    io.send(Bytes::from_static(b"reply"), &BytesCodec)
+        .await
+        .unwrap();
+    io.flush(true).await.unwrap();
+    assert!(calls.get() > 0);
+    assert_eq!(client.read_any(), b"reply".as_ref());
+    assert!(io.flags().is_read_paused());
+
+    // the transport does not read while paused
+    client.write("data");
+    sleep(Millis(25)).await;
+    assert_eq!(io.read_dst_size(), 0);
+    assert!(io.flags().is_read_paused());
+
+    assert_eq!(io.read_notify().await.unwrap(), Some(()));
+    assert_eq!(io.with_read_dst(BytesMut::take), b"data");
 }
 
 struct Failing;
