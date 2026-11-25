@@ -1,10 +1,10 @@
 use std::task::{Context, Poll};
-use std::{future::poll_fn, io};
+use std::{fmt, future::Future, future::poll_fn, io, pin::Pin};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::future::Either;
 
-use crate::{Decoded, IoStatusUpdate, RecvError};
+use crate::{Base, Decoded, IoStatusUpdate, RecvError};
 
 use super::Io;
 #[cfg(doc)]
@@ -67,6 +67,33 @@ impl<F> Io<F> {
                 Err(RecvError::PeerGone(None)) => Ok(None),
             };
         }
+    }
+
+    #[inline]
+    /// Reads and decodes the next item, reporting the end of the stream and
+    /// failures as [`RecvError`].
+    ///
+    /// This behaves like [`recv`](Self::recv) with a flatter result. The
+    /// future outputs the item itself, which is cheaper to pass out of the
+    /// future than the nested result of `recv`, so it suits per-item loops.
+    ///
+    /// - `RecvError::PeerGone(None)`: the connection closed before another
+    ///   item could be decoded and nothing was left undecoded. `recv`
+    ///   returns `Ok(None)` here.
+    /// - `RecvError::PeerGone(Some(err))`: a connection error, a truncated
+    ///   stream ([`io::ErrorKind::UnexpectedEof`]), or a flush error while
+    ///   waiting out write backpressure.
+    /// - `RecvError::Decoder(err)`: a codec error.
+    /// - `RecvError::Timeout`: the dispatcher timer expired, also while
+    ///   waiting out write backpressure.
+    ///
+    /// Write backpressure is waited out as in `recv`, so
+    /// `RecvError::WriteBackpressure` is never returned.
+    pub fn recv_item<'a, U>(&'a self, codec: &'a U) -> RecvItem<'a, U, F>
+    where
+        U: Decoder,
+    {
+        RecvItem { io: self, codec }
     }
 
     /// Reads exactly enough bytes from this I/O stream to fill `dst`.
@@ -567,5 +594,59 @@ impl<F> Io<F> {
     /// Registers a dispatch task.
     pub fn register_dispatch(&self, cx: &mut Context<'_>) {
         self.st().dispatch_task.register(cx.waker());
+    }
+}
+
+/// Future returned by [`Io::recv_item`].
+#[must_use = "futures do nothing unless polled"]
+pub struct RecvItem<'a, U, F = Base> {
+    io: &'a Io<F>,
+    codec: &'a U,
+}
+
+impl<U, F> fmt::Debug for RecvItem<'_, U, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecvItem")
+            .field("io", self.io)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<U, F> Future for RecvItem<'_, U, F>
+where
+    U: Decoder,
+{
+    type Output = Result<U::Item, RecvError<U>>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.io.poll_recv(self.codec, cx) {
+            Poll::Ready(Err(RecvError::WriteBackpressure)) => match self.io.recv_flush(cx) {
+                Some(err) => Poll::Ready(Err(RecvError::PeerGone(Some(err)))),
+                None => Poll::Pending,
+            },
+            res => res,
+        }
+    }
+}
+
+impl<F> Io<F> {
+    /// Waits out write backpressure for [`RecvItem`], returning a flush error.
+    ///
+    /// Nothing is stored between polls. Each poll goes through `poll_recv`,
+    /// which reports an expired dispatcher timer before write backpressure.
+    #[cold]
+    #[inline(never)]
+    fn recv_flush(&self, cx: &mut Context<'_>) -> Option<io::Error> {
+        match self.poll_flush(cx, false) {
+            Poll::Ready(Ok(())) => {
+                // Decoding here would give `RecvItem::poll` a second decode
+                // path, so the next poll decodes instead.
+                cx.waker().wake_by_ref();
+                None
+            }
+            Poll::Ready(Err(err)) => Some(err),
+            Poll::Pending => None,
+        }
     }
 }

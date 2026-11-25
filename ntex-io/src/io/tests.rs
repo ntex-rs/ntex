@@ -4589,6 +4589,137 @@ async fn recv_reports_timeout_during_write_backpressure() {
     assert!(io.flags().is_wr_backpressure());
 }
 
+/// STATEMENT: `recv_item` outputs decoded items and reports a clean end of stream as `PeerGone(None)`.
+///
+/// HOW:
+/// - Send two four-byte items, receive both, then close the peer.
+/// - Check the items in order, then `RecvError::PeerGone(None)` where `recv` returns `Ok(None)`.
+#[ntex::test]
+async fn recv_item_reports_clean_eof_as_peer_gone() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let codec = FixedSize(4);
+
+    client.write("12345678");
+    assert_eq!(
+        io.recv_item(&codec).await.unwrap(),
+        Bytes::from_static(b"1234")
+    );
+    assert_eq!(
+        io.recv_item(&codec).await.unwrap(),
+        Bytes::from_static(b"5678")
+    );
+
+    client.close().await;
+    let res = timeout(Millis(1000), io.recv_item(&codec))
+        .await
+        .expect("recv_item did not observe the peer closing");
+    assert!(matches!(res, Err(RecvError::PeerGone(None))));
+}
+
+/// STATEMENT: `recv_item` waits out write backpressure instead of returning `WriteBackpressure`.
+///
+/// HOW:
+/// - Block writes, queue output above the watermark, and buffer one complete input item.
+/// - Poll once and check it is pending, then let the peer drain output.
+/// - Check the item arrives and write backpressure is cleared.
+#[ntex::test]
+async fn recv_item_waits_out_write_backpressure() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(0);
+    let io = Io::new(
+        server,
+        SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
+    );
+    let codec = FixedSize(4);
+    io.encode_slice(BIN2).unwrap();
+    assert!(io.flags().is_wr_backpressure());
+
+    client.write("1234");
+    sleep(Millis(25)).await;
+
+    let mut fut = io.recv_item(&codec);
+    assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+
+    client.remote_buffer_cap(1024);
+    let item = timeout(Millis(1000), fut)
+        .await
+        .expect("recv_item was not woken when output drained");
+    assert_eq!(item.unwrap(), Bytes::from_static(b"1234"));
+    assert!(!io.flags().is_wr_backpressure());
+    assert_eq!(client.read_any(), Bytes::from_static(BIN2));
+}
+
+/// STATEMENT: `recv_item` wakes itself when write backpressure is still flagged but output already drained.
+///
+/// HOW:
+/// - Enable write backpressure, then let the peer drain all output so only the flag remains.
+/// - Poll a receive with a counting waker and check it is pending, cleared the flag, and woke once.
+/// - Poll again and check the buffered item is returned.
+#[ntex::test]
+async fn recv_item_wakes_itself_after_clearing_backpressure() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(0);
+    let io = Io::new(
+        server,
+        SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
+    );
+    io.encode_slice(BIN2).unwrap();
+    client.write("1234");
+    client.remote_buffer_cap(1024);
+    sleep(Millis(25)).await;
+
+    assert_eq!(client.read_any(), Bytes::from_static(BIN2));
+    assert!(io.flags().is_wr_backpressure());
+
+    let wake = std::sync::Arc::new(WakeCounter::default());
+    let waker = Waker::from(wake.clone());
+    let mut cx = Context::from_waker(&waker);
+    let codec = FixedSize(4);
+    let mut fut = io.recv_item(&codec);
+
+    assert!(Pin::new(&mut fut).poll(&mut cx).is_pending());
+    assert!(!io.flags().is_wr_backpressure());
+    assert_eq!(wake.count(), 1);
+
+    let Poll::Ready(item) = Pin::new(&mut fut).poll(&mut cx) else {
+        panic!("the buffered item was not decoded")
+    };
+    assert_eq!(item.unwrap(), Bytes::from_static(b"1234"));
+}
+
+/// STATEMENT: `recv_item` reports a dispatcher timeout that fires while it waits out write backpressure.
+///
+/// HOW:
+/// - Block writes, queue output above the watermark, and notify timeout while receiving.
+/// - Check `RecvError::Timeout` and verify write pressure remains set.
+#[ntex::test]
+async fn recv_item_reports_timeout_during_write_backpressure() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(0);
+    let io = Io::new(
+        server,
+        SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
+    );
+    io.encode_slice(BIN2).unwrap();
+    assert!(io.flags().is_wr_backpressure());
+
+    let ioref = io.get_ref();
+    let (res, ()) = ntex_util::future::join(
+        timeout(Millis(1000), io.recv_item(&BytesCodec)),
+        async move {
+            sleep(Millis(25)).await;
+            ioref.0.notify_timeout();
+        },
+    )
+    .await;
+
+    let res = res.expect("recv_item ignored the timeout");
+    assert!(matches!(res, Err(RecvError::Timeout)));
+    assert!(io.flags().is_wr_backpressure());
+}
+
 /// STATEMENT: Write timeout fails send, flush, and producer readiness without closing the connection.
 ///
 /// HOW:

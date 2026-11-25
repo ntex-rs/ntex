@@ -19,6 +19,8 @@ use crate::{FilterLayer, Handle, IoStream};
 
 mod state;
 mod stream;
+
+pub use self::stream::RecvItem;
 #[cfg(test)]
 mod tests;
 
