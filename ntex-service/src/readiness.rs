@@ -418,11 +418,17 @@ pub(crate) struct ScopeStore {
     root_ready: Cell<bool>,
 }
 
+/// Initial scope table capacity: the root plus a few bound children, so typical
+/// pipelines do not regrow the table in `depend_on`.
+const SCOPES_CAPACITY: usize = 4;
+
 impl Default for ScopeStore {
     /// Creates root ID `0` with one owner reserved for the initial root handle.
     fn default() -> Self {
+        let mut slots = Vec::with_capacity(SCOPES_CAPACITY);
+        slots.push(Some(ScopeInner::default()));
         Self {
-            slots: RefCell::new(vec![Some(ScopeInner::default())]),
+            slots: RefCell::new(slots),
             root_ready: Cell::new(false),
         }
     }
