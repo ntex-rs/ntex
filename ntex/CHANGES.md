@@ -1,6 +1,11 @@
 # Changes
 
-## [4.10.2] - unreleased
+## [4.11.0] - 2026-11-26
+
+* http: An HTTP/1 service readiness error while no request is in progress is
+  reported to the control service as `h1::control::Reason::NotReady`.
+  Acknowledging it closes the connection without a response, so the peer no
+  longer reads an unsolicited `500`
 
 * web: The router's readiness callback no longer allocates per connection
 

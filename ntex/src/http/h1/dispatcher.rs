@@ -251,7 +251,7 @@ where
             self.release_write_timer();
             match self.service.poll_ready(cx) {
                 Poll::Ready(Ok(())) => (),
-                Poll::Ready(Err(err)) => return Poll::Ready(self.ctl_error(err)),
+                Poll::Ready(Err(err)) => return Poll::Ready(self.ctl_not_ready(err)),
                 Poll::Pending => {
                     self.timers.suspend_read(&self.io);
                     match ready!(self.io.poll_read_pause(cx)) {
@@ -1125,6 +1125,11 @@ where
         self.ctl_disconnect(Control::err(err))
     }
 
+    fn ctl_not_ready(&mut self, err: Err) -> State<F, B, Err> {
+        self.io.set_close_reason(CloseReason::Service);
+        self.ctl_disconnect(Control::not_ready(err))
+    }
+
     fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, B, Err> {
         self.io.set_close_reason(match err {
             ProtocolError::Decode(_) => CloseReason::Decoder,
@@ -1454,11 +1459,11 @@ mod tests {
         assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
     }
 
-    /// STATEMENT: HTTP/1 reports readiness failures without first receiving a request head.
+    /// STATEMENT: HTTP/1 closes the connection without a response on a readiness failure before a request head.
     ///
     /// HOW:
     /// - Fail readiness immediately or after an initial pending check, without sending a request.
-    /// - Verify the dispatcher completes with a service close reason and an HTTP `500` response.
+    /// - Verify the dispatcher completes with a service close reason, writes nothing, and closes the transport.
     /// - Assert the application handler is never called.
     #[crate::rt_test]
     async fn test_readiness_error_before_request() {
@@ -1477,7 +1482,8 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(h1.inner.io.close_reason(), Some(CloseReason::Service));
-            assert!(client.read_any().starts_with(b"HTTP/1.1 500"));
+            assert!(client.read_any().is_empty());
+            assert!(client.is_closed());
             assert_eq!(service.calls.get(), 0);
         }
     }
@@ -4807,19 +4813,35 @@ mod tests {
         S: AsyncFn(Request) -> Result<Response, io::Error> + 'static,
         C: Fn(Control<Base, io::Error>) -> Result<ControlAck<Base>, DispatchError> + 'static,
     {
-        let events = events.clone();
         let svc = Rc::new(svc);
+        ctl_h1_service(
+            server,
+            events,
+            fn_service(move |req: Request| {
+                let svc = svc.clone();
+                async move { svc(req).await }
+            }),
+            ctl,
+        )
+    }
+
+    /// Same as `ctl_h1`, with an application service.
+    fn ctl_h1_service<S, C>(
+        server: IoTest,
+        events: &Events,
+        svc: S,
+        ctl: C,
+    ) -> Dispatcher<Base, body::Body, io::Error>
+    where
+        S: Service<(), Request, Res = Response, Error = io::Error> + 'static,
+        C: Fn(Control<Base, io::Error>) -> Result<ControlAck<Base>, DispatchError> + 'static,
+    {
+        let events = events.clone();
         let ctl = Rc::new(ctl);
         Dispatcher::new(
             0,
             nio::Io::new(server, SharedCfg::default()),
-            Pipeline::new(
-                (),
-                fn_service(move |req: Request| {
-                    let svc = svc.clone();
-                    async move { svc(req).await }
-                }),
-            ),
+            Pipeline::new((), svc),
             Some(Pipeline::new(
                 (),
                 fn_service(move |msg: Control<Base, io::Error>| {
@@ -4832,6 +4854,7 @@ mod tests {
                             format!("service:{:?}", r.reason())
                         }
                         Control::Disconnect(Reason::Error(_)) => "error".to_string(),
+                        Control::Disconnect(Reason::NotReady(_)) => "not-ready".to_string(),
                         Control::Disconnect(Reason::ProtocolError(e)) => match e.get_ref() {
                             ProtocolError::ResponsePayload(_) => "response-payload".to_string(),
                             ProtocolError::Decode(_) => "decode".to_string(),
@@ -4993,6 +5016,52 @@ mod tests {
             assert!(buf.starts_with(status), "{buf:?}");
             assert_eq!(events(&ev), ["request", "error"]);
         }
+    }
+
+    /// STATEMENT: A readiness failure on an idle keep-alive connection is reported as `NotReady` and closes without a response.
+    ///
+    /// HOW:
+    /// - Serve one request, whose call invalidates readiness, and read its `200` response.
+    /// - Fail readiness while the connection waits for the next request.
+    /// - Verify the control events, no bytes after the first response, the service close reason, and the closed transport.
+    #[crate::rt_test]
+    async fn test_readiness_error_idle_keepalive() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let ev = Events::default();
+        let service = Rc::new(ReadinessService::default());
+        service.available.set(true);
+        let mut h1 = ctl_h1_service(server, &ev, service.clone(), |msg| Ok(msg.ack()));
+
+        client.write("GET / HTTP/1.1\r\nhost: a\r\n\r\n");
+        timeout(
+            Seconds(1),
+            poll_fn(|cx| {
+                assert!(Pin::new(&mut h1).poll(cx).is_pending());
+                if service.completed.get() == 1 {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        let response = timeout(Seconds(1), client.read()).await.unwrap().unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(matches!(h1.st, State::ReadRequest));
+
+        service.failed.set(true);
+        service.changed.notify();
+        timeout(Seconds(5), poll_fn(|cx| Pin::new(&mut h1).poll(cx)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(events(&ev), ["request", "not-ready"]);
+        assert_eq!(h1.inner.io.close_reason(), Some(CloseReason::Service));
+        assert!(client.read_any().is_empty());
+        assert!(client.is_closed());
+        assert_eq!(service.calls.get(), 1);
     }
 
     /// STATEMENT: Protocol-error control can replace a decode failure with a response or another error.

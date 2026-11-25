@@ -26,8 +26,11 @@ pub enum Control<F, Err> {
 pub enum Reason<Err> {
     /// The HTTP service initiated the disconnect.
     Service(ServiceDisconnect),
-    /// The application service returned an error.
+    /// The application service returned an error for a request.
     Error(Error<Err>),
+    /// The application service failed its readiness check while no request
+    /// was in progress.
+    NotReady(NotReady<Err>),
     /// HTTP/1 decoding, encoding, or timeout processing failed.
     ProtocolError(ProtocolError),
     /// The peer closed the connection or an I/O error occurred.
@@ -113,6 +116,10 @@ impl<F, Err> Control<F, Err> {
         Control::Disconnect(Reason::Error(Error::new(err)))
     }
 
+    pub(super) fn not_ready(err: Err) -> Self {
+        Control::Disconnect(Reason::NotReady(NotReady(err)))
+    }
+
     pub(super) fn peer_gone(err: Option<io::Error>) -> Self {
         Control::Disconnect(Reason::PeerGone(PeerGone(err)))
     }
@@ -166,6 +173,7 @@ impl<Err: ResponseError> Reason<Err> {
     pub fn ack<F>(self) -> ControlAck<F> {
         match self {
             Reason::Error(msg) => msg.ack(),
+            Reason::NotReady(msg) => msg.ack(),
             Reason::ProtocolError(msg) => msg.ack(),
             Reason::PeerGone(msg) => msg.ack(),
             Reason::KeepAlive(msg) => msg.ack(),
@@ -502,6 +510,35 @@ impl<Err: ResponseError> Error<Err> {
     }
 }
 
+/// An application service readiness error.
+///
+/// The service failed its readiness check while no request was in progress,
+/// so the peer has not asked for a response.
+#[derive(Debug)]
+pub struct NotReady<Err>(Err);
+
+impl<Err> NotReady<Err> {
+    #[inline]
+    /// Returns the application service error.
+    pub fn get_ref(&self) -> &Err {
+        &self.0
+    }
+
+    #[inline]
+    /// Returns mutable access to the application service error.
+    pub fn get_mut(&mut self) -> &mut Err {
+        &mut self.0
+    }
+
+    #[inline]
+    /// Closes the connection without sending a response.
+    pub fn ack<F>(self) -> ControlAck<F> {
+        ControlAck {
+            result: ControlResult::Stop,
+        }
+    }
+}
+
 /// A protocol error reported to the control service.
 #[derive(Debug)]
 pub struct ProtocolError(super::ProtocolError);
@@ -727,6 +764,8 @@ mod tests {
         assert!(s.contains("Control::Disconnect(KeepAlive("), "{s}");
         let s = format!("{:?}", Ctl::err(io::Error::other("err")));
         assert!(s.contains("Control::Disconnect(Error("), "{s}");
+        let s = format!("{:?}", Ctl::not_ready(io::Error::other("err")));
+        assert!(s.contains("Control::Disconnect(NotReady("), "{s}");
     }
 
     /// STATEMENT: Transport-bearing control messages have distinct connect and upgrade debug representations.
@@ -860,6 +899,34 @@ mod tests {
         assert!(msg.get_ref().is_none());
         assert!(msg.get_mut().is_none());
         assert!(msg.take().is_none());
+        assert!(matches!(
+            msg.ack::<crate::io::Base>().result,
+            ControlResult::Stop
+        ));
+    }
+
+    /// STATEMENT: A readiness error closes the connection without a response.
+    ///
+    /// HOW:
+    /// - Change the error through mutable access and verify `NotReady::ack` stops without a response.
+    /// - Verify `Reason::ack` for a readiness error also stops without a response.
+    #[test]
+    fn not_ready() {
+        let Control::Disconnect(Reason::NotReady(mut msg)) =
+            Ctl::not_ready(io::Error::other("err"))
+        else {
+            panic!()
+        };
+        *msg.get_mut() = io::Error::other("changed");
+        assert_eq!(msg.get_ref().to_string(), "changed");
+        assert!(matches!(
+            msg.ack::<crate::io::Base>().result,
+            ControlResult::Stop
+        ));
+
+        let Control::Disconnect(msg) = Ctl::not_ready(io::Error::other("err")) else {
+            panic!()
+        };
         assert!(matches!(
             msg.ack::<crate::io::Base>().result,
             ControlResult::Stop
