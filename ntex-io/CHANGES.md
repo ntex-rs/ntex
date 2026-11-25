@@ -1,5 +1,11 @@
 # Changes
 
+## [4.9.1] - 2026-11-26
+
+* `IoRef::with_read_src()` and `IoRef::with_buf()` keep a read pause unless the
+  access consumed buffered read data or released read back-pressure; before,
+  any access, even one that only checks the buffer length, resumed reading
+
 ## [4.9.0] - 2026-11-25
 
 * Add `Io::recv_item()`, which receives the next item with its end of stream

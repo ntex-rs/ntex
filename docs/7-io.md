@@ -625,8 +625,11 @@ reports an [`IoStatusUpdate`] value:
 
 Use [`Io::poll_read_pause`] if you also want to stop accepting transport input
 while waiting. The pause is cooperative. Decoding, accessing the application
-read buffer, or explicitly requesting more input resumes reads. Use it while
-a dispatcher waits on readiness, not to disable the read half permanently.
+read buffer through [`IoRef::with_read_dst`], consuming buffered input through
+[`IoRef::with_buf`] or [`IoRef::with_read_src`], or explicitly requesting more
+input resumes reads. Access that consumes nothing, such as reading buffer
+sizes, keeps the pause. Use it while a dispatcher waits on readiness, not to
+disable the read half permanently.
 
 A codec-driven service receives the same conditions as [`RecvError`] from
 [`Io::poll_recv`]. It also receives decoder failures. Unlike the status

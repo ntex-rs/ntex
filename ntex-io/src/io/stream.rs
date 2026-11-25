@@ -545,9 +545,12 @@ impl<F> Io<F> {
     /// touches the read buffer or asks for more input, namely
     /// [`read_more`](Self::read_more), [`poll_read_more`](Self::poll_read_more),
     /// [`IoRef::decode`], [`IoRef::decode_item`], and [`IoRef::with_read_dst`].
-    /// Releasing read backpressure cancels it as well. Because those methods
-    /// are available through every [`IoRef`] clone, the pause holds only while
-    /// no other holder touches the read buffer.
+    /// [`IoRef::with_buf`] and [`IoRef::with_read_src`] cancel it only when
+    /// the application-facing read buffer is smaller after the access; access
+    /// that consumes nothing, such as filter callbacks reading buffer sizes,
+    /// keeps it. Releasing read backpressure cancels it as well. Because those
+    /// methods are available through every [`IoRef`] clone, the pause holds
+    /// only while no other holder touches the read buffer.
     ///
     /// See [`poll_status_update`](Self::poll_status_update) for the reported
     /// updates.
