@@ -120,15 +120,24 @@ bitflags::bitflags! {
         const DROPPED_SEC  = 0b0000_1000_0000;
         /// `Close` is submitted, descriptor belongs to the kernel
         const CLOSING      = 0b0001_0000_0000;
-        /// `SendMsg` is not supported, send one page at a time
-        const NO_MSG       = 0b0010_0000_0000;
-        /// `SendMsgZc` is not supported
-        const NO_ZC_MSG    = 0b0100_0000_0000;
         /// Input is streaming, receive into the connection's read buffer
         /// instead of a provided buffer
         const RD_DIRECT    = 0b1000_0000_0000;
         /// A receive returned eof or an error, the receive queue is empty for good
-        const RD_EOF       = 0b1_0000_0000_0000;
+        const RD_EOF       = 0b01_0000_0000_0000;
+        /// A receive reported a reset or timed out connection, the socket is closed
+        const RD_RESET     = 0b10_0000_0000_0000;
+    }
+}
+
+/// Flags of a stream whose receive ended the input with `res`.
+fn eof_flags(res: &io::Result<usize>) -> Flags {
+    match res {
+        // the kernel moved the socket to `TCP_CLOSE` before reporting these
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ECONNRESET | libc::ETIMEDOUT)) => {
+            Flags::RD_EOF | Flags::RD_RESET
+        }
+        _ => Flags::RD_EOF,
     }
 }
 
@@ -147,6 +156,8 @@ const FIXED_FILES: u32 = 16 * 1024;
 /// Kernel limit of the registered file table, `IORING_MAX_FIXED_FILES`
 const FIXED_FILES_MAX: u64 = 1 << 20;
 const FIXED_FILES_VAR: &str = "NTEX_URING_FIXED_FILES";
+/// Receive of a stream that registers its socket in the file table
+const FIXED_FILES_AFTER: u8 = 16;
 
 /// Expands `$op` with `$fd` set to the stream's slot in the registered file
 /// table, or to its descriptor if it has no slot.
@@ -173,6 +184,8 @@ struct StreamItem {
     /// Generation of the slot, see `StreamId`
     generation: u32,
     flags: Flags,
+    /// Receives submitted, counted up to `FIXED_FILES_AFTER`
+    recvs: u8,
     rd_op: Option<NonZeroU32>,
     wr_op: Option<NonZeroU32>,
     ctx: IoContext,
@@ -205,8 +218,6 @@ enum Operation {
     Close {
         id: StreamId,
     },
-    /// Close of the descriptor of a stream with a slot
-    CloseFd,
     Nop,
 }
 
@@ -472,7 +483,6 @@ struct StreamOpsInner {
     api: ReactorApi,
     delayed_feed: Queue<IdType>,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
-    default_flags: Flags,
 }
 
 struct StreamOpsStorage {
@@ -492,7 +502,14 @@ struct StreamOpsStorage {
 /// reference count update the kernel does for every operation on a plain
 /// descriptor. Streams beyond the table size use their descriptor.
 ///
-/// A slot holds its own reference to the socket, the stream closes both the
+/// A stream registers its socket on its `FIXED_FILES_AFTER`th receive, with
+/// an `io_uring_register` call. The call and the extra `Close` of the slot
+/// cost more than the lookups a short connection saves, so such connections
+/// keep their descriptor. Operations submitted before the registration keep
+/// using the descriptor. A `FilesUpdate` request would save the call, but
+/// under connection churn it costs more kernel time and its completion
+/// overflows the completion queue.
+/// The slot holds its own reference to the socket, the stream closes both the
 /// slot and the descriptor. The slot is reused only after its `Close`
 /// completed, a pending close would otherwise remove the next stream's socket.
 #[derive(Debug)]
@@ -510,7 +527,7 @@ impl FixedFiles {
         if cap != 0
             && let Err(e) = api.register_files_sparse(cap)
         {
-            // kernel older than 5.19, or the table does not fit
+            // the table does not fit
             log::debug!("Cannot register io-uring file table with {cap} slots: {e:?}");
             cap = 0;
         }
@@ -542,6 +559,16 @@ impl FixedFiles {
                 self.free.push(slot);
                 self.cap = 0;
                 None
+            }
+        }
+    }
+
+    /// Counts a receive of `item`, the `FIXED_FILES_AFTER`th registers its socket.
+    fn count_recv(&mut self, api: &ReactorApi, item: &mut StreamItem) {
+        if item.recvs < FIXED_FILES_AFTER {
+            item.recvs += 1;
+            if item.recvs == FIXED_FILES_AFTER {
+                item.slot = self.register(api, item.io.as_raw_fd());
             }
         }
     }
@@ -610,22 +637,6 @@ impl StreamOps {
         Arbiter::get_value(|| {
             let mut inner = None;
             reactor.register(|api| {
-                let mut default_flags = if api.is_supported(opcode::SendZc::CODE) {
-                    Flags::empty()
-                } else {
-                    Flags::NO_ZC
-                };
-                if !api.is_supported(opcode::SendMsg::CODE) {
-                    default_flags.insert(Flags::NO_MSG);
-                }
-                if !api.is_supported(opcode::SendMsgZc::CODE) {
-                    default_flags.insert(Flags::NO_ZC_MSG);
-                }
-                assert!(
-                    api.is_supported(opcode::Close::CODE),
-                    "opcode::Close is required for io-uring support"
-                );
-
                 let mut ops = Slab::new();
                 ops.insert(Some(Operation::Nop));
                 let bufs = BufRing::new(&api);
@@ -633,7 +644,6 @@ impl StreamOps {
 
                 let ops = Rc::new(StreamOpsInner {
                     api,
-                    default_flags,
                     delayed_feed: Queue::new(),
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
@@ -657,19 +667,15 @@ impl StreamOps {
         ctx: IoContext,
         zc: bool,
     ) -> (StreamCtl, WeakStreamCtl) {
-        let flags = if zc {
-            self.0.default_flags
-        } else {
-            self.0.default_flags | Flags::NO_ZC
-        };
+        let flags = if zc { Flags::empty() } else { Flags::NO_ZC };
 
         let id = self.0.with(|st| {
-            let slot = st.files.register(&self.0.api, io.as_raw_fd());
             st.streams.insert(StreamItem {
                 io,
                 ctx,
-                slot,
+                slot: None,
                 flags,
+                recvs: 0,
                 generation: 0,
                 rd_op: None,
                 wr_op: None,
@@ -711,7 +717,7 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Nop | Operation::Close { .. } | Operation::CloseFd => {}
+                Operation::Nop | Operation::Close { .. } => {}
             });
     }
 
@@ -839,7 +845,7 @@ impl Handler for StreamOpsHandler {
                         st.streams[id].flags.insert(Flags::DROPPED_PRI);
                     }
                 }
-                Operation::CloseFd | Operation::Nop => {}
+                Operation::Nop => {}
             }
             let _ = st.ops.remove(user_data);
         });
@@ -927,6 +933,8 @@ impl StreamOpsStorage {
             && !item.flags.contains(Flags::CLOSING)
         {
             if item.rd_op.is_none() {
+                self.files.count_recv(api, item);
+
                 // an idle connection does not hold a read buffer, the ring
                 // provides one once input arrives. Input that completes a
                 // partial frame is received into its buffer without a copy
@@ -1103,14 +1111,14 @@ impl StreamOpsStorage {
             }
             ref res if is_would_block(res) => self.recv(id, true, api),
             res => {
-                item.flags.insert(Flags::RD_EOF);
+                item.flags.insert(eof_flags(&res));
                 let res = match res {
                     Ok(size) if size > 0 => Err(io::Error::other("Received data without a buffer")),
                     res => res,
                 };
                 if item.ctx.release_read_buf(BytesMut::new(), Poll::Ready(res)) == IoTaskStatus::Io
                 {
-                    self.recv(id, api.is_new(), api);
+                    self.recv(id, true, api);
                 }
             }
         }
@@ -1130,7 +1138,7 @@ impl StreamOpsStorage {
         // a socket error is reported only once queued data was read, and no
         // more data arrives after it. `ECANCELED` is routed to `canceled()`
         if matches!(res, Ok(0) | Err(_)) {
-            item.flags.insert(Flags::RD_EOF);
+            item.flags.insert(eof_flags(&res));
         }
 
         // handle IORING_CQE_F_SOCK_NONEMPTY flag, more input is queued, keep
@@ -1144,7 +1152,7 @@ impl StreamOpsStorage {
             item.flags
                 .set(Flags::RD_DIRECT, nonempty || buf.remaining_mut() == 0);
             if item.ctx.release_read_buf(buf, Poll::Ready(res)) == IoTaskStatus::Io {
-                self.recv(id, api.is_new(), api);
+                self.recv(id, true, api);
             }
         }
     }
@@ -1179,16 +1187,11 @@ impl StreamOpsStorage {
         {
             if item.wr_op.is_none() {
                 let zc = !item.flags.contains(Flags::NO_ZC);
-                let max_pages = if item.flags.contains(Flags::NO_MSG) {
-                    1
-                } else {
-                    SEND_MAX_PAGES
-                };
                 // a zero-copy send is limited to `ZC_MAX_SIZE`
                 let max_size = if zc { ZC_MAX_SIZE as usize } else { SEND_MAX_SIZE };
                 let buf = item
                     .ctx
-                    .with_write_dst(|dst| SendData::take(dst, max_pages, max_size));
+                    .with_write_dst(|dst| SendData::take(dst, SEND_MAX_PAGES, max_size));
                 let Some(buf) = buf else {
                     return;
                 };
@@ -1197,9 +1200,7 @@ impl StreamOpsStorage {
                     SendData::Page(_) => 1,
                     SendData::Pages(buf) => buf.pages().count(),
                 };
-                let use_zc = zc
-                    && (ZC_SIZE as usize..=ZC_MAX_SIZE as usize).contains(&len)
-                    && (num == 1 || !item.flags.contains(Flags::NO_ZC_MSG));
+                let use_zc = zc && (ZC_SIZE as usize..=ZC_MAX_SIZE as usize).contains(&len);
                 let zc_report = use_zc && self.zc_report;
                 let zc_flags = if zc_report { IORING_SEND_ZC_REPORT_USAGE } else { 0 };
 
@@ -1328,15 +1329,15 @@ impl StreamOpsStorage {
         let slot = item.slot;
         let op_id = self.add_operation(Operation::Close { id });
         if let Some(slot) = slot {
-            // the slot and the descriptor each hold a reference to the socket
-            let fd_op_id = self.add_operation(Operation::CloseFd);
             // SAFETY: the entries hold no pointers, the closes own the slot
             // and the descriptor
             unsafe {
                 api.submit(op_id, move |entry| {
                     opcode::Close::new(entry, Fixed(slot));
                 });
-                api.submit(fd_op_id, move |entry| {
+                // the slot and the descriptor each hold a reference to the
+                // socket, only the close of the slot frees a resource
+                api.submit_detached(move |entry| {
                     opcode::Close::new(entry, fd);
                 });
             }
@@ -1456,8 +1457,12 @@ impl StreamCtl {
                 storage.streams[self.id].ctx.tag(),
                 self.id
             );
-            let fd = storage.streams[self.id].fd().0;
             let item = &storage.streams[self.id];
+            if item.flags.contains(Flags::RD_RESET) {
+                // the socket is closed, `shutdown(2)` would only return `ENOTCONN`
+                return Ok(());
+            }
+            let fd = item.fd().0;
             let drain = item.rd_op.is_none() && !item.flags.contains(Flags::RD_EOF);
             // `shutdown(2)` is called directly: io-uring always runs its
             // `Shutdown` opcode on an io-wq worker thread, which costs a thread
@@ -1597,6 +1602,18 @@ mod tests {
         (io, ctl.take().unwrap(), peer)
     }
 
+    /// Registers a stream as `register` does and counts receives up to
+    /// `FIXED_FILES_AFTER`, so its socket gets a slot if one is free.
+    fn register_fixed(ops: &StreamOps) -> (Io, StreamCtl, UnixStream) {
+        let (io, ctl, peer) = register(ops);
+        ops.0.with(|st| {
+            for _ in 0..FIXED_FILES_AFTER {
+                st.files.count_recv(&ops.0.api, &mut st.streams[ctl.id]);
+            }
+        });
+        (io, ctl, peer)
+    }
+
     /// Returns the id of the first stored operation that matches `f`.
     fn find_op(ops: &StreamOps, f: impl Fn(&Operation) -> bool) -> Option<usize> {
         ops.0.with(|st| {
@@ -1604,6 +1621,13 @@ mod tests {
                 .iter()
                 .find_map(|(op_id, op)| op.as_ref().filter(|op| f(op)).map(|_| op_id))
         })
+    }
+
+    /// Reads `peer` with a 5 s timeout, `true` on eof.
+    fn peer_closed(peer: &mut UnixStream) -> bool {
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        std::io::Read::read(peer, &mut [0; 8]).unwrap() == 0
     }
 
     /// STATEMENT: The file table size defaults to 16384 slots, follows
@@ -1628,14 +1652,17 @@ mod tests {
     }
 
     /// STATEMENT: A stream's slot in the registered file table is reused only after
-    /// the `Close` of the slot completed, not after the close of its descriptor.
+    /// the `Close` of the slot completed, and closing the stream closes its descriptor
+    /// as well.
     ///
     /// HOW:
-    /// - Register a stream and check it got a slot.
-    /// - Drop its control and check a `Close` and a `CloseFd` were queued.
-    /// - Complete `CloseFd`, check the slot is still taken and a new stream gets
-    ///   another slot.
-    /// - Complete `Close`, check the slot is free and the next stream gets it.
+    /// - Register a stream, count its receives up to the threshold and check it got a
+    ///   slot.
+    /// - Drop its control, register another stream the same way before submitting and
+    ///   check it got another slot.
+    /// - Submit and dispatch, check the slot is free and the peer reads eof, so the
+    ///   detached close of the descriptor ran as well.
+    /// - Register a third stream the same way and check it got the slot.
     #[ntex::test]
     async fn slot_reused_after_its_close() {
         let Ok(reactor) = Reactor::new(64) else {
@@ -1646,51 +1673,37 @@ mod tests {
             // kernel without sparse file tables
             return;
         }
-        let mut handler = StreamOpsHandler {
-            inner: ops.0.clone(),
-        };
 
-        let (io, ctl, _peer) = register(&ops);
+        let (io, ctl, mut peer) = register_fixed(&ops);
         let id = ctl.id;
-        let (fd, slot) = ops
-            .0
-            .with(|st| (st.streams[id].fd().0, st.streams[id].slot));
-        let slot = slot.unwrap();
+        let slot = ops.0.with(|st| st.streams[id].slot).unwrap();
 
         drop(ctl);
-        let close_op = find_op(&ops, |op| matches!(op, Operation::Close { .. })).unwrap();
-        let close_fd_op = find_op(&ops, |op| matches!(op, Operation::CloseFd)).unwrap();
-
-        handler.completed(close_fd_op, 0, Ok(0));
-        assert!(
-            ops.0
-                .with(|st| st.streams[id].slot == Some(slot) && st.files.free.is_empty())
-        );
-        let (_io2, ctl2, _peer2) = register(&ops);
+        let (_io2, ctl2, _peer2) = register_fixed(&ops);
         let other = ops.0.with(|st| st.streams[ctl2.id].slot);
         assert!(other.is_some_and(|other| other != slot));
 
-        handler.completed(close_op, 0, Ok(0));
+        reactor.submit_and_dispatch();
         assert!(
             ops.0
                 .with(|st| st.streams[id].slot.is_none() && st.files.free == [slot])
         );
+        assert!(peer_closed(&mut peer));
         drop(io);
-        handler.tick();
-        // SAFETY: `Close` was never submitted, so `fd` is still open and nothing else owns it.
-        unsafe { libc::close(fd) };
 
-        let (_io3, ctl3, _peer3) = register(&ops);
+        let (_io3, ctl3, _peer3) = register_fixed(&ops);
         assert_eq!(ops.0.with(|st| st.streams[ctl3.id].slot), Some(slot));
     }
 
-    /// STATEMENT: A stream registered while the file table is full uses its descriptor
-    /// and is closed by a single `Close`.
+    /// STATEMENT: A stream reaching the receive threshold while the file table is full
+    /// keeps its descriptor and is closed by a single `Close`.
     ///
     /// HOW:
-    /// - Register a stream, then shrink the table to the slots handed out.
-    /// - Register another stream and check it has no slot.
-    /// - Drop its control, check a `Close` was queued for it and no `CloseFd`.
+    /// - Register a stream with a slot, then shrink the table to the slots handed out.
+    /// - Register another stream, count its receives up to the threshold and check it
+    ///   has no slot.
+    /// - Drop its control and check a `Close` was queued for it.
+    /// - Submit and dispatch, check nothing is in flight and the peer reads eof.
     #[ntex::test]
     async fn full_table_falls_back_to_descriptor() {
         let Ok(reactor) = Reactor::new(64) else {
@@ -1702,9 +1715,9 @@ mod tests {
             return;
         }
 
-        let (_io, _ctl, _peer) = register(&ops);
+        let (_io, _ctl, _peer) = register_fixed(&ops);
         ops.0.with(|st| st.files.cap = st.files.next);
-        let (_io2, ctl2, _peer2) = register(&ops);
+        let (_io2, ctl2, mut peer2) = register_fixed(&ops);
         let id = ctl2.id;
         assert!(ops.0.with(|st| st.streams[id].slot.is_none()));
 
@@ -1716,14 +1729,17 @@ mod tests {
             )
             .is_some()
         );
-        assert!(find_op(&ops, |op| matches!(op, Operation::CloseFd)).is_none());
+        reactor.submit_and_dispatch();
+        assert_eq!(ops.0.with(|st| st.ops.len()), 1);
+        assert!(peer_closed(&mut peer2));
     }
 
     /// STATEMENT: Cleanup at runtime stop closes a socket of a live stream even though
     /// its slot in the file table holds a reference to it.
     ///
     /// HOW:
-    /// - Register a stream and check it got a slot.
+    /// - Register a stream, count its receives up to the threshold and check it got a
+    ///   slot.
     /// - Run the handler cleanup while the stream is alive.
     /// - Read the peer with a 5 s timeout and expect eof.
     #[ntex::test]
@@ -1740,14 +1756,54 @@ mod tests {
             inner: ops.0.clone(),
         };
 
-        let (_io, ctl, mut peer) = register(&ops);
+        let (_io, ctl, mut peer) = register_fixed(&ops);
         assert!(ops.0.with(|st| st.streams[ctl.id].slot.is_some()));
         handler.cleanup();
 
-        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
-        let mut buf = [0u8; 8];
-        assert_eq!(std::io::Read::read(&mut peer, &mut buf).unwrap(), 0);
+        assert!(peer_closed(&mut peer));
+    }
+
+    /// STATEMENT: A stream reads through its descriptor until its `FIXED_FILES_AFTER`th
+    /// receive, which registers the socket in the file table and reads through the
+    /// slot.
+    ///
+    /// HOW:
+    /// - Register a stream over a socket pair and resume reading.
+    /// - Before each receive below the threshold, check the stream has no slot, then
+    ///   write one byte from the peer and dispatch until the `Io` holds it, which
+    ///   submits the next receive.
+    /// - Check the stream has a slot now, write one more byte and check the `Io`
+    ///   receives it through the slot.
+    #[ntex::test]
+    async fn socket_registered_on_threshold_receive() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        if ops.0.with(|st| st.files.cap) == 0 {
+            // kernel without sparse file tables
+            return;
+        }
+        let receive = |peer: &mut UnixStream, io: &Io, len: usize| {
+            std::io::Write::write_all(peer, b"x").unwrap();
+            for _ in 0..500 {
+                reactor.submit_and_dispatch();
+                if io.read_dst_size() == len {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("byte {len} was not received");
+        };
+
+        let (io, ctl, mut peer) = register(&ops);
+        ctl.resume_read();
+        for len in 1..usize::from(FIXED_FILES_AFTER) {
+            assert!(ops.0.with(|st| st.streams[ctl.id].slot.is_none()));
+            receive(&mut peer, &io, len);
+        }
+        assert!(ops.0.with(|st| st.streams[ctl.id].slot.is_some()));
+        receive(&mut peer, &io, usize::from(FIXED_FILES_AFTER));
     }
 
     /// STATEMENT: A completion that arrives after its stream was removed does not reach
@@ -1844,6 +1900,47 @@ mod tests {
             let res = unsafe { libc::ioctl(fd, libc::FIONREAD, &raw mut queued) };
             assert_eq!(res, 0);
             assert_eq!(queued, 4);
+        }
+    }
+
+    /// STATEMENT: A graceful shutdown after a receive reported a reset or timed out
+    /// connection skips `shutdown(2)`, a shutdown after eof still calls it.
+    ///
+    /// HOW:
+    /// - For eof, `ECONNRESET` and `ETIMEDOUT`: register a stream over a connected
+    ///   socket pair and complete its receive with that result.
+    /// - Shut the stream down while it is still registered, so no `Close` runs.
+    /// - Read from the peer without blocking: after eof `shutdown(2)` makes it see
+    ///   eof, after a reset or a timeout nothing arrives.
+    #[ntex::test]
+    async fn shutdown_after_reset_skips_shutdown() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        let mut handler = StreamOpsHandler {
+            inner: ops.0.clone(),
+        };
+
+        for (res, shut) in [
+            (Ok(0), true),
+            (Err(libc::ECONNRESET), false),
+            (Err(libc::ETIMEDOUT), false),
+        ] {
+            let (_io, ctl, mut peer) = register(&ops);
+            ctl.resume_read();
+            let rd_op = ops.0.with(|st| st.streams[ctl.id].rd_op.unwrap());
+            let res = res.map_err(io::Error::from_raw_os_error);
+            handler.completed(rd_op.get() as usize, 0, res);
+            ctl.shutdown(false).unwrap();
+
+            peer.set_nonblocking(true).unwrap();
+            let res = std::io::Read::read(&mut peer, &mut [0; 8]);
+            if shut {
+                assert_eq!(res.unwrap(), 0);
+            } else {
+                assert_eq!(res.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+            }
         }
     }
 

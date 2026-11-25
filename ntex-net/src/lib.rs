@@ -12,10 +12,11 @@
 //! - `tokio` enables the Tokio reactor.
 //! - `compio` enables the Compio reactor.
 //! - `neon-polling` requires the native `polling` reactor on Unix.
-//! - `neon-uring` requires the native `io-uring` reactor on Linux.
+//! - `neon-uring` requires the native `io-uring` reactor on Linux 6.1 or later.
 //!
 //! Without an explicit runtime feature, Linux tries `io-uring` and falls back to
-//! `polling`; other Unix platforms use polling and Windows always uses `IOCP`.
+//! `polling` on older kernels; other Unix platforms use polling and Windows
+//! always uses `IOCP`.
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::clone_on_copy,
@@ -26,7 +27,7 @@
     clippy::missing_panics_doc,
     clippy::unused_async_trait_impl
 )]
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{any::Any, fmt, future::poll_fn, io, net, net::SocketAddr, panic};
 
 use ntex_io::Io;
@@ -98,10 +99,11 @@ pub trait Reactor: Driver {
 
 /// Reactor specific part of a [`Listener`].
 pub(crate) trait ListenerOps {
+    /// Returns the peer address only if accepting reported it.
     fn poll_accept(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<io::Result<(net::TcpStream, SocketAddr)>>;
+    ) -> Poll<io::Result<(net::TcpStream, Option<SocketAddr>)>>;
 
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
@@ -128,7 +130,7 @@ impl Listener {
     /// Dropping the returned future before it completes does not lose a
     /// connection, the next call returns it.
     pub async fn accept(&mut self) -> io::Result<(net::TcpStream, SocketAddr)> {
-        poll_fn(|cx| self.0.poll_accept(cx)).await
+        poll_fn(|cx| self.poll_accept(cx)).await
     }
 
     /// Polls for a new incoming connection.
@@ -141,7 +143,29 @@ impl Listener {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<(net::TcpStream, SocketAddr)>> {
-        self.0.poll_accept(cx)
+        let (stream, addr) = ready!(self.0.poll_accept(cx))?;
+        let addr = match addr {
+            Some(addr) => addr,
+            None => stream.peer_addr().map_err(|err| {
+                if err.kind() == io::ErrorKind::NotConnected {
+                    // the peer reset the connection before it was accepted
+                    io::ErrorKind::ConnectionAborted.into()
+                } else {
+                    err
+                }
+            })?,
+        };
+        Poll::Ready(Ok((stream, addr)))
+    }
+
+    /// Polls for a new incoming connection without its peer address.
+    ///
+    /// Same as [`poll_accept`](Self::poll_accept), but the io-uring reactor
+    /// skips the `getpeername` call it needs for the address. A connection
+    /// that the peer reset before it was accepted may be returned, reading
+    /// from it reports the error.
+    pub fn poll_accept_stream(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<net::TcpStream>> {
+        self.0.poll_accept(cx).map_ok(|(stream, _)| stream)
     }
 
     /// Returns the local address the listener is bound to.
@@ -362,15 +386,17 @@ impl Runner for DefaultRuntime {
             #[cfg(all(not(feature = "neon-uring"), not(feature = "neon-polling")))]
             {
                 #[cfg(target_os = "linux")]
-                let driver: Box<dyn Reactor> = if let Ok(reactor) =
-                    crate::uring::Reactor::new(crate::uring::Reactor::DEFAULT_ENTRIES)
-                {
-                    Box::new(reactor)
-                } else {
-                    Box::new(
-                        crate::polling::Reactor::new().expect("Cannot construct io-uring reactor"),
-                    )
-                };
+                let driver: Box<dyn Reactor> =
+                    match crate::uring::Reactor::new(crate::uring::Reactor::DEFAULT_ENTRIES) {
+                        Ok(reactor) => Box::new(reactor),
+                        Err(e) => {
+                            log::info!("io-uring driver is not available, using polling: {e}");
+                            Box::new(
+                                crate::polling::Reactor::new()
+                                    .expect("Cannot construct polling reactor"),
+                            )
+                        }
+                    };
 
                 #[cfg(not(target_os = "linux"))]
                 let driver: Box<dyn Reactor> = Box::new(

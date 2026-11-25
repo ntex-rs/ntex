@@ -36,8 +36,8 @@ pub(super) struct BufRing {
 }
 
 impl BufRing {
-    /// Registers a ring of read pages, returns `None` if provided buffer
-    /// rings are not supported.
+    /// Registers a ring of read pages, returns `None` if the ring cannot be
+    /// registered.
     pub(super) fn new(api: &ReactorApi) -> Option<Self> {
         Self::with_size(api, ENTRIES, PAGE_SIZE)
     }
@@ -70,7 +70,7 @@ impl BufRing {
 
         // SAFETY: the ring memory is freed only after it is unregistered
         if let Err(e) = unsafe { api.register_buf_ring(ring.as_ptr() as u64, entries, this.bgid) } {
-            log::debug!("Provided buffer rings are not supported: {e:?}");
+            log::debug!("Cannot register provided buffer ring: {e:?}");
             return None;
         }
         this.registered = true;

@@ -10,8 +10,8 @@ use std::os::unix::net::UnixStream as OsUnixStream;
 
 use ntex_io::Io;
 use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
-use ntex_io_uring::opcode::{AsyncCancel, AsyncCancel2};
-use ntex_io_uring::squeue::{Entry as SEntry, PushError, SubmissionQueue};
+use ntex_io_uring::opcode::{self, AsyncCancel};
+use ntex_io_uring::squeue::{self, Entry as SEntry, PushError, SubmissionQueue};
 use ntex_io_uring::types::{CancelBuilder, SubmitArgs, Timespec};
 use ntex_io_uring::{EnterFlags, IoUring, Probe, Submitter};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime};
@@ -66,10 +66,13 @@ pub struct ReactorApi {
 
 impl ReactorApi {
     #[inline]
-    /// Check if the ring was set up with `IORING_SETUP_SINGLE_ISSUER`, so the
-    /// kernel is 6.0 or greater and supports `IORING_RECVSEND_POLL_FIRST` (5.19)
+    #[deprecated(
+        since = "4.13.1",
+        note = "the driver requires Linux 6.1, always `true`"
+    )]
+    /// Check if the kernel is 6.0 or greater, always `true`.
     pub fn is_new(&self) -> bool {
-        self.inner.flags.get().contains(Flags::NEW)
+        true
     }
 
     fn submit_inner<F>(&self, f: F)
@@ -101,6 +104,30 @@ impl ReactorApi {
         self.submit_inner(|en| {
             f(en);
             en.set_user_data(u64::from(id) | self.batch);
+        });
+    }
+
+    #[inline]
+    /// Submit request to the driver without delivering its completion.
+    ///
+    /// For requests whose result is not needed, the `Close` of a descriptor
+    /// that nothing else uses for example. A successful request posts no
+    /// completion, a failure is ignored.
+    ///
+    /// # Safety
+    ///
+    /// The entry must not refer to memory, nothing tells when the kernel is
+    /// done with the request. A file descriptor or slot it refers to must
+    /// stay valid until the request is issued, with the next submit of the
+    /// reactor. See [`submit`](Self::submit) for the restrictions of `f`.
+    pub unsafe fn submit_detached<F>(&self, f: F)
+    where
+        F: FnOnce(&mut SEntry),
+    {
+        self.submit_inner(|en| {
+            f(en);
+            en.set_flags(squeue::Flags::SKIP_SUCCESS);
+            en.set_user_data(Reactor::CANCEL);
         });
     }
 
@@ -149,7 +176,7 @@ impl ReactorApi {
         self.inner.ring.submitter().unregister_buf_ring(bgid)
     }
 
-    /// Registers an empty file table with `nr` slots, kernel 5.19 or greater.
+    /// Registers an empty file table with `nr` slots.
     ///
     /// The ring has one table, it is released with the ring.
     pub fn register_files_sparse(&self, nr: u32) -> io::Result<()> {
@@ -231,17 +258,38 @@ impl Drop for TakenHandlers<'_> {
     }
 }
 
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    struct Flags: u8 {
-        /// Ring set up with `IORING_SETUP_SINGLE_ISSUER`, kernel 6.0 or greater
-        const NEW      = 0b0000_0001;
-    }
+/// Opcodes the driver issues, all available since 6.1
+const REQUIRED_OPCODES: [(u8, &str); 11] = [
+    (opcode::Accept::CODE, "Accept"),
+    (opcode::AsyncCancel::CODE, "AsyncCancel"),
+    (opcode::Close::CODE, "Close"),
+    (opcode::Connect::CODE, "Connect"),
+    (opcode::PollAdd::CODE, "PollAdd"),
+    (opcode::Read::CODE, "Read"),
+    (opcode::Recv::CODE, "Recv"),
+    (opcode::Send::CODE, "Send"),
+    (opcode::SendMsg::CODE, "SendMsg"),
+    (opcode::SendMsgZc::CODE, "SendMsgZc"),
+    (opcode::SendZc::CODE, "SendZc"),
+];
+
+/// Name of the first required opcode the kernel does not support.
+fn missing_opcode(probe: &Probe) -> Option<&'static str> {
+    REQUIRED_OPCODES
+        .iter()
+        .find(|(code, _)| !probe.is_supported(*code))
+        .map(|(_, name)| *name)
+}
+
+fn unsupported(what: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!("io-uring driver requires Linux 6.1+ ({what})"),
+    )
 }
 
 struct ReactorInner {
     probe: Probe,
-    flags: Cell<Flags>,
     ring: IoUring<SEntry, CEntry>,
     changes: UnsafeCell<VecDeque<mem::MaybeUninit<SEntry>>>,
     notify_read: NotifierRead,
@@ -303,6 +351,7 @@ impl Drop for ReactorInner {
 
 impl Reactor {
     const NOTIFY: u64 = notifier::NOTIFY;
+    /// User data of cancel and detached requests, their completions are ignored
     const CANCEL: u64 = u64::MAX - 1;
     const BATCH: u64 = 48;
     const BATCH_MASK: u64 = 0xFFFF_0000_0000_0000;
@@ -322,6 +371,10 @@ impl Reactor {
     pub(crate) const DEFAULT_ENTRIES: u32 = 256;
 
     /// Create io-uring driver
+    ///
+    /// Fails with [`io::ErrorKind::Unsupported`] on kernels older than 6.1,
+    /// detected by the ring setup flags, features and opcodes the kernel
+    /// supports.
     pub fn new(capacity: u32) -> io::Result<Self> {
         let build = |no_sqarray: bool| {
             let mut builder = IoUring::builder();
@@ -337,36 +390,45 @@ impl Reactor {
         };
 
         // Create ring
-        let (new, ring) = if let Ok(ring) = build(true) {
+        let ring = if let Ok(ring) = build(true) {
             log::info!(
                 "New io-uring driver with single-issuer, coop-taskrun, defer-taskrun, no-sqarray"
             );
-            (true, ring)
-        } else if let Ok(ring) = build(false) {
-            log::info!("New io-uring driver with single-issuer, coop-taskrun, defer-taskrun");
-            (true, ring)
-        } else if let Ok(ring) = IoUring::builder().setup_single_issuer().build(capacity) {
-            log::info!("New io-uring driver with single-issuer");
-            (true, ring)
+            ring
         } else {
-            let ring = IoUring::builder().build(capacity)?;
-            log::info!("New io-uring driver");
-            (false, ring)
+            match build(false) {
+                Ok(ring) => {
+                    log::info!(
+                        "New io-uring driver with single-issuer, coop-taskrun, defer-taskrun"
+                    );
+                    ring
+                }
+                // unknown setup flags, `IORING_SETUP_DEFER_TASKRUN` is available since 6.1
+                Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+                    return Err(unsupported("IORING_SETUP_DEFER_TASKRUN"));
+                }
+                Err(e) => return Err(e),
+            }
         };
 
-        // runtime timers bound the wait, available since 5.11
-        if !ring.params().is_feature_ext_arg() {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "io-uring driver requires Linux 5.11+ (IORING_FEAT_EXT_ARG)",
-            ));
+        // implied by the setup flags, checked for kernels with backported features
+        let params = ring.params();
+        if !params.is_feature_ext_arg() {
+            return Err(unsupported("IORING_FEAT_EXT_ARG"));
+        }
+        if !params.is_feature_skip_cqe_on_success() {
+            return Err(unsupported("IORING_FEAT_CQE_SKIP"));
         }
 
         let mut probe = Probe::new();
         ring.submitter().register_probe(&mut probe)?;
+        if let Some(name) = missing_opcode(&probe) {
+            return Err(unsupported(name));
+        }
 
-        // Avoid the per-call ring fd lookup in io_uring_enter, available since 5.18.
-        // The registration is per-thread, the reactor is created and driven on the same thread.
+        // Avoid the per-call ring fd lookup in io_uring_enter. The
+        // registration is per-thread, the reactor is created and driven on
+        // the same thread.
         if let Err(e) = ring.submitter().register_ring_fd() {
             log::debug!("Cannot register io-uring ring fd: {e}");
         }
@@ -375,7 +437,6 @@ impl Reactor {
         let inner = Rc::new(ReactorInner {
             ring,
             probe,
-            flags: Cell::new(if new { Flags::NEW } else { Flags::empty() }),
             changes: UnsafeCell::new(VecDeque::with_capacity(32)),
             notify_read: NotifierRead::new(),
             #[cfg(debug_assertions)]
@@ -488,13 +549,6 @@ impl Reactor {
         self.inner.notify_read.canceled(ring, &canceled);
         if let Err(e) = canceled {
             log::error!("Cannot cancel in-flight operations: {e:?}");
-            if e.raw_os_error() == Some(libc::EINVAL) {
-                // sync cancel is available since 6.0, cancel of any request since 5.19
-                self.inner.push(|en| {
-                    AsyncCancel2::new(en, CancelBuilder::any()).user_data(Self::CANCEL);
-                });
-                self.flush(sq, submitter);
-            }
         }
 
         let Some(handlers) = self.handlers.take() else {
@@ -628,6 +682,26 @@ fn submit_getevents(
     res
 }
 
+#[cfg(test)]
+impl Reactor {
+    /// Submits the queued entries and passes the posted completions to the
+    /// handlers, without a runtime and without arming the notifier.
+    pub(crate) fn submit_and_dispatch(&self) {
+        let ring = &self.inner.ring;
+        // SAFETY: No other borrow of the change queue is live.
+        assert!(unsafe { (*self.inner.changes.get()).is_empty() });
+        // SAFETY: The caller drives the reactor, it is the only completion consumer.
+        let mut cq = unsafe { ring.completion_shared() };
+        cq.sync();
+        submit_getevents(ring.submission(), &ring.submitter()).unwrap();
+        cq.sync();
+        while self.poll_completions(&mut cq) {
+            cq.sync();
+        }
+        cq.sync();
+    }
+}
+
 impl AsRawFd for Reactor {
     fn as_raw_fd(&self) -> RawFd {
         self.fd
@@ -679,11 +753,11 @@ impl crate::Reactor for Reactor {
     }
 
     fn tcp_listener(&self, sock: net::TcpListener) -> io::Result<crate::Listener> {
-        super::accept::AcceptOps::get(self).listener(sock)
+        Ok(super::accept::AcceptOps::get(self).listener(sock))
     }
 
     fn is_tcp_listener_supported(&self) -> bool {
-        super::accept::AcceptOps::get(self).is_supported()
+        true
     }
 }
 
@@ -814,7 +888,7 @@ mod tests {
     use std::sync::Arc;
     use std::task::{Poll, Waker};
 
-    use ntex_io_uring::opcode::{Nop, Read};
+    use ntex_io_uring::opcode::{Close, Nop, Read};
     use ntex_io_uring::types::Fd;
     use ntex_rt::syscall;
 
@@ -1017,6 +1091,57 @@ mod tests {
         let polls = |n| seen.iter().find(|(c, _)| *c == n).map(|(_, p)| *p);
         assert!(polls(chunk).is_some(), "{seen:?}");
         assert_eq!(polls(chunk), polls(2 * chunk), "{seen:?}");
+    }
+
+    /// STATEMENT: A detached request posts no completion when it succeeds, a failed one
+    /// posts a completion with the user data the reactor ignores.
+    ///
+    /// HOW:
+    /// - Submit a detached `Nop` and a detached `Close` of an invalid descriptor.
+    /// - Submit and wait for one completion; expect only the `EBADF` of the close, with
+    ///   `Reactor::CANCEL` as user data.
+    #[test]
+    fn detached_request_posts_only_failures() {
+        struct Noop;
+        impl Handler for Noop {
+            fn completed(&mut self, _: usize, _: u32, _: io::Result<usize>) {}
+            fn canceled(&mut self, _: usize) {}
+            fn tick(&mut self) {}
+            fn cleanup(&mut self) {}
+        }
+
+        let Ok(reactor) = Reactor::new(8) else {
+            return;
+        };
+        reactor.register(|api| {
+            // SAFETY: The entries reference no memory, `-1` is not a descriptor.
+            unsafe {
+                api.submit_detached(|en| {
+                    Nop::new(en);
+                });
+                api.submit_detached(|en| {
+                    Close::new(en, Fd(-1));
+                });
+            }
+            Box::new(Noop)
+        });
+        let ring = &reactor.inner.ring;
+        ring.submitter().submit_and_wait(1).unwrap();
+        // SAFETY: The test is the only consumer of the completion queue.
+        let mut cq = unsafe { ring.completion_shared() };
+        cq.sync();
+        let entries: Vec<_> = (&mut cq).map(|e| (e.user_data(), e.result())).collect();
+        assert_eq!(entries, [(Reactor::CANCEL, -libc::EBADF)]);
+    }
+
+    /// STATEMENT: A kernel that lacks an opcode the driver issues is rejected.
+    ///
+    /// HOW:
+    /// - Check an empty `Probe`, a kernel that supports no opcode, names the
+    ///   first required opcode as missing.
+    #[test]
+    fn kernel_without_required_opcode_is_rejected() {
+        assert_eq!(missing_opcode(&Probe::new()), Some("Accept"));
     }
 
     /// STATEMENT: In debug builds, a `submit` or `cancel` from a `submit` callback panics

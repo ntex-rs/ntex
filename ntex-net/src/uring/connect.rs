@@ -32,11 +32,6 @@ impl ConnectOps {
         Arbiter::get_value(move || {
             let mut inner = None;
             reactor.register(|api| {
-                assert!(
-                    api.is_supported(opcode::Connect::CODE),
-                    "opcode::Connect is required for io-uring support"
-                );
-
                 let ops = Rc::new(ConnectOpsInner {
                     api,
                     streams,
