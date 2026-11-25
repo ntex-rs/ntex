@@ -25,10 +25,11 @@ Tokio-based libraries. You still start the application with `#[ntex::main]`,
 not `#[tokio::main]`, because ntex sets up its own runtime context too.
 
 An explicit runtime feature is not required. Without one, ntex uses its
-native runtime: Linux tries `io-uring` and falls back to polling, other Unix
-systems use polling, and Windows uses IOCP. To choose another backend,
-replace `tokio` with `compio`, `neon-polling` (native polling on Unix), or
-`neon-uring` (native `io-uring` on Linux, without the polling fallback).
+native runtime: Linux tries `io-uring`, which requires Linux 6.1 or later, and
+falls back to polling, other Unix systems use polling, and Windows uses IOCP.
+To choose another backend, replace `tokio` with `compio`, `neon-polling`
+(native polling on Unix), or `neon-uring` (native `io-uring` on Linux, without
+the polling fallback).
 Choose one rather than combining runtime features. See
 [Runtime](./4-runtime.md) for the runtime model.
 

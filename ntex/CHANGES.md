@@ -1,5 +1,9 @@
 # Changes
 
+## [4.10.2] - unreleased
+
+* web: The router's readiness callback no longer allocates per connection
+
 ## [4.10.1] - 2026-11-24
 
 * http: Dropping a request or response head while the thread's message pool is

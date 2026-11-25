@@ -466,6 +466,10 @@ pipeline.on_notify(&callback);
 pipeline.bind().on_notify(&callback); // Same scope and identity: one registration.
 ```
 
+A service that already keeps its state in an `Rc` can implement `ReadyHandler`
+for that state and register `ReadyCallback::from_rc(state.clone())`, which does
+not allocate. The state must not retain the callback, or it is never dropped.
+
 The callback runs synchronously when `ReadyNotifier::notify()` reaches its
 scope, including notifications propagated from child scopes and repeated
 notifications while the scope is already invalid. It does not run for

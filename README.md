@@ -55,7 +55,8 @@ async fn main() -> std::io::Result<()> {
 Without an explicit runtime feature, ntex uses its native single-threaded
 runtime and automatically selects a platform I/O reactor:
 
-- Linux tries `io_uring` and falls back to polling.
+- Linux tries `io_uring`, which requires Linux 6.1 or later, and falls back to
+  polling.
 - Other Unix platforms use polling.
 - Windows uses IOCP.
 
@@ -66,7 +67,7 @@ Alternative runtimes and native reactors can be selected with Cargo features:
 | `tokio` | Tokio local runtime and I/O driver |
 | `compio` | Compio runtime and completion-based I/O |
 | `neon-polling` | Native runtime with the polling reactor on Unix |
-| `neon-uring` | Native runtime with `io_uring` on Linux |
+| `neon-uring` | Native runtime with `io_uring` on Linux 6.1 or later |
 
 Enable at most one runtime or native-reactor selection feature. For example:
 
