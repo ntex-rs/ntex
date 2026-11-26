@@ -218,15 +218,18 @@ impl<T: Into<String>> From<(CloseCode, T)> for CloseReason {
     }
 }
 
-// SHA-1 hashing algorithm initial hash values.
+// SHA-1 initial hash values and round constants.
 const H0: u32 = 0x6745_2301;
 const H1: u32 = 0xEFCD_AB89;
 const H2: u32 = 0x98BA_DCFE;
 const H3: u32 = 0x1032_5476;
 const H4: u32 = 0xC3D2_E1F0;
+const K0: u32 = 0x5A82_7999;
+const K1: u32 = 0x6ED9_EBA1;
+const K2: u32 = 0x8F1B_BCDC;
+const K3: u32 = 0xCA62_C1D6;
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-#[allow(clippy::many_single_char_names)]
 /// Computes the `Sec-WebSocket-Accept` value for a client handshake key.
 ///
 /// # Errors
@@ -237,90 +240,101 @@ pub fn hash_key(key: &[u8]) -> Result<String, HandshakeError> {
     if key.len() > 32 {
         return Err(HandshakeError::BadWebsocketKey);
     }
-    let mut input = [0; 192];
-    let klen = key.len();
-    let len = klen + 36;
-    input[..klen].copy_from_slice(key);
-    input[klen..len].copy_from_slice(WS_GUID.as_bytes());
+    // The key and GUID take at most 68 bytes, so the padded message
+    // is one or two 64-byte blocks.
+    let mut input = [0u8; 128];
+    let len = key.len() + WS_GUID.len();
+    input[..key.len()].copy_from_slice(key);
+    input[key.len()..len].copy_from_slice(WS_GUID.as_bytes());
+    input[len] = 0x80;
+    let total = if len + 9 <= 64 { 64 } else { 128 };
+    input[total - 8..total].copy_from_slice(&(len as u64 * 8).to_be_bytes());
 
-    // Initialize variables to the SHA-1's initial hash values.
-    let (mut h0, mut h1, mut h2, mut h3, mut h4) = (H0, H1, H2, H3, H4);
-    let (mut a, mut b, mut c, mut d, mut e);
-
-    // Pad the key
-    let msg = pad_message(len, &mut input);
-
-    // Process each 512-bit chunk of the padded message.
-    for chunk in msg.chunks(64) {
-        // Get the message schedule
-        let mut schedule = [0u32; 80];
-        for (i, block) in chunk.chunks(4).enumerate() {
-            schedule[i] = u32::from_be_bytes(block.try_into().unwrap());
-        }
-        for i in 16..80 {
-            schedule[i] = schedule[i - 3] ^ schedule[i - 8] ^ schedule[i - 14] ^ schedule[i - 16];
-            schedule[i] = schedule[i].rotate_left(1);
-        }
-
-        a = h0;
-        b = h1;
-        c = h2;
-        d = h3;
-        e = h4;
-
-        // Main loop of the SHA-1 algorithm
-        for (i, sch) in schedule.iter().enumerate() {
-            let (f, k) = match i {
-                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
-                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
-                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
-                _ => (b ^ c ^ d, 0xCA62_C1D6),
-            };
-
-            let temp = a
-                .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
-                .wrapping_add(k)
-                .wrapping_add(*sch);
-            e = d;
-            d = c;
-            c = b.rotate_left(30);
-            b = a;
-            a = temp;
-        }
-
-        // Add the compressed chunk to the current hash value.
-        h0 = h0.wrapping_add(a);
-        h1 = h1.wrapping_add(b);
-        h2 = h2.wrapping_add(c);
-        h3 = h3.wrapping_add(d);
-        h4 = h4.wrapping_add(e);
+    let mut h = [H0, H1, H2, H3, H4];
+    for block in input[..total].as_chunks::<64>().0 {
+        sha1_compress(&mut h, block);
     }
 
     let mut hash = [0u8; 20];
-    hash[0..4].copy_from_slice(&h0.to_be_bytes());
-    hash[4..8].copy_from_slice(&h1.to_be_bytes());
-    hash[8..12].copy_from_slice(&h2.to_be_bytes());
-    hash[12..16].copy_from_slice(&h3.to_be_bytes());
-    hash[16..20].copy_from_slice(&h4.to_be_bytes());
-
+    for (dst, v) in hash.as_chunks_mut::<4>().0.iter_mut().zip(h) {
+        *dst = v.to_be_bytes();
+    }
     Ok(base64.encode(hash))
 }
 
-fn pad_message(len: usize, input: &mut [u8]) -> &[u8] {
-    let mut cur = len + 1;
-    let bit_length = len as u64 * 8;
+fn sha1_ch(b: u32, c: u32, d: u32) -> u32 {
+    (b & c) | (!b & d)
+}
 
-    input[len] = 0x80;
-    while (cur * 8) % 512 != 448 {
-        input[cur] = 0;
-        cur += 1;
+fn sha1_parity(b: u32, c: u32, d: u32) -> u32 {
+    b ^ c ^ d
+}
+
+fn sha1_maj(b: u32, c: u32, d: u32) -> u32 {
+    (b & c) | (b & d) | (c & d)
+}
+
+/// Processes one 64-byte SHA-1 block.
+///
+/// The 80 rounds are unrolled and rotate the roles of `a`..`e` instead of
+/// moving values between them; the message schedule is a 16-word ring.
+#[allow(clippy::many_single_char_names)]
+fn sha1_compress(h: &mut [u32; 5], block: &[u8; 64]) {
+    let mut w = [0u32; 16];
+    for (w, b) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+        *w = u32::from_be_bytes(*b);
     }
-    let orig_len = &bit_length.to_be_bytes();
-    let total = cur + orig_len.len();
-    input[cur..total].copy_from_slice(orig_len);
-    &input[..total]
+    let [mut a, mut b, mut c, mut d, mut e] = *h;
+
+    // Message word for round `i`; from round 16 on it is computed in place.
+    macro_rules! word {
+        ($i:expr) => {{
+            if $i >= 16 {
+                w[$i & 15] = (w[($i + 13) & 15] ^ w[($i + 8) & 15] ^ w[($i + 2) & 15] ^ w[$i & 15])
+                    .rotate_left(1);
+            }
+            w[$i & 15]
+        }};
+    }
+    macro_rules! round {
+        ($f:ident, $k:ident, $i:expr, $a:ident, $b:ident, $c:ident, $d:ident, $e:ident) => {
+            $e = $e
+                .wrapping_add($a.rotate_left(5))
+                .wrapping_add($f($b, $c, $d))
+                .wrapping_add($k)
+                .wrapping_add(word!($i));
+            $b = $b.rotate_left(30);
+        };
+    }
+    // Five rounds bring the roles back to `a`..`e`.
+    macro_rules! rounds5 {
+        ($f:ident, $k:ident, $i:expr) => {
+            round!($f, $k, $i, a, b, c, d, e);
+            round!($f, $k, $i + 1, e, a, b, c, d);
+            round!($f, $k, $i + 2, d, e, a, b, c);
+            round!($f, $k, $i + 3, c, d, e, a, b);
+            round!($f, $k, $i + 4, b, c, d, e, a);
+        };
+    }
+    macro_rules! rounds20 {
+        ($f:ident, $k:ident, $i:expr) => {
+            rounds5!($f, $k, $i);
+            rounds5!($f, $k, $i + 5);
+            rounds5!($f, $k, $i + 10);
+            rounds5!($f, $k, $i + 15);
+        };
+    }
+
+    rounds20!(sha1_ch, K0, 0);
+    rounds20!(sha1_parity, K1, 20);
+    rounds20!(sha1_maj, K2, 40);
+    rounds20!(sha1_parity, K3, 60);
+
+    h[0] = h[0].wrapping_add(a);
+    h[1] = h[1].wrapping_add(b);
+    h[2] = h[2].wrapping_add(c);
+    h[3] = h[3].wrapping_add(d);
+    h[4] = h[4].wrapping_add(e);
 }
 
 #[cfg(test)]
@@ -376,14 +390,26 @@ mod tests {
         opcode_from!(OpCode::Pong => 10);
     }
 
-    /// STATEMENT: WebSocket challenge hashing produces the expected accept value for a known key.
+    /// STATEMENT: WebSocket challenge hashing produces the expected accept value for one- and
+    /// two-block SHA-1 inputs.
     ///
     /// HOW:
-    /// - Hash a fixed challenge and compare its complete base64-encoded result.
+    /// - Hash the RFC 6455 sample key and keys of 0, 15, 19, 20 and 32 bytes; key and GUID
+    ///   fit one padded block up to 19 bytes and need two from 20 bytes.
+    /// - Compare each complete base64-encoded result with a reference SHA-1 value.
     #[test]
     fn test_hash_key() {
-        let hash = hash_key(b"hello actix-web").unwrap();
-        assert_eq!(&hash, "cR1dlyUUJKp0s/Bel25u5TgvC3E=");
+        let cases: [(&[u8], &str); 6] = [
+            (b"", "Kfh9QIsMVZcl6xEPYxPHzW8SZ8w="),
+            (b"hello actix-web", "cR1dlyUUJKp0s/Bel25u5TgvC3E="),
+            (&[b'a'; 19], "yzaGyu0mcUukN7CdsSwa30tnCpc="),
+            (&[b'a'; 20], "dUYRM7bOMwDmbriNIPr11x+r3E0="),
+            (b"dGhlIHNhbXBsZSBub25jZQ==", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+            (&[b'a'; 32], "4dFARmauxJvKNqg//3NO2jF7P/Y="),
+        ];
+        for (key, accept) in cases {
+            assert_eq!(hash_key(key).unwrap(), accept, "key length {}", key.len());
+        }
     }
 
     /// STATEMENT: Numeric close codes map to named or custom variants and reject reserved wire values.
