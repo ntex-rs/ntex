@@ -1,6 +1,8 @@
 # Changes
 
-## [4.11.1] - unreleased
+## [4.11.1] - 2026-11-27
+
+* ws: `hash_key()` computes the `Sec-WebSocket-Accept` value about 3x faster
 
 * client: Connections being opened count against the HTTP/1 connection limit,
   so concurrent requests to different hosts no longer open more connections
