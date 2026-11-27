@@ -1,5 +1,10 @@
 # Changes
 
+## [4.9.2] - unreleased
+
+* Add `IoContext::read_budget()`, the input a transport can read before read
+  back-pressure is enabled
+
 ## [4.9.1] - 2026-11-26
 
 * `IoRef::with_read_src()` and `IoRef::with_buf()` keep a read pause unless the
