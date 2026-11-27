@@ -1,6 +1,6 @@
 # Changes
 
-## [4.10.0] - 2026-11-28 (unreleased)
+## [4.10.0] - 2026-11-28
 
 * Add `IoContext::read_budget()`, the input a transport can read before read
   back-pressure is enabled

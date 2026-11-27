@@ -131,7 +131,7 @@ use std::time::Instant;
 use std::{cell::Cell, fmt, future::Future, future::poll_fn, io, mem, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
-use ntex_io::{CloseReason, Decoded, IoBoxed, IoStatusUpdate, RecvError};
+use ntex_io::{CloseReason, DecodedItems, IoBoxed, IoStatusUpdate, RecvError};
 use ntex_service::pipeline::{Pipeline, PipelineCall};
 use ntex_util::{spawn_detached, time::Seconds, time::Sleep, time::sleep};
 
@@ -263,14 +263,21 @@ pub enum Reason<U: Encoder + Decoder> {
 /// # Readiness and concurrency
 ///
 /// Normal frame dispatch waits for pipeline readiness and space below the
-/// [`Self::max_inflight`] threshold. Service calls may overlap, and responses
-/// are encoded as calls complete rather than being reordered into request
-/// order. Use `max_inflight(1)` to serialize normal frame handling.
+/// [`Self::max_inflight`] threshold. Once ready, the dispatcher decodes the
+/// buffered frames in one batch, up to the free in-flight capacity and at
+/// most 16, and calls the service for them in decode order while it stays
+/// ready and write backpressure is off. Frames left when the service becomes
+/// unready wait for readiness, frames left by write backpressure wait for the
+/// output to drain; both are called before more input is decoded. Service
+/// calls may overlap, and responses are encoded as calls complete rather than
+/// being reordered into request order. Use `max_inflight(1)` to serialize
+/// normal frame handling.
 ///
-/// Write backpressure pauses frame decoding and produces
-/// [`Control::WBackPressureEnabled`]. When enough output drains, the dispatcher
-/// produces [`Control::WBackPressureDisabled`] and resumes normal processing.
-/// Pending calls continue during backpressure and may add more output.
+/// Write backpressure pauses frame decoding and calls for decoded frames, and
+/// produces [`Control::WBackPressureEnabled`]. When enough output drains, the
+/// dispatcher produces [`Control::WBackPressureDisabled`] and resumes normal
+/// processing. Pending calls continue during backpressure and may add more
+/// output.
 /// Control and stop events use the same readiness-aware pipeline as frames,
 /// but are not constrained by the normal frame-admission limit.
 ///
@@ -376,6 +383,11 @@ where
     timers: Timers,
     max_inflight: u32,
     keepalive: Seconds,
+    // decoded frames waiting for a service call, in reverse decode order;
+    // kept for its capacity
+    items: Vec<<U as Decoder>::Item>,
+    // stop condition decoded after the queued frames
+    queued_stop: Option<Reason<U>>,
 }
 
 pub(crate) struct DispatcherShared<U, Err>
@@ -416,6 +428,21 @@ enum PollService {
     Backpressure,
     Continue,
     Ready,
+}
+
+/// Maximum number of frames decoded per readiness check.
+const MAX_BATCH: u32 = 16;
+
+/// Outcome of receiving a batch of frames.
+enum Recv<U: Encoder + Decoder> {
+    /// Frames were decoded or the state changed.
+    Continue,
+    /// No complete frame is buffered, the dispatcher is woken on input.
+    Pending,
+    /// Write backpressure is enabled.
+    Backpressure,
+    /// The dispatcher stops once the decoded frames are dispatched.
+    Stop(Reason<U>),
 }
 
 impl<U, Err> Dispatcher<U, Err>
@@ -469,6 +496,8 @@ where
                 st: DispatcherState::Processing,
                 max_inflight: u32::MAX,
                 keepalive,
+                items: Vec::new(),
+                queued_stop: None,
             },
         }
     }
@@ -592,75 +621,41 @@ where
                 DispatcherState::Processing => {
                     let item = match ready!(inner.poll_service(cx)) {
                         PollService::Ready => {
-                            // decode incoming bytes if buffer is ready
-                            match inner.shared.io.poll_recv_decode(&inner.shared.codec, cx) {
-                                Ok(decoded) => {
-                                    inner.update_timer(&decoded);
-                                    if let Some(el) = decoded.item {
-                                        DispatchItem::Item(el)
-                                    } else {
-                                        return Poll::Pending;
-                                    }
-                                }
-                                Err(RecvError::Timeout) if inner.timers.active != Timer::Write => {
-                                    // input received together with a read timer wins over
-                                    // its expiry, the buffered input is decoded first
-                                    match inner.shared.io.decode_item(&inner.shared.codec) {
-                                        Ok(decoded) => {
-                                            let timer = inner.timers.active;
-                                            inner.update_timer(&decoded);
-                                            if let Some(el) = decoded.item {
-                                                DispatchItem::Item(el)
-                                            } else {
-                                                // a timer armed for the received input has
-                                                // not expired
-                                                if inner.timers.active == timer
-                                                    && let Err(ctl) = inner.handle_timeout()
-                                                {
-                                                    inner.st = inner.stop(ctl);
-                                                }
-                                                continue;
-                                            }
-                                        }
-                                        Err(err) => {
-                                            log::trace!(
-                                                "{}: Decoder error, stopping dispatcher: {:?}",
-                                                inner.shared.io.tag(),
-                                                err
-                                            );
-                                            inner.st = inner.stop(Reason::Decoder(err));
-                                            continue;
-                                        }
-                                    }
-                                }
-                                Err(RecvError::Timeout) => {
-                                    if let Err(ctl) = inner.handle_timeout() {
-                                        inner.st = inner.stop(ctl);
-                                    }
-                                    continue;
-                                }
-                                Err(RecvError::WriteBackpressure) => {
-                                    // instruct write task to notify dispatcher when data is flushed
-                                    inner.start_write_timer();
-                                    inner.st = DispatcherState::Backpressure;
+                            let mut items = mem::take(&mut inner.items);
+                            let next = if items.is_empty() {
+                                let next = inner.recv_items(cx, &mut items);
+                                // calls take frames from the end
+                                items.reverse();
+                                next
+                            } else if inner.shared.io.is_wr_backpressure() {
+                                // queued frames wait until the output drains
+                                inner.start_write_timer();
+                                inner.st = DispatcherState::Backpressure;
+                                Recv::Backpressure
+                            } else {
+                                // frames queued by an earlier batch go first
+                                inner.queued_stop.take().map_or(Recv::Continue, Recv::Stop)
+                            };
+                            if !matches!(next, Recv::Backpressure) {
+                                inner.call_items(cx, &mut items);
+                            }
+                            let queued = !items.is_empty();
+                            inner.items = items;
+                            match next {
+                                Recv::Continue => continue,
+                                Recv::Pending => return Poll::Pending,
+                                Recv::Backpressure => {
                                     DispatchItem::Control(Control::WBackPressureEnabled)
                                 }
-                                Err(RecvError::Decoder(err)) => {
-                                    log::trace!(
-                                        "{}: Decoder error, stopping dispatcher: {:?}",
-                                        inner.shared.io.tag(),
-                                        err
-                                    );
-                                    inner.st = inner.stop(Reason::Decoder(err));
+                                Recv::Stop(reason) if queued => {
+                                    inner.queued_stop = Some(reason);
                                     continue;
                                 }
-                                Err(RecvError::PeerGone(err)) => {
-                                    log::trace!(
-                                        "{}: Peer is gone, stopping dispatcher: {:?}",
-                                        inner.shared.io.tag(),
-                                        err
-                                    );
-                                    inner.st = inner.stop(Reason::Io(err));
+                                Recv::Stop(reason) => {
+                                    // a call that failed at once has stopped the dispatcher
+                                    if matches!(inner.st, DispatcherState::Processing) {
+                                        inner.st = inner.stop(reason);
+                                    }
                                     continue;
                                 }
                             }
@@ -795,7 +790,10 @@ where
     U: Decoder + Encoder + 'static,
     Err: 'static,
 {
-    fn stop(&self, reason: Reason<U>) -> DispatcherState<U, Err> {
+    fn stop(&mut self, reason: Reason<U>) -> DispatcherState<U, Err> {
+        // queued frames are not dispatched after a stop
+        self.items.clear();
+        self.queued_stop = None;
         self.shared.io.set_close_reason(match reason {
             Reason::Service => CloseReason::Service,
             Reason::Io(None) => CloseReason::PeerGone,
@@ -815,7 +813,8 @@ where
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>) {
         let mut fut = self.shared.call(item);
 
-        // the first poll consumes the pipeline readiness checked by `poll_service()`
+        // frame calls are made with valid pipeline readiness and dispatched
+        // here, control calls may wait for readiness
         if Pin::new(&mut fut).poll(cx).is_ready() {
             drop(fut);
         } else if self.response.is_none() {
@@ -826,6 +825,107 @@ where
                 fut.await;
                 shared.io.notify_dispatcher();
             });
+        }
+    }
+
+    /// Decodes buffered frames into `items`, at most the free in-flight
+    /// capacity and [`MAX_BATCH`].
+    fn recv_items(
+        &mut self,
+        cx: &mut Context<'_>,
+        items: &mut Vec<<U as Decoder>::Item>,
+    ) -> Recv<U> {
+        // `poll_service()` admits a batch only below `max_inflight`
+        let max = self
+            .max_inflight
+            .saturating_sub(self.shared.inflight.get())
+            .min(MAX_BATCH) as usize;
+
+        match self
+            .shared
+            .io
+            .poll_recv_decode_items(&self.shared.codec, items, max, cx)
+        {
+            Ok(decoded) => {
+                self.update_timer(decoded);
+                if decoded.items == 0 {
+                    Recv::Pending
+                } else {
+                    Recv::Continue
+                }
+            }
+            Err(RecvError::Timeout) if self.timers.active != Timer::Write => {
+                // input received together with a read timer wins over
+                // its expiry, the buffered input is decoded first
+                match self.shared.io.decode_items(&self.shared.codec, items, max) {
+                    Ok(decoded) => {
+                        let timer = self.timers.active;
+                        self.update_timer(decoded);
+                        // a timer armed for the received input has not expired
+                        if decoded.items == 0
+                            && self.timers.active == timer
+                            && let Err(reason) = self.handle_timeout()
+                        {
+                            Recv::Stop(reason)
+                        } else {
+                            Recv::Continue
+                        }
+                    }
+                    Err(err) => self.decoder_error(err),
+                }
+            }
+            Err(RecvError::Timeout) => match self.handle_timeout() {
+                Ok(()) => Recv::Continue,
+                Err(reason) => Recv::Stop(reason),
+            },
+            Err(RecvError::WriteBackpressure) => {
+                // instruct write task to notify dispatcher when data is flushed
+                self.start_write_timer();
+                self.st = DispatcherState::Backpressure;
+                Recv::Backpressure
+            }
+            Err(RecvError::Decoder(err)) => self.decoder_error(err),
+            Err(RecvError::PeerGone(err)) => {
+                log::trace!(
+                    "{}: Peer is gone, stopping dispatcher: {:?}",
+                    self.shared.io.tag(),
+                    err
+                );
+                Recv::Stop(Reason::Io(err))
+            }
+        }
+    }
+
+    fn decoder_error(&self, err: <U as Decoder>::Error) -> Recv<U> {
+        log::trace!(
+            "{}: Decoder error, stopping dispatcher: {:?}",
+            self.shared.io.tag(),
+            err
+        );
+        Recv::Stop(Reason::Decoder(err))
+    }
+
+    /// Calls the service for the queued frames, in decode order.
+    ///
+    /// The first call uses the readiness checked by `poll_service()`. Later
+    /// calls are made while the pipeline readiness stays valid, an in-flight
+    /// slot is free and write backpressure is off, the other frames stay
+    /// queued for the next readiness check or until the output drains. A
+    /// call that fails at once stops the dispatcher and drops the queued
+    /// frames.
+    fn call_items(&mut self, cx: &mut Context<'_>, items: &mut Vec<<U as Decoder>::Item>) {
+        while let Some(item) = items.pop() {
+            self.call_service(cx, DispatchItem::Item(item));
+            if matches!(self.check_error(), PollService::Continue) {
+                items.clear();
+                break;
+            }
+            if self.shared.inflight.get() >= self.max_inflight
+                || !self.shared.service.is_ready()
+                || self.shared.io.is_wr_backpressure()
+            {
+                break;
+            }
         }
     }
 
@@ -887,7 +987,9 @@ where
                     }
                     // frames that were already received are dispatched once
                     // the service is ready, as in the processing state
-                    IoStatusUpdate::PeerGone(_) if self.shared.io.read_dst_size() != 0 => {
+                    IoStatusUpdate::PeerGone(_)
+                        if !self.items.is_empty() || self.shared.io.read_dst_size() != 0 =>
+                    {
                         log::trace!(
                             "{}: Peer is gone during pause, wait for service",
                             self.shared.io.tag()
@@ -941,14 +1043,18 @@ where
         }
     }
 
-    fn update_timer(&mut self, decoded: &Decoded<<U as Decoder>::Item>) {
-        let item = decoded.item.is_some();
-        self.timers.update_read(
-            self.shared.io.cfg(),
-            item,
-            decoded.remains as u32,
-            decoded.consumed as u32,
-        );
+    fn update_timer(&mut self, decoded: DecodedItems) {
+        let cfg = self.shared.io.cfg();
+        if decoded.items != 0 {
+            self.timers.update_read(cfg, true, 0, 0);
+        }
+        // input consumed after the last frame starts the next frame, as a
+        // separate decode attempt would report it
+        let item = decoded.items != 0 && decoded.consumed == 0;
+        if !item {
+            self.timers
+                .update_read(cfg, false, decoded.remains as u32, decoded.consumed as u32);
+        }
 
         // the filter chain pauses reading, the peer is not charged for it
         if !item && self.shared.io.is_filter_paused() {

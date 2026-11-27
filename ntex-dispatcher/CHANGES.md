@@ -1,5 +1,13 @@
 # Changes
 
+## [4.6.0] - 2026-11-28
+
+* Decode buffered frames in batches with `Io::poll_recv_decode_items()`: after
+  one readiness check the dispatcher decodes up to 16 frames, limited by the
+  free in-flight capacity, and calls the service for them in order while it
+  stays ready and write backpressure is off; frames left wait for readiness or
+  for the output to drain
+
 ## [4.5.0] - 2026-11-17
 
 * Add `Dispatcher::keepalive_timeout()` to override the transport's keep-alive

@@ -1,6 +1,6 @@
 # Changes
 
-## [4.13.2] - unreleased
+## [4.13.2] - 2026-11-28
 
 * io-uring: Handle completions of sends posted during their submission in the
   same turn when the turn handled few events, saves a runtime turn per request
