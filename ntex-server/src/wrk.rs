@@ -173,6 +173,16 @@ impl<T> Worker<T> {
         self.metrics.as_ref().map_or(0, |m| m.active()) + self.reqs.len()
     }
 
+    /// Returns `true` if no item is queued and the worker's runtime is idle.
+    ///
+    /// A runtime that takes latency samples on a timer is never idle, it is
+    /// detected as blocked only while its samples are checked.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.reqs.is_empty()
+            && self.arbiter.handle().current_turn().is_none()
+            && self.arbiter.latency().is_none_or(|l| l.deferred)
+    }
+
     /// Returns the index of the worker's CPU followed by its SMT siblings,
     /// empty if the worker is not placed on a CPU or the placement failed.
     pub(crate) fn cpus(&self) -> &[usize] {

@@ -670,15 +670,20 @@ mod tests {
     ///
     /// HOW:
     /// - Expect default metrics before an arbiter is set.
-    /// - Keep a first arbiter busy for 20 ms; expect busy time and latency samples.
+    /// - Keep a first arbiter busy for 20 ms and wake it again after its sampling interval;
+    ///   expect busy time and latency samples.
     /// - Replace it and keep the new one busy; expect busy time, latency samples and polls
     ///   (when available) to grow from the first totals.
     #[ntex::test]
     async fn runtime_restart() {
-        let busy = |a: &Arbiter| {
+        let busy = async |a: &Arbiter| {
             a.handle().spawn(async {
                 std::thread::sleep(Duration::from_millis(20));
             });
+            // the native runtime samples latency at a turn after the interval
+            ntex::time::sleep(ntex::time::Millis(150)).await;
+            a.handle().spawn(async {});
+            ntex::time::sleep(ntex::time::Millis(100)).await;
         };
 
         let m = Metrics::new(1);
@@ -687,8 +692,7 @@ mod tests {
 
         let a1 = Arbiter::with_name("rt-metrics-1".to_string());
         w.set_arbiter(a1.clone());
-        busy(&a1);
-        ntex::time::sleep(ntex::time::Millis(250)).await;
+        busy(&a1).await;
         let m1 = w.runtime_metrics();
         let b1 = m1.busy_duration.unwrap();
         let l1 = m1.latency.clone().unwrap().histogram.count();
@@ -698,8 +702,7 @@ mod tests {
 
         let a2 = Arbiter::with_name("rt-metrics-2".to_string());
         w.set_arbiter(a2.clone());
-        busy(&a2);
-        ntex::time::sleep(ntex::time::Millis(250)).await;
+        busy(&a2).await;
         let m2 = w.runtime_metrics();
         assert!(m2.busy_duration.unwrap() >= b1 + Duration::from_millis(20));
         assert!(m2.latency.unwrap().histogram.count() > l1);
