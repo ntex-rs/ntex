@@ -96,6 +96,56 @@ impl<F> Io<F> {
         RecvItem { io: self, codec }
     }
 
+    /// Reads and decodes buffered frames into `dst`, at most `max` of them.
+    ///
+    /// Waits until at least one item is decoded, then decodes the input that
+    /// is already buffered without waiting for more, and outputs the number
+    /// of items appended to `dst`. A `max` of zero is treated as one. Per
+    /// batch the read buffer is accessed once and the dispatcher timer, write
+    /// backpressure and read state are checked once, see
+    /// [`IoRef::decode_items`].
+    ///
+    /// Errors are reported as by [`recv_item`](Self::recv_item), and write
+    /// backpressure is waited out before decoding. Only a codec error can
+    /// follow decoded items: `RecvError::Decoder` leaves the items decoded
+    /// before it in `dst`, so handle `dst` before the error.
+    ///
+    /// Decoded items no longer count as buffered input, so reads may resume
+    /// while they wait in `dst`; `max` bounds the input held this way.
+    ///
+    /// ```
+    /// # use ntex_codec::BytesCodec;
+    /// # use ntex_io::Io;
+    /// async fn echo(io: Io) {
+    ///     let mut items = Vec::with_capacity(32);
+    ///     loop {
+    ///         let res = io.recv_batch(&BytesCodec, &mut items, 32).await;
+    ///         for item in items.drain(..) {
+    ///             let _ = io.encode(item, &BytesCodec);
+    ///         }
+    ///         if res.is_err() {
+    ///             break;
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub fn recv_batch<'a, U>(
+        &'a self,
+        codec: &'a U,
+        dst: &'a mut Vec<U::Item>,
+        max: usize,
+    ) -> RecvBatch<'a, U, F>
+    where
+        U: Decoder,
+    {
+        RecvBatch {
+            io: self,
+            codec,
+            dst,
+            max,
+        }
+    }
+
     /// Reads exactly enough bytes from this I/O stream to fill `dst`.
     ///
     /// If there is not enough data available, waits for incoming data.
@@ -633,18 +683,105 @@ where
     }
 }
 
+/// Future returned by [`Io::recv_batch`].
+#[must_use = "futures do nothing unless polled"]
+pub struct RecvBatch<'a, U: Decoder, F = Base> {
+    io: &'a Io<F>,
+    codec: &'a U,
+    dst: &'a mut Vec<U::Item>,
+    max: usize,
+}
+
+impl<U: Decoder, F> fmt::Debug for RecvBatch<'_, U, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecvBatch")
+            .field("io", self.io)
+            .field("max", &self.max)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<U, F> Future for RecvBatch<'_, U, F>
+where
+    U: Decoder,
+{
+    type Output = Result<usize, RecvError<U>>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match this.io.poll_recv_batch(this.codec, this.dst, this.max, cx) {
+            Poll::Ready(Err(RecvError::WriteBackpressure)) => match this.io.recv_flush(cx) {
+                Some(err) => Poll::Ready(Err(RecvError::PeerGone(Some(err)))),
+                None => Poll::Pending,
+            },
+            res => res,
+        }
+    }
+}
+
 impl<F> Io<F> {
-    /// Waits out write backpressure for [`RecvItem`], returning a flush error.
+    /// Decodes buffered items into `dst` for [`RecvBatch`].
     ///
-    /// Nothing is stored between polls. Each poll goes through `poll_recv`,
-    /// which reports an expired dispatcher timer before write backpressure.
+    /// Same checks and waiting as
+    /// [`poll_recv_decode`](Self::poll_recv_decode), but decodes up to `max`
+    /// items with [`IoRef::decode_items`].
+    #[inline]
+    fn poll_recv_batch<U>(
+        &self,
+        codec: &U,
+        dst: &mut Vec<U::Item>,
+        max: usize,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<usize, RecvError<U>>>
+    where
+        U: Decoder,
+    {
+        let st = self.st();
+        if !st.flags.is_recv_ready() {
+            st.flags.unset_read_ready();
+
+            if !st.flags.is_stopping_or_terminating() {
+                if st.flags.check_dispatcher_timeout() {
+                    return Poll::Ready(Err(RecvError::Timeout));
+                } else if st.flags.is_wr_backpressure() {
+                    return Poll::Ready(Err(RecvError::WriteBackpressure));
+                }
+            }
+        }
+
+        match self.decode_items(codec, dst, max) {
+            Ok(0) => (),
+            Ok(n) => return Poll::Ready(Ok(n)),
+            Err(err) => return Poll::Ready(Err(RecvError::Decoder(err))),
+        }
+
+        if st.flags.is_stopping_or_terminating() {
+            Poll::Ready(Err(RecvError::PeerGone(
+                st.error().or_else(|| self.truncated()),
+            )))
+        } else {
+            match self.poll_read_more(cx) {
+                Poll::Pending | Poll::Ready(Ok(Some(()))) => Poll::Pending,
+                Poll::Ready(Err(e)) => Poll::Ready(Err(RecvError::PeerGone(Some(e)))),
+                Poll::Ready(Ok(None)) => Poll::Ready(Err(RecvError::PeerGone(self.truncated()))),
+            }
+        }
+    }
+
+    /// Waits out write backpressure for [`RecvItem`] and [`RecvBatch`],
+    /// returning a flush error.
+    ///
+    /// Nothing is stored between polls. Each poll goes through `poll_recv` or
+    /// `poll_recv_batch`, which report an expired dispatcher timer before
+    /// write backpressure.
     #[cold]
     #[inline(never)]
     fn recv_flush(&self, cx: &mut Context<'_>) -> Option<io::Error> {
         match self.poll_flush(cx, false) {
             Poll::Ready(Ok(())) => {
-                // Decoding here would give `RecvItem::poll` a second decode
-                // path, so the next poll decodes instead.
+                // Decoding here would give the futures a second decode path,
+                // so the next poll decodes instead.
                 cx.waker().wake_by_ref();
                 None
             }

@@ -467,6 +467,10 @@ Choose the highest-level read API that fits your protocol:
 
 - Use `recv(codec)` for framed messages. It decodes buffered input and waits
   when the codec reports an incomplete frame.
+- Use [`Io::recv_batch`] when a peer pipelines many small frames. It decodes
+  up to `max` buffered frames into a `Vec` in one buffer access and checks
+  timeouts and write backpressure once per batch. Items decoded before a
+  codec error stay in the vector.
 - Use `read_exact()` for a fixed-size header or field.
 - For a custom parser, inspect or consume the buffer through `IoRef`. Call
   [`Io::read_more`] only when you have decided that you need more bytes.
@@ -480,11 +484,12 @@ read task. Consuming input through these methods wakes the task once the
 buffer falls to half that mark:
 
 - [`IoRef::decode`]
+- [`IoRef::decode_items`]
 - [`IoRef::with_buf`]
 - [`IoRef::with_read_src`]
 - [`IoRef::with_read_dst`]
 
-[`Io::recv`] and [`Io::read_exact`] wait for more input. They release
+[`Io::recv`], [`Io::recv_batch`] and [`Io::read_exact`] wait for more input. They release
 backpressure regardless of how much input remains buffered.
 
 `BytesMut` is contiguous and growable. A decoder can split immutable [`Bytes`]
@@ -589,12 +594,14 @@ place the result in the next buffer toward the transport.
 [`Io::read_exact`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.read_exact
 [`Io::read_more`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.read_more
 [`Io::recv`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.recv
+[`Io::recv_batch`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.recv_batch
 [`Io::send`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.send
 [`IoConfig`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html
 [`IoConfig::set_read_backpressure`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html#method.set_read_backpressure
 [`IoConfig::set_read_size`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html#method.set_read_size
 [`HttpServiceConfig`]: https://docs.ntex.rs/api/ntex/http/struct.HttpServiceConfig.html
 [`IoRef::decode`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.decode
+[`IoRef::decode_items`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.decode_items
 [`IoRef::encode`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.encode
 [`IoRef::encode_bytes`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.encode_bytes
 [`IoRef::encode_slice`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.encode_slice

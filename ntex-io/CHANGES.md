@@ -1,9 +1,13 @@
 # Changes
 
-## [4.9.2] - unreleased
+## [4.10.0] - 2026-11-28 (unreleased)
 
 * Add `IoContext::read_budget()`, the input a transport can read before read
   back-pressure is enabled
+
+* Add `Io::recv_batch()` and `IoRef::decode_items()`, which decode up to `max`
+  buffered items into a `Vec` in one buffer access; pipelined protocols pay
+  the per-receive cost once per batch instead of once per item
 
 ## [4.9.1] - 2026-11-26
 

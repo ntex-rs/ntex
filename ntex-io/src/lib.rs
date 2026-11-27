@@ -47,7 +47,7 @@ pub use self::cfg::IoConfig;
 pub use self::ctx::IoContext;
 pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
-pub use self::io::{Io, IoRef, RecvItem};
+pub use self::io::{Io, IoRef, RecvBatch, RecvItem};
 pub use self::metrics::{
     CloseReason, CloseStats, IoConfigMetrics, IoMetrics, IoMetricsGroup, IoMetricsSnapshot,
 };

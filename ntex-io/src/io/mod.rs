@@ -20,7 +20,7 @@ use crate::{FilterLayer, Handle, IoStream};
 mod state;
 mod stream;
 
-pub use self::stream::RecvItem;
+pub use self::stream::{RecvBatch, RecvItem};
 #[cfg(test)]
 mod tests;
 
