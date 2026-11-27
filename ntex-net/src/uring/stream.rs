@@ -197,9 +197,11 @@ enum Operation {
         id: StreamId,
         buf: BytesMut,
     },
-    /// Receive into a buffer selected from the provided buffer ring
+    /// Receive into buffers selected from the provided buffer ring. A
+    /// multishot receive stays while the kernel reports more completions
     RecvRing {
         id: StreamId,
+        multi: bool,
     },
     /// Send of gathered pages, or of an inline page
     Send {
@@ -494,6 +496,10 @@ struct StreamOpsStorage {
     files: FixedFiles,
     /// `IORING_SEND_ZC_REPORT_USAGE` is supported, cleared on first `EINVAL`
     zc_report: bool,
+    /// Multishot receives limited to the read budget are supported (Linux
+    /// 6.17), cleared on first `EINVAL`. Ring receives take one input each
+    /// otherwise
+    recv_multi: bool,
 }
 
 /// Slots of the ring's registered file table, one per stream.
@@ -503,10 +509,12 @@ struct StreamOpsStorage {
 /// descriptor. Streams beyond the table size use their descriptor.
 ///
 /// A stream registers its socket on its `FIXED_FILES_AFTER`th receive, with
-/// an `io_uring_register` call. The call and the extra `Close` of the slot
-/// cost more than the lookups a short connection saves, so such connections
-/// keep their descriptor. Operations submitted before the registration keep
-/// using the descriptor. A `FilesUpdate` request would save the call, but
+/// an `io_uring_register` call. A direct receive counts when it is submitted,
+/// a ring receive counts every input it delivers. The call and the extra
+/// `Close` of the slot cost more than the lookups a short connection saves,
+/// so such connections keep their descriptor. Operations submitted before the
+/// registration keep using the descriptor, an armed multishot receive among
+/// them. A `FilesUpdate` request would save the call, but
 /// under connection churn it costs more kernel time and its completion
 /// overflows the completion queue.
 /// The slot holds its own reference to the socket, the stream closes both the
@@ -651,6 +659,7 @@ impl StreamOps {
                         bufs,
                         files,
                         zc_report: true,
+                        recv_multi: true,
                     }))),
                 });
                 inner = Some(ops.clone());
@@ -700,7 +709,7 @@ impl Handler for StreamOpsHandler {
             .with(|st| match st.ops.remove(user_data).unwrap() {
                 Operation::Recv { id, buf } => st.recv_canceled(id, Some(buf), &self.inner.api),
                 // the kernel returns a selected buffer to the ring by itself
-                Operation::RecvRing { id } => st.recv_canceled(id, None, &self.inner.api),
+                Operation::RecvRing { id, .. } => st.recv_canceled(id, None, &self.inner.api),
                 op @ (Operation::Send { .. } | Operation::SendOne { .. }) => {
                     let (id, buf, _) = op.into_send();
                     if let Some(item) = st.streams.get_mut(id) {
@@ -728,8 +737,12 @@ impl Handler for StreamOpsHandler {
                 Operation::Recv { id, buf } => {
                     st.recv_done(id, buf, flags, res, &self.inner.api);
                 }
-                Operation::RecvRing { id } => {
-                    st.recv_ring_done(id, flags, res, &self.inner.api);
+                Operation::RecvRing { id, multi } => {
+                    if st.recv_ring_done(id, multi, flags, res, &self.inner.api) {
+                        // the multishot receive is still armed, it keeps its id
+                        st.ops[user_data] = Some(Operation::RecvRing { id, multi });
+                        return;
+                    }
                 }
                 op @ (Operation::Send { .. } | Operation::SendOne { .. }) => {
                     let (id, buf, mut state) = op.into_send();
@@ -933,11 +946,11 @@ impl StreamOpsStorage {
             && !item.flags.contains(Flags::CLOSING)
         {
             if item.rd_op.is_none() {
-                self.files.count_recv(api, item);
-
                 // an idle connection does not hold a read buffer, the ring
-                // provides one once input arrives. Input that completes a
-                // partial frame is received into its buffer without a copy
+                // provides one for every input. A multishot receive stays
+                // armed while the input is consumed, the kernel ends it once
+                // it delivered the read budget. Input that completes a partial
+                // frame is received into its buffer without a copy
                 if let Some(ring) = &self.bufs
                     && !item.flags.contains(Flags::RD_DIRECT)
                     && item.ctx.read_buf_size() == 0
@@ -945,24 +958,40 @@ impl StreamOpsStorage {
                     #[cfg(feature = "trace")]
                     log::trace!("{}: RcvRing({id})", item.ctx.tag());
 
-                    let op_id = self.ops.insert(Some(Operation::RecvRing { id })) as u32;
+                    let multi = self.recv_multi;
+                    let op_id = self.ops.insert(Some(Operation::RecvRing { id, multi })) as u32;
                     item.rd_op = NonZeroU32::new(op_id);
 
                     let (bgid, buf_len) = (ring.bgid(), ring.buf_len());
-                    // SAFETY: the kernel selects a buffer from the registered
+                    // zero would not limit the receive
+                    let limit = u32::try_from(item.ctx.read_budget())
+                        .unwrap_or(u32::MAX)
+                        .max(1);
+                    // SAFETY: the kernel selects buffers from the registered
                     // ring, the descriptor is closed by a later `Close` entry
                     unsafe {
                         api.submit(op_id, move |entry| {
-                            let op = with_fd!(item, fd => opcode::Recv::new(entry, fd, ptr::null_mut(), buf_len))
-                                .buffer_select(bgid);
-                            if poll_first {
-                                op.ioprio(IORING_RECVSEND_POLL_FIRST);
+                            if multi {
+                                let op = with_fd!(item, fd => opcode::RecvMulti::new(entry, fd, bgid))
+                                    .total_len(limit);
+                                #[cfg(test)]
+                                let op = op.flags(tests::RECV_MULTI_FLAGS.get());
+                                if poll_first {
+                                    op.ioprio(IORING_RECVSEND_POLL_FIRST);
+                                }
+                            } else {
+                                let op = with_fd!(item, fd => opcode::Recv::new(entry, fd, ptr::null_mut(), buf_len))
+                                    .buffer_select(bgid);
+                                if poll_first {
+                                    op.ioprio(IORING_RECVSEND_POLL_FIRST);
+                                }
                             }
                         });
                     }
                 } else {
                     #[cfg(feature = "trace")]
                     log::trace!("{}: Rcv({id})", item.ctx.tag());
+                    self.files.count_recv(api, item);
 
                     let mut buf = item.ctx.take_read_buf();
                     let s = buf.chunk_mut();
@@ -990,10 +1019,10 @@ impl StreamOpsStorage {
 
     /// A receive was canceled, `buf` is the read buffer it took.
     ///
-    /// A ring receive takes no read buffer. Reading was paused or the stream
-    /// is closing, so the receive is reissued only for a resume that raced
-    /// the cancel, it could not submit while the canceled receive was pending.
-    /// Later resumes submit it themselves.
+    /// A ring receive takes no read buffer. It is reissued if a resume raced
+    /// the cancel, or if a multishot receive was canceled for streaming input
+    /// that the read buffer still accepts. No receive is submitted while the
+    /// canceled one is pending. Later resumes submit it themselves.
     fn recv_canceled(&mut self, id: StreamId, buf: Option<BytesMut>, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
             #[cfg(feature = "trace")]
@@ -1052,27 +1081,34 @@ impl StreamOpsStorage {
         }
     }
 
+    /// Handles a completion of a ring receive. Returns `true` if the
+    /// multishot receive is still armed and keeps its operation.
     fn recv_ring_done(
         &mut self,
         id: StreamId,
+        multi: bool,
         flags: u32,
         res: io::Result<usize>,
         api: &ReactorApi,
-    ) {
+    ) -> bool {
         let bid = cqueue::buffer_select(flags);
+        if cqueue::more(flags) {
+            self.recv_ring_input(id, bid, flags, res, api);
+            return true;
+        }
         if matches!(res, Err(ref e) if e.raw_os_error() == Some(libc::ECANCELED)) {
             // canceled after a buffer was selected
             if let (Some(bid), Some(ring)) = (bid, &mut self.bufs) {
                 ring.recycle(bid);
             }
             self.recv_canceled(id, None, api);
-            return;
+            return false;
         }
         let Some(item) = self.streams.get_mut(id) else {
             if let (Some(bid), Some(ring)) = (bid, &mut self.bufs) {
                 ring.recycle(bid);
             }
-            return;
+            return false;
         };
 
         #[cfg(feature = "trace")]
@@ -1097,8 +1133,9 @@ impl StreamOpsStorage {
                 if let Some(t) = item.ctx.buf_tracker() {
                     buf.set_tracker(t);
                 }
+                self.files.count_recv(api, item);
                 self.recv_complete(id, buf, flags, res, api);
-                return;
+                return false;
             }
             ring.recycle(bid);
         }
@@ -1108,6 +1145,13 @@ impl StreamOpsStorage {
                 // all ring buffers are in use, receive into a buffer of its own
                 item.flags.insert(Flags::RD_DIRECT);
                 self.recv(id, false, api);
+            }
+            Err(ref e) if multi && e.raw_os_error() == Some(libc::EINVAL) => {
+                // the kernel cannot limit a multishot receive (Linux 6.17),
+                // an unlimited one would grow the read buffer past the read
+                // backpressure. Ring receives take one input each from now on
+                self.recv_multi = false;
+                self.recv(id, true, api);
             }
             ref res if is_would_block(res) => self.recv(id, true, api),
             res => {
@@ -1121,6 +1165,75 @@ impl StreamOpsStorage {
                     self.recv(id, true, api);
                 }
             }
+        }
+        false
+    }
+
+    /// Handles input of an armed multishot receive.
+    ///
+    /// The receive stays armed while the input is consumed as it arrives, the
+    /// kernel ends it once it delivered the read budget it was armed with. It
+    /// is canceled once reading is paused or stopped, or once input streams
+    /// in, the next receive then goes to a buffer of its own. Input received
+    /// before the cancel is appended to the read buffer.
+    fn recv_ring_input(
+        &mut self,
+        id: StreamId,
+        bid: Option<u16>,
+        flags: u32,
+        res: io::Result<usize>,
+        api: &ReactorApi,
+    ) {
+        let Some(ring) = &mut self.bufs else {
+            return;
+        };
+        let (Some(bid), Ok(size)) = (bid, res) else {
+            // the kernel keeps a receive armed only after it delivered input
+            if let Some(bid) = bid {
+                ring.recycle(bid);
+            }
+            return;
+        };
+        let Some(item) = self.streams.get_mut(id) else {
+            // the stream is gone, the final completion releases the operation
+            ring.recycle(bid);
+            return;
+        };
+
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: RcvRingInput({id}) {size} bid:{bid} non-empty:{}",
+            item.ctx.tag(),
+            cqueue::sock_nonempty(flags)
+        );
+
+        #[cfg_attr(not(feature = "tracker"), allow(unused_mut))]
+        let mut buf = ring.take(bid, size);
+        #[cfg(feature = "tracker")]
+        if let Some(t) = item.ctx.buf_tracker() {
+            buf.set_tracker(t);
+        }
+        self.files.count_recv(api, item);
+
+        // input that fills the page or leaves more queued is streaming,
+        // ring pages would be copied into one read buffer
+        let streaming = cqueue::sock_nonempty(flags) || buf.remaining_mut() == 0;
+        let status = item.ctx.release_read_buf(buf, Poll::Ready(Ok(size)));
+        if status == IoTaskStatus::Io && !streaming && !item.flags.contains(Flags::RD_CANCELING) {
+            return;
+        }
+
+        if streaming {
+            item.flags.insert(Flags::RD_DIRECT);
+        }
+        // the cancel completes the receive, the next one is submitted then
+        item.flags
+            .set(Flags::RD_REISSUE, status == IoTaskStatus::Io);
+        if !item.flags.contains(Flags::RD_CANCELING)
+            && let Some(op) = item.rd_op
+        {
+            item.flags.insert(Flags::RD_CANCELING);
+            api.cancel(op.get());
         }
     }
 
@@ -1203,6 +1316,9 @@ impl StreamOpsStorage {
                 let use_zc = zc && (ZC_SIZE as usize..=ZC_MAX_SIZE as usize).contains(&len);
                 let zc_report = use_zc && self.zc_report;
                 let zc_flags = if zc_report { IORING_SEND_ZC_REPORT_USAGE } else { 0 };
+                if !use_zc {
+                    api.submitted_inline();
+                }
 
                 #[cfg(feature = "trace")]
                 log::trace!(
@@ -1562,10 +1678,16 @@ impl Drop for WeakStreamCtl {
 mod tests {
     use std::os::unix::net::UnixStream;
 
-    use ntex_io::{Handle, Io, IoStream};
+    use ntex_io::{Handle, Io, IoConfig, IoStream};
     use ntex_service::cfg::SharedCfg;
 
     use super::*;
+
+    thread_local! {
+        /// `MSG_*` flags of multishot receives, an invalid one makes the
+        /// kernel reject them
+        pub(super) static RECV_MULTI_FLAGS: Cell<i32> = const { Cell::new(0) };
+    }
 
     struct TestStream {
         socket: Socket,
@@ -1589,6 +1711,11 @@ mod tests {
 
     /// Registers one end of a socket pair, returns the peer as well.
     fn register(ops: &StreamOps) -> (Io, StreamCtl, UnixStream) {
+        register_with(ops, SharedCfg::default())
+    }
+
+    /// Registers one end of a socket pair with `cfg`, returns the peer as well.
+    fn register_with(ops: &StreamOps, cfg: impl Into<SharedCfg>) -> (Io, StreamCtl, UnixStream) {
         let (socket, peer) = UnixStream::pair().unwrap();
         let ctl = Rc::new(Cell::new(None));
         let io = Io::new(
@@ -1597,9 +1724,31 @@ mod tests {
                 ops: ops.clone(),
                 ctl: ctl.clone(),
             },
-            SharedCfg::default(),
+            cfg.into(),
         );
         (io, ctl.take().unwrap(), peer)
+    }
+
+    /// Submits and dispatches until `f` returns `true`, panics after 5 s.
+    fn dispatch_until(reactor: &Reactor, mut f: impl FnMut() -> bool) {
+        for _ in 0..500 {
+            reactor.submit_and_dispatch();
+            if f() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("condition was not reached");
+    }
+
+    /// Returns `true` if the receive of stream `id` is an operation matching `f`.
+    fn rd_op_is(ops: &StreamOps, id: StreamId, f: impl Fn(&Operation) -> bool) -> bool {
+        ops.0.with(|st| {
+            st.streams[id]
+                .rd_op
+                .and_then(|op| st.ops[op.get() as usize].as_ref())
+                .is_some_and(f)
+        })
     }
 
     /// Registers a stream as `register` does and counts receives up to
@@ -1764,16 +1913,15 @@ mod tests {
     }
 
     /// STATEMENT: A stream reads through its descriptor until its `FIXED_FILES_AFTER`th
-    /// receive, which registers the socket in the file table and reads through the
-    /// slot.
+    /// received input registers the socket in the file table, the ring receive armed
+    /// before the registration keeps delivering input.
     ///
     /// HOW:
     /// - Register a stream over a socket pair and resume reading.
-    /// - Before each receive below the threshold, check the stream has no slot, then
-    ///   write one byte from the peer and dispatch until the `Io` holds it, which
-    ///   submits the next receive.
-    /// - Check the stream has a slot now, write one more byte and check the `Io`
-    ///   receives it through the slot.
+    /// - Before each input below the threshold, check the stream has no slot, then
+    ///   write one byte from the peer and dispatch until the `Io` holds it.
+    /// - Write the threshold byte the same way and check the stream has a slot now.
+    /// - Write one more byte and check the `Io` receives it.
     #[ntex::test]
     async fn socket_registered_on_threshold_receive() {
         let Ok(reactor) = Reactor::new(64) else {
@@ -1786,14 +1934,7 @@ mod tests {
         }
         let receive = |peer: &mut UnixStream, io: &Io, len: usize| {
             std::io::Write::write_all(peer, b"x").unwrap();
-            for _ in 0..500 {
-                reactor.submit_and_dispatch();
-                if io.read_dst_size() == len {
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            panic!("byte {len} was not received");
+            dispatch_until(&reactor, || io.read_dst_size() == len);
         };
 
         let (io, ctl, mut peer) = register(&ops);
@@ -1802,8 +1943,208 @@ mod tests {
             assert!(ops.0.with(|st| st.streams[ctl.id].slot.is_none()));
             receive(&mut peer, &io, len);
         }
-        assert!(ops.0.with(|st| st.streams[ctl.id].slot.is_some()));
         receive(&mut peer, &io, usize::from(FIXED_FILES_AFTER));
+        assert!(ops.0.with(|st| st.streams[ctl.id].slot.is_some()));
+        receive(&mut peer, &io, usize::from(FIXED_FILES_AFTER) + 1);
+    }
+
+    /// STATEMENT: A ring receive stays armed across inputs that do not pause reading,
+    /// one operation delivers all of them.
+    ///
+    /// HOW:
+    /// - Register a stream, resume reading, write one byte from the peer and dispatch
+    ///   until the `Io` holds it. Skip if the kernel rejected multishot receives.
+    /// - Note the stream's `RecvRing` operation.
+    /// - Three times: write one byte and dispatch until the `Io` holds it, then check
+    ///   the stream's receive is still that operation, no cancel of it is pending and
+    ///   it is the only stored operation.
+    #[ntex::test]
+    async fn ring_receive_stays_armed() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        if ops.0.with(|st| st.bufs.is_none()) {
+            // kernel without provided buffer rings
+            return;
+        }
+
+        let (io, ctl, mut peer) = register(&ops);
+        ctl.resume_read();
+        std::io::Write::write_all(&mut peer, b"x").unwrap();
+        dispatch_until(&reactor, || io.read_dst_size() == 1);
+        if !ops.0.with(|st| st.recv_multi) {
+            // kernel without limited multishot receives
+            return;
+        }
+        let op = ops.0.with(|st| st.streams[ctl.id].rd_op);
+        assert!(rd_op_is(&ops, ctl.id, |op| matches!(
+            op,
+            Operation::RecvRing { multi: true, .. }
+        )));
+
+        for len in 2..=4 {
+            std::io::Write::write_all(&mut peer, b"x").unwrap();
+            dispatch_until(&reactor, || io.read_dst_size() == len);
+            assert_eq!(ops.0.with(|st| st.streams[ctl.id].rd_op), op);
+            assert!(
+                !ops.0
+                    .with(|st| st.streams[ctl.id].flags.contains(Flags::RD_CANCELING))
+            );
+            // the placeholder and the receive
+            assert_eq!(ops.0.with(|st| st.ops.len()), 2);
+        }
+    }
+
+    /// STATEMENT: Input that turns on read backpressure ends the armed ring receive,
+    /// and resuming reading arms a new one.
+    ///
+    /// HOW:
+    /// - Register a stream with 2 bytes of read backpressure and resume reading.
+    /// - Write one byte from the peer, dispatch until the `Io` holds it and check a
+    ///   `RecvRing` is still armed.
+    /// - Write another byte, dispatch until the stream has no receive and check the
+    ///   `Io` holds both bytes and only the placeholder operation is stored.
+    /// - Resume reading and check a `RecvRing` is armed again.
+    #[ntex::test]
+    async fn ring_receive_ends_on_backpressure() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        if ops.0.with(|st| st.bufs.is_none()) {
+            // kernel without provided buffer rings
+            return;
+        }
+        let is_ring = |op: &Operation| matches!(op, Operation::RecvRing { .. });
+
+        let cfg = SharedCfg::new("RECV").add(IoConfig::default().set_read_backpressure(2));
+        let (io, ctl, mut peer) = register_with(&ops, cfg);
+        ctl.resume_read();
+
+        std::io::Write::write_all(&mut peer, b"a").unwrap();
+        dispatch_until(&reactor, || io.read_dst_size() == 1);
+        assert!(rd_op_is(&ops, ctl.id, is_ring));
+
+        std::io::Write::write_all(&mut peer, b"b").unwrap();
+        dispatch_until(&reactor, || {
+            ops.0.with(|st| st.streams[ctl.id].rd_op.is_none())
+        });
+        assert_eq!(io.read_dst_size(), 2);
+        assert_eq!(ops.0.with(|st| st.ops.len()), 1);
+
+        ctl.resume_read();
+        assert!(rd_op_is(&ops, ctl.id, is_ring));
+    }
+
+    /// STATEMENT: Input that fills ring pages cancels the armed ring receive, the
+    /// next receive goes to a buffer of its own, and input that fits a page returns
+    /// to the ring. Input arrives complete and in order.
+    ///
+    /// HOW:
+    /// - Register a stream with 1 MiB of read backpressure and resume reading.
+    /// - Write 64 KiB of a byte pattern from the peer, dispatch until the `Io` holds
+    ///   it and the stream's receive is a direct `Recv`.
+    /// - Write one more byte, dispatch until the `Io` holds it and the receive is a
+    ///   `RecvRing` again.
+    /// - Check the `Io` holds the pattern followed by the byte.
+    #[ntex::test]
+    async fn streaming_input_switches_to_direct_receive() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        if ops.0.with(|st| st.bufs.is_none()) {
+            // kernel without provided buffer rings
+            return;
+        }
+
+        let cfg = SharedCfg::new("RECV").add(IoConfig::default().set_read_backpressure(1 << 20));
+        let (io, ctl, mut peer) = register_with(&ops, cfg);
+        ctl.resume_read();
+
+        let mut data: Vec<u8> = (0..=250).cycle().take(64 * 1024).collect();
+        std::io::Write::write_all(&mut peer, &data).unwrap();
+        dispatch_until(&reactor, || {
+            io.read_dst_size() == data.len()
+                && rd_op_is(&ops, ctl.id, |op| matches!(op, Operation::Recv { .. }))
+        });
+
+        std::io::Write::write_all(&mut peer, b"!").unwrap();
+        data.push(b'!');
+        dispatch_until(&reactor, || {
+            io.read_dst_size() == data.len()
+                && rd_op_is(&ops, ctl.id, |op| matches!(op, Operation::RecvRing { .. }))
+        });
+        assert!(io.with_read_dst(|buf| buf[..] == data[..]));
+    }
+
+    /// STATEMENT: A ring receive delivers no more input than the read budget it was
+    /// armed with, input beyond it stays queued in the socket.
+    ///
+    /// HOW:
+    /// - Register a stream with 100 bytes of read backpressure and resume reading.
+    /// - Write 64 KiB from the peer and dispatch until the stream has no receive and
+    ///   the `Io` holds input.
+    /// - Check the `Io` holds at most one ring page.
+    #[ntex::test]
+    async fn ring_receive_stops_at_read_budget() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        let Some(page) = ops.0.with(|st| st.bufs.as_ref().map(BufRing::buf_len)) else {
+            // kernel without provided buffer rings
+            return;
+        };
+
+        let cfg = SharedCfg::new("RECV").add(IoConfig::default().set_read_backpressure(100));
+        let (io, ctl, mut peer) = register_with(&ops, cfg);
+        ctl.resume_read();
+
+        std::io::Write::write_all(&mut peer, &vec![1u8; 64 * 1024]).unwrap();
+        dispatch_until(&reactor, || {
+            io.read_dst_size() > 0 && ops.0.with(|st| st.streams[ctl.id].rd_op.is_none())
+        });
+        assert!(io.read_dst_size() <= page as usize);
+    }
+
+    /// STATEMENT: A multishot receive the kernel rejects is reissued as a ring receive of
+    /// one input, and later ring receives on the thread take one input each.
+    ///
+    /// HOW:
+    /// - Make multishot receives invalid with `MSG_WAITALL`, register a stream and
+    ///   resume reading.
+    /// - Dispatch until the stream's receive is a single-input `RecvRing` and check
+    ///   multishot receives are disabled.
+    /// - Write two bytes from the peer one at a time, dispatching until the `Io` holds
+    ///   each, and check the `Io` holds both in order.
+    #[ntex::test]
+    async fn rejected_multishot_receive_falls_back_to_single_receive() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        if ops.0.with(|st| st.bufs.is_none()) {
+            // kernel without provided buffer rings
+            return;
+        }
+        RECV_MULTI_FLAGS.set(libc::MSG_WAITALL);
+
+        let (io, ctl, mut peer) = register(&ops);
+        ctl.resume_read();
+        dispatch_until(&reactor, || {
+            rd_op_is(&ops, ctl.id, |op| {
+                matches!(op, Operation::RecvRing { multi: false, .. })
+            })
+        });
+        assert!(!ops.0.with(|st| st.recv_multi));
+
+        for (len, byte) in [(1, b"a"), (2, b"b")] {
+            std::io::Write::write_all(&mut peer, byte).unwrap();
+            dispatch_until(&reactor, || io.read_dst_size() == len);
+        }
+        assert!(io.with_read_dst(|buf| buf[..] == b"ab"[..]));
     }
 
     /// STATEMENT: A completion that arrives after its stream was removed does not reach
@@ -1942,6 +2283,34 @@ mod tests {
                 assert_eq!(res.unwrap_err().kind(), io::ErrorKind::WouldBlock);
             }
         }
+    }
+
+    /// STATEMENT: A send that does not wait for a zero-copy notification marks the turn,
+    /// so the driver handles its completion in the turn that submitted it.
+    ///
+    /// HOW:
+    /// - Register a stream (zero-copy disabled) and clear the mark.
+    /// - Resume writing with no output and check nothing is marked.
+    /// - Buffer 5 bytes, resume writing, then check a send operation was stored and the
+    ///   turn is marked.
+    #[ntex::test]
+    async fn send_marks_inline_completion() {
+        let Ok(reactor) = Reactor::new(64) else {
+            return;
+        };
+        let ops = StreamOps::get(&reactor);
+        let (io, ctl, _peer) = register(&ops);
+        ops.0.api.take_inline();
+
+        ctl.resume_write();
+        assert!(!ops.0.api.take_inline());
+
+        io.encode_slice(b"hello").unwrap();
+        ctl.resume_write();
+        let is_send =
+            |op: &Operation| matches!(op, Operation::Send { .. } | Operation::SendOne { .. });
+        assert!(find_op(&ops, is_send).is_some());
+        assert!(ops.0.api.take_inline());
     }
 
     /// STATEMENT: `SendBuf` debug output shows the number of gathered pages and their

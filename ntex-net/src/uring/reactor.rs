@@ -176,6 +176,20 @@ impl ReactorApi {
         self.inner.ring.submitter().unregister_buf_ring(bgid)
     }
 
+    /// Marks a submitted request that usually completes during its
+    /// submission, a send to a socket with buffer space for example.
+    ///
+    /// A turn that handled few completions submits it before it ends, and
+    /// handles the completion within the turn rather than in another one.
+    pub(crate) fn submitted_inline(&self) {
+        self.inner.inline.set(true);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_inline(&self) -> bool {
+        self.inner.inline.take()
+    }
+
     /// Registers an empty file table with `nr` slots.
     ///
     /// The ring has one table, it is released with the ring.
@@ -293,6 +307,9 @@ struct ReactorInner {
     ring: IoUring<SEntry, CEntry>,
     changes: UnsafeCell<VecDeque<mem::MaybeUninit<SEntry>>>,
     notify_read: NotifierRead,
+    /// A request submitted in the current turn usually completes during the
+    /// submission, see `ReactorApi::submitted_inline`
+    inline: Cell<bool>,
     #[cfg(debug_assertions)]
     pushing: Cell<bool>,
 }
@@ -439,6 +456,7 @@ impl Reactor {
             probe,
             changes: UnsafeCell::new(VecDeque::with_capacity(32)),
             notify_read: NotifierRead::new(),
+            inline: Cell::new(false),
             #[cfg(debug_assertions)]
             pushing: Cell::new(false),
         });
@@ -610,13 +628,16 @@ impl Reactor {
     }
 
     /// Handle up to `CQES_PER_POLL` synced completions, forward changes to
-    /// specific handler. Returns `true` if synced completions remain.
+    /// specific handler. Returns the number of handled completions, and
+    /// `true` if synced completions remain.
     ///
     /// The caller must sync the queue before and after.
-    fn poll_completions(&self, cq: &mut cqueue::CompletionQueue<'_, CEntry>) -> bool {
+    fn poll_completions(&self, cq: &mut cqueue::CompletionQueue<'_, CEntry>) -> (usize, bool) {
+        let mut handled = 0;
         let mut has_more = false;
 
         if !cqueue::CompletionQueue::<'_, _>::is_empty(cq) {
+            handled = ExactSizeIterator::len(cq).min(Self::CQES_PER_POLL);
             let mut handlers = TakenHandlers::new(&self.handlers);
             for entry in (&mut *cq).take(Self::CQES_PER_POLL) {
                 let user_data = entry.user_data();
@@ -660,7 +681,7 @@ impl Reactor {
                 h.tick();
             }
         }
-        has_more
+        (handled, has_more)
     }
 }
 
@@ -695,7 +716,7 @@ impl Reactor {
         cq.sync();
         submit_getevents(ring.submission(), &ring.submitter()).unwrap();
         cq.sync();
-        while self.poll_completions(&mut cq) {
+        while self.poll_completions(&mut cq).1 {
             cq.sync();
         }
         cq.sync();
@@ -777,14 +798,41 @@ impl ntex_rt::Driver for Reactor {
                 // tasks woken until the runtime is polled do not need to notify
                 rt.awake();
                 cq.sync();
+                self.inner.inline.set(false);
 
                 // Run tasks after each chunk of completions, so a task writes
                 // to its socket while the socket is still hot in the cache.
                 // All chunks belong to one runtime turn, and their submissions
                 // share one `io_uring_enter` unless the submission queue fills.
+                let mut events = 0;
+                let mut reaped_inline = false;
                 let more_cqes = loop {
-                    if !self.poll_completions(&mut cq) {
-                        break false;
+                    let (handled, more) = self.poll_completions(&mut cq);
+                    events += handled;
+                    if !more {
+                        if handled == 0 || reaped_inline {
+                            break false;
+                        }
+                        // Requests that complete during their submission, sends
+                        // in particular, are submitted before the turn ends and
+                        // their completions handled in it. Otherwise the wait
+                        // at the end of the turn returns at once, and the next
+                        // turn handles only these completions. A busy turn
+                        // leaves them to the next one, which handles them with
+                        // new input.
+                        rt.run_ready();
+                        if !self.inner.inline.take() || events >= Self::CQES_PER_POLL {
+                            break false;
+                        }
+                        reaped_inline = true;
+                        cq.sync();
+                        if submit_getevents(sq, &submitter).is_err() {
+                            // the end of the turn retries and reports the error
+                            break false;
+                        }
+                        self.apply_changes(sq);
+                        cq.sync();
+                        continue;
                     }
                     rt.run_ready();
 
@@ -952,12 +1000,14 @@ mod tests {
     }
 
     /// STATEMENT: `poll_completions` handles at most `CQES_PER_POLL` synced completions
-    /// and reports whether more remain.
+    /// and reports how many it handled and whether more remain.
     ///
     /// HOW:
     /// - Submit `CQES_PER_POLL + 4` `Nop` operations to a counting handler and wait for them.
-    /// - Sync once, poll and check `CQES_PER_POLL` completions were handled and `true` returned.
-    /// - Poll again and check the rest were handled, `false` returned and the queue is empty.
+    /// - Sync once, poll and check `CQES_PER_POLL` completions were handled and reported,
+    ///   with `true` for the rest.
+    /// - Poll again and check the other 4 were handled and reported, `false` returned and
+    ///   the queue is empty.
     #[test]
     fn poll_completions_handles_one_chunk() {
         struct Count(Rc<Cell<usize>>);
@@ -999,9 +1049,12 @@ mod tests {
         // SAFETY: The test is the only consumer of the completion queue.
         let mut cq = unsafe { reactor.inner.ring.completion_shared() };
         cq.sync();
-        assert!(reactor.poll_completions(&mut cq));
+        assert_eq!(
+            reactor.poll_completions(&mut cq),
+            (Reactor::CQES_PER_POLL, true)
+        );
         assert_eq!(count.get(), Reactor::CQES_PER_POLL);
-        assert!(!reactor.poll_completions(&mut cq));
+        assert_eq!(reactor.poll_completions(&mut cq), (4, false));
         assert_eq!(count.get(), total);
         cq.sync();
         assert!(cq.is_empty());
@@ -1091,6 +1144,83 @@ mod tests {
         let polls = |n| seen.iter().find(|(c, _)| *c == n).map(|(_, p)| *p);
         assert!(polls(chunk).is_some(), "{seen:?}");
         assert_eq!(polls(chunk), polls(2 * chunk), "{seen:?}");
+    }
+
+    /// STATEMENT: A request marked as completing during its submission is submitted
+    /// before the turn ends, and its completion is handled in the same turn.
+    ///
+    /// HOW:
+    /// - Complete a `Nop` whose handler submits another `Nop` and calls `submitted_inline()`.
+    /// - Record the completion count and `poll_count()` from a task woken by completions.
+    /// - Check both completions were seen with the same poll count, so one runtime turn
+    ///   handled them.
+    #[test]
+    fn inline_completion_is_handled_in_turn() {
+        struct Resubmit {
+            api: ReactorApi,
+            count: Rc<Cell<usize>>,
+            waker: Rc<Cell<Option<Waker>>>,
+        }
+        impl Handler for Resubmit {
+            fn completed(&mut self, id: usize, _: u32, _: io::Result<usize>) {
+                self.count.set(self.count.get() + 1);
+                if id == 0 {
+                    // SAFETY: `Nop` entries reference no memory or descriptors.
+                    unsafe {
+                        self.api.submit(1, |en| {
+                            Nop::new(en);
+                        });
+                    }
+                    self.api.submitted_inline();
+                }
+                if let Some(waker) = self.waker.take() {
+                    waker.wake();
+                }
+            }
+            fn canceled(&mut self, _: usize) {}
+            fn tick(&mut self) {}
+            fn cleanup(&mut self) {}
+        }
+
+        let Ok(reactor) = Reactor::new(16) else {
+            return;
+        };
+        let count = Rc::new(Cell::new(0));
+        let waker = Rc::new(Cell::new(None));
+        reactor.register(|api| {
+            // SAFETY: `Nop` entries reference no memory or descriptors.
+            unsafe {
+                api.submit(0, |en| {
+                    Nop::new(en);
+                });
+            }
+            Box::new(Resubmit {
+                api,
+                count: count.clone(),
+                waker: waker.clone(),
+            })
+        });
+        reactor.inner.ring.submitter().submit_and_wait(1).unwrap();
+
+        let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
+        let seen = RefCell::new(Vec::new());
+        rt.block_on(
+            std::future::poll_fn(|cx| {
+                waker.set(Some(cx.waker().clone()));
+                seen.borrow_mut().push((count.get(), rt.poll_count()));
+                if count.get() == 2 {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }),
+            &reactor,
+        );
+
+        let seen = seen.into_inner();
+        let polls = |n| seen.iter().find(|(c, _)| *c == n).map(|(_, p)| *p);
+        assert!(polls(1).is_some(), "{seen:?}");
+        assert_eq!(polls(1), polls(2), "{seen:?}");
     }
 
     /// STATEMENT: A detached request posts no completion when it succeeds, a failed one
@@ -1659,7 +1789,7 @@ mod tests {
         // SAFETY: The test is the only consumer of the completion queue.
         let mut cq = unsafe { reactor.inner.ring.completion_shared() };
         cq.sync();
-        assert!(!reactor.poll_completions(&mut cq));
+        assert!(!reactor.poll_completions(&mut cq).1);
         cq.sync();
         reactor
             .inner
