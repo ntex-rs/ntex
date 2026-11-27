@@ -328,9 +328,10 @@ rules. Among those workers, `LoadBalancing` decides:
   runtimes are blocked while another worker is available.
 * `LeastLoaded` picks two random workers and chooses the one with lower
   runtime utilization. Utilization is the share of time the runtime was
-  busy, averaged over about 250 ms and sampled at most every 10 ms. If the
-  two differ by less than 10%, the one with fewer open and queued connections
-  wins.
+  busy, averaged over about 250 ms and sampled at most every 10 ms. On the
+  neon and compio runtimes, runtime turns of 100 ms or more are not counted.
+  If the two differ by less than 10%, the one with fewer open and queued
+  connections wins.
 
   Blocked workers are skipped while another worker is available. See
   [Stall detection](#stall-detection). On tokio, busy time is available only
@@ -393,6 +394,8 @@ it to another worker when the original worker:
 * Is blocked by a task. With two or more workers, the server checks for
   blocked workers every 50 ms. It moves their queued connections while
   another worker is not blocked. See [Stall detection](#stall-detection).
+  On the native runtime the check sleeps while every worker is idle and
+  resumes with the next connection.
 
 Only queued connections move. Once a worker takes a connection, it registers
 that connection with its runtime and keeps it there. A blocked worker handles
@@ -781,7 +784,8 @@ for `interval` and records how late it wakes up:
 | `interval` | setting | Sampling interval. |
 | `last` | gauge | Lateness of the most recent sample. |
 | `histogram` | histogram | Lateness of all samples. |
-| `last_sample` | gauge | Time of the most recent sample. |
+| `last_sample` | gauge | Time of the most recent sample. With `deferred`, it stops advancing while the worker is idle. |
+| `deferred` | setting | Whether runtime turns take the samples instead of a timer. `true` on the native runtime. |
 | `stalls` | counter | Times the worker recorded no sample for longer than `interval` plus the stall threshold. |
 | `stall_duration` | duration | Total duration of finished stalls. |
 | `stalled` | gauge | Whether the worker is stalled now. |
@@ -1255,12 +1259,15 @@ metrics.
 
 Stall detection identifies workers that stop making progress. Each worker
 runs a task that sleeps for the latency sampling interval and records how
-late it wakes up. A watchdog thread checks workers every interval.
+late it wakes up. A watchdog thread checks workers when the earliest stall
+can start, at most once per interval.
 
 A worker is stalled if it records no sample for longer than the interval
 plus the stall threshold. The defaults are 100 ms for the interval and 1 s
 for the threshold. A worker is therefore stalled after about 1.1 s without
-progress.
+progress. On the native runtime the next runtime turn takes the sample, so
+an idle worker is never stalled, and the watchdog sleeps while every worker
+is idle.
 
 When a stall starts, the watchdog logs an error:
 
@@ -1289,7 +1296,9 @@ the `latency.histogram` and `poll_histogram` differences.
 While another worker is available, new connections skip a worker if:
 
 * Its runtime turn has lasted 100 ms or more.
-* It has recorded no latency sample for 100 ms past its interval.
+* It has recorded no latency sample for 100 ms past its interval. This rule
+  does not apply with deferred sampling on the native runtime, where an
+  idle worker records no samples.
 * It is stalled.
 
 Queued connections move to other workers. See [Rescheduling](#rescheduling).
@@ -1316,9 +1325,9 @@ fn main() -> std::io::Result<()> {
 ```
 
 A shorter interval detects stalls sooner and gives a finer latency
-histogram. It also causes more timer wakeups on idle workers. Keep the
-threshold above the longest blocking you accept to avoid logging expected
-work.
+histogram. On the tokio and compio runtimes it also causes more timer
+wakeups on idle workers. Keep the threshold above the longest blocking you
+accept to avoid logging expected work.
 
 Set `latency_interval(0)` to disable sampling and stall detection.
 `WorkerMetrics::runtime.latency` is then `None`.

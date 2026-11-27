@@ -39,10 +39,12 @@ use crate::metrics::Histogram;
 use crate::remote::{Job, RemoteJoin, Runner};
 use crate::time::Timer;
 
+mod lazy;
 mod queue;
 pub(crate) mod task;
 pub(crate) mod wake;
 
+use self::lazy::LazyTimer;
 use self::queue::RunnableQueue;
 
 /// Error returned by [`crate::spawn_sendable()`] when no task output is available.
@@ -229,6 +231,8 @@ pub struct Runtime {
     queue: Arc<RunnableQueue>,
     /// Timer wheel, its timers are expired by [`Runtime::poll`].
     pub(crate) timer: Rc<Timer>,
+    /// Deadline expired at turn starts, used by the latency sampler.
+    pub(crate) lazy: LazyTimer,
     // tasks are polled and dropped on the thread that created the runtime
     _not_send: PhantomData<*const ()>,
 }
@@ -256,6 +260,7 @@ impl Runtime {
             stop: Cell::new(false),
             queue,
             timer: Timer::new_native(builder.timer_resolution),
+            lazy: LazyTimer::default(),
             _not_send: PhantomData,
         }
     }
@@ -385,6 +390,8 @@ impl Runtime {
     pub fn awake(&self) {
         if self.queue.idle.get() {
             self.queue.start_busy();
+            // tasks may run before the next poll
+            self.lazy.turn(self.queue.poll_start.get());
         }
     }
 
@@ -414,6 +421,7 @@ impl Runtime {
             // expired timers wake their tasks before the batch runs; buckets
             // that become due later in the turn are caught below
             self.timer.run_due(start);
+            self.lazy.turn(start);
             if self.queue.run() {
                 PollResult::PollAgain
             } else {
@@ -427,7 +435,12 @@ impl Runtime {
         let result = match result {
             PollResult::Pending(_) => match self.timer.next_deadline() {
                 Some(deadline) if deadline <= now => PollResult::PollAgain,
-                deadline => PollResult::Pending(deadline.map(|d| d - now)),
+                // a deadline passed during the turn is expired by the next one
+                _ if self.lazy.is_due(now) => PollResult::PollAgain,
+                deadline => {
+                    self.lazy.sleep();
+                    PollResult::Pending(deadline.map(|d| d - now))
+                }
             },
             result => result,
         };
@@ -625,6 +638,7 @@ impl Drop for Runtime {
         CURRENT_RUNTIME.set(self, || {
             self.queue.shutdown();
             self.timer.shutdown();
+            self.lazy.clear();
         });
     }
 }
@@ -667,6 +681,14 @@ impl Handle {
     /// See [`Runtime::current_turn`].
     pub fn current_turn(&self) -> Option<Duration> {
         self.queue.busy.current_turn()
+    }
+
+    #[doc(hidden)]
+    /// Returns the number of runtime turns that ran for at least 100 ms.
+    ///
+    /// A turn is counted once it ends. Always returns `Some`.
+    pub fn long_turns(&self) -> Option<u64> {
+        Some(self.queue.busy.long_turns())
     }
 
     /// Returns the number of scheduler polls, including polls with no ready tasks.

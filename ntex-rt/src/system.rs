@@ -9,6 +9,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::arbiter::Arbiter;
 use crate::pool::PoolMetrics;
+use crate::watchdog::Watchdog;
 use crate::{BlockingResult, Builder, Handle, HashMap, Runner, SystemRunner, TaskCallbacks};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -49,6 +50,7 @@ pub(crate) struct SystemInner {
     signals: AtomicBool,
     // pool totals of unregistered arbiters
     retired_pools: Mutex<PoolMetrics>,
+    pub(crate) watchdog: Arc<Watchdog>,
 }
 
 /// Configuration shared by a running [`System`].
@@ -110,6 +112,7 @@ impl System {
             retired_pools: Mutex::new(PoolMetrics::default()),
             storage: RwLock::new(HashMap::default()),
             signals: AtomicBool::new(false),
+            watchdog: Arc::default(),
         }));
         System::set_current(sys.clone());
 
@@ -510,7 +513,6 @@ struct SystemSupport {
     sys: System,
     stop: Option<oneshot::Sender<i32>>,
     commands: Receiver<SystemCommand>,
-    watchdog: Option<Arc<AtomicBool>>,
 }
 
 impl Drop for SystemSupport {
@@ -525,22 +527,20 @@ impl SystemSupport {
             sys: sys.clone(),
             stop: Some(stop),
             commands: sys.0.receiver.clone(),
-            watchdog: None,
         }
     }
 
-    fn stop_watchdog(&mut self) {
-        if let Some(stop) = self.watchdog.take() {
-            stop.store(true, Ordering::Relaxed);
-        }
+    fn stop_watchdog(&self) {
+        self.sys.0.watchdog.stop();
     }
 
     async fn run(mut self) {
         crate::metrics::start_latency_sampler(
             &self.sys.0.arbiter.0.latency,
             self.sys.0.config.latency_interval,
+            &self.sys.0.watchdog,
         );
-        self.watchdog = crate::watchdog::start(&self.sys);
+        crate::watchdog::start(&self.sys);
         if self.sys.0.config.ping_interval != 0 {
             crate::spawn_detached(ping_arbiters(self.sys.clone()));
         }

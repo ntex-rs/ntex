@@ -93,6 +93,110 @@ fn latency_callback_replaced_while_running() {
     *ARB_CB.lock() = None;
 }
 
+/// STATEMENT: While an arbiter takes samples, the watchdog wakes when a stall can start,
+/// not every latency interval.
+///
+/// HOW:
+/// - Run a system without pings, sampling every 10 ms with a 300 ms threshold.
+/// - Once the system arbiter samples, keep it running on a 1 ms timer for 600 ms and
+///   check it took samples.
+/// - Check the watchdog made a few checks in that time, not one per interval.
+#[test]
+fn watchdog_wakes_when_stall_can_start() {
+    System::build()
+        .name("test")
+        .latency_interval(10)
+        .ping_interval(0)
+        .ping_threshold(300)
+        .build(TestRunner)
+        .block_on(async {
+            let wd = System::current().0.watchdog.clone();
+            let latency = || System::current().arbiter().latency();
+            while latency().is_none() {
+                Delay::new(Duration::from_millis(1)).await;
+            }
+            let samples = || latency().unwrap().histogram.count();
+            let before = (wd.passes.load(Ordering::Relaxed), samples());
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_millis(600) {
+                Delay::new(Duration::from_millis(1)).await;
+            }
+            assert!(
+                samples() - before.1 >= 20,
+                "{} samples",
+                samples() - before.1
+            );
+            let passes = wd.passes.load(Ordering::Relaxed) - before.0;
+            assert!(passes <= 15, "{passes} checks");
+        });
+}
+
+#[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
+/// STATEMENT: The watchdog parks while every arbiter is idle, and an arbiter that wakes and
+/// blocks is still detected as stalled.
+///
+/// HOW:
+/// - Run a system on a driver that blocks while idle, without pings, sampling every 10 ms.
+/// - From a plain thread, wait for the watchdog to park and check no arbiter takes a
+///   sample while it stays parked for 100 ms.
+/// - Block a worker arbiter past the threshold and check the stall is detected and recovered.
+#[test]
+fn watchdog_parks_while_idle() {
+    let _guard = CALLBACK.lock();
+    System::build()
+        .name("test")
+        .latency_interval(10)
+        .ping_interval(0)
+        .ping_threshold(100)
+        .build(crate::testing::ParkRunner)
+        .block_on(async {
+            let mut arb = Arbiter::new();
+            let sys_arb = System::current().arbiter();
+            let wd = System::current().0.watchdog.clone();
+            let (tx, rx) = oneshot::channel();
+            let arb2 = arb.clone();
+            std::thread::spawn(move || {
+                let parked = || wd.parked.load(Ordering::Relaxed);
+                let samples =
+                    || [&arb2, &sys_arb].map(|arb| arb.latency().unwrap().histogram.count());
+                let start = std::time::Instant::now();
+                while !parked() && start.elapsed() < Duration::from_secs(10) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let before = (parked(), samples());
+                std::thread::sleep(Duration::from_millis(100));
+                let _ = tx.send((before, (parked(), samples())));
+            });
+            let (before, after) = rx.await.unwrap();
+            assert!(before.0, "watchdog did not park");
+            assert_eq!(before, after);
+
+            let done = arb.handle().spawn(async move {
+                std::thread::sleep(Duration::from_millis(400));
+            });
+            let stalled = || arb.latency().unwrap().stalled;
+            for _ in 0..400 {
+                if stalled() {
+                    break;
+                }
+                Delay::new(Duration::from_millis(5)).await;
+            }
+            assert!(stalled());
+            done.await.unwrap();
+            for _ in 0..400 {
+                if !stalled() {
+                    break;
+                }
+                Delay::new(Duration::from_millis(5)).await;
+            }
+            let m = arb.latency().unwrap();
+            assert_eq!((m.stalls, m.stalled), (1, false), "{m:?}");
+
+            arb.stop();
+            arb.join().unwrap();
+        });
+}
+
 #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 // Spins instead of blocking, a blocking call can be a tail call that
 // leaves no frame of this function. Exported, so the symbol is resolved

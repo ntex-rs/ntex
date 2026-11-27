@@ -27,3 +27,29 @@ fn read_before_stop_is_not_undone() {
     clock.stop(next + Duration::from_millis(5));
     assert_eq!(clock.busy_duration(), Duration::from_millis(6));
 }
+
+/// STATEMENT: A turn is counted as long once it ends after running for at least 100 ms,
+/// also when it ends the busy period.
+///
+/// HOW:
+/// - Drive the clock with fixed timestamps: a 50 ms turn, a turn of exactly 100 ms, and a
+///   101 ms turn that ends the busy period.
+/// - Start another busy period with a 99 ms turn.
+/// - Check the count after each turn ends.
+#[test]
+fn long_turns_are_counted_when_they_end() {
+    let ms = Duration::from_millis;
+    let clock = BusyClock::new();
+    let start = Instant::now();
+    clock.start(start);
+    clock.next_turn(start + ms(50));
+    assert_eq!(clock.long_turns(), 0);
+    clock.next_turn(start + ms(150));
+    assert_eq!(clock.long_turns(), 1);
+    clock.stop(start + ms(251));
+    assert_eq!(clock.long_turns(), 2);
+
+    clock.start(start + ms(300));
+    clock.stop(start + ms(399));
+    assert_eq!(clock.long_turns(), 2);
+}

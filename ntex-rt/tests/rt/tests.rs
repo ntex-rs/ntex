@@ -2609,3 +2609,70 @@ fn dropped_runtime_timers_are_stale() {
         assert_eq!(rt.poll(), PollResult::Pending(None));
     });
 }
+
+/// Spawns a task that arms a lazy deadline `delay` from now and stores the
+/// effective deadline once it expires, returns the deadline and the slot.
+fn spawn_lazy_waiter(rt: &Runtime, delay: Duration) -> (Instant, Rc<Cell<Option<Instant>>>) {
+    let deadline = Instant::now() + delay;
+    let expired = Rc::new(Cell::new(None));
+    let slot = expired.clone();
+    rt.spawn_detached(async move {
+        Runtime::with_current(|rt| rt.lazy.reset(deadline));
+        let at = poll_fn(|cx| Runtime::with_current(|rt| rt.lazy.poll_expired(cx))).await;
+        slot.set(Some(at));
+    });
+    (deadline, expired)
+}
+
+/// STATEMENT: A lazy deadline does not wake an idle runtime, the first turn after it
+/// expires it as of the start of that turn.
+///
+/// HOW:
+/// - Arm a lazy deadline from a task and check the idle poll reports no timeout.
+/// - Sleep past the deadline as an idle driver would and check nothing expired.
+/// - Wake the runtime and poll, check the effective deadline is the turn start,
+///   after the deadline.
+#[test]
+fn lazy_deadline_expires_at_next_turn() {
+    let delay = Duration::from_millis(if cfg!(miri) { 500 } else { 20 });
+    let rt = Runtime::new(Box::new(NoopNotify));
+    CURRENT_RUNTIME.set(&rt, || {
+        let (deadline, expired) = spawn_lazy_waiter(&rt, delay);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
+
+        thread::sleep(delay * 2);
+        assert_eq!(expired.get(), None);
+
+        let woke = Instant::now();
+        rt.awake();
+        assert_eq!(rt.poll(), PollResult::Pending(None));
+        let at = expired.get().unwrap();
+        assert!(at >= woke && at > deadline, "{at:?} {woke:?} {deadline:?}");
+    });
+}
+
+/// STATEMENT: A lazy deadline that passes during a turn makes the poll ask for another
+/// pass, which expires it as of the deadline.
+///
+/// HOW:
+/// - Arm a lazy deadline from a task and let the runtime go idle.
+/// - Mark the runtime awake before the deadline, then block past it to stand for
+///   driver-event processing.
+/// - Check the poll returns `PollAgain` without expiring the deadline, and the next
+///   poll expires it with the deadline itself as the effective deadline.
+#[test]
+fn lazy_deadline_in_long_turn() {
+    let delay = Duration::from_millis(if cfg!(miri) { 500 } else { 20 });
+    let rt = Runtime::new(Box::new(NoopNotify));
+    CURRENT_RUNTIME.set(&rt, || {
+        let (deadline, expired) = spawn_lazy_waiter(&rt, delay);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
+
+        rt.awake();
+        thread::sleep(delay * 2);
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert_eq!(expired.get(), None);
+        assert_eq!(rt.poll(), PollResult::Pending(None));
+        assert_eq!(expired.get(), Some(deadline));
+    });
+}

@@ -376,6 +376,14 @@ impl Handle {
         self.stats.busy.current_turn()
     }
 
+    #[doc(hidden)]
+    /// Returns the number of runtime turns that ran for at least 100 ms.
+    ///
+    /// A turn is counted once it ends. Always returns `Some`.
+    pub fn long_turns(&self) -> Option<u64> {
+        Some(self.stats.busy.long_turns())
+    }
+
     /// Returns the number of runtime turns.
     ///
     /// Always returns `Some`, the return type matches the other runtime

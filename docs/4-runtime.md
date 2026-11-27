@@ -315,12 +315,19 @@ ten most recent round-trip times. Set `ping_interval(0)` to turn pings off.
 
 For a closer view of scheduling delays, each arbiter measures its latency
 every `latency_interval()`, 100 milliseconds by default. `Arbiter::latency()`
-returns a histogram of how late those measurements woke up.
+returns a histogram of how late those measurements woke up. On the native
+(neon) runtime the measurement does not wake an idle arbiter. The first
+runtime turn after the interval takes it, and `LatencyMetrics::deferred` is
+`true`. Lateness is then measured from the start of that turn if the arbiter
+was idle when the interval ended.
 
 A watchdog thread marks an arbiter as stalled if no measurement arrives within
 the interval plus `ping_threshold()`. The threshold defaults to one second.
-`Arbiter::latency()` also counts these stalls. Set `latency_interval(0)` to turn
-off both measurement and stall detection.
+`Arbiter::latency()` also counts these stalls. With deferred measurement an
+idle arbiter is never stalled, and the watchdog sleeps while every arbiter is
+idle. Otherwise the watchdog wakes when the earliest stall can start, at most
+once per interval. Set `latency_interval(0)` to turn off both measurement and
+stall detection.
 
 To help locate a stall on the native (neon) runtime,
 `Handle::current_task()` returns the spawn location of the task being polled.

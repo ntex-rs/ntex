@@ -1,9 +1,15 @@
 # Changes
 
-## [4.10.2] - unreleased
+## [4.10.2] - 2026-11-28
 
 * Expire timers as of the start of the runtime turn, saves a clock read per
   turn
+
+* The native runtime takes latency samples at the start of runtime turns
+  instead of waking an idle arbiter, see `LatencyMetrics::deferred`
+
+* The watchdog thread parks while every arbiter is idle, otherwise it wakes
+  when a stall can start instead of every latency interval
 
 ## [4.10.1] - 2026-11-24
 
