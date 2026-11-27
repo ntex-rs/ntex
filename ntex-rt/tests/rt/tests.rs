@@ -2506,6 +2506,36 @@ fn poll_again_for_due_timer() {
     });
 }
 
+/// STATEMENT: Timers are expired as of the start of the turn, a timer that becomes due
+/// later in the turn makes the poll ask for another pass, which expires it.
+///
+/// HOW:
+/// - Spawn a task waiting on a 20 ms timer and poll it, so the timer is armed.
+/// - Mark the runtime awake, then block the thread past the deadline to stand for
+///   driver-event processing.
+/// - Check the poll returns `PollAgain` with the task still waiting, and the next poll
+///   expires the timer and completes the task.
+#[test]
+fn timers_expire_at_turn_start() {
+    let rt = RuntimeBuilder::new()
+        .timer_resolution(1)
+        .build(Box::new(NoopNotify));
+    CURRENT_RUNTIME.set(&rt, || {
+        let task = rt.spawn(async {
+            let hnd = crate::time::TimerHandle::new(20);
+            poll_fn(|cx| hnd.poll_elapsed(cx)).await;
+        });
+        assert!(matches!(rt.poll(), PollResult::Pending(Some(_))));
+
+        rt.awake();
+        thread::sleep(Duration::from_millis(40));
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert!(!task.is_finished());
+        assert!(matches!(rt.poll(), PollResult::Pending(None)));
+        assert!(task.is_finished());
+    });
+}
+
 /// STATEMENT: Timer tasks and callbacks are driven by `Runtime::poll` alone, with the runtime current.
 ///
 /// HOW:

@@ -1,5 +1,10 @@
 # Changes
 
+## [4.10.2] - unreleased
+
+* Expire timers as of the start of the runtime turn, saves a clock read per
+  turn
+
 ## [4.10.1] - 2026-11-24
 
 * Fix use-after-free when a native runtime's notifier drops the runtime during

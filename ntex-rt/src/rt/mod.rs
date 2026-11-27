@@ -411,8 +411,9 @@ impl Runtime {
         let result = if self.stop.get() {
             PollResult::Ready
         } else {
-            // expired timers wake their tasks before the batch runs
-            self.timer.run_due();
+            // expired timers wake their tasks before the batch runs; buckets
+            // that become due later in the turn are caught below
+            self.timer.run_due(start);
             if self.queue.run() {
                 PollResult::PollAgain
             } else {
