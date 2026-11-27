@@ -21,6 +21,21 @@ pub struct Decoded<T> {
     pub consumed: usize,
 }
 
+/// Result of decoding buffered items into a `Vec`.
+///
+/// Returned by [`IoRef::decode_items`](crate::IoRef::decode_items) and
+/// [`Io::poll_recv_decode_items`](crate::Io::poll_recv_decode_items).
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct DecodedItems {
+    /// Number of items appended to the destination.
+    pub items: usize,
+    /// Bytes left in the application-facing read buffer after decoding.
+    pub remains: usize,
+    /// Bytes consumed by the last decode attempt when it produced no item,
+    /// for example a partial frame the codec keeps internally, otherwise 0.
+    pub consumed: usize,
+}
+
 // capacity of the wake buffer kept for reuse
 const MAX_SPARE_WAKERS: usize = 1024;
 

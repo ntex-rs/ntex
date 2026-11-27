@@ -9,6 +9,10 @@
   buffered items into a `Vec` in one buffer access; pipelined protocols pay
   the per-receive cost once per batch instead of once per item
 
+* Add `Io::poll_recv_decode_items()`, the batch form of
+  `Io::poll_recv_decode()`; it and `IoRef::decode_items()` return
+  `DecodedItems` with the item count and buffer progress for read timers
+
 ## [4.9.1] - 2026-11-26
 
 * `IoRef::with_read_src()` and `IoRef::with_buf()` keep a read pause unless the

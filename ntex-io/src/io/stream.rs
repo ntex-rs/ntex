@@ -4,7 +4,7 @@ use std::{fmt, future::Future, future::poll_fn, io, pin::Pin};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::future::Either;
 
-use crate::{Base, Decoded, IoStatusUpdate, RecvError};
+use crate::{Base, Decoded, DecodedItems, IoStatusUpdate, RecvError};
 
 use super::Io;
 #[cfg(doc)]
@@ -481,6 +481,55 @@ impl<F> Io<F> {
         }
     }
 
+    #[inline]
+    /// Decodes up to `max` buffered items into `dst` and reports buffer
+    /// progress.
+    ///
+    /// The batch form of [`poll_recv_decode`](Self::poll_recv_decode), with
+    /// the same checks, errors and waiting: decoding goes through
+    /// [`IoRef::decode_items`], and `Ok` with no items means the codec needs
+    /// more input and `cx` will be woken when progress is possible. Items
+    /// decoded before a codec error stay in `dst`, and the error is returned.
+    pub fn poll_recv_decode_items<U>(
+        &self,
+        codec: &U,
+        dst: &mut Vec<U::Item>,
+        max: usize,
+        cx: &mut Context<'_>,
+    ) -> Result<DecodedItems, RecvError<U>>
+    where
+        U: Decoder,
+    {
+        let st = self.st();
+        if !st.flags.is_recv_ready() {
+            st.flags.unset_read_ready();
+
+            if !st.flags.is_stopping_or_terminating() {
+                if st.flags.check_dispatcher_timeout() {
+                    return Err(RecvError::Timeout);
+                } else if st.flags.is_wr_backpressure() {
+                    return Err(RecvError::WriteBackpressure);
+                }
+            }
+        }
+
+        let decoded = self
+            .decode_items(codec, dst, max)
+            .map_err(|err| RecvError::Decoder(err))?;
+
+        if decoded.items != 0 {
+            Ok(decoded)
+        } else if st.flags.is_stopping_or_terminating() {
+            Err(RecvError::PeerGone(st.error().or_else(|| self.truncated())))
+        } else {
+            match self.poll_read_more(cx) {
+                Poll::Pending | Poll::Ready(Ok(Some(()))) => Ok(decoded),
+                Poll::Ready(Err(e)) => Err(RecvError::PeerGone(Some(e))),
+                Poll::Ready(Ok(None)) => Err(RecvError::PeerGone(self.truncated())),
+            }
+        }
+    }
+
     /// Reports a stream the peer closed cleanly in the middle of a frame.
     fn truncated(&self) -> Option<io::Error> {
         let st = self.st();
@@ -710,70 +759,27 @@ where
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        match this.io.poll_recv_batch(this.codec, this.dst, this.max, cx) {
-            Poll::Ready(Err(RecvError::WriteBackpressure)) => match this.io.recv_flush(cx) {
+        match this
+            .io
+            .poll_recv_decode_items(this.codec, this.dst, this.max, cx)
+        {
+            Ok(decoded) if decoded.items == 0 => Poll::Pending,
+            Ok(decoded) => Poll::Ready(Ok(decoded.items)),
+            Err(RecvError::WriteBackpressure) => match this.io.recv_flush(cx) {
                 Some(err) => Poll::Ready(Err(RecvError::PeerGone(Some(err)))),
                 None => Poll::Pending,
             },
-            res => res,
+            Err(err) => Poll::Ready(Err(err)),
         }
     }
 }
 
 impl<F> Io<F> {
-    /// Decodes buffered items into `dst` for [`RecvBatch`].
-    ///
-    /// Same checks and waiting as
-    /// [`poll_recv_decode`](Self::poll_recv_decode), but decodes up to `max`
-    /// items with [`IoRef::decode_items`].
-    #[inline]
-    fn poll_recv_batch<U>(
-        &self,
-        codec: &U,
-        dst: &mut Vec<U::Item>,
-        max: usize,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<usize, RecvError<U>>>
-    where
-        U: Decoder,
-    {
-        let st = self.st();
-        if !st.flags.is_recv_ready() {
-            st.flags.unset_read_ready();
-
-            if !st.flags.is_stopping_or_terminating() {
-                if st.flags.check_dispatcher_timeout() {
-                    return Poll::Ready(Err(RecvError::Timeout));
-                } else if st.flags.is_wr_backpressure() {
-                    return Poll::Ready(Err(RecvError::WriteBackpressure));
-                }
-            }
-        }
-
-        match self.decode_items(codec, dst, max) {
-            Ok(0) => (),
-            Ok(n) => return Poll::Ready(Ok(n)),
-            Err(err) => return Poll::Ready(Err(RecvError::Decoder(err))),
-        }
-
-        if st.flags.is_stopping_or_terminating() {
-            Poll::Ready(Err(RecvError::PeerGone(
-                st.error().or_else(|| self.truncated()),
-            )))
-        } else {
-            match self.poll_read_more(cx) {
-                Poll::Pending | Poll::Ready(Ok(Some(()))) => Poll::Pending,
-                Poll::Ready(Err(e)) => Poll::Ready(Err(RecvError::PeerGone(Some(e)))),
-                Poll::Ready(Ok(None)) => Poll::Ready(Err(RecvError::PeerGone(self.truncated()))),
-            }
-        }
-    }
-
     /// Waits out write backpressure for [`RecvItem`] and [`RecvBatch`],
     /// returning a flush error.
     ///
     /// Nothing is stored between polls. Each poll goes through `poll_recv` or
-    /// `poll_recv_batch`, which report an expired dispatcher timer before
+    /// `poll_recv_decode_items`, which report an expired dispatcher timer before
     /// write backpressure.
     #[cold]
     #[inline(never)]

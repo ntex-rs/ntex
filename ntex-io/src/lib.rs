@@ -53,7 +53,7 @@ pub use self::metrics::{
 };
 pub use self::ops::{Id, TimerHandle};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::utils::Decoded;
+pub use self::utils::{Decoded, DecodedItems};
 pub use self::waiters::Waiter;
 
 #[doc(hidden)]

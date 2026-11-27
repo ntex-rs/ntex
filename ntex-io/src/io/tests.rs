@@ -4957,7 +4957,7 @@ async fn decode_items_updates_read_state() {
 
     let mut items = Vec::new();
     let decoded = io.decode_items(&FixedSize(size / 4), &mut items, 2);
-    assert_eq!(decoded.unwrap(), 2);
+    assert_eq!(decoded.unwrap().items, 2);
     assert!(!io.flags().is_read_ready());
     assert!(!io.flags().is_rd_backpressure());
     assert_eq!(metrics.snapshot().read_buffered, size / 2);

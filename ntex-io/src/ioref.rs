@@ -9,7 +9,8 @@ use crate::io::Close;
 use crate::ops::{Id, Iops, TimerHandle};
 use crate::waiters::{TAG_DISCONNECT, TAG_WRITE, Waiter};
 use crate::{
-    CloseReason, Decoded, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext, IoRef, types,
+    CloseReason, Decoded, DecodedItems, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext,
+    IoRef, types,
 };
 
 impl IoRef {
@@ -360,12 +361,12 @@ impl IoRef {
 
     /// Decodes buffered frames into `dst`, at most `max` of them.
     ///
-    /// Returns the number of items appended to `dst`. Decoding stops when
-    /// `max` items were appended, the codec needs more input or fails, or an
-    /// item leaves the read buffer empty. Items appended before a codec error
-    /// stay in `dst`. A `max` of zero is treated as one. Once the transport
-    /// reached eof this uses [`Decoder::decode_eof`] instead of
-    /// [`Decoder::decode`].
+    /// Returns the number of items appended to `dst` and the read buffer
+    /// progress, see [`DecodedItems`]. Decoding stops when `max` items were
+    /// appended, the codec needs more input or fails, or an item leaves the
+    /// read buffer empty. Items appended before a codec error stay in `dst`.
+    /// A `max` of zero is treated as one. Once the transport reached eof this
+    /// uses [`Decoder::decode_eof`] instead of [`Decoder::decode`].
     ///
     /// The read buffer is accessed once and the read state is updated once
     /// for all items, which is cheaper than calling [`decode`](Self::decode)
@@ -377,14 +378,15 @@ impl IoRef {
         codec: &U,
         dst: &mut Vec<<U as Decoder>::Item>,
         max: usize,
-    ) -> Result<usize, <U as Decoder>::Error>
+    ) -> Result<DecodedItems, <U as Decoder>::Error>
     where
         U: Decoder,
     {
         let res = self.0.buffer.with_read_dst(self, |buf| {
             let eof = self.0.flags.is_read_eof();
-            let mut count = 0;
+            let mut items = 0;
             let res = loop {
+                let len = buf.len();
                 let item = if eof {
                     codec.decode_eof(buf)
                 } else {
@@ -393,13 +395,23 @@ impl IoRef {
                 match item {
                     Ok(Some(item)) => {
                         dst.push(item);
-                        count += 1;
+                        items += 1;
                         // an empty buffer is decoded by the next call
-                        if count >= max || buf.is_empty() {
-                            break Ok(count);
+                        if items >= max || buf.is_empty() {
+                            break Ok(DecodedItems {
+                                items,
+                                remains: buf.len(),
+                                consumed: 0,
+                            });
                         }
                     }
-                    Ok(None) => break Ok(count),
+                    Ok(None) => {
+                        break Ok(DecodedItems {
+                            items,
+                            remains: buf.len(),
+                            consumed: len - buf.len(),
+                        });
+                    }
                     Err(err) => break Err(err),
                 }
             };
