@@ -5161,6 +5161,69 @@ async fn recv_uses_decode_eof_after_eof() {
     assert_eq!(io.with_read_dst(|b| b.len()), 0);
 }
 
+/// Fixed size frames, counts the `decode` and `decode_eof` calls that get an
+/// empty buffer.
+struct EmptyDecodes(usize, std::cell::Cell<usize>, std::cell::Cell<usize>);
+
+impl Decoder for EmptyDecodes {
+    type Item = Bytes;
+    type Error = io::Error;
+
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Bytes>, io::Error> {
+        if src.is_empty() {
+            self.1.set(self.1.get() + 1);
+        }
+        FixedSize(self.0).decode(src)
+    }
+
+    fn decode_eof(&self, src: &mut BytesMut) -> Result<Option<Bytes>, io::Error> {
+        if src.is_empty() {
+            self.2.set(self.2.get() + 1);
+        }
+        FixedSize(self.0).decode(src)
+    }
+}
+
+/// STATEMENT: Before eof the codec is not called with an empty read buffer, an empty decode
+/// attempt still cancels a read pause, and at eof `decode_eof` gets the empty buffer.
+///
+/// HOW:
+/// - Install a read pause, decode the empty buffer with `decode`, `decode_item` and
+///   `decode_items`; check no items, no `decode` call and the pause is cancelled.
+/// - Buffer two frames, receive both in one batch, and check the next `poll_recv` is pending
+///   without a `decode` call on the drained buffer.
+/// - Close the peer and check the receive ends after `decode_eof` got an empty buffer.
+#[ntex::test]
+async fn empty_read_buffer_is_not_decoded() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let codec = EmptyDecodes(4, std::cell::Cell::new(0), std::cell::Cell::new(0));
+
+    assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+    assert!(io.flags().is_read_paused());
+    assert!(io.decode(&codec).unwrap().is_none());
+    assert!(!io.flags().is_read_paused());
+    let decoded = io.decode_item(&codec).unwrap();
+    assert!(decoded.item.is_none());
+    assert_eq!((decoded.remains, decoded.consumed), (0, 0));
+    let mut items = Vec::new();
+    assert_eq!(io.decode_items(&codec, &mut items, 4).unwrap().items, 0);
+    assert_eq!(codec.1.get(), 0);
+
+    client.write("12345678");
+    sleep(Millis(25)).await;
+    assert_eq!(io.recv_batch(&codec, &mut items, 4).await.unwrap(), 2);
+    assert_eq!(items, ["1234", "5678"]);
+    assert!(lazy(|cx| io.poll_recv(&codec, cx)).await.is_pending());
+    assert_eq!(codec.1.get(), 0);
+
+    client.close().await;
+    assert!(io.recv(&codec).await.unwrap().is_none());
+    assert_eq!(codec.1.get(), 0);
+    assert!(codec.2.get() >= 1);
+}
+
 /// STATEMENT: Local shutdown does not classify incomplete buffered input as peer truncation.
 ///
 /// HOW:

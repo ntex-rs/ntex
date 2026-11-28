@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.1] - unreleased
+
+* Document that `Decoder::decode()` is not called with an empty buffer before eof
+
 ## [2.0.0] - 2026-10-01
 
 * Remove deprecated `Encoder::encode()` method with `BytesMut` buffer

@@ -2,6 +2,11 @@
 
 ## [4.10.0] - 2026-11-28
 
+* `IoRef::decode()`, `IoRef::decode_item()` and `IoRef::decode_items()` do not
+  call the codec while the read buffer is empty before eof, a receive that
+  finds no input no longer takes a read buffer from the pool. A codec must
+  return a frame while decoding the input that completes it
+
 * `IoRef::encode()` returns the buffered size from the encoder on success and
   handles encoder errors out of line, the encoder result is no longer copied
   through the stack on every call
