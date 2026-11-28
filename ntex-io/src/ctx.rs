@@ -257,6 +257,21 @@ impl IoContext {
         }
     }
 
+    /// Returns the size of input the read buffer takes before read
+    /// backpressure is enabled.
+    ///
+    /// This is the read backpressure watermark less the input buffered for
+    /// the dispatcher, zero once the watermark is reached. A transport that
+    /// keeps reading without being asked for each read, such as a multishot
+    /// receive, can stop after this much input, so the buffer grows past the
+    /// watermark by at most one read.
+    pub fn read_budget(&self) -> usize {
+        let st = self.st();
+        st.cfg()
+            .read_backpressure()
+            .saturating_sub(st.buffer.read_dst_size())
+    }
+
     /// Takes a buffer for the next transport read.
     ///
     /// The returned buffer must be released exactly once through

@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
-use std::{cell::RefCell, io};
+use std::{cell::RefCell, io, marker::PhantomData};
 
 use ntex_bytes::{BytePageSize, BytePages, Bytes, BytesMut};
 use ntex_codec::BytesCodec;
@@ -632,10 +632,12 @@ async fn stop_handoff_cancels_owned_response() {
     }
 }
 
-/// STATEMENT: The dispatcher defers requests beyond its configured in-flight limit.
+/// STATEMENT: The dispatcher defers requests beyond its configured in-flight limit, also when
+/// they are buffered together.
 ///
 /// HOW:
-/// - Set a limit of two, send three requests, and block their handlers on a condition.
+/// - Set a limit of two, send one request, then two more at once, and block their handlers on
+///   a condition.
 /// - Verify only two calls start before release and the third starts after notifying the condition.
 #[ntex::test]
 async fn max_inflight_calls() {
@@ -648,8 +650,8 @@ async fn max_inflight_calls() {
 
     let (disp, _) = Dispatcher::debug(
         Io::from(server),
-        BytesCodec,
-        ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+        BCodec(1),
+        ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
             let waiter = release2.wait();
             if matches!(msg, DispatchItem::Item(_)) {
                 calls2.set(calls2.get() + 1);
@@ -662,7 +664,8 @@ async fn max_inflight_calls() {
     );
     ntex::rt::spawn(disp.max_inflight(2));
 
-    for msg in ["a", "b", "c"] {
+    // one call is in flight when the next two arrive in one batch
+    for msg in ["a", "bc"] {
         client.write(msg);
         sleep(Millis(25)).await;
     }
@@ -671,6 +674,344 @@ async fn max_inflight_calls() {
     release.notify(());
     sleep(Millis(25)).await;
     assert_eq!(calls.get(), 3);
+}
+
+/// Service that closes its readiness gate while handling the first frame,
+/// echoes frames and records their first byte in call order, and `!` for a
+/// stop.
+struct BatchSrv<C> {
+    gate: Gate,
+    close: RefCell<Option<oneshot::Receiver<()>>>,
+    items: Rc<RefCell<Vec<u8>>>,
+    _codec: PhantomData<C>,
+}
+
+impl<C> Service<(), DispatchItem<C>> for BatchSrv<C>
+where
+    C: Decoder<Item = Bytes> + Encoder<Item = Bytes> + 'static,
+{
+    type Res = Option<Bytes>;
+    type Error = ();
+
+    fn bind(&self, ctx: BindCtx<'_>) {
+        ctx.subscribe(self.gate.changed());
+    }
+
+    async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+        self.gate.ready().await;
+        Ok(())
+    }
+
+    async fn call(
+        &self,
+        msg: DispatchItem<C>,
+        _: Ctx<'_, Self>,
+    ) -> Result<Option<Bytes>, Self::Error> {
+        match msg {
+            DispatchItem::Item(bytes) => {
+                self.items.borrow_mut().push(bytes[0]);
+                if let Some(rx) = self.close.borrow_mut().take() {
+                    self.gate.close(rx);
+                }
+                Ok(Some(bytes))
+            }
+            DispatchItem::Stop(_) => {
+                self.items.borrow_mut().push(b'!');
+                Ok(None)
+            }
+            DispatchItem::Control(_) => Ok(None),
+        }
+    }
+}
+
+/// Started `BatchSrv` dispatcher.
+struct Batch<C: Encoder + Decoder + 'static> {
+    /// Recorded frames and stops.
+    items: Rc<RefCell<Vec<u8>>>,
+    /// Opens the gate.
+    open: oneshot::Sender<()>,
+    io: IoRef,
+    shared: Rc<DispatcherShared<C, ()>>,
+}
+
+/// Starts a `BatchSrv` dispatcher.
+fn batch_dispatcher<C>(server: IoTest, codec: C, max_inflight: u32) -> Batch<C>
+where
+    C: Decoder<Item = Bytes> + Encoder<Item = Bytes> + 'static,
+{
+    let (open, rx) = oneshot::channel();
+    let items = Rc::new(RefCell::new(Vec::new()));
+    let io = Io::from(server);
+    let ioref = io.get_ref();
+    let srv = BatchSrv {
+        gate: Gate::default(),
+        close: RefCell::new(Some(rx)),
+        items: items.clone(),
+        _codec: PhantomData,
+    };
+    let disp = Dispatcher::new(io, codec, Pipeline::new((), srv)).max_inflight(max_inflight);
+    let shared = disp.inner.shared.clone();
+    spawn(async move {
+        let _ = disp.await;
+    });
+    Batch {
+        items,
+        open,
+        io: ioref,
+        shared,
+    }
+}
+
+/// Reads until `n` bytes arrive or the peer closes.
+async fn read_n(client: &IoTest, n: usize) -> Vec<u8> {
+    let read = async {
+        let mut buf = Vec::new();
+        while buf.len() < n {
+            // a closed peer reads nothing
+            let chunk = client.read().await.unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        buf
+    };
+    timeout(Millis(1000), read).await.unwrap()
+}
+
+/// STATEMENT: Frames left in a batch when the service becomes unready are not called until it
+/// is ready again, then they are called in decode order.
+///
+/// HOW:
+/// - Send three frames at once to a service that closes its readiness gate while handling the
+///   first.
+/// - Verify only the first frame is handled, the read buffer is drained, and no call waits for
+///   readiness.
+/// - Open the gate and verify the frames are handled and echoed in decode order.
+#[ntex::test]
+async fn queued_frames_are_called_in_order() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let batch = batch_dispatcher(server, BCodec(1), u32::MAX);
+
+    client.write("abc");
+    sleep(Millis(100)).await;
+    assert_eq!(&batch.items.borrow()[..], b"a");
+    assert_eq!(batch.io.read_dst_size(), 0);
+    assert_eq!(batch.shared.inflight.get(), 0);
+
+    let _ = batch.open.send(());
+    assert_eq!(read_n(&client, 3).await, b"abc");
+    assert_eq!(&batch.items.borrow()[..], b"abc");
+}
+
+/// STATEMENT: A batch holds at most the free in-flight capacity and 16 frames; the rest stays
+/// buffered until the service is ready again.
+///
+/// HOW:
+/// - Send frames at once to a service that closes its readiness gate while handling the first:
+///   five frames with `max_inflight(3)`, and twenty frames without a limit.
+/// - Verify two and four bytes, respectively, stay in the read buffer while the gate is closed.
+/// - Open the gate and verify every frame is handled in order.
+#[ntex::test]
+async fn batch_size_is_limited() {
+    for (max, input, buffered) in [(3, "abcde", 2), (u32::MAX, "abcdefghijklmnopqrst", 4)] {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let batch = batch_dispatcher(server, BCodec(1), max);
+
+        client.write(input);
+        sleep(Millis(100)).await;
+        assert_eq!(&batch.items.borrow()[..], b"a", "{input}");
+        assert_eq!(batch.io.read_dst_size(), buffered, "{input}");
+
+        let _ = batch.open.send(());
+        wait_until(Millis(1000), || batch.items.borrow().len() == input.len()).await;
+        assert_eq!(&batch.items.borrow()[..], input.as_bytes());
+    }
+}
+
+/// STATEMENT: Queued frames are called only while an in-flight slot is free, also when control
+/// calls took slots after the batch was decoded.
+///
+/// HOW:
+/// - With `max_inflight(3)`, send three frames at once to a service that, for the first frame,
+///   closes its readiness gate and writes a response above the write-backpressure mark, and
+///   holds every other call.
+/// - Open the gate and let the peer drain the output, so both backpressure control calls are
+///   held.
+/// - Verify only the second frame is called and three calls are in flight, then release the held
+///   calls and verify the third frame is called.
+#[ntex::test]
+async fn queued_frames_wait_for_inflight_slot() {
+    struct Srv {
+        gate: Gate,
+        close: RefCell<Option<oneshot::Receiver<()>>>,
+        hold: Condition,
+        items: Rc<RefCell<Vec<u8>>>,
+    }
+
+    impl Service<(), DispatchItem<BCodec>> for Srv {
+        type Res = Option<Bytes>;
+        type Error = ();
+
+        fn bind(&self, ctx: BindCtx<'_>) {
+            ctx.subscribe(self.gate.changed());
+        }
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+            self.gate.ready().await;
+            Ok(())
+        }
+
+        async fn call(
+            &self,
+            msg: DispatchItem<BCodec>,
+            _: Ctx<'_, Self>,
+        ) -> Result<Option<Bytes>, Self::Error> {
+            if let DispatchItem::Item(bytes) = &msg {
+                self.items.borrow_mut().push(bytes[0]);
+                if let Some(rx) = self.close.borrow_mut().take() {
+                    self.gate.close(rx);
+                    return Ok(Some(Bytes::from(vec![b'x'; 4096])));
+                }
+            }
+            let _ = self.hold.wait().ready().await;
+            Ok(None)
+        }
+    }
+
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(0);
+    let (open, rx) = oneshot::channel();
+    let hold = Condition::new();
+    let items = Rc::new(RefCell::new(Vec::new()));
+    let io = Io::new(
+        server,
+        SharedCfg::new("TEST").add(IoConfig::new().set_write_backpressure(1024)),
+    );
+    let srv = Srv {
+        gate: Gate::default(),
+        close: RefCell::new(Some(rx)),
+        hold: hold.clone(),
+        items: items.clone(),
+    };
+    let disp = Dispatcher::new(io, BCodec(1), Pipeline::new((), srv)).max_inflight(3);
+    let shared = disp.inner.shared.clone();
+    spawn(async move {
+        let _ = disp.await;
+    });
+
+    client.write("abc");
+    sleep(Millis(50)).await;
+    assert_eq!(&items.borrow()[..], b"a");
+    // the backpressure-enabled call waits for readiness
+    assert_eq!(shared.inflight.get(), 1);
+
+    let _ = open.send(());
+    client.remote_buffer_cap(65536);
+    sleep(Millis(100)).await;
+    assert_eq!(&items.borrow()[..], b"ab");
+    assert_eq!(shared.inflight.get(), 3);
+
+    hold.notify(());
+    wait_until(Millis(1000), || items.borrow().len() == 3).await;
+    assert_eq!(&items.borrow()[..], b"abc");
+}
+
+/// STATEMENT: Write backpressure enabled by a call in a batch stops the batch, and the queued
+/// frames are called in decode order only after the output drains.
+///
+/// HOW:
+/// - With a 1 KiB write-backpressure mark and a peer that accepts nothing, send three frames at
+///   once to a ready service that answers the first frame with 4 KiB and echoes the others.
+/// - Verify the read buffer is drained, only the first frame is called, and
+///   `WBackPressureEnabled` follows it.
+/// - Let the peer accept output and verify `WBackPressureDisabled` comes before the queued
+///   frames, which are called and echoed in order.
+#[ntex::test]
+async fn write_backpressure_stops_batch() {
+    struct Srv(Rc<RefCell<Vec<u8>>>);
+
+    impl Service<(), DispatchItem<BCodec>> for Srv {
+        type Res = Option<Bytes>;
+        type Error = ();
+
+        async fn call(
+            &self,
+            msg: DispatchItem<BCodec>,
+            _: Ctx<'_, Self>,
+        ) -> Result<Option<Bytes>, Self::Error> {
+            match msg {
+                DispatchItem::Item(bytes) => {
+                    self.0.borrow_mut().push(bytes[0]);
+                    if bytes[0] == b'a' {
+                        return Ok(Some(Bytes::from(vec![b'x'; 4096])));
+                    }
+                    Ok(Some(bytes))
+                }
+                DispatchItem::Control(Control::WBackPressureEnabled) => {
+                    self.0.borrow_mut().push(b'E');
+                    Ok(None)
+                }
+                DispatchItem::Control(Control::WBackPressureDisabled) => {
+                    self.0.borrow_mut().push(b'D');
+                    Ok(None)
+                }
+                _ => Ok(None),
+            }
+        }
+    }
+
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(0);
+    let items = Rc::new(RefCell::new(Vec::new()));
+    let io = Io::new(
+        server,
+        SharedCfg::new("TEST").add(IoConfig::new().set_write_backpressure(1024)),
+    );
+    let ioref = io.get_ref();
+    let disp = Dispatcher::new(io, BCodec(1), Pipeline::new((), Srv(items.clone())));
+    spawn(async move {
+        let _ = disp.await;
+    });
+
+    client.write("abc");
+    sleep(Millis(50)).await;
+    assert_eq!(ioref.read_dst_size(), 0);
+    assert_eq!(&items.borrow()[..], b"aE");
+
+    client.remote_buffer_cap(65536);
+    let mut expected = vec![b'x'; 4096];
+    expected.extend_from_slice(b"bc");
+    assert_eq!(read_n(&client, expected.len()).await, expected);
+    assert_eq!(&items.borrow()[..], b"aEDbc");
+}
+
+/// STATEMENT: A decoder error found behind queued frames stops the dispatcher only after those
+/// frames are called.
+///
+/// HOW:
+/// - Send two frames and a rejected byte at once through `XCodec` to a service that closes its
+///   readiness gate while handling the first frame.
+/// - Verify only the first frame is handled while the gate is closed.
+/// - Open the gate and verify the second frame is handled before the stop, and the transport
+///   closes with `CloseReason::Decoder`.
+#[ntex::test]
+async fn decoder_error_waits_for_queued_frames() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let batch = batch_dispatcher(server, XCodec, u32::MAX);
+
+    client.write("abx");
+    sleep(Millis(100)).await;
+    assert_eq!(&batch.items.borrow()[..], b"a");
+
+    let _ = batch.open.send(());
+    assert_eq!(read_n(&client, 2).await, b"ab");
+    wait_closed(&client, Millis(1000)).await;
+    assert_eq!(&batch.items.borrow()[..], b"ab!");
+    assert_eq!(batch.io.close_reason(), Some(CloseReason::Decoder));
 }
 
 /// STATEMENT: An idle connection closes with a keep-alive stop notification and close reason.
@@ -1053,11 +1394,12 @@ async fn stop_reason_at_eof(input: &'static str) -> Option<io::ErrorKind> {
     reason
 }
 
-/// STATEMENT: Buffered frames are delivered before a transport failure's stop notification.
+/// STATEMENT: Received frames are delivered before a transport failure's stop notification.
 ///
 /// HOW:
 /// - Send two eight-byte frames to an echo service that becomes not ready after the first
-///   frame, and make writes fail with `ConnectionReset`.
+///   frame, so the second stays queued in the dispatcher, and make writes fail with
+///   `ConnectionReset`.
 /// - Verify only the first frame is handled while the service is paused.
 /// - Release the gate and verify both frame payloads precede the stop event carrying the reset error.
 #[ntex::test]
@@ -1759,6 +2101,94 @@ async fn read_rate_starts_for_consumed_partial_frame() {
     assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
 }
 
+/// Codec with 8-byte frames that moves the input of a partial frame into
+/// its own buffer.
+#[derive(Default)]
+struct AccCodec(RefCell<BytesMut>);
+
+impl Encoder for AccCodec {
+    type Item = Bytes;
+    type Error = io::Error;
+
+    fn encode(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
+        dst.append(item);
+        Ok(())
+    }
+}
+
+impl Decoder for AccCodec {
+    type Item = Bytes;
+    type Error = io::Error;
+
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let mut buf = self.0.borrow_mut();
+        let n = (8 - buf.len()).min(src.len());
+        buf.extend_from_slice(&src.split_to(n));
+        if buf.len() == 8 {
+            Ok(Some(buf.split_to(8)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// STATEMENT: Input the codec takes for the next frame in the same batch as a complete frame
+/// starts frame-read timeout tracking.
+///
+/// HOW:
+/// - Send a complete frame and one byte of the next frame at once; `AccCodec` moves that byte
+///   into its own buffer, leaving the read buffer empty.
+/// - Verify the peer closes before the long keep-alive deadline and the service records the
+///   frame followed by a read timeout.
+#[ntex::test]
+async fn read_rate_starts_for_consumed_input_after_frame() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+
+    let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+    let data2 = data.clone();
+
+    let io = Io::new(
+        server,
+        SharedCfg::new("TEST").add(
+            IoConfig::new()
+                .set_keepalive_timeout(Seconds(30))
+                .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+        ),
+    );
+    let disp = Dispatcher::new(
+        io,
+        AccCodec::default(),
+        Pipeline::new(
+            (),
+            ntex_service::fn_service(move |msg: DispatchItem<AccCodec>| {
+                let data = data2.clone();
+                async move {
+                    match msg {
+                        DispatchItem::Item(_) => data.lock().unwrap().borrow_mut().push(0),
+                        DispatchItem::Stop(Reason::ReadTimeout) => {
+                            data.lock().unwrap().borrow_mut().push(1);
+                        }
+                        _ => (),
+                    }
+                    Ok::<_, ()>(None)
+                }
+            }),
+        ),
+    );
+    spawn(async move {
+        let _ = disp.await;
+    });
+
+    client.write("123456781");
+    wait_until(Millis(5000), || {
+        client.is_closed() && data.lock().unwrap().borrow().len() == 2
+    })
+    .await;
+    assert!(client.is_closed());
+    assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+}
+
 /// Service that is not ready while a frame is handled.
 struct BusySrv(Rc<Cell<bool>>, IoRef, ReadyNotifier);
 
@@ -2184,7 +2614,10 @@ fn timeout_on_first_frame(server: IoTest) -> Events {
                 async move { Ok::<_, ()>(res) }
             }),
         ),
-    );
+    )
+    // one frame per batch, the frames behind the first are decoded after
+    // the timeout is flagged
+    .max_inflight(1);
     spawn(async move {
         let _ = disp.await;
     });
@@ -2693,6 +3126,87 @@ async fn decoder_error_stops_dispatcher() {
     let reason = err_codec_stop("!").await;
     assert!(reason.starts_with("Reason::Decoder("), "{reason}");
     assert!(reason.contains("decode"), "{reason}");
+}
+
+/// STATEMENT: Frames decoded before a malformed frame in the same batch are dispatched before
+/// the decoder error stops the dispatcher.
+///
+/// HOW:
+/// - Send two valid frames followed by a rejected byte at once through `XCodec`.
+/// - Verify both frames are echoed, the peer closes, and the service records two items followed
+///   by the decoder stop.
+#[ntex::test]
+async fn decoder_error_after_frames_in_batch() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+
+    let events: Events = Rc::new(RefCell::new(Vec::new()));
+    let ev = events.clone();
+    let (disp, _) = Dispatcher::debug(
+        Io::from(server),
+        XCodec,
+        ntex_service::fn_service(move |msg: DispatchItem<XCodec>| {
+            let (name, res) = match msg {
+                DispatchItem::Item(bytes) => ("item", Some(bytes)),
+                DispatchItem::Stop(Reason::Decoder(_)) => ("decoder", None),
+                DispatchItem::Stop(_) => ("stop", None),
+                DispatchItem::Control(_) => ("control", None),
+            };
+            ev.borrow_mut().push(name);
+            async move { Ok::<_, ()>(res) }
+        }),
+    );
+    spawn(async move {
+        let _ = disp.await;
+    });
+
+    client.write("12x");
+    assert_eq!(read_n(&client, 2).await, b"12");
+
+    wait_closed(&client, Millis(1000)).await;
+    assert!(client.is_closed());
+    assert_eq!(&events.borrow()[..], &["item", "item", "decoder"]);
+}
+
+/// STATEMENT: A call that fails at once stops the dispatcher, and the rest of its batch is not
+/// dispatched.
+///
+/// HOW:
+/// - Send three one-byte frames at once to a service that fails on the second frame.
+/// - Verify the dispatcher returns the service error.
+/// - Check the service saw the first two frames and the service stop, but not the third frame.
+#[ntex::test]
+async fn service_error_drops_rest_of_batch() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    client.write("abc");
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let ev = events.clone();
+    let (disp, _) = Dispatcher::debug(
+        Io::from(server),
+        BCodec(1),
+        ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+            let res = match msg {
+                DispatchItem::Item(bytes) => {
+                    ev.borrow_mut().push(format!("{:?}", bytes[0] as char));
+                    if &bytes[..] == b"b" {
+                        Err(())
+                    } else {
+                        Ok(Some(bytes))
+                    }
+                }
+                DispatchItem::Stop(reason) => {
+                    ev.borrow_mut().push(format!("{reason:?}"));
+                    Ok(None)
+                }
+                DispatchItem::Control(_) => Ok(None),
+            };
+            async move { res }
+        }),
+    );
+    assert_eq!(timeout(Millis(1000), disp).await, Ok(Err(())));
+    assert_eq!(&events.borrow()[..], &["'a'", "'b'", "Reason::Service"]);
 }
 
 /// STATEMENT: The transport close reason distinguishes failed terminations that the dispatcher completes as `Ok(())`.

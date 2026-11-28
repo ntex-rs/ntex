@@ -1,6 +1,8 @@
 //! Stalled arbiter detection.
-use std::sync::{Arc, Weak, atomic::AtomicBool, atomic::Ordering};
-use std::{panic::Location, thread, time::Duration, time::Instant};
+use std::sync::atomic::{AtomicBool, Ordering, fence};
+use std::sync::{Arc, OnceLock, Weak};
+use std::thread::{self, Thread};
+use std::{panic::Location, time::Duration, time::Instant};
 
 use parking_lot::Mutex;
 
@@ -24,84 +26,180 @@ fn latency_callback() -> Option<LatencyCallback> {
     ARB_CB.lock().clone()
 }
 
-/// Starts a thread that detects stalled arbiters.
+/// Watchdog thread state shared with the arbiters.
 ///
-/// Returns the stop flag of the thread.
-pub(crate) fn start(sys: &System) -> Option<Arc<AtomicBool>> {
+/// The thread wakes when a stall can start, at most once per latency
+/// interval. It parks while every arbiter is idle past its sample deadline,
+/// an arbiter in that state expires the deadline at its next turn and
+/// notifies the watchdog.
+#[derive(Debug, Default)]
+pub(crate) struct Watchdog {
+    thread: OnceLock<Thread>,
+    parked: AtomicBool,
+    stop: AtomicBool,
+    // checks made by the thread
+    #[cfg(test)]
+    passes: std::sync::atomic::AtomicUsize,
+}
+
+impl Watchdog {
+    /// Wakes the thread if it is parked.
+    ///
+    /// State the watchdog checks before it parks must be written before the call.
+    pub(crate) fn notify(&self) {
+        // pairs with the fence in `park`, either the thread sees the state
+        // written before this call or this call sees it parked
+        fence(Ordering::SeqCst);
+        if self.parked.load(Ordering::Acquire)
+            && let Some(thread) = self.thread.get()
+        {
+            thread.unpark();
+        }
+    }
+
+    /// Stops the thread.
+    pub(crate) fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.get() {
+            thread.unpark();
+        }
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Sleeps for `timeout` unless the thread is stopped.
+    fn sleep(&self, timeout: Duration) {
+        let end = Instant::now() + timeout;
+        while !self.is_stopped() {
+            let Some(timeout) = end.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            thread::park_timeout(timeout);
+        }
+    }
+
+    /// Parks the thread unless `idle` returns `false` after the thread is
+    /// marked parked.
+    fn park(&self, idle: impl FnOnce() -> bool) {
+        self.parked.store(true, Ordering::Release);
+        fence(Ordering::SeqCst);
+        if !self.is_stopped() && idle() {
+            thread::park();
+        }
+        self.parked.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Starts a thread that detects stalled arbiters.
+pub(crate) fn start(sys: &System) {
     let interval = sys.0.config.latency_interval;
     if interval == 0 {
-        return None;
+        return;
     }
     let interval = Duration::from_millis(interval as u64);
     let threshold = Duration::from_millis(sys.0.config.ping_threshold as u64);
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop2 = stop.clone();
+    let name = format!("{}:watchdog", sys.0.config.name);
     let sys = Arc::downgrade(&sys.0);
 
-    let name = format!("{}:watchdog", sys.upgrade()?.config.name);
-    match thread::Builder::new()
+    if let Err(e) = thread::Builder::new()
         .name(name)
-        .spawn(move || watchdog(&sys, &stop2, interval, threshold))
+        .spawn(move || watchdog(&sys, interval, threshold))
     {
-        Ok(_) => Some(stop),
-        Err(e) => {
-            log::error!("Cannot start arbiter watchdog: {e}");
-            None
+        log::error!("Cannot start arbiter watchdog: {e}");
+    }
+}
+
+fn watchdog(sys: &Weak<SystemInner>, interval: Duration, threshold: Duration) {
+    let Some(wd) = sys.upgrade().map(|sys| sys.watchdog.clone()) else {
+        return;
+    };
+    let _ = wd.thread.set(thread::current());
+
+    let mut wait = interval;
+    loop {
+        wd.sleep(wait);
+        if wd.is_stopped() {
+            return;
+        }
+        let Some(sys) = sys.upgrade() else {
+            return;
+        };
+        #[cfg(test)]
+        wd.passes.fetch_add(1, Ordering::Relaxed);
+
+        let now = Instant::now();
+        let mut idle = true;
+        // an arbiter that starts sampling now cannot stall earlier
+        let mut next = now + threshold;
+        for arb in sys.arbiters() {
+            if !arb.is_running() {
+                continue;
+            }
+            let turn = arb.handle().current_turn();
+            check(&arb, now, threshold, turn);
+            if let Some(at) = arb.0.latency.stall_at(now, threshold, turn) {
+                next = next.min(at);
+            }
+            idle = idle && arb.0.latency.is_dormant(now, turn);
+        }
+        // wake when a stall can start, at most once per interval
+        wait = next.saturating_duration_since(now).max(interval);
+        if idle {
+            wait = interval;
+            // arbiters registered or woken after the first pass notify the
+            // thread, re-check them once it is marked parked
+            wd.park(|| {
+                let now = Instant::now();
+                let idle = sys.arbiters().iter().all(|arb| {
+                    !arb.is_running() || {
+                        let turn = arb.handle().current_turn();
+                        arb.0.latency.is_dormant(now, turn)
+                    }
+                });
+                drop(sys);
+                idle
+            });
         }
     }
 }
 
-fn watchdog(sys: &Weak<SystemInner>, stop: &AtomicBool, interval: Duration, threshold: Duration) {
-    loop {
-        thread::sleep(interval);
-        if stop.load(Ordering::Relaxed) {
-            return;
-        }
-        let Some(arbiters) = sys.upgrade().map(|sys| sys.arbiters()) else {
-            return;
-        };
-
-        let now = Instant::now();
-        for arb in arbiters {
-            if !arb.is_running() {
-                continue;
+fn check(arb: &Arbiter, now: Instant, threshold: Duration, turn: Option<Duration>) {
+    match arb.0.latency.check(now, threshold, turn) {
+        Stall::Started(age) => {
+            let task = arb.handle().current_task();
+            if let Some(task) = task {
+                log::error!(
+                    "Arbiter {}({:?}) is stalled, no progress for {age:?}, running task spawned at {task}",
+                    arb.name(),
+                    arb.id()
+                );
+            } else {
+                log::error!(
+                    "Arbiter {}({:?}) is stalled, no progress for {age:?}",
+                    arb.name(),
+                    arb.id()
+                );
             }
-            match arb.0.latency.check(now, threshold) {
-                Stall::Started(age) => {
-                    let task = arb.handle().current_task();
-                    if let Some(task) = task {
-                        log::error!(
-                            "Arbiter {}({:?}) is stalled, no progress for {age:?}, running task spawned at {task}",
-                            arb.name(),
-                            arb.id()
-                        );
-                    } else {
-                        log::error!(
-                            "Arbiter {}({:?}) is stalled, no progress for {age:?}",
-                            arb.name(),
-                            arb.id()
-                        );
-                    }
-                    if let Some(bt) = capture_backtrace(&arb) {
-                        // the backtrace belongs to the task only if it still runs
-                        let task = task.filter(|t| {
-                            arb.handle()
-                                .current_task()
-                                .is_some_and(|cur| std::ptr::eq(*t, cur))
-                        });
-                        report(&arb, age, bt, task);
-                    }
-                }
-                Stall::Recovered(time) => {
-                    log::warn!(
-                        "Arbiter {}({:?}) recovered after {time:?} stall",
-                        arb.name(),
-                        arb.id()
-                    );
-                }
-                Stall::None => {}
+            if let Some(bt) = capture_backtrace(arb) {
+                // the backtrace belongs to the task only if it still runs
+                let task = task.filter(|t| {
+                    arb.handle()
+                        .current_task()
+                        .is_some_and(|cur| std::ptr::eq(*t, cur))
+                });
+                report(arb, age, bt, task);
             }
         }
+        Stall::Recovered(time) => {
+            log::warn!(
+                "Arbiter {}({:?}) recovered after {time:?} stall",
+                arb.name(),
+                arb.id()
+            );
+        }
+        Stall::None => {}
     }
 }
 

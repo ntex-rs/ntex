@@ -1,7 +1,7 @@
 use std::hash::{BuildHasher, RandomState};
 use std::time::{Duration, Instant};
 
-use ntex_rt::Id;
+use ntex_rt::{Arbiter, Id};
 use ntex_util::HashMap;
 
 use crate::Worker;
@@ -73,7 +73,8 @@ pub enum LoadBalancing {
 const REFRESH: Duration = Duration::from_millis(10);
 /// Time constant of the utilization average.
 const TAU: Duration = Duration::from_millis(250);
-/// A runtime turn longer than this marks the worker as blocked.
+/// A runtime turn longer than this marks the worker as blocked, the runtime
+/// counts ended turns of this length, see `Handle::long_turns`.
 const BLOCKED: Duration = Duration::from_millis(100);
 /// Utilization difference below which workers are compared by load.
 const UTIL_SLACK: f64 = 0.1;
@@ -93,23 +94,38 @@ pub(crate) struct Sample {
     turn: Duration,
     /// The runtime is blocked by a task.
     blocked: bool,
+    /// Number of ended runtime turns that blocked the runtime.
+    long: Option<u64>,
 }
 
 impl Sample {
-    fn of<T>(wrk: &Worker<T>, now: Instant) -> Sample {
-        let arb = wrk.arbiter();
+    fn of(arb: &Arbiter, now: Instant) -> Sample {
         let hnd = arb.handle();
-        let turn = hnd.current_turn().unwrap_or_default();
+        // a long turn that ends while the sample is taken is read again, the
+        // sample sees it either running or counted
+        let (turn, busy, long) = loop {
+            let long = hnd.long_turns();
+            let turn = hnd.current_turn().unwrap_or_default();
+            let busy = hnd.busy_duration();
+            if hnd.long_turns() == long {
+                break (turn, busy, long);
+            }
+        };
+        // a deferred sample is not taken while the runtime is idle, a late
+        // one shows as the current turn
         let blocked = turn >= BLOCKED
             || arb.latency().is_some_and(|l| {
                 l.stalled
-                    || l.last_sample
-                        .is_some_and(|t| now.saturating_duration_since(t) >= l.interval + BLOCKED)
+                    || (!l.deferred
+                        && l.last_sample.is_some_and(|t| {
+                            now.saturating_duration_since(t) >= l.interval + BLOCKED
+                        }))
             });
         Sample {
-            busy: hnd.busy_duration(),
+            busy,
             turn,
             blocked,
+            long,
         }
     }
 }
@@ -120,6 +136,7 @@ struct State {
     at: Option<Instant>,
     util: f64,
     blocked: bool,
+    long: Option<u64>,
 }
 
 impl State {
@@ -128,9 +145,11 @@ impl State {
         // counts once it ends
         let busy = sample.busy.map(|b| b.saturating_sub(sample.turn));
         let now = now.checked_sub(sample.turn).unwrap_or(now);
-        // a blocked worker is skipped, the time it is blocked is not load
+        // a blocked worker is skipped, the time it is blocked is not load,
+        // also if it was blocked only between the samples
         if !self.blocked
             && !sample.blocked
+            && self.long == sample.long
             && let (Some(busy), Some(prev), Some(at)) = (busy, self.busy, self.at)
         {
             let dt = now.saturating_duration_since(at);
@@ -143,6 +162,7 @@ impl State {
         self.busy = busy;
         self.at = Some(now);
         self.blocked = sample.blocked;
+        self.long = sample.long;
     }
 }
 
@@ -260,7 +280,7 @@ impl Balancer {
             LoadBalancing::RoundRobin => (self.round_robin(workers.len()), None),
             LoadBalancing::LeastLoaded | LoadBalancing::IncomingCpu | LoadBalancing::Reuseport => {
                 let now = Instant::now();
-                self.refresh(now, |idx| Sample::of(&workers[idx], now));
+                self.refresh(now, |idx| Sample::of(workers[idx].arbiter(), now));
                 let load = |idx: usize| workers[idx].load();
                 let idx = self.least_loaded(load);
                 match cpu {
@@ -291,7 +311,7 @@ impl Balancer {
     /// Returns `true` if some workers are blocked and others are not.
     pub(crate) fn sample<T>(&mut self, workers: &[Worker<T>]) -> bool {
         let now = Instant::now();
-        self.refresh(now, |idx| Sample::of(&workers[idx], now));
+        self.refresh(now, |idx| Sample::of(workers[idx].arbiter(), now));
         !self.ready.is_empty() && self.ready.len() < self.states.len()
     }
 
@@ -434,6 +454,7 @@ mod tests {
             busy: Some(MS * busy_ms),
             turn: MS * turn_ms,
             blocked,
+            long: None,
         }
     }
 
@@ -508,6 +529,39 @@ mod tests {
             "{}",
             st.util
         );
+    }
+
+    /// STATEMENT: A runtime turn that blocks a worker between two samples does not count
+    /// towards its utilization.
+    ///
+    /// HOW:
+    /// - Sample an arbiter, block it for 150 ms in a task, and wait until its runtime
+    ///   counted the long turn.
+    /// - Sample it again and check the utilization stays near zero.
+    /// - Skip the check on runtimes that do not count long turns (Tokio).
+    #[ntex::test]
+    async fn turn_blocked_between_samples_is_not_utilization() {
+        let arb = Arbiter::new();
+        let hnd = arb.handle().clone();
+        if let Some(before) = hnd.long_turns() {
+            let mut b = balancer(1);
+            let now = Instant::now();
+            b.refresh(now, |_| Sample::of(&arb, now));
+
+            hnd.spawn(async { std::thread::sleep(MS * 150) });
+            for _ in 0..400 {
+                if hnd.long_turns() != Some(before) {
+                    break;
+                }
+                ntex_util::time::sleep(MS * 5).await;
+            }
+            assert_eq!(hnd.long_turns(), Some(before + 1));
+
+            let now = Instant::now();
+            b.refresh(now, |_| Sample::of(&arb, now));
+            assert!(b.states[0].util < 0.05, "{}", b.states[0].util);
+        }
+        arb.stop();
     }
 
     /// STATEMENT: The balancer samples workers at most every `REFRESH`, unless the worker list

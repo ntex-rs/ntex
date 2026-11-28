@@ -193,21 +193,21 @@ impl Stack {
     ///
     /// A closure would take `item` by value, as a capture or an argument, and
     /// that copies it on every call.
-    pub(crate) fn encode<U>(
-        &self,
-        io: &IoRef,
-        item: U::Item,
-        codec: &U,
-    ) -> (Result<(), U::Error>, usize)
+    ///
+    /// Returns the buffered output size, like
+    /// [`write_buf_size`](Self::write_buf_size). On an encoder error the
+    /// caller reads the size separately; returning it with the error would
+    /// copy the error through the stack on the common path.
+    pub(crate) fn encode<U>(&self, io: &IoRef, item: U::Item, codec: &U) -> Result<usize, U::Error>
     where
         U: Encoder,
     {
         let layers = self.borrow();
-        let (result, len) = layers.app.encode_len_of(io, item, codec);
+        let len = layers.app.encode_len_of(io, item, codec)?;
         if let Some(wire) = &layers.wire {
-            (result, len + wire.write_len())
+            Ok(len + wire.write_len())
         } else {
-            (result, len)
+            Ok(len)
         }
     }
 
@@ -570,12 +570,7 @@ impl Buffer {
 
     /// Same as [`with_write_len_of`](Self::with_write_len_of), encodes `item`
     /// with `codec` instead of calling a closure.
-    fn encode_len_of<U>(
-        &self,
-        io: &IoRef,
-        item: U::Item,
-        codec: &U,
-    ) -> (Result<(), U::Error>, usize)
+    fn encode_len_of<U>(&self, io: &IoRef, item: U::Item, codec: &U) -> Result<usize, U::Error>
     where
         U: Encoder,
     {
@@ -584,8 +579,7 @@ impl Buffer {
         if io.0.is_output_discarded() {
             wb.clear();
         }
-        let len = wb.len();
-        (result, len)
+        result.map(|()| wb.len())
     }
 }
 

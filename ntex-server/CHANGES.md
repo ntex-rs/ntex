@@ -1,5 +1,17 @@
 # Changes
 
+## [4.6.4] - 2026-11-28
+
+* The blocked-worker reschedule check sleeps while no item was dispatched and
+  every worker is idle with deferred or disabled latency sampling, so an idle
+  server no longer wakes every 50 ms on the native runtime
+
+* An idle worker whose runtime defers latency samples to turn starts is not
+  marked blocked because its last sample is old
+
+* A task that blocks a worker's runtime between two load samples no longer
+  counts as worker load on the native and compio runtimes
+
 ## [4.6.3] - 2026-11-25
 
 * `LoadBalancing::Reuseport` workers accept connections without querying the

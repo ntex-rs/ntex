@@ -1,5 +1,27 @@
 # Changes
 
+## [4.10.0] - 2026-11-28
+
+* `IoRef::decode()`, `IoRef::decode_item()` and `IoRef::decode_items()` do not
+  call the codec while the read buffer is empty before eof, a receive that
+  finds no input no longer takes a read buffer from the pool. A codec must
+  return a frame while decoding the input that completes it
+
+* `IoRef::encode()` returns the buffered size from the encoder on success and
+  handles encoder errors out of line, the encoder result is no longer copied
+  through the stack on every call
+
+* Add `IoContext::read_budget()`, the input a transport can read before read
+  back-pressure is enabled
+
+* Add `Io::recv_batch()` and `IoRef::decode_items()`, which decode up to `max`
+  buffered items into a `Vec` in one buffer access; pipelined protocols pay
+  the per-receive cost once per batch instead of once per item
+
+* Add `Io::poll_recv_decode_items()`, the batch form of
+  `Io::poll_recv_decode()`; it and `IoRef::decode_items()` return
+  `DecodedItems` with the item count and buffer progress for read timers
+
 ## [4.9.1] - 2026-11-26
 
 * `IoRef::with_read_src()` and `IoRef::with_buf()` keep a read pause unless the

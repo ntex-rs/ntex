@@ -75,6 +75,10 @@ fn latency_sampling() {
 
             let m = arb.latency().unwrap();
             assert_eq!(m.interval, Duration::from_millis(5));
+            assert_eq!(
+                m.deferred,
+                cfg!(not(any(feature = "tokio", feature = "compio")))
+            );
             assert!(m.last_sample.unwrap() <= Instant::now());
 
             arb.stop();
@@ -89,6 +93,57 @@ fn latency_sampling() {
             assert_eq!(System::current().arbiter().latency(), None);
             let mut arb = Arbiter::new();
             assert_eq!(arb.latency(), None);
+            arb.stop();
+            arb.join().unwrap();
+        });
+}
+
+/// STATEMENT: An arbiter handle counts the runtime turns that ran for at least 100 ms, on
+/// the runtimes that expose turns.
+///
+/// HOW:
+/// - On the native runtime, block a worker arbiter for 150 ms in a task and wait for the
+///   count to grow by one, then run a short task and check the count stays.
+/// - On Compio, whose driver in `ntex-net` reports the turns, check the count is available.
+/// - On Tokio, check the count is not available.
+#[test]
+fn long_turns() {
+    System::build()
+        .name("test")
+        .build(TestRunner)
+        .block_on(async {
+            let mut arb = Arbiter::new();
+            let hnd = arb.handle().clone();
+            let run = |block: Duration| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                hnd.spawn(async move {
+                    std::thread::sleep(block);
+                    tx.send(()).unwrap();
+                });
+                rx
+            };
+            if cfg!(feature = "tokio") {
+                assert_eq!(hnd.long_turns(), None);
+            } else if cfg!(feature = "compio") {
+                assert!(hnd.long_turns().is_some());
+            } else {
+                let before = hnd.long_turns().unwrap();
+                let done = run(Duration::from_millis(150));
+                for _ in 0..400 {
+                    if done.try_recv().is_ok() && hnd.long_turns() == Some(before + 1) {
+                        break;
+                    }
+                    Delay::new(Duration::from_millis(5)).await;
+                }
+                assert_eq!(hnd.long_turns(), Some(before + 1));
+
+                let done = run(Duration::ZERO);
+                while done.try_recv().is_err() {
+                    Delay::new(Duration::from_millis(5)).await;
+                }
+                Delay::new(Duration::from_millis(20)).await;
+                assert_eq!(hnd.long_turns(), Some(before + 1));
+            }
             arb.stop();
             arb.join().unwrap();
         });

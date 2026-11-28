@@ -275,6 +275,14 @@ impl Handle {
         None
     }
 
+    #[doc(hidden)]
+    /// Returns the number of runtime turns that ran for at least 100 ms.
+    ///
+    /// Tokio does not expose runtime turns; always returns `None`.
+    pub fn long_turns(&self) -> Option<u64> {
+        None
+    }
+
     /// Returns the number of runtime polls, not available on Tokio.
     ///
     /// Always returns `None`, the method exists for compatibility with the

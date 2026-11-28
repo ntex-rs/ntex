@@ -4721,6 +4721,248 @@ async fn recv_item_reports_timeout_during_write_backpressure() {
     assert!(io.flags().is_wr_backpressure());
 }
 
+/// Two-byte frames, a frame starting with `x` is invalid.
+struct FailsAtX;
+
+impl Decoder for FailsAtX {
+    type Item = Bytes;
+    type Error = &'static str;
+
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Bytes>, &'static str> {
+        if src.first() == Some(&b'x') {
+            Err("invalid frame")
+        } else {
+            Ok(FixedSize(2).decode(src).unwrap())
+        }
+    }
+}
+
+/// STATEMENT: `recv_batch` appends buffered items to `dst`, at most `max` per call, and treats a `max` of zero as one.
+///
+/// HOW:
+/// - Buffer five four-byte items and half of a sixth.
+/// - Receive with `max` 3, 0 and 3 into one vector and check the counts 3, 1 and 1.
+/// - Check the items were appended in order and the partial item stays buffered.
+#[ntex::test]
+async fn recv_batch_decodes_up_to_max_items() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let codec = FixedSize(4);
+
+    client.write("0000111122223333444455");
+    sleep(Millis(25)).await;
+
+    let mut items = Vec::new();
+    assert_eq!(io.recv_batch(&codec, &mut items, 3).await.unwrap(), 3);
+    assert_eq!(io.recv_batch(&codec, &mut items, 0).await.unwrap(), 1);
+    assert_eq!(io.recv_batch(&codec, &mut items, 3).await.unwrap(), 1);
+    assert_eq!(items, ["0000", "1111", "2222", "3333", "4444"]);
+    assert_eq!(io.read_dst_size(), 2);
+}
+
+/// STATEMENT: `recv_batch` waits until a complete item is buffered, then returns all complete items.
+///
+/// HOW:
+/// - Poll a batch receive with no input, then with half an item buffered, and check it stays pending.
+/// - Write the rest of the item and one more, then check the woken receive returns both.
+#[ntex::test]
+async fn recv_batch_waits_for_a_complete_item() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let codec = FixedSize(4);
+    let mut items = Vec::new();
+
+    let mut fut = io.recv_batch(&codec, &mut items, 8);
+    assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+    client.write("12");
+    sleep(Millis(25)).await;
+    assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+
+    client.write("345678");
+    let res = timeout(Millis(1000), fut)
+        .await
+        .expect("recv_batch was not woken by input");
+    assert_eq!(res.unwrap(), 2);
+    assert_eq!(items, ["1234", "5678"]);
+}
+
+/// STATEMENT: A codec error in `recv_batch` leaves the items decoded before it in `dst`.
+///
+/// HOW:
+/// - Buffer two valid two-byte frames followed by an invalid one.
+/// - Check `RecvError::Decoder` is returned and `dst` holds both valid frames.
+#[ntex::test]
+async fn recv_batch_keeps_items_decoded_before_codec_error() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+
+    client.write("aabbxx");
+    sleep(Millis(25)).await;
+
+    let mut items = Vec::new();
+    let res = io.recv_batch(&FailsAtX, &mut items, 8).await;
+    assert!(matches!(res, Err(RecvError::Decoder("invalid frame"))));
+    assert_eq!(items, ["aa", "bb"]);
+}
+
+/// STATEMENT: After peer EOF `recv_batch` decodes the remaining input with `decode_eof`, then reports the end of stream as `PeerGone(None)`.
+///
+/// HOW:
+/// - Buffer one and a half items and close the peer.
+/// - Check one batch returns the full item and the shorter final one through `decode_eof`.
+/// - Check the next batch returns `PeerGone(None)`.
+#[ntex::test]
+async fn recv_batch_decodes_eof_input_then_ends() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let codec = FixedSizeEof(4, Cell::new(0));
+
+    client.write("123456");
+    sleep(Millis(25)).await;
+    client.close().await;
+    sleep(Millis(25)).await;
+
+    let mut items = Vec::new();
+    assert_eq!(io.recv_batch(&codec, &mut items, 8).await.unwrap(), 2);
+    assert_eq!(items, ["1234", "56"]);
+    assert!(codec.1.get() >= 2);
+
+    let res = timeout(Millis(1000), io.recv_batch(&codec, &mut items, 8))
+        .await
+        .expect("recv_batch did not observe the peer closing");
+    assert!(matches!(res, Err(RecvError::PeerGone(None))));
+}
+
+/// STATEMENT: `recv_batch` reports input cut off by a clean peer EOF as `UnexpectedEof`.
+///
+/// HOW:
+/// - Buffer one and a half fixed-size items and close the peer.
+/// - Check the batch returns the full item, then `PeerGone` with an `UnexpectedEof` error.
+#[ntex::test]
+async fn recv_batch_reports_truncated_stream() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let codec = FixedSize(4);
+
+    client.write("123456");
+    sleep(Millis(25)).await;
+    client.close().await;
+
+    let mut items = Vec::new();
+    assert_eq!(io.recv_batch(&codec, &mut items, 8).await.unwrap(), 1);
+    let res = timeout(Millis(1000), io.recv_batch(&codec, &mut items, 8))
+        .await
+        .expect("recv_batch did not observe the peer closing");
+    let Err(RecvError::PeerGone(Some(err))) = res else {
+        panic!("expected a truncated stream")
+    };
+    assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(items, ["1234"]);
+}
+
+/// STATEMENT: `recv_batch` reports a dispatcher timeout before decoding and keeps the buffered input.
+///
+/// HOW:
+/// - Buffer two items and notify the timeout.
+/// - Check `RecvError::Timeout` with `dst` empty and the input still buffered.
+/// - Check the next batch returns both items.
+#[ntex::test]
+async fn recv_batch_reports_timeout_before_decoding() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let codec = FixedSize(4);
+
+    client.write("12345678");
+    sleep(Millis(25)).await;
+    io.st().notify_timeout();
+
+    let mut items = Vec::new();
+    let res = io.recv_batch(&codec, &mut items, 8).await;
+    assert!(matches!(res, Err(RecvError::Timeout)));
+    assert_eq!(items.len(), 0);
+    assert_eq!(io.read_dst_size(), 8);
+
+    assert_eq!(io.recv_batch(&codec, &mut items, 8).await.unwrap(), 2);
+    assert_eq!(items, ["1234", "5678"]);
+}
+
+/// STATEMENT: `recv_batch` waits out write backpressure instead of returning `WriteBackpressure`.
+///
+/// HOW:
+/// - Block writes, queue output above the watermark, and buffer two complete input items.
+/// - Poll once and check it is pending, then let the peer drain output.
+/// - Check both items arrive in one batch and write backpressure is cleared.
+#[ntex::test]
+async fn recv_batch_waits_out_write_backpressure() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(0);
+    let io = Io::new(
+        server,
+        SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
+    );
+    let codec = FixedSize(4);
+    io.encode_slice(BIN2).unwrap();
+    assert!(io.flags().is_wr_backpressure());
+
+    client.write("12345678");
+    sleep(Millis(25)).await;
+
+    let mut items = Vec::new();
+    let mut fut = io.recv_batch(&codec, &mut items, 8);
+    assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+
+    client.remote_buffer_cap(1024);
+    let res = timeout(Millis(1000), fut)
+        .await
+        .expect("recv_batch was not woken when output drained");
+    assert_eq!(res.unwrap(), 2);
+    assert_eq!(items, ["1234", "5678"]);
+    assert!(!io.flags().is_wr_backpressure());
+    assert_eq!(client.read_any(), Bytes::from_static(BIN2));
+}
+
+/// STATEMENT: `decode_items` clears read readiness, releases read backpressure, and reports the remaining input to the read gauge.
+///
+/// HOW:
+/// - Fill the read buffer to the backpressure mark with metrics enabled.
+/// - Decode half of it as a two-item batch.
+/// - Check readiness and backpressure are cleared and the `read_buffered` gauge reports the remaining half.
+#[ntex::test]
+async fn decode_items_updates_read_state() {
+    let cfg = SharedCfg::new("SRV")
+        .add(
+            IoConfig::default()
+                .set_metrics(true)
+                .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                .set_read_backpressure(BytePageSize::Size4.capacity()),
+        )
+        .build();
+    let metrics = cfg.get::<IoConfig>().metrics();
+
+    let (client, server) = IoTest::create();
+    let io = Io::new(server, cfg);
+    assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+
+    let size = BytePageSize::Size4.capacity();
+    client.write(vec![b'x'; size]);
+    sleep(Millis(50)).await;
+    assert!(io.flags().is_read_ready());
+    assert!(io.flags().is_rd_backpressure());
+
+    let mut items = Vec::new();
+    let decoded = io.decode_items(&FixedSize(size / 4), &mut items, 2);
+    assert_eq!(decoded.unwrap().items, 2);
+    assert!(!io.flags().is_read_ready());
+    assert!(!io.flags().is_rd_backpressure());
+    assert_eq!(metrics.snapshot().read_buffered, size / 2);
+}
+
 /// STATEMENT: Write timeout fails send, flush, and producer readiness without closing the connection.
 ///
 /// HOW:
@@ -4917,6 +5159,69 @@ async fn recv_uses_decode_eof_after_eof() {
     assert!(io.recv(&codec).await.unwrap().is_none());
     assert!(codec.1.get() >= 2);
     assert_eq!(io.with_read_dst(|b| b.len()), 0);
+}
+
+/// Fixed size frames, counts the `decode` and `decode_eof` calls that get an
+/// empty buffer.
+struct EmptyDecodes(usize, std::cell::Cell<usize>, std::cell::Cell<usize>);
+
+impl Decoder for EmptyDecodes {
+    type Item = Bytes;
+    type Error = io::Error;
+
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Bytes>, io::Error> {
+        if src.is_empty() {
+            self.1.set(self.1.get() + 1);
+        }
+        FixedSize(self.0).decode(src)
+    }
+
+    fn decode_eof(&self, src: &mut BytesMut) -> Result<Option<Bytes>, io::Error> {
+        if src.is_empty() {
+            self.2.set(self.2.get() + 1);
+        }
+        FixedSize(self.0).decode(src)
+    }
+}
+
+/// STATEMENT: Before eof the codec is not called with an empty read buffer, an empty decode
+/// attempt still cancels a read pause, and at eof `decode_eof` gets the empty buffer.
+///
+/// HOW:
+/// - Install a read pause, decode the empty buffer with `decode`, `decode_item` and
+///   `decode_items`; check no items, no `decode` call and the pause is cancelled.
+/// - Buffer two frames, receive both in one batch, and check the next `poll_recv` is pending
+///   without a `decode` call on the drained buffer.
+/// - Close the peer and check the receive ends after `decode_eof` got an empty buffer.
+#[ntex::test]
+async fn empty_read_buffer_is_not_decoded() {
+    let (client, server) = IoTest::create();
+    client.remote_buffer_cap(1024);
+    let io = Io::new(server, SharedCfg::new("SRV"));
+    let codec = EmptyDecodes(4, std::cell::Cell::new(0), std::cell::Cell::new(0));
+
+    assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+    assert!(io.flags().is_read_paused());
+    assert!(io.decode(&codec).unwrap().is_none());
+    assert!(!io.flags().is_read_paused());
+    let decoded = io.decode_item(&codec).unwrap();
+    assert!(decoded.item.is_none());
+    assert_eq!((decoded.remains, decoded.consumed), (0, 0));
+    let mut items = Vec::new();
+    assert_eq!(io.decode_items(&codec, &mut items, 4).unwrap().items, 0);
+    assert_eq!(codec.1.get(), 0);
+
+    client.write("12345678");
+    sleep(Millis(25)).await;
+    assert_eq!(io.recv_batch(&codec, &mut items, 4).await.unwrap(), 2);
+    assert_eq!(items, ["1234", "5678"]);
+    assert!(lazy(|cx| io.poll_recv(&codec, cx)).await.is_pending());
+    assert_eq!(codec.1.get(), 0);
+
+    client.close().await;
+    assert!(io.recv(&codec).await.unwrap().is_none());
+    assert_eq!(codec.1.get(), 0);
+    assert!(codec.2.get() >= 1);
 }
 
 /// STATEMENT: Local shutdown does not classify incomplete buffered input as peer truncation.

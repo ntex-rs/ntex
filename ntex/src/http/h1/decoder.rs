@@ -868,6 +868,18 @@ impl PayloadDecoder {
         self.kind.get() == Kind::Eof
     }
 
+    /// Returns `true` if the whole payload is decoded.
+    ///
+    /// The decoder reports the end of the payload as [`PayloadItem::Eof`]
+    /// only when it is called again, but the decoder is not called with an
+    /// empty buffer, so a consumer checks this after every item.
+    pub(crate) fn is_finished(&self) -> bool {
+        matches!(
+            self.kind.get(),
+            Kind::Length(0) | Kind::Chunked(ChunkedState::End, ..)
+        )
+    }
+
     /// Returns the remaining size of a `Content-Length` delimited payload.
     pub(super) fn fixed_length(&self) -> Option<u64> {
         if let Kind::Length(len) = self.kind.get() {

@@ -1,5 +1,20 @@
 # Changes
 
+## [4.6.0] - 2026-11-28
+
+* Use valid pipeline readiness without `Pipeline::poll_ready()`, which
+  registered the dispatcher for readiness changes on every pass; invalidated
+  readiness is checked and registered on the next pass
+
+* Check for errors of completed calls with a flag instead of moving the error
+  out on every pass
+
+* Decode buffered frames in batches with `Io::poll_recv_decode_items()`: after
+  one readiness check the dispatcher decodes up to 16 frames, limited by the
+  free in-flight capacity, and calls the service for them in order while it
+  stays ready and write backpressure is off; frames left wait for readiness or
+  for the output to drain
+
 ## [4.5.0] - 2026-11-17
 
 * Add `Dispatcher::keepalive_timeout()` to override the transport's keep-alive

@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 use std::{future::poll_fn, time::Duration, time::Instant};
 
 use crate::time::TimerHandle;
+use crate::watchdog::Watchdog;
 
 pub use crate::pool::PoolMetrics;
 pub use crate::system::PingRecord;
@@ -124,11 +125,19 @@ impl AtomicHistogram {
 
 /// Snapshot of an arbiter's scheduling latency.
 ///
-/// The arbiter runs a task that sleeps for `interval` on the runtime timer
-/// wheel and records how late it wakes up. Lateness is measured from the
-/// deadline of the wheel, which rounds `interval` up to the wheel granularity.
-/// It includes the time the runtime spent running other tasks and handling
-/// driver events, and the timer's own wake-up latency.
+/// The arbiter runs a task that sleeps for `interval` and records how late it
+/// wakes up. Lateness includes the time the runtime spent running other tasks
+/// and handling driver events.
+///
+/// With the Tokio and Compio backends the task sleeps on the runtime timer
+/// wheel. Lateness is measured from the deadline of the wheel, which rounds
+/// `interval` up to the wheel granularity, and includes the timer's own
+/// wake-up latency.
+///
+/// With the native runtime sampling is [`deferred`](Self::deferred): a sample
+/// does not wake an idle arbiter, it is taken by the first runtime turn after
+/// the deadline.
+///
 /// Fields are sampled independently and may be slightly inconsistent during
 /// concurrent updates.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -142,12 +151,24 @@ pub struct LatencyMetrics {
     pub histogram: Histogram,
     /// Time of the most recent sample, `None` if no sample has been recorded.
     ///
-    /// A time much older than `interval` means the arbiter is blocked.
+    /// Without [`deferred`](Self::deferred) sampling, a time much older than
+    /// `interval` means the arbiter is blocked. With deferred sampling it
+    /// stops advancing while the arbiter is idle.
     pub last_sample: Option<Instant>,
+    /// Whether samples are taken by runtime turns instead of a timer.
+    ///
+    /// A deferred sample does not wake an idle arbiter, it is taken by the
+    /// first turn that starts after its deadline. Lateness is measured from
+    /// the deadline, or from the start of that turn if the arbiter was idle at
+    /// the deadline. A turn that is still running at the deadline is measured
+    /// from the deadline.
+    pub deferred: bool,
     /// Number of stalls detected by the watchdog.
     ///
     /// An arbiter is stalled when its pending sample is late by more than
-    /// the [`ping_threshold`](crate::Builder::ping_threshold).
+    /// the [`ping_threshold`](crate::Builder::ping_threshold). With
+    /// [`deferred`](Self::deferred) sampling, an idle arbiter is never late
+    /// and lateness is bounded by the running turn.
     pub stalls: u64,
     /// Total lateness accumulated by recovered stalls.
     ///
@@ -185,6 +206,8 @@ pub(crate) struct LatencyStats {
     stalled: AtomicBool,
     // expected sample time of the current stall, nanoseconds since `base`
     stalled_at: AtomicU64,
+    // samples are taken by runtime turns, see `LatencyMetrics::deferred`
+    deferred: AtomicBool,
 }
 
 fn as_nanos(d: Duration) -> u64 {
@@ -227,13 +250,64 @@ impl LatencyStats {
             stalls: self.stalls.load(Ordering::Relaxed),
             stall_duration: Duration::from_nanos(self.stall_duration.load(Ordering::Relaxed)),
             stalled: self.stalled.load(Ordering::Relaxed),
+            deferred: self.deferred.load(Ordering::Relaxed),
         })
+    }
+
+    /// Returns `true` if samples are deferred, the arbiter is idle and its
+    /// pending sample is due.
+    ///
+    /// The next turn of such an arbiter takes the sample and notifies the
+    /// watchdog. `turn` is the current turn of the arbiter, read before the call.
+    pub(crate) fn is_dormant(&self, now: Instant, turn: Option<Duration>) -> bool {
+        turn.is_none()
+            && self.deferred.load(Ordering::Relaxed)
+            && !self.stalled.load(Ordering::Relaxed)
+            && self.base.get().is_some_and(|base| {
+                *base + Duration::from_nanos(self.next.load(Ordering::Relaxed)) <= now
+            })
+    }
+
+    /// Returns the earliest time the arbiter can be stalled, `None` if
+    /// sampling has not started.
+    ///
+    /// Takes the arguments of the preceding [`check`](Self::check). Deadlines
+    /// and samples only move forward, so no stall starts before the returned
+    /// time. A stalled arbiter returns `now`, its recovery is due at any time.
+    pub(crate) fn stall_at(
+        &self,
+        now: Instant,
+        threshold: Duration,
+        turn: Option<Duration>,
+    ) -> Option<Instant> {
+        let interval = self.interval.load(Ordering::Relaxed);
+        let base = self.base.get()?;
+        if interval == 0 {
+            return None;
+        }
+        if self.stalled.load(Ordering::Relaxed) {
+            return Some(now);
+        }
+        let last = self.last_sample.load(Ordering::Relaxed).saturating_sub(1);
+        let expected = self
+            .next
+            .load(Ordering::Relaxed)
+            .max(last.saturating_add(interval));
+        let mut at = *base + Duration::from_nanos(expected);
+        if self.deferred.load(Ordering::Relaxed) {
+            // only a turn is late, a later turn starts after `now`
+            if let Some(start) = turn.map_or(Some(now), |turn| now.checked_sub(turn)) {
+                at = at.max(start);
+            }
+        }
+        Some(at + threshold)
     }
 
     /// Checks whether the arbiter stopped recording samples.
     ///
-    /// Must be called from a single thread.
-    pub(crate) fn check(&self, now: Instant, threshold: Duration) -> Stall {
+    /// `turn` is the current turn of the arbiter, it bounds the lateness of
+    /// deferred samples. Must be called from a single thread.
+    pub(crate) fn check(&self, now: Instant, threshold: Duration, turn: Option<Duration>) -> Stall {
         let interval = Duration::from_nanos(self.interval.load(Ordering::Relaxed));
         let Some(base) = self.base.get() else {
             return Stall::None;
@@ -261,15 +335,28 @@ impl LatencyStats {
         } else {
             // The pending deadline is at least `interval` after the last
             // sample, a deadline older than the last sample is stale
-            let expected = self
+            let mut expected = self
                 .next
                 .load(Ordering::Relaxed)
                 .max(last.saturating_add(as_nanos(interval)));
-            let late = now.saturating_duration_since(*base + Duration::from_nanos(expected));
+            let mut late = now.saturating_duration_since(*base + Duration::from_nanos(expected));
+            let mut age = now.saturating_duration_since(*base + Duration::from_nanos(last));
+            if self.deferred.load(Ordering::Relaxed) {
+                // the first turn after the deadline takes the sample, an idle
+                // arbiter is not late and a turn is late since it started
+                let Some(turn) = turn else {
+                    return Stall::None;
+                };
+                if turn < late {
+                    late = turn;
+                    expected = as_nanos(now.saturating_duration_since(*base))
+                        .saturating_sub(as_nanos(turn));
+                }
+                age = age.min(turn);
+            }
             if late <= threshold {
                 return Stall::None;
             }
-            let age = now.saturating_duration_since(*base + Duration::from_nanos(last));
             self.stalled_at.store(expected, Ordering::Relaxed);
             self.stalled.store(true, Ordering::Relaxed);
             self.stalls.store(
@@ -282,13 +369,22 @@ impl LatencyStats {
 }
 
 /// Samples the scheduling latency of the current arbiter.
-pub(crate) fn start_latency_sampler(stats: &Arc<LatencyStats>, interval_ms: usize) {
+pub(crate) fn start_latency_sampler(
+    stats: &Arc<LatencyStats>,
+    interval_ms: usize,
+    watchdog: &Arc<Watchdog>,
+) {
     if interval_ms == 0 {
         return;
     }
     let interval = Duration::from_millis(interval_ms as u64);
     stats.base.get_or_init(Instant::now);
     stats.interval.store(as_nanos(interval), Ordering::Relaxed);
+
+    if cfg!(not(any(feature = "tokio", feature = "compio"))) && crate::rt::Runtime::has_current() {
+        start_deferred_sampler(stats.clone(), interval, watchdog);
+        return;
+    }
 
     let stats = stats.clone();
     crate::spawn_detached(async move {
@@ -299,6 +395,31 @@ pub(crate) fn start_latency_sampler(stats: &Arc<LatencyStats>, interval_ms: usiz
             poll_fn(|cx| timer.poll_elapsed(cx)).await;
             let now = Instant::now();
             stats.record(now.saturating_duration_since(deadline), now);
+        }
+    });
+}
+
+/// Samples on the native runtime with a deadline expired by runtime turns.
+fn start_deferred_sampler(stats: Arc<LatencyStats>, interval: Duration, watchdog: &Arc<Watchdog>) {
+    use crate::rt::Runtime;
+
+    let arm = move |stats: &LatencyStats| {
+        let deadline = Instant::now() + interval;
+        stats.expect(deadline);
+        Runtime::with_current(|rt| rt.lazy.reset(deadline));
+    };
+    stats.deferred.store(true, Ordering::Relaxed);
+    Runtime::with_current(|rt| rt.lazy.set_watchdog(watchdog.clone()));
+    arm(&stats);
+    // a parked watchdog does not check the new arbiter
+    watchdog.notify();
+
+    crate::spawn_detached(async move {
+        loop {
+            let at = poll_fn(|cx| Runtime::with_current(|rt| rt.lazy.poll_expired(cx))).await;
+            let now = Instant::now();
+            stats.record(now.saturating_duration_since(at), now);
+            arm(&stats);
         }
     });
 }

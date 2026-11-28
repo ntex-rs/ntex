@@ -114,8 +114,13 @@ pub trait Decoder {
     /// frame yet. On `None` the partial frame must stay in `src`, it is
     /// passed in again together with the input that arrives next.
     ///
-    /// This is called repeatedly while it returns frames, and may be called
-    /// with an empty buffer.
+    /// This is called repeatedly while it returns frames and input remains.
+    /// `ntex-io` does not call it with an empty buffer, so a frame must be
+    /// returned while decoding the input that completes it, a frame that
+    /// could only be returned for an empty buffer is not received until more
+    /// input arrives. At EOF [`decode_eof`](Self::decode_eof) is used
+    /// instead, its default implementation calls this method, also with an
+    /// empty buffer.
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error>;
 
     /// Attempts to decode a frame once the transport reached a clean EOF.

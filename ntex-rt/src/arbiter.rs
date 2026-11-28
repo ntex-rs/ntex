@@ -200,7 +200,7 @@ impl Arbiter {
                     let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx, pool);
                     sys.register_arbiter(arb.clone());
                     // `Arbiter::latency()` is available once the arbiter is returned
-                    start_latency_sampler(&arb.0.latency, config.latency_interval);
+                    start_latency_sampler(&arb.0.latency, config.latency_interval, &sys.0.watchdog);
                     arb_hnd_tx
                         .send(arb.clone())
                         .expect("Controller thread has gone");

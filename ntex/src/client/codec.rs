@@ -113,6 +113,16 @@ impl ClientPayloadCodec {
             .as_ref()
             .is_some_and(PayloadDecoder::is_eof)
     }
+
+    /// Check if the whole payload is decoded, the end of the payload is
+    /// not decoded from an empty buffer
+    pub(crate) fn is_finished(&self) -> bool {
+        self.inner
+            .payload
+            .borrow()
+            .as_ref()
+            .is_none_or(PayloadDecoder::is_finished)
+    }
 }
 
 impl Decoder for ClientCodec {

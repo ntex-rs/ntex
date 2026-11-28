@@ -49,9 +49,11 @@
 //! # Native runtime
 //!
 //! Each native [`Runtime`] owns a wheel. `Runtime::poll`
-//! expires due buckets before running tasks and reports the time until the
-//! next occupied bucket in `PollResult::Pending`, so the driver waits for
-//! I/O and timers in a single call. No driver tasks are spawned. The cached
+//! expires the buckets due at the start of the turn before running tasks,
+//! asks for another pass if a bucket became due during the turn, and reports
+//! the time until the next occupied bucket in `PollResult::Pending`, so the
+//! driver waits for I/O and timers in a single call. No driver tasks are
+//! spawned. The cached
 //! [`system_time()`] is refreshed when it is older than 150 milliseconds.
 //! The resolution is read from the current system when the first timer is
 //! armed, or set with `RuntimeBuilder::timer_resolution`.
@@ -589,11 +591,12 @@ impl Timer {
         }
     }
 
-    /// Expires the due buckets of a native runtime and runs their callbacks.
-    pub(crate) fn run_due(&self) {
+    /// Expires the buckets of a native runtime that are due at `now`, the
+    /// start of the turn, and runs their callbacks.
+    pub(crate) fn run_due(&self, now: Instant) {
         if self.next_expiry.get() != u64::MAX {
             // generation changes only when the runtime is dropped
-            let _ = self.process(Instant::now(), self.generation.get());
+            let _ = self.process(now, self.generation.get());
         }
     }
 

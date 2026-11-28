@@ -56,7 +56,7 @@ fn status(val: u64) -> ServerStatus {
 #[derive(Debug)]
 pub struct Server<T> {
     shared: Arc<ServerShared>,
-    router: Arc<Routing<T>>,
+    pub(crate) router: Arc<Routing<T>>,
     cmd: Sender<ServerCommand<T>>,
     stop: Option<oneshot::AsyncReceiver<()>>,
 }

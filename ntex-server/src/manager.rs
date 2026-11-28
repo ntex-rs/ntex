@@ -1,4 +1,6 @@
-use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, pin::pin, rc::Rc, sync::Arc};
+use std::task::{Context, Poll, Waker};
+use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, mem, pin::pin, rc::Rc};
+use std::{future::poll_fn, sync::Arc};
 
 use async_channel::{Receiver, Sender, unbounded};
 use ntex_rt::{System, signals::PanicSource, signals::Signal};
@@ -13,7 +15,8 @@ use crate::{balance::Balancer, metrics::Metrics, server::ServerShared};
 
 const STOP_DELAY: Millis = Millis(250);
 const RESTART_DELAY: Millis = Millis(250);
-/// Interval of the check for items queued at blocked workers.
+/// Interval of the check for items queued at blocked workers, the check is
+/// dormant while no item is sent.
 const RESCHEDULE_INTERVAL: Millis = Millis(50);
 
 #[derive(Clone)]
@@ -77,6 +80,10 @@ pub(crate) struct Router<T> {
     balancer: Balancer,
     /// The server is stopping, items are not sent to workers.
     closed: bool,
+    /// An item was sent to a worker since the last reschedule check.
+    sent: bool,
+    /// Wakes the dormant reschedule check when an item is sent.
+    check: Option<Waker>,
 }
 
 /// See [`ServerConfiguration::incoming_cpu`].
@@ -106,6 +113,8 @@ impl<T> Routing<T> {
                 workers: Vec::with_capacity(capacity),
                 balancer,
                 closed: false,
+                sent: false,
+                check: None,
             }),
             incoming_cpu: Mutex::new(incoming_cpu),
         }
@@ -174,6 +183,10 @@ impl<T> Router<T> {
                     if let Some(local) = local {
                         metrics.incoming_cpu(local);
                     }
+                    self.sent = true;
+                    if let Some(check) = self.check.take() {
+                        check.wake();
+                    }
                     return Ok(());
                 }
                 Err(i) => {
@@ -185,6 +198,20 @@ impl<T> Router<T> {
             }
         }
         Err(Rejected::NoWorker(item))
+    }
+
+    /// Waits for an item to be sent to a worker.
+    fn poll_sent(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        if self.sent {
+            self.check = None;
+            Poll::Ready(())
+        } else {
+            match self.check {
+                Some(ref check) if check.will_wake(cx.waker()) => (),
+                _ => self.check = Some(cx.waker().clone()),
+            }
+            Poll::Pending
+        }
     }
 }
 
@@ -446,14 +473,23 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 
     /// Moves the items queued at blocked workers to other workers.
-    fn reschedule_blocked(&mut self) {
+    ///
+    /// Returns `true` if no item was sent since the previous check and every
+    /// worker is idle, nothing is rescheduled until an item is sent. The
+    /// samples taken while a worker is blocked keep its blocked time out of
+    /// its load.
+    fn reschedule_blocked(&mut self) -> bool {
         let metrics = &self.mgr.0.shared.metrics;
         let routing = self.mgr.0.router.clone();
         let mut router = routing.lock();
         let r = &mut *router;
+        // workers become available without an item being sent
+        let idle = !mem::take(&mut r.sent)
+            && !r.workers.is_empty()
+            && r.workers.iter().all(Worker::is_idle);
         // only if some workers are not blocked
-        if r.closed || !r.balancer.sample(&r.workers) {
-            return;
+        if idle || r.closed || !r.balancer.sample(&r.workers) {
+            return idle;
         }
         let mut items = Vec::new();
         for (idx, wrk) in r.workers.iter().enumerate() {
@@ -483,6 +519,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         if !self.backlog.is_empty() {
             self.mgr.set_available(false);
         }
+        false
     }
 
     fn update_workers(&mut self, upd: Update<F::Item>) {
@@ -643,23 +680,36 @@ async fn handle_cmd<F: ServerConfiguration>(
     rx: Receiver<ServerCommand<F::Item>>,
 ) {
     let _drop_hnd = DropHandle(mgr.clone());
-    // queued items are moved from blocked workers to other workers
-    let check = (mgr.0.cfg.num >= 2).then(|| interval(RESCHEDULE_INTERVAL));
+    // queued items are moved from blocked workers to other workers, the
+    // check is dormant while no item is sent
+    let reschedule = mgr.0.cfg.num >= 2;
+    let mut check = reschedule.then(|| interval(RESCHEDULE_INTERVAL));
+    let routing = mgr.0.router.clone();
     let mut state = HandleCmdState::new(mgr);
 
     loop {
-        let item = if let Some(ref check) = check {
-            match select(rx.recv(), check.tick()).await {
+        let item = match check {
+            Some(ref tick) => match select(rx.recv(), tick.tick()).await {
                 Either::Left(item) => item,
                 Either::Right(()) => {
-                    if !state.mgr.stopping() {
-                        state.reschedule_blocked();
+                    if state.reschedule_blocked() {
+                        check = None;
                     }
                     continue;
                 }
+            },
+            None if reschedule => {
+                let sent = poll_fn(|cx| routing.lock().poll_sent(cx));
+                match select(rx.recv(), sent).await {
+                    Either::Left(item) => item,
+                    Either::Right(()) => {
+                        // the first tick checks immediately
+                        check = Some(interval(RESCHEDULE_INTERVAL));
+                        continue;
+                    }
+                }
             }
-        } else {
-            rx.recv().await
+            None => rx.recv().await,
         };
         let Ok(item) = item else {
             return;
@@ -842,6 +892,84 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(metrics.snapshot().incoming_cpu_hits, 1);
         drop(busy);
+
+        wrk.stop(Millis::ZERO).await;
+    }
+
+    /// STATEMENT: The reschedule check goes dormant while no item is sent and the workers
+    /// sample latency at runtime turns, and a sent item wakes it.
+    ///
+    /// HOW:
+    /// - Start a two-worker server. If its runtime samples latency on a timer, check the
+    ///   check stays awake for 200 ms.
+    /// - Otherwise wait for the check to register its waker after an interval without
+    ///   items.
+    /// - Send an item and check it takes the waker, the woken check consumes the sent flag,
+    ///   and the check goes dormant again.
+    #[ntex::test]
+    async fn reschedule_check_is_dormant_while_idle() {
+        async fn wait_for(f: impl Fn() -> bool) {
+            for _ in 0..400 {
+                if f() {
+                    return;
+                }
+                sleep(Millis(5)).await;
+            }
+            panic!("condition not met");
+        }
+
+        let srv = WorkerPool::new()
+            .name("test")
+            .workers(2)
+            .disable_signals()
+            .run(Cfg);
+        while srv.status() != ServerStatus::Ready {
+            srv.status_changed().await;
+        }
+        let dormant = || srv.router.lock().check.is_some();
+        let latency = System::current().arbiter().latency();
+        if latency.is_some_and(|l| !l.deferred) {
+            sleep(Millis(200)).await;
+            assert!(!dormant());
+            srv.stop(false).await;
+            return;
+        }
+        wait_for(dormant).await;
+
+        srv.process(1).unwrap();
+        assert!(!dormant());
+        wait_for(|| !srv.router.lock().sent).await;
+        wait_for(dormant).await;
+
+        srv.stop(false).await;
+    }
+
+    /// STATEMENT: An idle worker is not blocked, also on a runtime that takes no latency
+    /// sample while idle.
+    ///
+    /// HOW:
+    /// - Start a worker and wake its runtime after the sampling interval until it records
+    ///   a latency sample.
+    /// - Leave it idle for longer than the interval plus the blocked threshold, sample it
+    ///   with a balancer and check it is not blocked.
+    #[ntex::test]
+    async fn idle_worker_is_not_blocked() {
+        let mut wrk = Worker::start("test".into(), Cfg, None);
+        assert_eq!(wrk.wait_for_status().await, WorkerStatus::Available);
+        for _ in 0..100 {
+            if wrk.arbiter().latency().unwrap().last_sample.is_some() {
+                break;
+            }
+            sleep(Millis(20)).await;
+            wrk.arbiter().handle().spawn(async {});
+        }
+        assert!(wrk.arbiter().latency().unwrap().last_sample.is_some());
+        sleep(Millis(300)).await;
+
+        let mut balancer = Balancer::new(LoadBalancing::LeastLoaded);
+        balancer.insert(0);
+        balancer.sample(std::slice::from_ref(&wrk));
+        assert!(!balancer.is_blocked(0));
 
         wrk.stop(Millis::ZERO).await;
     }

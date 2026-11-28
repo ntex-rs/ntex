@@ -696,30 +696,28 @@ where
                                     merged += payload_codec.merged_chunks();
                                     sender.feed_data(chunk);
 
-                                    // decoding of merged small chunks is bounded per
-                                    // poll, other tasks run before the rest of the
-                                    // buffered input is decoded, large chunks are
-                                    // never merged and do not yield
-                                    if merged >= PAYLOAD_MERGED_CHUNKS_PER_POLL
-                                        && decoded.remains != 0
-                                        && pending.is_none()
-                                    {
-                                        cx.waker().wake_by_ref();
-                                        return Poll::Pending;
+                                    if !payload_codec.is_finished() {
+                                        // decoding of merged small chunks is bounded per
+                                        // poll, other tasks run before the rest of the
+                                        // buffered input is decoded, large chunks are
+                                        // never merged and do not yield
+                                        if merged >= PAYLOAD_MERGED_CHUNKS_PER_POLL
+                                            && decoded.remains != 0
+                                            && pending.is_none()
+                                        {
+                                            cx.waker().wake_by_ref();
+                                            return Poll::Pending;
+                                        }
+                                        continue;
                                     }
-                                    continue;
                                 }
                                 Some(PayloadItem::Trailers(trailers)) => {
                                     sender.feed_trailers(trailers);
-                                    continue;
+                                    if !payload_codec.is_finished() {
+                                        continue;
+                                    }
                                 }
-                                Some(PayloadItem::Eof) => {
-                                    updated = true;
-                                    sender.feed_eof();
-                                    self.timers.payload_done(&self.io);
-                                    self.payload = None;
-                                    break;
-                                }
+                                Some(PayloadItem::Eof) => (),
                                 None => {
                                     // the filter chain pauses reading, the
                                     // peer is not charged for it
@@ -729,6 +727,13 @@ where
                                     break;
                                 }
                             }
+                            // the decoder is not called with an empty buffer, the
+                            // payload ends with its last item
+                            updated = true;
+                            sender.feed_eof();
+                            self.timers.payload_done(&self.io);
+                            self.payload = None;
+                            break;
                         }
                         Err(RecvError::WriteBackpressure) => match self.poll_flush_timed(cx) {
                             Poll::Ready(Ok(())) => continue,

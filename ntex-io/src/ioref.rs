@@ -9,7 +9,8 @@ use crate::io::Close;
 use crate::ops::{Id, Iops, TimerHandle};
 use crate::waiters::{TAG_DISCONNECT, TAG_WRITE, Waiter};
 use crate::{
-    CloseReason, Decoded, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext, IoRef, types,
+    CloseReason, Decoded, DecodedItems, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext,
+    IoRef, types,
 };
 
 impl IoRef {
@@ -262,13 +263,25 @@ impl IoRef {
         // Not built on `with_write_src`: a closure would copy `item` on every
         // call, and the inactive path would build an error only to discard it.
         if st.flags.is_active() {
-            let (result, size) = st.buffer.encode(self, item, codec);
-            match self.consolidate_write_state_for(size, false) {
-                Ok(()) => result,
-                Err(_) => Ok(()),
+            match st.buffer.encode(self, item, codec) {
+                Ok(size) => {
+                    let _ = self.consolidate_write_state_for(size, false);
+                    Ok(())
+                }
+                Err(err) => self.encode_failed(err),
             }
         } else {
             Ok(())
+        }
+    }
+
+    /// Updates the write state after an encoder error, see [`encode`](Self::encode).
+    #[cold]
+    #[inline(never)]
+    fn encode_failed<E>(&self, err: E) -> Result<(), E> {
+        match self.consolidate_write_state(false) {
+            Ok(()) => Err(err),
+            Err(_) => Ok(()),
         }
     }
 
@@ -300,7 +313,8 @@ impl IoRef {
     /// Attempts to decode a frame from the read buffer.
     ///
     /// Once the transport reached eof this uses [`Decoder::decode_eof`]
-    /// instead of [`Decoder::decode`].
+    /// instead of [`Decoder::decode`]. Before eof the codec is not called
+    /// while the read buffer is empty, the attempt returns `Ok(None)`.
     ///
     /// This mutates the read state: it clears read readiness, and consuming
     /// enough bytes may release read backpressure. It also cancels a pause
@@ -316,10 +330,13 @@ impl IoRef {
     where
         U: Decoder,
     {
+        if self.skip_empty_decode() {
+            return Ok(None);
+        }
         let res = self.0.buffer.with_read_dst(self, |buf| {
             let res = self.decode_buf(codec, buf);
             self.0.flags.unset_read_ready();
-            self.update_read_destination(buf);
+            self.update_read_destination(buf.len());
             res
         });
         self.0.sync_read_buffered();
@@ -331,7 +348,8 @@ impl IoRef {
     /// `Decoded::consumed` reports the bytes taken by this attempt and
     /// `Decoded::remains` the bytes left in the application-facing read
     /// buffer. Once the transport reached eof this uses
-    /// [`Decoder::decode_eof`] instead of [`Decoder::decode`].
+    /// [`Decoder::decode_eof`] instead of [`Decoder::decode`]. Before eof the
+    /// codec is not called while the read buffer is empty.
     ///
     /// Like [`decode`](Self::decode), this mutates the read state: it clears
     /// read readiness, may release read backpressure, and cancels a pause
@@ -343,6 +361,13 @@ impl IoRef {
     where
         U: Decoder,
     {
+        if self.skip_empty_decode() {
+            return Ok(Decoded {
+                item: None,
+                remains: 0,
+                consumed: 0,
+            });
+        }
         let res = self.0.buffer.with_read_dst(self, |buf| {
             let len = buf.len();
             let res = self.decode_buf(codec, buf).map(|item| Decoded {
@@ -351,11 +376,96 @@ impl IoRef {
                 consumed: len - buf.len(),
             });
             self.0.flags.unset_read_ready();
-            self.update_read_destination(buf);
+            self.update_read_destination(buf.len());
             res
         });
         self.0.sync_read_buffered();
         res
+    }
+
+    /// Decodes buffered frames into `dst`, at most `max` of them.
+    ///
+    /// Returns the number of items appended to `dst` and the read buffer
+    /// progress, see [`DecodedItems`]. Decoding stops when `max` items were
+    /// appended, the codec needs more input or fails, or an item leaves the
+    /// read buffer empty. Items appended before a codec error stay in `dst`.
+    /// A `max` of zero is treated as one. Once the transport reached eof this
+    /// uses [`Decoder::decode_eof`] instead of [`Decoder::decode`]. Before eof
+    /// the codec is not called while the read buffer is empty.
+    ///
+    /// The read buffer is accessed once and the read state is updated once
+    /// for all items, which is cheaper than calling [`decode`](Self::decode)
+    /// per item. Like `decode`, this clears read readiness, consuming enough
+    /// bytes may release read backpressure, and it cancels a pause installed
+    /// by [`Io::poll_read_pause`](crate::Io::poll_read_pause).
+    pub fn decode_items<U>(
+        &self,
+        codec: &U,
+        dst: &mut Vec<<U as Decoder>::Item>,
+        max: usize,
+    ) -> Result<DecodedItems, <U as Decoder>::Error>
+    where
+        U: Decoder,
+    {
+        if self.skip_empty_decode() {
+            return Ok(DecodedItems::default());
+        }
+        let res = self.0.buffer.with_read_dst(self, |buf| {
+            let eof = self.0.flags.is_read_eof();
+            let mut items = 0;
+            let res = loop {
+                let len = buf.len();
+                let item = if eof {
+                    codec.decode_eof(buf)
+                } else {
+                    codec.decode(buf)
+                };
+                match item {
+                    Ok(Some(item)) => {
+                        dst.push(item);
+                        items += 1;
+                        // the codec is not called with an empty buffer, at
+                        // eof the next call decodes it
+                        if items >= max || buf.is_empty() {
+                            break Ok(DecodedItems {
+                                items,
+                                remains: buf.len(),
+                                consumed: 0,
+                            });
+                        }
+                    }
+                    Ok(None) => {
+                        break Ok(DecodedItems {
+                            items,
+                            remains: buf.len(),
+                            consumed: len - buf.len(),
+                        });
+                    }
+                    Err(err) => break Err(err),
+                }
+            };
+            self.0.flags.unset_read_ready();
+            self.update_read_destination(buf.len());
+            res
+        });
+        self.0.sync_read_buffered();
+        res
+    }
+
+    /// Skips a decode attempt on an empty read buffer before eof.
+    ///
+    /// Returns `true` after updating the read state like an attempt that
+    /// consumed nothing. The read buffer and the gauges are not touched, an
+    /// empty application-facing buffer was synced when it was emptied.
+    #[inline]
+    fn skip_empty_decode(&self) -> bool {
+        if self.0.flags.is_read_eof() || self.0.buffer.read_dst_size() != 0 {
+            false
+        } else {
+            self.0.flags.unset_read_ready();
+            self.update_read_destination(0);
+            true
+        }
     }
 
     fn decode_buf<U: Decoder>(
@@ -462,7 +572,7 @@ impl IoRef {
     {
         let res = self.0.buffer.with_read_dst(self, |buf| {
             let res = f(buf);
-            self.update_read_destination(buf);
+            self.update_read_destination(buf.len());
             res
         });
         self.0.sync_read_buffered();
@@ -722,8 +832,9 @@ impl IoRef {
 
     /// Updates read state after the application-facing destination was accessed.
     ///
-    /// While read back-pressure is active nothing is released until `buf` has
-    /// fallen to at most half the high watermark. Until then read readiness and
+    /// `len` is the size of the destination after the access. While read
+    /// back-pressure is active nothing is released until it has fallen to at
+    /// most half the high watermark. Until then read readiness and
     /// any installed read pause are deliberately left in place, keeping the
     /// transport read task parked. Once it has, read readiness and
     /// back-pressure are cleared together; without back-pressure only read
@@ -737,19 +848,14 @@ impl IoRef {
     /// variant used when the caller may have drained a different buffer of the
     /// filter chain; it cancels the pause only when the destination shrank.
     #[inline]
-    fn update_read_destination(&self, buf: &mut BytesMut) {
+    fn update_read_destination(&self, len: usize) {
         let st = &self.0;
 
         #[cfg(feature = "trace")]
-        log::trace!(
-            "{}: read-upd == buf:{} flags:{:?}",
-            st.tag(),
-            buf.len(),
-            st.flags
-        );
+        log::trace!("{}: read-upd == buf:{} flags:{:?}", st.tag(), len, st.flags);
 
         if st.flags.is_read_paused_or_backpressure() {
-            self.update_read_destination_slow(buf);
+            self.update_read_destination_slow(len);
         } else {
             st.flags.unset_read_ready();
         }
@@ -758,12 +864,12 @@ impl IoRef {
     /// Releases read back-pressure and a read pause for
     /// [`update_read_destination`](Self::update_read_destination).
     #[inline(never)]
-    fn update_read_destination_slow(&self, buf: &BytesMut) {
+    fn update_read_destination_slow(&self, len: usize) {
         let st = &self.0;
 
         if st.flags.is_rd_backpressure() {
             // Keep reads paused until enough buffered data has been consumed.
-            if !st.should_disable_rd_backpressure(buf.len()) {
+            if !st.should_disable_rd_backpressure(len) {
                 return;
             }
             st.unset_read_ready_and_backpressure();

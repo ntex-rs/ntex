@@ -151,6 +151,9 @@ impl Builder {
     /// sample is late by more than this threshold, see
     /// [`LatencyMetrics::stalls`](crate::metrics::LatencyMetrics::stalls). On Linux and
     /// Windows an attempt is made to create a backtrace for the stalled arbiter.
+    /// With deferred sampling an idle arbiter is never stalled, and the watchdog
+    /// parks while every arbiter is idle. Otherwise the watchdog wakes when the
+    /// earliest stall can start, at most once per latency interval.
     ///
     /// The threshold is specified in milliseconds and defaults to 1,000.
     pub fn ping_threshold(mut self, interval: usize) -> Self {
@@ -163,6 +166,9 @@ impl Builder {
     ///
     /// Each arbiter runs a task that sleeps for the interval and records how
     /// late it wakes up, see [`Arbiter::latency`](crate::Arbiter::latency).
+    /// On the native runtime the sample is taken at the start of the first
+    /// runtime turn after the interval, so an idle arbiter is not woken, see
+    /// [`LatencyMetrics::deferred`](crate::metrics::LatencyMetrics::deferred).
     ///
     /// The interval is specified in milliseconds and defaults to 100.
     /// Set it to zero to disable sampling and stall detection.

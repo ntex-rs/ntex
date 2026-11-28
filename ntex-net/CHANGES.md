@@ -1,5 +1,16 @@
 # Changes
 
+## [4.13.2] - 2026-11-28
+
+* io-uring: Handle completions of sends posted during their submission in the
+  same turn when the turn handled few events, saves a runtime turn per request
+  at low load
+
+* io-uring: Keep one multishot ring receive armed per connection while its
+  input is consumed, limited to the input the connection can buffer before
+  read backpressure; saves a receive submission per input. Kernels before
+  Linux 6.17 cannot limit it and keep one receive per input
+
 ## [4.13.1] - 2026-11-25
 
 * io-uring: Skip the `shutdown(2)` call when closing a connection that the

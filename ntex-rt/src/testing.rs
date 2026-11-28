@@ -32,6 +32,38 @@ mod busy {
             Ok(())
         }
     }
+
+    /// Unparks the driver thread.
+    #[derive(Debug)]
+    struct ParkNotify(std::thread::Thread);
+
+    impl Notify for ParkNotify {
+        fn notify(&self) -> io::Result<()> {
+            self.0.unpark();
+            Ok(())
+        }
+    }
+
+    /// Driver that parks the thread while the runtime is idle.
+    pub(super) struct ParkDriver;
+
+    impl Driver for ParkDriver {
+        fn handle(&self) -> Box<dyn Notify> {
+            Box::new(ParkNotify(std::thread::current()))
+        }
+
+        fn run(&self, rt: &Runtime) -> io::Result<()> {
+            loop {
+                match rt.poll() {
+                    PollResult::Ready => return Ok(()),
+                    PollResult::PollAgain => continue,
+                    PollResult::Pending(None) => std::thread::park(),
+                    PollResult::Pending(Some(timeout)) => std::thread::park_timeout(timeout),
+                }
+                rt.awake();
+            }
+        }
+    }
 }
 
 /// Runner for tests that do not need I/O or timers.
@@ -56,6 +88,19 @@ impl Runner for TestRunner {
         #[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
         crate::rt::Runtime::new(Box::new(busy::NoopNotify)).block_on(fut, &busy::BusyDriver);
 
+        Ok(())
+    }
+}
+
+/// Runner for the native runtime whose driver blocks while the runtime is idle.
+#[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
+pub(crate) struct ParkRunner;
+
+#[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
+impl Runner for ParkRunner {
+    fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>> {
+        let driver = busy::ParkDriver;
+        crate::rt::Runtime::new(crate::Driver::handle(&driver)).block_on(fut, &driver);
         Ok(())
     }
 }
