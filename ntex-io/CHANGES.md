@@ -2,6 +2,10 @@
 
 ## [4.10.0] - 2026-11-28
 
+* `IoRef::encode()` returns the buffered size from the encoder on success and
+  handles encoder errors out of line, the encoder result is no longer copied
+  through the stack on every call
+
 * Add `IoContext::read_budget()`, the input a transport can read before read
   back-pressure is enabled
 

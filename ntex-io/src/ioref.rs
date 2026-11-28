@@ -263,13 +263,25 @@ impl IoRef {
         // Not built on `with_write_src`: a closure would copy `item` on every
         // call, and the inactive path would build an error only to discard it.
         if st.flags.is_active() {
-            let (result, size) = st.buffer.encode(self, item, codec);
-            match self.consolidate_write_state_for(size, false) {
-                Ok(()) => result,
-                Err(_) => Ok(()),
+            match st.buffer.encode(self, item, codec) {
+                Ok(size) => {
+                    let _ = self.consolidate_write_state_for(size, false);
+                    Ok(())
+                }
+                Err(err) => self.encode_failed(err),
             }
         } else {
             Ok(())
+        }
+    }
+
+    /// Updates the write state after an encoder error, see [`encode`](Self::encode).
+    #[cold]
+    #[inline(never)]
+    fn encode_failed<E>(&self, err: E) -> Result<(), E> {
+        match self.consolidate_write_state(false) {
+            Ok(()) => Err(err),
+            Err(_) => Ok(()),
         }
     }
 
