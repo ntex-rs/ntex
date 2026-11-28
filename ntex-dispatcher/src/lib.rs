@@ -398,6 +398,8 @@ where
     codec: U,
     service: Service<U, Err>,
     error: Cell<Option<DispatcherError<Err, <U as Encoder>::Error>>>,
+    // set with `error`, checked on every pass without moving the error
+    failed: Cell<bool>,
     inflight: Cell<u32>,
 }
 
@@ -484,6 +486,7 @@ where
             codec,
             service,
             error: Cell::new(None),
+            failed: Cell::new(false),
             inflight: Cell::new(0),
         });
 
@@ -589,11 +592,24 @@ where
         match item {
             Ok(Some(val)) => {
                 if let Err(err) = self.io.encode(val, &self.codec) {
-                    self.error.set(Some(DispatcherError::Encoder(err)));
+                    self.set_error(DispatcherError::Encoder(err));
                 }
             }
-            Err(err) => self.error.set(Some(DispatcherError::Service(err))),
+            Err(err) => self.set_error(DispatcherError::Service(err)),
             Ok(None) => (),
+        }
+    }
+
+    fn set_error(&self, err: DispatcherError<Err, <U as Encoder>::Error>) {
+        self.error.set(Some(err));
+        self.failed.set(true);
+    }
+
+    fn take_error(&self) -> Option<DispatcherError<Err, <U as Encoder>::Error>> {
+        if self.failed.replace(false) {
+            self.error.take()
+        } else {
+            None
         }
     }
 }
@@ -705,7 +721,7 @@ where
                     if Pin::new(&mut stop.fut).poll(cx).is_ready() {
                         // the dispatcher returns a service error from the stop call,
                         // unless it is stopping because of an earlier one
-                        if let Some(DispatcherError::Service(err)) = inner.shared.error.take()
+                        if let Some(DispatcherError::Service(err)) = inner.shared.take_error()
                             && inner.error.is_none()
                         {
                             inner.error = Some(err);
@@ -929,9 +945,19 @@ where
         }
     }
 
+    #[inline]
     fn check_error(&mut self) -> PollService {
-        // check for errors
-        if let Some(err) = self.shared.error.take() {
+        if self.shared.failed.get() {
+            self.handle_error()
+        } else {
+            PollService::Ready
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn handle_error(&mut self) -> PollService {
+        if let Some(err) = self.shared.take_error() {
             log::trace!(
                 "{}: Error occurred, stopping dispatcher",
                 self.shared.io.tag()
@@ -951,7 +977,21 @@ where
         }
     }
 
+    #[inline]
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService> {
+        // Valid readiness is used without `poll_ready`, which would register
+        // the dispatcher for readiness changes on every pass. Invalidation
+        // does not need a wake while frames are not waiting: the next pass
+        // sees invalid readiness and registers.
+        if self.shared.inflight.get() < self.max_inflight && self.shared.service.is_ready() {
+            Poll::Ready(self.check_error())
+        } else {
+            self.poll_service_slow(cx)
+        }
+    }
+
+    #[inline(never)]
+    fn poll_service_slow(&mut self, cx: &mut Context<'_>) -> Poll<PollService> {
         // wait until an in-flight call completes and the service becomes ready
         let ready = if self.shared.inflight.get() >= self.max_inflight {
             Poll::Pending
