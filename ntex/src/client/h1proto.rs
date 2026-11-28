@@ -245,6 +245,14 @@ impl PlStream {
             pool,
         }
     }
+
+    /// Ends the payload and releases the connection.
+    fn finish(&mut self) -> Option<Result<Bytes, PayloadError>> {
+        if let Some(io) = self.io.take() {
+            release_connection(io, !self.codec.keepalive(), self.created, self.pool.take());
+        }
+        None
+    }
 }
 
 impl Stream for PlStream {
@@ -256,19 +264,17 @@ impl Stream for PlStream {
             let Some(io) = this.io.as_ref() else {
                 return Poll::Ready(None);
             };
+            // the end of the payload is not decoded from an empty buffer
+            if this.codec.is_finished() {
+                return Poll::Ready(this.finish());
+            }
             let item = ready!(io.poll_recv(&this.codec, cx));
             return Poll::Ready(Some(match item {
                 Ok(chunk) => {
                     if let Some(chunk) = chunk {
                         Ok(chunk)
                     } else {
-                        release_connection(
-                            this.io.take().unwrap(),
-                            !this.codec.keepalive(),
-                            this.created,
-                            this.pool.take(),
-                        );
-                        return Poll::Ready(None);
+                        return Poll::Ready(this.finish());
                     }
                 }
                 Err(RecvError::Timeout) => Err(PayloadError::from(io::Error::new(

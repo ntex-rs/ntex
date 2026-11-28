@@ -1,5 +1,11 @@
 # Changes
 
+## [4.11.2] - unreleased
+
+* http: HTTP/1 request and client response payloads end with their last data
+  or trailers item, the payload decoder is not called again with an empty
+  buffer to report the end
+
 ## [4.11.1] - 2026-11-27
 
 * ws: `hash_key()` computes the `Sec-WebSocket-Accept` value about 3x faster
